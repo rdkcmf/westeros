@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="simple_shell">
+  
+    <copyright>
+    Copyright © 2008-2011 Kristian Høgsberg
+    Copyright © 2010-2011 Intel Corporation
+    Permission to use, copy, modify, distribute, and sell this
+    software and its documentation for any purpose is hereby granted
+    without fee, provided that\n the above copyright notice appear in
+    all copies and that both that copyright notice and this permission
+    notice appear in supporting documentation, and that the name of
+    the copyright holders not be used in advertising or publicity
+    pertaining to distribution of the software without specific,
+    written prior permission.  The copyright holders make no
+    representations about the suitability of this software for any
+    purpose.  It is provided "as is" without express or implied
+    warranty.
+    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    THIS SOFTWARE.
+  </copyright>
+  <interface name="wl_simple_shell" version="1">
+    
+    <description summary="control the layout of surfaces">
+      The simple_shell provides control over the size, position,
+      z-order, opacity, etc., of the surfaces making up the user
+      interfaces suitable for situations such as embedded systems.
+    </description>
+
+    <!-- Raised when a new surface is created to provide the surfaceId -->
+    <event name="surface_id">
+      <description summary="provides surface id for new surface">
+   This event is sent to the creator of a new wl_surface to
+   provide the surface id.  The surface id is used in the 
+   simple_shell protocol to control the surface.  The surface
+   creator can set a surface name with the set_name request
+   in response to this event.
+      </description>
+      <arg name="surfaceId" type="uint"/>
+    </event>
+    <!-- Raised when a new surface is created by any client-->
+    <event name="surface_created">
+      <description summary="broadcast announcement of a new surface">
+   This event is sent to all simple_shell listeners to announce the creation 
+   of a new wl_surface.
+      </description>
+      <arg name="surfaceId" type="uint"/>
+      <arg name="name" type="string"/>
+    </event>
+    <!-- Raised when a surface is destroyed by any client-->
+    <event name="surface_destroyed">
+      <description summary="broadcast announcement of a surface destruction">
+   This event is sent to all simple_shell listeners to announce the destruction 
+   of a new wl_surface.
+      </description>
+      <arg name="surfaceId" type="uint"/>
+      <arg name="name" type="string"/>
+    </event>
+    <!-- Raised in response to a get_status request for a surface -->
+    <event name="surface_status">
+      <description summary="supply current surface information">
+   This event is sent in response to a get_status request to the listener
+   registered by the client issuing the request.
+      </description>
+      <arg name="surfaceId" type="uint"/>
+      <arg name="name" type="string"/>
+      <arg name="visible" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="opacity" type="fixed"/>
+      <arg name="zorder" type="fixed"/>
+    </event>
+    
+    <!-- Set the name of a surface -->
+    <request name="set_name">
+      <arg name="surfaceId" type="uint"/>
+      <arg name="name" type="string"/>
+    </request>
+    
+    <!-- Set the visibility of a surface -->
+    <request name="set_visible">
+      <arg name="surfaceId" type="uint"/>
+      <arg name="visible" type="uint"/>
+    </request>
+
+    <!-- Set the geometry of a surface -->
+    <request name="set_geometry">
+      <arg name="surfaceId" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+    
+    <!-- Set the opacity of a surface -->
+    <request name="set_opacity">
+      <arg name="surfaceId" type="uint"/>
+      <arg name="opacity" type="fixed"/>
+    </request>
+    
+    <!-- Set the z-order of a surface -->
+    <request name="set_zorder">
+      <arg name="surfaceId" type="uint"/>
+      <arg name="zorder" type="fixed"/>
+    </request>
+
+    <!-- Query the status of a surface -->
+    <request name="get_status">
+      <arg name="surfaceId" type="uint"/>
+    </request>
+
+    <!-- Query all existing surfaces -->
+    <request name="get_surfaces">
+      <description summary="get all existing surfaces">
+      Causes a surface status event for each existing surface
+      to be sent to the listener registered by the client issuing
+       the request.
+      </description>
+    </request>
+    
+  </interface>
+  
+</protocol>

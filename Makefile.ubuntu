@@ -1,0 +1,148 @@
+WID=$(shell pwd)/external/install
+XDGOPT=xdgv5
+
+all:  externals westeros-protocols westeros-simpleshell westeros
+
+cleanall: init
+
+setenv= \
+	export PKG_CONFIG_PATH=$(WID)/lib/pkgconfig:$(WID)/share/pkgconfig && \
+	export ACLOCAL_PATH=$(WID)/share/aclocal && \
+	export ACLOCAL="aclocal -I $ACLOCAL_PATH"
+
+init:
+	rm -rf external
+	cd protocol/version4 && rm *.h && rm *.c
+	cd protocol/version5 && rm *.h && rm *.c
+	cd simpleshell/protocol && rm *.h && rm *.c
+	cd simpleshell && rm *.o && rm *.lo && rm .libs/*
+	rm *.o && rm *.lo && rm .libs/*
+	
+externals: external \
+           external/.proto \
+           external/.macros \
+           external/.libxcd \
+           external/.libxkbcommon \
+           external/.wayland
+
+external:
+	mkdir -p external
+	mkdir -p external/install
+	
+external/.proto:	
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/xcb/proto && \
+	cd proto && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .proto
+
+external/.macros:
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/xorg/util/macros && \
+	cd macros && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .macros
+
+external/.libxcd:
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/xcb/libxcb && \
+	cd libxcb && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .libxcd
+	
+external/.libxkbcommon:
+	$(call setenv) && \
+	cd external && \
+	git clone git://github.com/xkbcommon/libxkbcommon && \
+	cd libxkbcommon && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .libxkbcommon
+
+external/.wayland:
+	$(call setenv) && \
+	cd external && \
+	mkdir wayland && \
+	cd wayland && \
+	wget http://wayland.freedesktop.org/releases/wayland-1.6.0.tar.xz && \
+	tar xf wayland-1.6.0.tar.xz && \
+	cd wayland-1.6.0 && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .wayland
+	
+westeros-protocols: xdg-shell-v4 xdg-shell-v5 simpleshell
+
+xdg-shell-v4: protocol/version4/xdg-shell-server-protocol.h \
+              protocol/version4/xdg-shell-protocol.c
+
+protocol/version4/xdg-shell-server-protocol.h: protocol/version4/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+
+protocol/version4/xdg-shell-protocol.c: protocol/version4/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+
+xdg-shell-v5: protocol/version5/xdg-shell-server-protocol.h \
+              protocol/version5/xdg-shell-protocol.c
+
+protocol/version5/xdg-shell-server-protocol.h: protocol/version5/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+
+protocol/version5/xdg-shell-protocol.c: protocol/version5/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+	
+simpleshell: simpleshell/protocol/simpleshell-client-protocol.h \
+             simpleshell/protocol/simpleshell-server-protocol.h \
+             simpleshell/protocol/simpleshell-protocol.c
+
+simpleshell/protocol/simpleshell-client-protocol.h:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+simpleshell/protocol/simpleshell-server-protocol.h:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+simpleshell/protocol/simpleshell-protocol.c:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+westeros-simpleshell:
+	$(call setenv) && \
+	cd simpleshell && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install
+
+westeros:
+	$(call setenv) && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) --enable-${XDGOPT} && \
+	make && make install
+
+
