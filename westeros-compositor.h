@@ -6,7 +6,8 @@ typedef struct _WstCompositor WstCompositor;
 typedef enum _WstKeyboard_keyState
 {
    WstKeyboard_keyState_released,
-   WstKeyboard_keyState_depressed
+   WstKeyboard_keyState_depressed,
+   WstKeyboard_keyState_none
 } WstKeyboard_keyState;
 
 typedef enum _WstKeyboad_modifiers
@@ -133,6 +134,21 @@ bool WstCompositorSetNestedDisplayName( WstCompositor *ctx, const char *nestedDi
 bool WstCompositorSetNestedSize( WstCompositor *ctx, unsigned int width, unsigned int height );
 
 /**
+ * WstCompositorSetAllowCursorModification
+ *
+ * Specify whether compositor clients are permitted to modify the pointer cursor
+ * image.  This must be called prior to WstCompositorStart.
+ */
+bool WstCompositorSetAllowCursorModification( WstCompositor *ctx, bool allow );
+
+/**
+ * WstCompositorGetOutputDimensions
+ *
+ * Obtain the width and height of the compositor output.
+ */
+void WstCompositorGetOutputDimensions( WstCompositor *ctx, unsigned int *width, unsigned int *height );
+ 
+/**
  * WstCompositorGetDisplayName
  *
  * Obtain the display name used by this compositor instance.  This will 
@@ -192,6 +208,15 @@ const char *WstCompositorGetNestedDisplayName( WstCompositor *ctx );
  * This can be called at any time.
  */
 void WstCompositorGetNestedSize( WstCompositor *ctx, unsigned int *width, unsigned int *height );
+
+/**
+ * WstCompositorGetAllowCursorModification
+ *
+ * Determine if this compsitor instance is configured to allow
+ * compositor clients to modify the pointer cursor image.  
+ * This may be called at any time.
+ */
+bool WstCompositorGetAllowCursorModification( WstCompositor *ctx );
 
 /**
  * WstCompositorSetInvalidateCallback
