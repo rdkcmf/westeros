@@ -27,9 +27,6 @@
 #include "westeros-render.h"
 #include "xdg-shell-server-protocol.h"
 
-// Uncomment to allow wayland clients to change the pointer image
-//#define ALLOW_CURSOR_MODIFICATION
-
 #define WST_MAX_ERROR_DETAIL (512)
 
 #define MAX_NESTED_NAME_LEN (32)
@@ -178,6 +175,7 @@ typedef struct _WstCompositor
    const char *nestedDisplayName;
    unsigned int nestedWidth;
    unsigned int nestedHeight;
+   bool allowModifyCursor;
    int outputWidth;
    int outputHeight;
 
@@ -772,6 +770,58 @@ exit:
    return result;
 }
 
+bool WstCompositorSetAllowCursorModification( WstCompositor *ctx, bool allow )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set allow cursor modification while compositor is running" );
+         goto exit;
+      }      
+
+      pthread_mutex_lock( &ctx->mutex );
+      
+      ctx->allowModifyCursor= allow;
+               
+      pthread_mutex_unlock( &ctx->mutex );
+            
+      result= true;
+   }
+
+exit:
+   
+   return result;
+}
+
+void WstCompositorGetOutputDimensions( WstCompositor *ctx, unsigned int *width, unsigned int *height )
+{
+   int outputWidth= 0;
+   int outputHeight= 0;
+   
+   if ( ctx )
+   {               
+      pthread_mutex_lock( &ctx->mutex );
+      
+      outputWidth= ctx->outputWidth;
+      outputHeight= ctx->outputHeight;
+               
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   if ( width )
+   {
+      *width= outputWidth;
+   }
+   if ( height )
+   {
+      *height= outputHeight;
+   }
+}
+
 const char *WstCompositorGetDisplayName( WstCompositor *ctx )
 {
    const char *displayName= 0;
@@ -892,6 +942,22 @@ void WstCompositorGetNestedSize( WstCompositor *ctx, unsigned int *width, unsign
    {
       *height= nestedHeight;
    }
+}
+
+bool WstCompositorGetAllowCursorModification( WstCompositor *ctx )
+{
+   bool allow= false;
+   
+   if ( ctx )
+   {               
+      pthread_mutex_lock( &ctx->mutex );
+      
+      allow= ctx->allowModifyCursor;
+               
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+   
+   return allow;
 }
 
 bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneCallback cb, void *userData )
@@ -3524,28 +3590,31 @@ static void wstIPointerSetCursor( struct wl_client *client,
       }
    }
    
-   #ifdef ALLOW_CURSOR_MODIFICATION
-   wstPointerSetPointer( pointer, surface );
-   
-   if ( pointer->pointerSurface )
+   if ( compositor->allowModifyCursor )
    {
-      pointer->hotSpotX= hotspot_x;
-      pointer->hotSpotY= hotspot_y;
+      wstPointerSetPointer( pointer, surface );
       
-      wstPointerUpdatePosition( pointer );
-   }
+      if ( pointer->pointerSurface )
+      {
+         pointer->hotSpotX= hotspot_x;
+         pointer->hotSpotY= hotspot_y;
+         
+         wstPointerUpdatePosition( pointer );
+      }
 
-   if ( compositor->invalidateCB )
-   {
-      compositor->invalidateCB( compositor, compositor->invalidateUserData );
+      if ( compositor->invalidateCB )
+      {
+         compositor->invalidateCB( compositor, compositor->invalidateUserData );
+      }
    }
-   #else
-   if ( surface )
+   else
    {
-      // Hide the client's cursor surface. We will continue to use default pointer image.
-      WstRendererSurfaceSetVisible( compositor->renderer, surface->surface, false );
+      if ( surface )
+      {
+         // Hide the client's cursor surface. We will continue to use default pointer image.
+         WstRendererSurfaceSetVisible( compositor->renderer, surface->surface, false );
+      }
    }
-   #endif
 }
                                   
 static void wstIPointerRelease( struct wl_client *client, struct wl_resource *resource )
@@ -3856,8 +3925,11 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
 
       WstRendererSurfaceGetGeometry( compositor->renderer, pointer->focus->surface, &sx, &sy, &sw, &sh );
       
-      x= (x*compositor->renderer->resW/compositor->renderer->outputWidth);
-      y= (y*compositor->renderer->resH/compositor->renderer->outputHeight);
+      if ( compositor->isEmbedded )
+      {
+         x= (x*compositor->renderer->resW/compositor->renderer->outputWidth);
+         y= (y*compositor->renderer->resH/compositor->renderer->outputHeight);
+      }
       
       xFixed= wl_fixed_from_int( x-sx );
       yFixed= wl_fixed_from_int( y-sy );
@@ -3872,6 +3944,8 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
       {
          wstPointerUpdatePosition( pointer );
       }
+      
+      wstCompositorScheduleRepaint( compositor );
    }
 }
 
