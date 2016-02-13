@@ -28,7 +28,7 @@
     
     <description summary="cross process buffer id wrapper">
       The simple buffer protocol provides a mechanism for encapsulating buffer identifers
-      that are valied across process boundaries and sharing them between client
+      that are valid across process boundaries and sharing them between client
       and server processes.
     </description>
 
