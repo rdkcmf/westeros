@@ -46,6 +46,35 @@ typedef float (*WSTMethodSurfaceGetOpacity)( WstRenderer *renderer, WstRenderSur
 typedef void (*WSTMethodSurfaceSetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float z );
 typedef float (*WSTMethodSurfaceGetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float *z );
 
+typedef void (*WSTCallbackKeyboardHandleKeyMap)( void *userData, uint32_t format, int fd, uint32_t size );
+typedef void (*WSTCallbackKeyboardHandleEnter)( void *userData, struct wl_array *keys );
+typedef void (*WSTCallbackKeyboardHandleLeave)( void *userData );
+typedef void (*WSTCallbackKeyboardHandleKey)( void *userData, uint32_t time, uint32_t key, uint32_t state );
+typedef void (*WSTCallbackKeyboardHandleModifiers)( void *userData, uint32_t mods_depressed, uint32_t mods_latched,
+                                                    uint32_t mods_locked, uint32_t group );
+typedef void (*WSTCallbackKeyboardHandleRepeatInfo)( void *userData, int32_t rate, int32_t delay );
+
+typedef void (*WSTCallbackPointerHandleEnter)( void *userData, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WSTCallbackPointerHandleLeave)( void *userData );
+typedef void (*WSTCallbackPointerHandleMotion)( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WSTCallbackPointerHandleButton)( void *userData, uint32_t time, uint32_t button, uint32_t state );
+typedef void (*WSTCallbackPointerHandleAxis)( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
+
+typedef struct _WstRenderNestedListener
+{
+   WSTCallbackKeyboardHandleKeyMap keyboardHandleKeyMap;
+   WSTCallbackKeyboardHandleEnter keyboardHandleEnter;
+   WSTCallbackKeyboardHandleLeave keyboardHandleLeave;
+   WSTCallbackKeyboardHandleKey keyboardHandleKey;
+   WSTCallbackKeyboardHandleModifiers keyboardHandleModifiers;
+   WSTCallbackKeyboardHandleRepeatInfo keyboardHandleRepeatInfo;
+   WSTCallbackPointerHandleEnter pointerHandleEnter;
+   WSTCallbackPointerHandleLeave pointerHandleLeave;
+   WSTCallbackPointerHandleMotion pointerHandleMotion;
+   WSTCallbackPointerHandleButton pointerHandleButton;
+   WSTCallbackPointerHandleAxis pointerHandleAxis;
+} WstRenderNestedListener;
+
 typedef struct _WstRenderer
 {
    int outputWidth;
@@ -72,8 +101,17 @@ typedef struct _WstRenderer
    struct wl_registry *registry;
    struct wl_compositor *compositor;
    struct wl_surface *surface;
+   struct wl_seat *seat;
+   struct wl_keyboard *keyboard;
+   struct wl_pointer *pointer;
+   struct wl_touch *touch;
    int nestedWidth;
    int nestedHeight;
+   void *nestedListenerUserData;
+   WstRenderNestedListener *nestedListener;
+   bool started;
+   bool stopRequested;
+   pthread_t nestedThreadId;
    
    // For embedded composition
    int resW;
@@ -82,7 +120,7 @@ typedef struct _WstRenderer
    float alpha;
 } WstRenderer;
 
-WstRenderer* WstRendererCreate( const char *module, int argc, char **argv );
+WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, WstRenderNestedListener *listener, void *userData );
 void WstRendererDestroy( WstRenderer *renderer );
 
 void WstRendererUpdateScene( WstRenderer *renderer );
