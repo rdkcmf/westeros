@@ -197,6 +197,7 @@ typedef struct _WstCompositor
    struct xkb_rule_names xkbNames;
    struct xkb_context *xkbCtx;
    struct xkb_keymap *xkbKeymap;
+   uint32_t xkbKeymapFormat;
    int xkbKeymapSize;
    int xkbKeymapFd;
    char *xkbKeymapArea;
@@ -205,6 +206,9 @@ typedef struct _WstCompositor
 
    WstSeat *seat;
    WstRenderer *renderer;
+   
+   void *nestedListenerUserData;
+   WstRenderNestedListener nestedListener;
 
    struct wl_display *display;
    #ifdef ENABLE_SBPROTOCOL
@@ -387,6 +391,19 @@ static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
                                                 struct wl_resource *resource );
 static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
                                              struct wl_resource *resource );
+static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size );
+static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array *keys );
+static void wstDefaultNestedKeyboardHandleLeave( void *userData );
+static void wstDefaultNestedKeyboardHandleKey( void *userData, uint32_t time, uint32_t key, uint32_t state );
+static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mods_depressed, uint32_t mods_latched, 
+                                                     uint32_t mods_locked, uint32_t group );
+static void wstDefaultNestedKeyboardHandleRepeatInfo( void *userData, int32_t rate, int32_t delay );
+static void wstDefaultNestedPointerHandleEnter( void *userData, wl_fixed_t sx, wl_fixed_t sy );
+static void wstDefaultNestedPointerHandleLeave( void *userData );
+static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy );
+static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state );
+static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
+static void wstSetDefaultNestedListener( WstCompositor *ctx );
 static bool wstSeatInit( WstCompositor *ctx );
 static void wstSeatTerm( WstCompositor *ctx );
 static void wstResourceUnBindCallback( struct wl_resource *resource );
@@ -415,7 +432,6 @@ static void wstPointerSetPointer( WstPointer *pointer, WstSurface *surface );
 static void wstPointerUpdatePosition( WstPointer *pointer );
 static void wstPointerSetFocus( WstPointer *pointer, WstSurface *surface, wl_fixed_t x, wl_fixed_t y );
 static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *client );
-
 
 extern char **environ;
 static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
@@ -449,6 +465,8 @@ WstCompositor* WstCompositorCreate()
       ctx->xkbNames.model= strdup("pc105");
       ctx->xkbNames.layout= strdup("us");
       ctx->xkbKeymapFd= -1;
+
+      wstSetDefaultNestedListener( ctx );
    }
    
    return ctx;
@@ -1143,12 +1161,15 @@ bool WstCompositorStart( WstCompositor *ctx )
          ctx->displayName= wstGetNextNestedDisplayName();
       }
 
-      // Setup key map
-      result= wstInitializeKeymap( ctx );
-      if ( !result )
+      if ( !ctx->isNested )
       {
-         pthread_mutex_unlock( &ctx->mutex );
-         goto exit;      
+         // Setup key map
+         result= wstInitializeKeymap( ctx );
+         if ( !result )
+         {
+            pthread_mutex_unlock( &ctx->mutex );
+            goto exit;      
+         }
       }
       
       rc= pthread_create( &ctx->compositorThreadId, NULL, wstCompositorThread, ctx );
@@ -1195,7 +1216,10 @@ void WstCompositorStop( WstCompositor *ctx )
             pthread_mutex_lock( &ctx->mutex );
          }
 
-         wstTerminateKeymap( ctx );         
+         if ( !ctx->isNested )
+         {
+            wstTerminateKeymap( ctx );         
+         }
       }
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -1208,7 +1232,7 @@ void WstCompositorKeyEvent( WstCompositor *ctx, int keyCode, unsigned int keySta
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( ctx->seat )
+      if ( ctx->seat && !ctx->isNested )
       {
          WstKeyboard *keyboard= ctx->seat->keyboard;
          
@@ -1228,7 +1252,7 @@ void WstCompositorPointerEnter( WstCompositor *ctx )
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( ctx->seat )
+      if ( ctx->seat && !ctx->isNested )
       {
          WstPointer *pointer= ctx->seat->pointer;
          
@@ -1248,7 +1272,7 @@ void WstCompositorPointerLeave( WstCompositor *ctx )
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( ctx->seat )
+      if ( ctx->seat && !ctx->isNested )
       {
          WstPointer *pointer= ctx->seat->pointer;
          
@@ -1268,7 +1292,7 @@ void WstCompositorPointerMoveEvent( WstCompositor *ctx, int x, int y )
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( ctx->seat )
+      if ( ctx->seat && !ctx->isNested )
       {
          WstPointer *pointer= ctx->seat->pointer;
          
@@ -1288,7 +1312,7 @@ void WstCompositorPointerButtonEvent( WstCompositor *ctx, unsigned int button, u
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( ctx->seat )
+      if ( ctx->seat && !ctx->isNested )
       {
          WstPointer *pointer= ctx->seat->pointer;
          
@@ -1833,10 +1857,10 @@ static void* wstCompositorThread( void *arg )
       argc= 0;
    }
    
-   ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv );
+   ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, &ctx->nestedListener, ctx );
    if ( !ctx->renderer )
    {
-      ERROR("unable to initiizize renderer module");
+      ERROR("unable to initialize renderer module");
       goto exit;
    }
 
@@ -2701,8 +2725,6 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
             break;
       }
 
-      //JRW
-      //printf("wstISurfaceCommit: calling wl_buffer_send_release: resource %p (id %d)\n", surface->attachedBufferResource, wl_resource_get_id(surface->attachedBufferResource) );
       wl_buffer_send_release( surface->attachedBufferResource );
       surface->attachedBufferResource= 0;
       surface->attachedBufferType= WstBufferType_null;
@@ -3271,6 +3293,194 @@ static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
    WESTEROS_UNUSED(resource);
 }                                             
 
+static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      ctx->xkbKeymapFormat= format;
+      ctx->xkbKeymapFd= fd;
+      ctx->xkbKeymapSize= size;
+   }   
+} 
+
+static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array *keys )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      wl_array_copy( &ctx->seat->keyboard->keys, keys );
+   }
+}
+
+static void wstDefaultNestedKeyboardHandleLeave( void *userData )
+{
+   // Nothing to do.
+   // Keyboard focus is controlled by the master compositor.  All clients
+   // will remain in a keyboard entered state but will only get keys
+   // when the master compositor passes them to this client.
+}
+
+static void wstDefaultNestedKeyboardHandleKey( void *userData, uint32_t time, uint32_t key, uint32_t state )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      WstKeyboard *keyboard= ctx->seat->keyboard;
+      
+      if ( keyboard )
+      {
+         uint32_t serial;
+         struct wl_resource *resource;
+         
+         serial= wl_display_next_serial( ctx->display );
+         wl_resource_for_each( resource, &keyboard->resourceList )
+         {
+            wl_keyboard_send_key( resource, 
+                                  serial,
+                                  time,
+                                  key,
+                                  state );
+         }   
+      }
+   }
+}
+
+static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mods_depressed, uint32_t mods_latched, 
+                                                     uint32_t mods_locked, uint32_t group )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      WstKeyboard *keyboard= ctx->seat->keyboard;
+      
+      if ( keyboard )
+      {
+         uint32_t serial;
+         struct wl_resource *resource;
+         
+         serial= wl_display_next_serial( ctx->display );
+         wl_resource_for_each( resource, &keyboard->resourceList )
+         {
+            wl_keyboard_send_modifiers( resource,
+                                        serial,
+                                        mods_depressed, // mod depressed
+                                        mods_latched,   // mod latched
+                                        mods_locked,    // mod locked
+                                        group           // mod group
+                                      );
+         }   
+      }
+   }
+}
+
+static void wstDefaultNestedKeyboardHandleRepeatInfo( void *userData, int32_t rate, int32_t delay )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      ctx->seat->keyRepeatDelay;
+      ctx->seat->keyRepeatRate;
+   }
+}
+
+static void wstDefaultNestedPointerHandleEnter( void *userData, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      WstPointer *pointer= ctx->seat->pointer;
+      if (  pointer )
+      {
+         int x, y;
+         
+         x= wl_fixed_to_int( sx );
+         y= wl_fixed_to_int( sy );
+         
+         pointer->entered= true;
+         
+         pointer->pointerX= x;
+         pointer->pointerY= y;
+         
+         wstPointerCheckFocus( pointer, x, y );
+      }
+   }
+}
+
+static void wstDefaultNestedPointerHandleLeave( void *userData )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      WstPointer *pointer= ctx->seat->pointer;
+      if (  pointer )
+      {
+         wstProcessPointerLeave( pointer );
+      }
+   }
+}
+
+static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      WstPointer *pointer= ctx->seat->pointer;
+      if (  pointer )
+      {
+         int x, y;
+         
+         x= wl_fixed_to_int( sx );
+         y= wl_fixed_to_int( sy );
+
+         wstProcessPointerMoveEvent( pointer, x, y );
+      }
+   }
+}
+
+static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->seat )
+   {
+      WstPointer *pointer= ctx->seat->pointer;
+      if (  pointer )
+      {
+         wstProcessPointerButtonEvent( pointer, button, state );
+      }
+   }
+}
+
+static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value )
+{
+   // Not supported
+}
+
+static void wstSetDefaultNestedListener( WstCompositor *ctx )
+{
+   ctx->nestedListenerUserData= ctx;
+   ctx->nestedListener.keyboardHandleKeyMap= wstDefaultNestedKeyboardHandleKeyMap;
+   ctx->nestedListener.keyboardHandleEnter= wstDefaultNestedKeyboardHandleEnter;
+   ctx->nestedListener.keyboardHandleLeave= wstDefaultNestedKeyboardHandleLeave;
+   ctx->nestedListener.keyboardHandleKey= wstDefaultNestedKeyboardHandleKey;
+   ctx->nestedListener.keyboardHandleModifiers= wstDefaultNestedKeyboardHandleModifiers;
+   ctx->nestedListener.keyboardHandleRepeatInfo= wstDefaultNestedKeyboardHandleRepeatInfo;
+   ctx->nestedListener.pointerHandleEnter= wstDefaultNestedPointerHandleEnter;
+   ctx->nestedListener.pointerHandleLeave= wstDefaultNestedPointerHandleLeave;
+   ctx->nestedListener.pointerHandleMotion= wstDefaultNestedPointerHandleMotion;
+   ctx->nestedListener.pointerHandleButton= wstDefaultNestedPointerHandleButton;
+   ctx->nestedListener.pointerHandleAxis= wstDefaultNestedPointerHandleAxis;   
+}
+
 static bool wstSeatInit( WstCompositor *ctx )
 {
    bool result= false;
@@ -3306,17 +3516,20 @@ static bool wstSeatInit( WstCompositor *ctx )
    wl_list_init( &keyboard->resourceList );
    wl_array_init( &keyboard->keys );
    
-   keyboard->state= xkb_state_new( ctx->xkbKeymap );
-   if ( !keyboard->state )
+   if ( !ctx->isNested )
    {
-      ERROR("unable to create key state");
-      goto exit;
+      keyboard->state= xkb_state_new( ctx->xkbKeymap );
+      if ( !keyboard->state )
+      {
+         ERROR("unable to create key state");
+         goto exit;
+      }
+      
+      keyboard->modShift= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_SHIFT );
+      keyboard->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
+      keyboard->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
+      keyboard->modCaps= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CAPS );
    }
-   
-   keyboard->modShift= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_SHIFT );
-   keyboard->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
-   keyboard->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
-   keyboard->modCaps= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CAPS );
 
    // Create pointer
    seat->pointer= (WstPointer*)calloc( 1, sizeof(WstPointer) );
@@ -3513,11 +3726,10 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
    }
    
    wl_keyboard_send_keymap( resourceKbd,
-                            WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+                            seat->compositor->xkbKeymapFormat,
                             seat->compositor->xkbKeymapFd,
                             seat->compositor->xkbKeymapSize );
 
-   //JRW if ( seat->compositor->isEmbedded )
    {
       struct wl_resource *surface= 0;
       
@@ -3532,7 +3744,10 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
                                  surface,
                                  &keyboard->keys );
 
-         wstKeyboardSendModifiers( keyboard, resourceKbd );
+         if ( !seat->compositor->isNested )
+         {
+            wstKeyboardSendModifiers( keyboard, resourceKbd );
+         }
       }                              
    }                               
 }
@@ -3664,6 +3879,7 @@ static bool wstInitializeKeymap( WstCompositor *ctx )
       goto exit;      
    }
    
+   ctx->xkbKeymapFormat= WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1;
    ctx->xkbKeymapSize= strlen(keymapStr)+1;
    
    strcpy( filename, "/tmp/westeros-XXXXXX" );
@@ -3975,6 +4191,8 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
    WstSurface *surface= 0;
    int sx, sy, sw, sh;
    wl_fixed_t xFixed, yFixed;
+   bool haveRoles= false;
+   WstSurface *surfaceNoRole= 0;
 
    // Identify top-most surface containing the pointer position
    for ( std::vector<WstSurface*>::reverse_iterator it= compositor->surfaces.rbegin(); 
@@ -3985,6 +4203,16 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
       
       WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
       
+      // If this client is using surfaces with roles (eg xdg shell surfaces) then we only
+      // want to assign focus to surfaces with appropriate roles.  However, we take note of
+      // the best choice of surfaces with no role.  If we don't find a hit with a roled surface
+      // and there was no use of roles, then we set focus on the best hit with  a surface
+      // with no role.  This will happen if the client is a nested compositor instance.
+      if ( surface->roleName )
+      {
+         haveRoles= true;
+      }
+
       if ( (x >= sx) && (x < sx+sw) && (y >= sy) && (y < sy+sh) )
       {
          bool eligible= true;
@@ -3999,6 +4227,10 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
          }
          else
          {
+            if ( !surfaceNoRole )
+            {
+               surfaceNoRole= surface;
+            }
             eligible= false;
          }
          if ( eligible )
@@ -4008,6 +4240,11 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
       }
       
       surface= 0;
+   }
+   
+   if ( !surface && !haveRoles )
+   {
+      surface= surfaceNoRole;
    }
    
    if ( pointer->focus != surface )

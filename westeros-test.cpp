@@ -204,7 +204,7 @@ static void seatName( void *data, struct wl_seat *seat, const char *name )
    printf("seat %p name: %s\n", seat, name);
 }
 
-struct wl_seat_listener seatListener = {
+static const struct wl_seat_listener seatListener = {
    seatCapabilities,
    seatName 
 };
@@ -219,21 +219,21 @@ static void registryHandleGlobal(void *data,
    printf("westeros-test: registry: id %d interface (%s) version %d\n", id, interface, version ); //JRW
 
    len= strlen(interface);
-   if ((len==6) && !strncmp(interface, "wl_shm", len)) {
+   if ( (len==6) && !strncmp(interface, "wl_shm", len)) {
       ctx->shm= (struct wl_shm*)wl_registry_bind(registry, id, &wl_shm_interface, 1);
       printf("shm %p\n", ctx->shm);
 		wl_shm_add_listener(ctx->shm, &shmListener, ctx);
    }
-   else if ((len==13) && !strcmp(interface, "wl_compositor") ) {
+   else if ( (len==13) && !strncmp(interface, "wl_compositor", len) ) {
       ctx->compositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
       printf("compositor %p\n", ctx->compositor);
    } 
-   else if ((len==7) && !strcmp(interface, "wl_seat") ) {
+   else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
       ctx->seat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
       printf("seat %p\n", ctx->seat);
 		wl_seat_add_listener(ctx->seat, &seatListener, ctx);
    } 
-   else if ((len==15) && !strcmp(interface, "wl_simple_shell") ) {
+   else if ( (len==15) && !strncmp(interface, "wl_simple_shell", len) ) {
       if ( ctx->getShell ) {
          ctx->shell= (struct wl_simple_shell*)wl_registry_bind(registry, id, &wl_simple_shell_interface, 1);      
          printf("shell %p\n", ctx->shell );

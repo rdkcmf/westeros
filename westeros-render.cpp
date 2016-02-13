@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <memory.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include <dlfcn.h>
 
@@ -11,15 +13,207 @@
 
 #define WESTEROS_UNUSED(x) ((void)(x))
 
+static void keyboardHandleKeymap( void *data, struct wl_keyboard *keyboard, 
+                                  uint32_t format, int fd, uint32_t size )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->keyboardHandleKeyMap( renderer->nestedListenerUserData,
+                                                      format, fd, size );
+   }
+}
+
+static void keyboardHandleEnter( void *data, struct wl_keyboard *keyboard,
+                                 uint32_t serial, struct wl_surface *surface, 
+                                 struct wl_array *keys )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->keyboardHandleEnter( renderer->nestedListenerUserData,
+                                                     keys );
+   }
+}
+
+static void keyboardHandleLeave( void *data, struct wl_keyboard *keyboard,
+                                 uint32_t serial, struct wl_surface *surface )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->keyboardHandleLeave( renderer->nestedListenerUserData );
+   }
+}
+
+static void keyboardHandleKey( void *data, struct wl_keyboard *keyboard,
+                               uint32_t serial, uint32_t time, uint32_t key,
+                               uint32_t state)
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->keyboardHandleKey( renderer->nestedListenerUserData,
+                                                   time, key, state );
+   }
+}
+
+static void keyboardHandleModifiers( void *data, struct wl_keyboard *keyboard,
+                                     uint32_t serial, uint32_t mods_depressed,
+                                     uint32_t mods_latched, uint32_t mods_locked,
+                                     uint32_t group )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->keyboardHandleModifiers( renderer->nestedListenerUserData,
+                                                         mods_depressed, mods_latched,
+                                                         mods_locked, group );
+   }
+}
+
+static void keyboardHandleRepeatInfo( void *data, struct wl_keyboard *keyboard,
+                                      int32_t rate, int32_t delay )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->keyboardHandleRepeatInfo( renderer->nestedListenerUserData,
+                                                          rate, delay );
+   }
+}
+
+static const struct wl_keyboard_listener keyboardListener= {
+   keyboardHandleKeymap,
+   keyboardHandleEnter,
+   keyboardHandleLeave,
+   keyboardHandleKey,
+   keyboardHandleModifiers,
+   keyboardHandleRepeatInfo
+};
+
+static void pointerHandleEnter( void *data, struct wl_pointer *pointer,
+                                uint32_t serial, struct wl_surface *surface,
+                                wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->pointerHandleEnter( renderer->nestedListenerUserData,
+                                                    sx, sy );
+   }
+}
+
+static void pointerHandleLeave( void *data, struct wl_pointer *pointer,
+                                uint32_t serial, struct wl_surface *surface )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->pointerHandleLeave( renderer->nestedListenerUserData );
+   }
+}
+
+static void pointerHandleMotion( void *data, struct wl_pointer *pointer, 
+                                 uint32_t time, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->pointerHandleMotion( renderer->nestedListenerUserData,
+                                                     time, sx, sy );
+   }
+}
+
+static void pointerHandleButton( void *data, struct wl_pointer *pointer,
+                                 uint32_t serial, uint32_t time, 
+                                 uint32_t button, uint32_t state )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->pointerHandleButton( renderer->nestedListenerUserData,
+                                                     time, button, state );
+   }
+}
+
+static void pointerHandleAxis( void *data, struct wl_pointer *pointer,
+                               uint32_t time, uint32_t axis, wl_fixed_t value )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   if ( renderer->nestedListener )
+   {
+      renderer->nestedListener->pointerHandleAxis( renderer->nestedListenerUserData,
+                                                   time, axis, value );
+   }
+}
+
+static const struct wl_pointer_listener pointerListener= {
+   pointerHandleEnter,
+   pointerHandleLeave,
+   pointerHandleMotion,
+   pointerHandleButton,
+   pointerHandleAxis
+};
+
+static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
+{
+	WstRenderer *renderer = (WstRenderer*)data;
+
+   if ( capabilities & WL_SEAT_CAPABILITY_KEYBOARD )
+   {
+      renderer->keyboard= wl_seat_get_keyboard( renderer->seat );
+      wl_keyboard_add_listener( renderer->keyboard, &keyboardListener, renderer );
+   }
+   if ( capabilities & WL_SEAT_CAPABILITY_POINTER )
+   {
+      renderer->pointer= wl_seat_get_pointer( renderer->seat );
+      wl_pointer_add_listener( renderer->pointer, &pointerListener, renderer );
+   }
+   if ( capabilities & WL_SEAT_CAPABILITY_TOUCH )
+   {
+      renderer->touch= wl_seat_get_touch( renderer->seat );
+   }   
+   wl_display_roundtrip( renderer->display );
+}
+
+static void seatName( void *data, struct wl_seat *seat, const char *name )
+{
+	WstRenderer *renderer = (WstRenderer*)data;
+}
+
+static const struct wl_seat_listener seatListener = {
+   seatCapabilities,
+   seatName 
+};
+
 static void registryHandleGlobal(void *data, 
                                  struct wl_registry *registry, uint32_t id,
 		                           const char *interface, uint32_t version)
 {
 	WstRenderer *renderer = (WstRenderer*)data;
-
-   if (strcmp(interface, "wl_compositor") == 0 ) {
+   int len;
+  
+   len= strlen(interface);
+   if ( ((len==13) && !strncmp(interface, "wl_compositor", len) ) ) {
       renderer->compositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
    }
+   else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
+      renderer->seat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
+		wl_seat_add_listener(renderer->seat, &seatListener, renderer);
+		wl_display_roundtrip( renderer->display );
+   } 
 }
 
 static void registryHandleGlobalRemove(void *data, 
@@ -34,7 +228,26 @@ static const struct wl_registry_listener registryListener =
 	registryHandleGlobalRemove
 };
 
-WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv )
+static void* wstNestedThread( void *data )
+{
+   WstRenderer *renderer= (WstRenderer*)data;
+   
+   renderer->started= true;
+   
+   while ( !renderer->stopRequested )
+   {
+      if ( wl_display_dispatch( renderer->display ) == -1 )
+      {
+         break;
+      }
+      
+      usleep( 50000 );
+   }
+   
+   renderer->started= false;
+}
+
+WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, WstRenderNestedListener *listener, void *userData )
 {
    bool error= false;
    void *module= 0, *init;
@@ -97,6 +310,9 @@ WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv )
       // may cause the renderer to configure itself differently.
       if ( displayName )
       {
+         renderer->nestedListenerUserData= userData;
+         renderer->nestedListener= listener;
+
          renderer->display= wl_display_connect( displayName );
          if ( !renderer->display )
          {
@@ -127,6 +343,16 @@ WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv )
          if ( !renderer->surface )
          {
             printf("WstRendererCreate: failed to create compositor surface from wayland display: %s\n", displayName );
+            error= true;
+            goto exit;
+         }
+         
+         renderer->started= false;
+         renderer->stopRequested= false;
+         rc= pthread_create( &renderer->nestedThreadId, NULL, wstNestedThread, renderer );
+         if ( rc )
+         {
+            printf("WstRendererCreate: failed to start thread for nested compositor\n" );
             error= true;
             goto exit;
          }
@@ -173,16 +399,7 @@ exit:
    {
       if ( renderer )
       {
-         if ( renderer->registry )
-         {
-            wl_registry_destroy( renderer->registry );
-         }
-         if ( renderer->display )
-         {
-            wl_display_disconnect( renderer->display );
-         }
-         free( renderer );
-         renderer= 0;
+         WstRendererDestroy( renderer );
       }
       if ( module )
       {
@@ -197,6 +414,19 @@ void WstRendererDestroy( WstRenderer *renderer )
 {
    if ( renderer )
    {
+      bool threadStarted= renderer->started;
+      if ( renderer->touch )
+      {
+         wl_touch_destroy( renderer->touch );
+      }
+      if ( renderer->pointer )
+      {
+         wl_pointer_destroy( renderer->pointer );
+      }
+      if ( renderer->keyboard )
+      {
+         wl_keyboard_destroy( renderer->keyboard );
+      }
       if ( renderer->renderer )
       {
          renderer->renderTerm( renderer );
@@ -219,8 +449,18 @@ void WstRendererDestroy( WstRenderer *renderer )
       }
       if ( renderer->display )
       {
+         wl_display_flush( renderer->display );
+         if ( threadStarted )
+         {
+            renderer->stopRequested= true;
+         }
+         wl_display_roundtrip( renderer->display );
          wl_display_disconnect( renderer->display );
          renderer->display= 0;
+      }
+      if ( threadStarted )
+      {
+         pthread_join( renderer->nestedThreadId, NULL );
       }
       free( renderer );      
    }
@@ -229,12 +469,6 @@ void WstRendererDestroy( WstRenderer *renderer )
 void WstRendererUpdateScene( WstRenderer *renderer )
 {
    renderer->updateScene( renderer );
-   
-   if ( renderer->display )
-   {
-      // For nested, keep connection active
-      wl_display_roundtrip( renderer->display );
-   }
 }
 
 WstRenderSurface* WstRendererSurfaceCreate( WstRenderer *renderer )
