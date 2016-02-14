@@ -273,7 +273,7 @@ bool WstCompositorSetClientStatusCallback( WstCompositor *ctx, WstClientStatus c
  * Specifies a set of callbacks to be invoked by a nested compositor for keyboard input.  By default
  * the nested compositor will forward keyboard events to a connected client.  When a listener is set
  * using WstCompositorSetKeyboardNestedListener the events will instead be passed to the caller
- * through the specified callback functions.  This allows the call to route keyboard input outside
+ * through the specified callback functions.  This allows the caller to route keyboard input outside
  * of Wayland.  This must be called prior to WstCompositorStart.
  */
 bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNestedListener *listener, void *userData );
@@ -284,7 +284,7 @@ bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNest
  * Specifies a set of callbacks to be invoked by a nested compositor for pointer input.  By default
  * the nested compositor will forward pointer events to a connected client.  When a listener is set
  * using WstCompositorSetPointerNestedListener the events will instead be passed to the caller
- * through the specified callback functions.  This allows the call to route pointer input outside
+ * through the specified callback functions.  This allows the caller to route pointer input outside
  * of Wayland.  This must be called prior to WstCompositorStart.
  */
 bool WstCompositorSetPointerNestedListener( WstCompositor *ctx, WstPointerNestedListener *listener, void *userData );
