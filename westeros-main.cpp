@@ -35,6 +35,7 @@ static void showUsage()
    printf("  --display <name> : name of wayland display created by compositor\n" );
    printf("  --nested : operate as a nested compositor\n" );
    printf("  --nestedDisplay <name> : name of wayland display to connect to for nested composition\n" );
+   printf("  --nestedInput : register nested input listeners\n" ); 
    printf("  --width <width> : width of nested composition surface\n" );
    printf("  --height <width> : height of nested composition surface\n" );
    printf("  -? : show usage\n" );
@@ -332,6 +333,80 @@ void* inputThread( void *data )
    return NULL;
 }
 
+static void keyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size )
+{
+   printf("keyboardHandleKeyMap: format %d fd %d size %d\n", format, fd, size );
+}
+
+static void keyboardHandleEnter( void *userData, struct wl_array *keys )
+{
+   printf("keyboardHandleEnter: keys %p\n", keys );
+}
+
+static void keyboardHandleLeave( void *userData )
+{
+   printf("keyboardHandleLeave\n" );
+}
+
+static void keyboardHandleKey( void *userData, uint32_t time, uint32_t key, uint32_t state )
+{
+   printf("keyboardHandleKey: time %u key %u state %u\n", time, key, state );
+}
+
+static void keyboardHandleModifiers( void *userData, uint32_t mods_depressed, uint32_t mods_latched, 
+                                     uint32_t mods_locked, uint32_t group )
+{
+   printf("keyboardHandleModifiers: depressed %x latched %x locked %x group %u\n", 
+          mods_depressed, mods_latched, mods_locked, group );
+}
+
+static void keyboardHandleRepeatInfo( void *userData, int32_t rate, int32_t delay )
+{
+   printf("keyboardHandleRepeatInfo: rate %d delay %d\n", rate, delay );
+}
+
+WstKeyboardNestedListener keyboardListener = {
+   keyboardHandleKeyMap,
+   keyboardHandleEnter,
+   keyboardHandleLeave,
+   keyboardHandleKey,
+   keyboardHandleModifiers,
+   keyboardHandleRepeatInfo
+};
+
+static void pointerHandleEnter( void *userData, wl_fixed_t sx, wl_fixed_t sy )
+{
+   printf("pointerHandleEnter: sx %x sy %x\n", sx, sy );
+}
+
+static void pointerHandleLeave( void *userData )
+{
+   printf("pointerHandleLeave\n");
+}
+
+static void pointerHandleMotion( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy )
+{
+   printf("pointerHandleMotion: time %u sx %x sy %x\n", time, sx, sy );
+}
+
+static void pointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state )
+{
+   printf("pointerHandleButton: time %u button %u state %u\n", time, button, state );
+}
+
+static void pointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value )
+{
+   printf("pointerHandleAxis: time %u axis %u value %x\n", time, axis, value );
+}
+
+WstPointerNestedListener pointerListener = {
+   pointerHandleEnter,
+   pointerHandleLeave,
+   pointerHandleMotion,
+   pointerHandleButton,
+   pointerHandleAxis
+};
+
 int main( int argc, char** argv)
 {
    int nRC= 0;
@@ -428,6 +503,19 @@ int main( int argc, char** argv)
                error= true;
                break;
             }
+         }
+      }
+      if ( (len == 13) && !strncmp( (const char*)argv[i], "--nestedInput", len) )
+      {
+         if ( !WstCompositorSetKeyboardNestedListener( wctx, &keyboardListener, NULL) )
+         {
+            error= true;
+            break;
+         }
+         if ( !WstCompositorSetPointerNestedListener( wctx, &pointerListener, NULL) )
+         {
+            error= true;
+            break;
          }
       }
       else

@@ -1,6 +1,8 @@
 #ifndef _WESTEROS_COMPOSITOR_H
 #define _WESTEROS_COMPOSITOR_H
 
+#include "westeros-render.h"
+
 typedef struct _WstCompositor WstCompositor;
 
 typedef enum _WstKeyboard_keyState
@@ -36,6 +38,25 @@ typedef enum _WstClient_status
 typedef void (*WstInvalidateSceneCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstHidePointerCallback)( WstCompositor *ctx, bool hidePointer, void *userData );
 typedef void (*WstClientStatus)( WstCompositor *ctx, int status, int clientPID, int detail, void *userData );
+
+typedef struct _WstKeyboardNestedListener
+{
+   WSTCallbackKeyboardHandleKeyMap keyboardHandleKeyMap;
+   WSTCallbackKeyboardHandleEnter keyboardHandleEnter;
+   WSTCallbackKeyboardHandleLeave keyboardHandleLeave;
+   WSTCallbackKeyboardHandleKey keyboardHandleKey;
+   WSTCallbackKeyboardHandleModifiers keyboardHandleModifiers;
+   WSTCallbackKeyboardHandleRepeatInfo keyboardHandleRepeatInfo;
+} WstKeyboardNestedListener;
+
+typedef struct _WstPointerNestedListener
+{
+   WSTCallbackPointerHandleEnter pointerHandleEnter;
+   WSTCallbackPointerHandleLeave pointerHandleLeave;
+   WSTCallbackPointerHandleMotion pointerHandleMotion;
+   WSTCallbackPointerHandleButton pointerHandleButton;
+   WSTCallbackPointerHandleAxis pointerHandleAxis;
+} WstPointerNestedListener;
 
 /**
  * WestCompositorCreate
@@ -243,9 +264,30 @@ bool WstCompositorSetHidePointerCallback( WstCompositor *ctx, WstHidePointerCall
  * client process.  The callback will supply a status value from the WstClient_status
  * enum and the client pid.  If the status is WstClient_status_stoppedAbnormal the detail
  * value will be the signal that caused the client to terminate.
- * supply the pid of the client process.
  */
 bool WstCompositorSetClientStatusCallback( WstCompositor *ctx, WstClientStatus cb, void *userData );
+
+/**
+ * WstCompositorSetKeyboardNestedListener
+ *
+ * Specifies a set of callbacks to be invoked by a nested compositor for keyboard input.  By default
+ * the nested compositor will forward keyboard events to a connected client.  When a listener is set
+ * using WstCompositorSetKeyboardNestedListener the events will instead be passed to the caller
+ * through the specified callback functions.  This allows the call to route keyboard input outside
+ * of Wayland.  This must be called prior to WstCompositorStart.
+ */
+bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNestedListener *listener, void *userData );
+
+/**
+ * WstCompositorSetPointerNestedListener
+ *
+ * Specifies a set of callbacks to be invoked by a nested compositor for pointer input.  By default
+ * the nested compositor will forward pointer events to a connected client.  When a listener is set
+ * using WstCompositorSetPointerNestedListener the events will instead be passed to the caller
+ * through the specified callback functions.  This allows the call to route pointer input outside
+ * of Wayland.  This must be called prior to WstCompositorStart.
+ */
+bool WstCompositorSetPointerNestedListener( WstCompositor *ctx, WstPointerNestedListener *listener, void *userData );
 
 /**
  * WstCompositorComposeEmbedded
