@@ -1,6 +1,8 @@
 #ifndef _WESTEROS_RENDER_H
 #define _WESTEROS_RENDER_H
 
+#include <pthread.h>
+
 #include "wayland-client.h"
 
 /*

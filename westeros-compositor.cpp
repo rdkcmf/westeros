@@ -24,7 +24,6 @@
 #include "westeros-simplebuffer.h"
 #endif
 #include "westeros-simpleshell.h"
-#include "westeros-render.h"
 #include "xdg-shell-server-protocol.h"
 
 #define WST_MAX_ERROR_DETAIL (512)
@@ -209,6 +208,11 @@ typedef struct _WstCompositor
    
    void *nestedListenerUserData;
    WstRenderNestedListener nestedListener;
+   
+   void *keyboardNestedListenerUserData;
+   WstKeyboardNestedListener *keyboardNestedListener;
+   void *pointerNestedListenerUserData;
+   WstPointerNestedListener *pointerNestedListener;
 
    struct wl_display *display;
    #ifdef ENABLE_SBPROTOCOL
@@ -1054,6 +1058,78 @@ bool WstCompositorSetClientStatusCallback( WstCompositor *ctx, WstClientStatus c
       
       ctx->clientStatusUserData= userData;
       ctx->clientStatusCB= cb;
+      
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      result= true;
+   }
+
+exit:
+
+   return result;   
+}
+
+bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNestedListener *listener, void *userData )
+{
+  bool result= false;
+   
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set keyboard nested listener while compositor is running" );
+         goto exit;
+      }      
+
+      if ( !ctx->isNested )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Compositor is not nested" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+      
+      ctx->keyboardNestedListenerUserData= userData;
+      ctx->keyboardNestedListener= listener;
+      
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      result= true;
+   }
+
+exit:
+
+   return result;   
+}
+
+bool WstCompositorSetPointerNestedListener( WstCompositor *ctx, WstPointerNestedListener *listener, void *userData )
+{
+  bool result= false;
+   
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set pointer nested listener while compositor is running" );
+         goto exit;
+      }      
+
+      if ( !ctx->isNested )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Compositor is not nested" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+      
+      ctx->pointerNestedListenerUserData= userData;
+      ctx->pointerNestedListener= listener;
       
       pthread_mutex_unlock( &ctx->mutex );
       
@@ -3302,51 +3378,91 @@ static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t forma
       ctx->xkbKeymapFormat= format;
       ctx->xkbKeymapFd= fd;
       ctx->xkbKeymapSize= size;
+
+      if ( ctx->keyboardNestedListener )
+      {
+         ctx->keyboardNestedListener->keyboardHandleKeyMap( ctx->keyboardNestedListenerUserData,
+                                                            format, fd, size );
+      }
    }   
 } 
 
 static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array *keys )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
-   
-   if ( ctx->seat )
+
+   if ( ctx )
    {
-      wl_array_copy( &ctx->seat->keyboard->keys, keys );
-   }
+      if ( ctx->keyboardNestedListener )
+      {
+         ctx->keyboardNestedListener->keyboardHandleEnter( ctx->keyboardNestedListenerUserData,
+                                                           keys );
+      }
+      else
+      {
+         if ( ctx->seat )
+         {
+            wl_array_copy( &ctx->seat->keyboard->keys, keys );
+         }
+      }
+   }   
 }
 
 static void wstDefaultNestedKeyboardHandleLeave( void *userData )
 {
-   // Nothing to do.
-   // Keyboard focus is controlled by the master compositor.  All clients
-   // will remain in a keyboard entered state but will only get keys
-   // when the master compositor passes them to this client.
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->keyboardNestedListener )
+      {
+         ctx->keyboardNestedListener->keyboardHandleLeave( ctx->keyboardNestedListenerUserData );
+      }
+      else
+      {
+         // Nothing to do.
+         // Keyboard focus is controlled by the master compositor.  All clients
+         // will remain in a keyboard entered state but will only get keys
+         // when the master compositor passes them to this client.
+      }
+   }
 }
 
 static void wstDefaultNestedKeyboardHandleKey( void *userData, uint32_t time, uint32_t key, uint32_t state )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
-   
-   if ( ctx->seat )
+
+   if ( ctx )
    {
-      WstKeyboard *keyboard= ctx->seat->keyboard;
-      
-      if ( keyboard )
+      if ( ctx->keyboardNestedListener )
       {
-         uint32_t serial;
-         struct wl_resource *resource;
-         
-         serial= wl_display_next_serial( ctx->display );
-         wl_resource_for_each( resource, &keyboard->resourceList )
-         {
-            wl_keyboard_send_key( resource, 
-                                  serial,
-                                  time,
-                                  key,
-                                  state );
-         }   
+         ctx->keyboardNestedListener->keyboardHandleKey( ctx->keyboardNestedListenerUserData,
+                                                         time, key, state );
       }
-   }
+      else
+      {
+         if ( ctx->seat )
+         {
+            WstKeyboard *keyboard= ctx->seat->keyboard;
+            
+            if ( keyboard )
+            {
+               uint32_t serial;
+               struct wl_resource *resource;
+               
+               serial= wl_display_next_serial( ctx->display );
+               wl_resource_for_each( resource, &keyboard->resourceList )
+               {
+                  wl_keyboard_send_key( resource, 
+                                        serial,
+                                        time,
+                                        key,
+                                        state );
+               }   
+            }
+         }
+      }
+   }   
 }
 
 static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mods_depressed, uint32_t mods_latched, 
@@ -3354,26 +3470,37 @@ static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mo
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->seat )
+   if ( ctx )
    {
-      WstKeyboard *keyboard= ctx->seat->keyboard;
-      
-      if ( keyboard )
+      if ( ctx->keyboardNestedListener )
       {
-         uint32_t serial;
-         struct wl_resource *resource;
-         
-         serial= wl_display_next_serial( ctx->display );
-         wl_resource_for_each( resource, &keyboard->resourceList )
+         ctx->keyboardNestedListener->keyboardHandleModifiers( ctx->keyboardNestedListenerUserData,
+                                                               mods_depressed, mods_latched, mods_locked, group );
+      }
+      else
+      {
+         if ( ctx->seat )
          {
-            wl_keyboard_send_modifiers( resource,
-                                        serial,
-                                        mods_depressed, // mod depressed
-                                        mods_latched,   // mod latched
-                                        mods_locked,    // mod locked
-                                        group           // mod group
-                                      );
-         }   
+            WstKeyboard *keyboard= ctx->seat->keyboard;
+            
+            if ( keyboard )
+            {
+               uint32_t serial;
+               struct wl_resource *resource;
+               
+               serial= wl_display_next_serial( ctx->display );
+               wl_resource_for_each( resource, &keyboard->resourceList )
+               {
+                  wl_keyboard_send_modifiers( resource,
+                                              serial,
+                                              mods_depressed, // mod depressed
+                                              mods_latched,   // mod latched
+                                              mods_locked,    // mod locked
+                                              group           // mod group
+                                            );
+               }   
+            }
+         }
       }
    }
 }
@@ -3382,33 +3509,55 @@ static void wstDefaultNestedKeyboardHandleRepeatInfo( void *userData, int32_t ra
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->seat )
+   if ( ctx )
    {
-      ctx->seat->keyRepeatDelay;
-      ctx->seat->keyRepeatRate;
-   }
+      if ( ctx->keyboardNestedListener )
+      {
+         ctx->keyboardNestedListener->keyboardHandleRepeatInfo( ctx->keyboardNestedListenerUserData,
+                                                                rate, delay );
+      }
+      else
+      {
+         if ( ctx->seat )
+         {
+            ctx->seat->keyRepeatDelay;
+            ctx->seat->keyRepeatRate;
+         }
+      }
+   }                       
 }
 
 static void wstDefaultNestedPointerHandleEnter( void *userData, wl_fixed_t sx, wl_fixed_t sy )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->seat )
+   if ( ctx )
    {
-      WstPointer *pointer= ctx->seat->pointer;
-      if (  pointer )
+      if ( ctx->pointerNestedListener )
       {
-         int x, y;
-         
-         x= wl_fixed_to_int( sx );
-         y= wl_fixed_to_int( sy );
-         
-         pointer->entered= true;
-         
-         pointer->pointerX= x;
-         pointer->pointerY= y;
-         
-         wstPointerCheckFocus( pointer, x, y );
+         ctx->pointerNestedListener->pointerHandleEnter( ctx->pointerNestedListenerUserData,
+                                                         sx, sy );
+      }
+      else
+      {
+         if ( ctx->seat )
+         {
+            WstPointer *pointer= ctx->seat->pointer;
+            if (  pointer )
+            {
+               int x, y;
+               
+               x= wl_fixed_to_int( sx );
+               y= wl_fixed_to_int( sy );
+               
+               pointer->entered= true;
+               
+               pointer->pointerX= x;
+               pointer->pointerY= y;
+               
+               wstPointerCheckFocus( pointer, x, y );
+            }
+         }
       }
    }
 }
@@ -3417,12 +3566,22 @@ static void wstDefaultNestedPointerHandleLeave( void *userData )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->seat )
+   if ( ctx )
    {
-      WstPointer *pointer= ctx->seat->pointer;
-      if (  pointer )
+      if ( ctx->pointerNestedListener )
       {
-         wstProcessPointerLeave( pointer );
+         ctx->pointerNestedListener->pointerHandleLeave( ctx->pointerNestedListenerUserData );
+      }
+      else
+      {
+         if ( ctx->seat )
+         {
+            WstPointer *pointer= ctx->seat->pointer;
+            if (  pointer )
+            {
+               wstProcessPointerLeave( pointer );
+            }
+         }
       }
    }
 }
@@ -3431,17 +3590,28 @@ static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, 
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->seat )
+   if ( ctx )
    {
-      WstPointer *pointer= ctx->seat->pointer;
-      if (  pointer )
+      if ( ctx->pointerNestedListener )
       {
-         int x, y;
-         
-         x= wl_fixed_to_int( sx );
-         y= wl_fixed_to_int( sy );
+         ctx->pointerNestedListener->pointerHandleMotion( ctx->pointerNestedListenerUserData,
+                                                          time, sx, sy );
+      }
+      else
+      {
+         if ( ctx->seat )
+         {
+            WstPointer *pointer= ctx->seat->pointer;
+            if (  pointer )
+            {
+               int x, y;
+               
+               x= wl_fixed_to_int( sx );
+               y= wl_fixed_to_int( sy );
 
-         wstProcessPointerMoveEvent( pointer, x, y );
+               wstProcessPointerMoveEvent( pointer, x, y );
+            }
+         }
       }
    }
 }
@@ -3450,19 +3620,43 @@ static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, 
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->seat )
+   if ( ctx )
    {
-      WstPointer *pointer= ctx->seat->pointer;
-      if (  pointer )
+      if ( ctx->pointerNestedListener )
       {
-         wstProcessPointerButtonEvent( pointer, button, state );
+         ctx->pointerNestedListener->pointerHandleButton( ctx->pointerNestedListenerUserData,
+                                                          time, button, state );
+      }
+      else
+      {
+         if ( ctx->seat )
+         {
+            WstPointer *pointer= ctx->seat->pointer;
+            if (  pointer )
+            {
+               wstProcessPointerButtonEvent( pointer, button, state );
+            }
+         }
       }
    }
 }
 
 static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value )
 {
-   // Not supported
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->pointerNestedListener )
+      {
+         ctx->pointerNestedListener->pointerHandleAxis( ctx->pointerNestedListenerUserData,
+                                                        time, axis, value );
+      }
+      else
+      {
+         // Not supported
+      }
+   }
 }
 
 static void wstSetDefaultNestedListener( WstCompositor *ctx )
