@@ -553,6 +553,8 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
    EGLNativePixmapType eglPixmap= 0;
    EGLImageKHR eglImage= 0;
+   int bufferWidth, bufferHeight;
+   bool resize= false;
 
    if ( buffer )
    {
@@ -562,9 +564,15 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
       }
       if ( WstGLGetNativePixmap( rendererEMB->glCtx, buffer, &surface->nativePixmap ) )
       {
-         WstGLGetNativePixmapDimensions( rendererEMB->glCtx, surface->nativePixmap, &surface->bufferWidth, &surface->bufferHeight );
+         WstGLGetNativePixmapDimensions( rendererEMB->glCtx, surface->nativePixmap, &bufferWidth, &bufferHeight );
+         if ( (surface->bufferWidth != bufferWidth) || (surface->bufferHeight != bufferHeight) )
+         {
+            surface->bufferWidth= bufferWidth;
+            surface->bufferHeight= bufferHeight;
+            resize= true;
+         }
          
-         if ( eglPixmap != WstGLGetEGLNativePixmap(rendererEMB->glCtx, surface->nativePixmap) )
+         if ( resize || (eglPixmap != WstGLGetEGLNativePixmap(rendererEMB->glCtx, surface->nativePixmap)) )
          {
             /*
              * If the eglPixmap contained by the surface WstGLNativePixmap changed
