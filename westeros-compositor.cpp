@@ -20,6 +20,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "wayland-server.h"
+#include "westeros-nested.h"
 #ifdef ENABLE_SBPROTOCOL
 #include "westeros-simplebuffer.h"
 #endif
@@ -178,6 +179,8 @@ typedef struct _WstCompositor
    int outputWidth;
    int outputHeight;
 
+   void *terminatedUserData;
+   WstTerminatedCallback terminatedCB;
    void *invalidateUserData;
    WstInvalidateSceneCallback invalidateCB;
    void *hidePointerUserData;
@@ -206,8 +209,9 @@ typedef struct _WstCompositor
    WstSeat *seat;
    WstRenderer *renderer;
    
+   WstNestedConnection *nc;
    void *nestedListenerUserData;
-   WstRenderNestedListener nestedListener;
+   WstNestedConnectionListener nestedListener;
    
    void *keyboardNestedListenerUserData;
    WstKeyboardNestedListener *keyboardNestedListener;
@@ -395,6 +399,7 @@ static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
                                                 struct wl_resource *resource );
 static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
                                              struct wl_resource *resource );
+static void wstDefaultNestedConnectionEnded( void *userData );
 static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size );
 static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array *keys );
 static void wstDefaultNestedKeyboardHandleLeave( void *userData );
@@ -853,6 +858,12 @@ const char *WstCompositorGetDisplayName( WstCompositor *ctx )
                
       pthread_mutex_lock( &ctx->mutex );
       
+      // If no display name was provided, then generate a name.
+      if ( !ctx->displayName )
+      {
+         ctx->displayName= wstGetNextNestedDisplayName();
+      }
+
       displayName= ctx->displayName;
                
       pthread_mutex_unlock( &ctx->mutex );
@@ -980,6 +991,27 @@ bool WstCompositorGetAllowCursorModification( WstCompositor *ctx )
    }
    
    return allow;
+}
+
+bool WstCompositorSetTerminatedCallback( WstCompositor *ctx, WstTerminatedCallback cb, void *userData )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->terminatedUserData= userData;
+      ctx->terminatedCB= cb;
+      
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      result= true;
+   }
+
+exit:
+
+   return result;   
 }
 
 bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneCallback cb, void *userData )
@@ -1222,6 +1254,14 @@ bool WstCompositorStart( WstCompositor *ctx )
          // If we are operating as a nested compostitor the name
          // of the wayland display we are to pass our composited output
          // to must be provided
+         if ( !ctx->nestedDisplayName )
+         {
+            char *var= getenv("WAYLAND_DISPLAY");
+            if ( var )
+            {
+               ctx->nestedDisplayName= strdup(var);
+            }
+         }
          if ( !ctx->nestedDisplayName )
          {
             sprintf( ctx->lastErrorDetail,
@@ -1841,9 +1881,7 @@ static void* wstCompositorThread( void *arg )
 	char arg1[MAX_NESTED_NAME_LEN+1];
 	char arg2[MAX_NESTED_NAME_LEN+1];
 	char arg3[MAX_NESTED_NAME_LEN+1];
-	char arg4[MAX_NESTED_NAME_LEN+1];
-	char arg5[MAX_NESTED_NAME_LEN+1];
-	char *argv[6]= { arg0, arg1, arg2, arg3, arg4, arg5 };
+	char *argv[4]= { arg0, arg1, arg2, arg3 };
 
    ctx->compositorThreadStarted= true;
 
@@ -1920,20 +1958,30 @@ static void* wstCompositorThread( void *arg )
 
    if ( ctx->isNested )
    {
-      argc= 6;
-      strcpy( arg0, "--display" );
-      strcpy( arg1, ctx->nestedDisplayName );
-      strcpy( arg2, "--width" );
-      sprintf( arg3, "%u", ctx->nestedWidth );
-      strcpy( arg4, "--height" );
-      sprintf( arg5, "%u", ctx->nestedHeight );
+      ctx->nc= WstNestedConnectionCreate( ctx, 
+                                          ctx->nestedDisplayName, 
+                                          ctx->nestedWidth, 
+                                          ctx->nestedHeight,
+                                          &ctx->nestedListener,
+                                          ctx );
+      if ( !ctx->nc )
+      {
+         ERROR( "Unable to create nested connection to display %s", ctx->nestedDisplayName );
+         goto exit;
+      }
+      
+      argc= 4;
+      strcpy( arg0, "--width" );
+      sprintf( arg1, "%u", ctx->outputWidth );
+      strcpy( arg2, "--height" );
+      sprintf( arg3, "%u", ctx->outputHeight );
    }
    else
    {
       argc= 0;
    }
    
-   ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, &ctx->nestedListener, ctx );
+   ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->nc );
    if ( !ctx->renderer )
    {
       ERROR("unable to initialize renderer module");
@@ -1974,24 +2022,6 @@ exit:
    
    ctx->compositorThreadStarted= false;
 
-   ctx->surfaceMap.clear();
-   
-   while( ctx->surfaceInfoMap.size() >  0 )
-   {
-      std::map<struct wl_resource*,WstSurfaceInfo*>::iterator it= ctx->surfaceInfoMap.begin();
-      WstSurfaceInfo *surfaceInfo= it->second;
-      ctx->surfaceInfoMap.erase( it );
-      free( surfaceInfo );
-   }   
-   
-   while( ctx->clientInfoMap.size() >  0 )
-   {
-      std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin();
-      WstClientInfo *clientInfo= it->second;
-      ctx->clientInfoMap.erase( it );
-      free( clientInfo );
-   }
-
    if ( ctx->displayTimer )
    {
       wl_event_source_remove( ctx->displayTimer );
@@ -2011,11 +2041,23 @@ exit:
       ctx->sb= 0;
    }
    #endif
+
+   if ( ctx->nc )
+   {
+      WstNestedConnectionDisconnect( ctx->nc );
+      ctx->nc= 0;
+   }
    
    if ( ctx->renderer )
    {
       WstRendererDestroy( ctx->renderer );
       ctx->renderer= 0;
+   }
+   
+   if ( ctx->nc )
+   {
+      WstNestedConnectionDestroy( ctx->nc );
+      ctx->nc= 0;
    }
    
    if ( ctx->seat )
@@ -2026,9 +2068,27 @@ exit:
    if ( ctx->display )
    {
       wl_display_destroy(ctx->display);
-      display= 0;      
+      ctx->display= 0;      
    }
    DEBUG("display: %s terminated", ctx->displayName );
+
+   ctx->surfaceMap.clear();
+   
+   while( ctx->surfaceInfoMap.size() >  0 )
+   {
+      std::map<struct wl_resource*,WstSurfaceInfo*>::iterator it= ctx->surfaceInfoMap.begin();
+      WstSurfaceInfo *surfaceInfo= it->second;
+      ctx->surfaceInfoMap.erase( it );
+      free( surfaceInfo );
+   }   
+   
+   while( ctx->clientInfoMap.size() >  0 )
+   {
+      std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin();
+      WstClientInfo *clientInfo= it->second;
+      ctx->clientInfoMap.erase( it );
+      free( clientInfo );
+   }
    
    return NULL;
 }
@@ -3369,6 +3429,22 @@ static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
    WESTEROS_UNUSED(resource);
 }                                             
 
+static void wstDefaultNestedConnectionEnded( void *userData )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   if ( ctx )
+   {
+      if ( ctx->display )
+      {
+         wl_display_terminate(ctx->display);
+      }
+      if ( ctx->terminatedCB )
+      {
+         ctx->terminatedCB( ctx, ctx->terminatedUserData );
+      }
+   }
+}
+
 static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -3662,6 +3738,7 @@ static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, ui
 static void wstSetDefaultNestedListener( WstCompositor *ctx )
 {
    ctx->nestedListenerUserData= ctx;
+   ctx->nestedListener.connectionEnded= wstDefaultNestedConnectionEnded;
    ctx->nestedListener.keyboardHandleKeyMap= wstDefaultNestedKeyboardHandleKeyMap;
    ctx->nestedListener.keyboardHandleEnter= wstDefaultNestedKeyboardHandleEnter;
    ctx->nestedListener.keyboardHandleLeave= wstDefaultNestedKeyboardHandleLeave;
@@ -3929,18 +4006,28 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
       
       if ( seat->compositor->clientInfoMap.size() > 0 )
       {
-         uint32_t serial;
-         
-         serial= wl_display_next_serial( seat->compositor->display );
-         surface= seat->compositor->clientInfoMap[client]->surface->resource;
-         wl_keyboard_send_enter( resourceKbd,
-                                 serial,
-                                 surface,
-                                 &keyboard->keys );
-
-         if ( !seat->compositor->isNested )
+         WstCompositor *compositor= seat->compositor;
+         for( std::map<struct wl_client*,WstClientInfo*>::iterator it= compositor->clientInfoMap.begin(); 
+              it != compositor->clientInfoMap.end(); ++it )
          {
-            wstKeyboardSendModifiers( keyboard, resourceKbd );
+            if ( it->first == client )
+            {
+               uint32_t serial;
+               
+               serial= wl_display_next_serial( compositor->display );
+               surface= compositor->clientInfoMap[client]->surface->resource;
+               wl_keyboard_send_enter( resourceKbd,
+                                       serial,
+                                       surface,
+                                       &keyboard->keys );
+
+               if ( !compositor->isNested )
+               {
+                  wstKeyboardSendModifiers( keyboard, resourceKbd );
+               }
+               
+               break;
+            }
          }
       }                              
    }                               

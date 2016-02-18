@@ -73,6 +73,7 @@ endif
 
 libwesteros_compositor_la_SOURCES = \
    westeros-compositor.cpp \
+   westeros-nested.cpp \
    westeros-render.cpp
 libwesteros_compositor_la_include_HEADERS = \
    westeros-compositor.h \

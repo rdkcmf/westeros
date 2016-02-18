@@ -228,6 +228,25 @@ uint32_t WstSBBufferGetFormat(struct wl_sb_buffer *buffer)
    return buffer->format;
 }
 
+int32_t WstSBBufferGetWidth(struct wl_sb_buffer *buffer)
+{
+   return buffer->width;
+}
+
+int32_t WstSBBufferGetHeight(struct wl_sb_buffer *buffer)
+{
+   return buffer->height;
+}
+
+void WstSBBufferGetPlaneOffsetAndStride(struct wl_sb_buffer *buffer, int plane, int32_t *offset, int32_t *stride )
+{
+   if ( (plane >=0 ) && (plane <= 2) )
+   {
+      *offset= buffer->offset[plane];
+      *stride= buffer->stride[plane];
+   }
+}
+
 void *WstSBBufferGetBuffer(struct wl_sb_buffer *buffer)
 {
    return buffer->driverBuffer;
