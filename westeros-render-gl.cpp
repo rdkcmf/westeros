@@ -1547,6 +1547,7 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
    EGLNativePixmapType eglPixmap= 0;
    EGLImageKHR eglImage= 0;
    int bufferWidth, bufferHeight;
+   bool resize= false;
    
    if ( buffer )
    {
@@ -1562,9 +1563,10 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
             surface->bufferWidth= bufferWidth;
             surface->bufferHeight= bufferHeight;
             surface->vertexCoordsDirty= 1;
+            resize= true;
          }
          
-         if ( eglPixmap != WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap) )
+         if ( resize || (eglPixmap != WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap)) )
          {
             /*
              * If the eglPixmap contained by the surface WstGLNativePixmap changed
