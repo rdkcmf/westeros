@@ -35,27 +35,42 @@ typedef enum _WstClient_status
    WstClient_disconnected
 } WstClient_status;
 
+typedef void (*WstTerminatedCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstInvalidateSceneCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstHidePointerCallback)( WstCompositor *ctx, bool hidePointer, void *userData );
 typedef void (*WstClientStatus)( WstCompositor *ctx, int status, int clientPID, int detail, void *userData );
 
+typedef void (*WstKeyboardHandleKeyMapCallback)( void *userData, uint32_t format, int fd, uint32_t size );
+typedef void (*WstKeyboardHandleEnterCallback)( void *userData, struct wl_array *keys );
+typedef void (*WstKeyboardHandleLeaveCallback)( void *userData );
+typedef void (*WstKeyboardHandleKeyCallback)( void *userData, uint32_t time, uint32_t key, uint32_t state );
+typedef void (*WstKeyboardHandleModifiersCallback)( void *userData, uint32_t mods_depressed, uint32_t mods_latched,
+                                                    uint32_t mods_locked, uint32_t group );
+typedef void (*WstKeyboardHandleRepeatInfoCallback)( void *userData, int32_t rate, int32_t delay );
+
+typedef void (*WstPointerHandleEnterCallback)( void *userData, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WstPointerHandleLeaveCallback)( void *userData );
+typedef void (*WstPointerHandleMotionCallback)( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WstPointerHandleButtonCallback)( void *userData, uint32_t time, uint32_t button, uint32_t state );
+typedef void (*WstPointerHandleAxisCallback)( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
+
 typedef struct _WstKeyboardNestedListener
 {
-   WSTCallbackKeyboardHandleKeyMap keyboardHandleKeyMap;
-   WSTCallbackKeyboardHandleEnter keyboardHandleEnter;
-   WSTCallbackKeyboardHandleLeave keyboardHandleLeave;
-   WSTCallbackKeyboardHandleKey keyboardHandleKey;
-   WSTCallbackKeyboardHandleModifiers keyboardHandleModifiers;
-   WSTCallbackKeyboardHandleRepeatInfo keyboardHandleRepeatInfo;
+   WstKeyboardHandleKeyMapCallback keyboardHandleKeyMap;
+   WstKeyboardHandleEnterCallback keyboardHandleEnter;
+   WstKeyboardHandleLeaveCallback keyboardHandleLeave;
+   WstKeyboardHandleKeyCallback keyboardHandleKey;
+   WstKeyboardHandleModifiersCallback keyboardHandleModifiers;
+   WstKeyboardHandleRepeatInfoCallback keyboardHandleRepeatInfo;
 } WstKeyboardNestedListener;
 
 typedef struct _WstPointerNestedListener
 {
-   WSTCallbackPointerHandleEnter pointerHandleEnter;
-   WSTCallbackPointerHandleLeave pointerHandleLeave;
-   WSTCallbackPointerHandleMotion pointerHandleMotion;
-   WSTCallbackPointerHandleButton pointerHandleButton;
-   WSTCallbackPointerHandleAxis pointerHandleAxis;
+   WstPointerHandleEnterCallback pointerHandleEnter;
+   WstPointerHandleLeaveCallback pointerHandleLeave;
+   WstPointerHandleMotionCallback pointerHandleMotion;
+   WstPointerHandleButtonCallback pointerHandleButton;
+   WstPointerHandleAxisCallback pointerHandleAxis;
 } WstPointerNestedListener;
 
 /**
@@ -238,6 +253,14 @@ void WstCompositorGetNestedSize( WstCompositor *ctx, unsigned int *width, unsign
  * This may be called at any time.
  */
 bool WstCompositorGetAllowCursorModification( WstCompositor *ctx );
+
+/**
+ * WstCompositorSetTerminatedCallback
+ *
+ * Specifies a callback for an embedded compositor to invoke to signal that it
+ * has terminated.
+ */
+bool WstCompositorSetTerminatedCallback( WstCompositor *ctx, WstTerminatedCallback cb, void *userData );
 
 /**
  * WstCompositorSetInvalidateCallback

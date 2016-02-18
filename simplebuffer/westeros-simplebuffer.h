@@ -1,7 +1,7 @@
 #ifndef _WESTEROS_SIMPLEBUFFER_H
 #define _WESTEROS_SIMPLEBUFFER_H
 
-#include <wayland-server.h>
+#include "wayland-server.h"
 
 #ifndef WL_SB_FORMAT_ENUM
 #define WL_SB_FORMAT_ENUM
@@ -93,6 +93,9 @@ wl_sb* WstSBInit( struct wl_display *display, struct wayland_sb_callbacks *callb
 void WstSBUninit( struct wl_sb *sb );
 struct wl_sb_buffer *WstSBBufferGet( struct wl_sb *sb, struct wl_resource *resource );
 uint32_t WstSBBufferGetFormat(struct wl_sb_buffer *buffer);
+int32_t WstSBBufferGetWidth(struct wl_sb_buffer *buffer);
+int32_t WstSBBufferGetHeight(struct wl_sb_buffer *buffer);
+void WstSBBufferGetPlaneOffsetAndStride(struct wl_sb_buffer *buffer, int plane, int32_t *offset, int32_t *stride );
 void *WstSBBufferGetBuffer(struct wl_sb_buffer *buffer);
 
 #endif

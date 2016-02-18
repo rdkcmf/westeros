@@ -407,6 +407,11 @@ WstPointerNestedListener pointerListener = {
    pointerHandleAxis
 };
 
+void compositorTerminated( WstCompositor *ctx, void *userData )
+{
+   g_running= false;
+}
+
 int main( int argc, char** argv)
 {
    int nRC= 0;
@@ -428,6 +433,12 @@ int main( int argc, char** argv)
    {
       printf("unable to create compositor instance\n");
       nRC= -1;
+      goto exit;
+   }
+   
+   if ( !WstCompositorSetTerminatedCallback( wctx, compositorTerminated, NULL ) )
+   {
+      error= true;
       goto exit;
    }
 
@@ -592,6 +603,7 @@ int main( int argc, char** argv)
             }
          }
       
+         g_running= true;
          if ( !(error= !WstCompositorStart( wctx )) )
          {
 	         sigint.sa_handler = signalHandler;
@@ -599,7 +611,6 @@ int main( int argc, char** argv)
 	         sigint.sa_flags = SA_RESETHAND;
 	         sigaction(SIGINT, &sigint, NULL);
 
-            g_running= true;
             while( g_running )
             {
                usleep( 10000 );
