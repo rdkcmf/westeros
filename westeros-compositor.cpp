@@ -1446,7 +1446,7 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
 {
    bool result= false;
    int rc;
-   int i, numArgs, numEnvVar;
+   int i, len, numArgs, numEnvVar;
    char work[256];
    char *p1, *p2;
    char **args= 0;
@@ -1543,14 +1543,22 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
       // Build environment for client
       if ( environ )
       {
-         int i= 0;
+         int i= numEnvVar= 0;
          for( ; ; )
          {
             char *var= environ[i];
             if ( var == NULL )
             {
-               numEnvVar= i;
                break;
+            }
+            len= strlen(var);
+            if ( (len >= 16) && !strncmp( "WAYLAND_DISPLAY=", var, 16) )
+            {
+               //skip this var
+            }
+            else
+            {
+               ++numEnvVar;
             }
             ++i;
          }
@@ -1565,9 +1573,18 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
          goto exit;
       }
       
-      for( int i= 0; i < numEnvVar; ++i )
+      for( int i= 0, j= 0; j < numEnvVar; ++i )
       {
-         env[i]= environ[i];
+         char *var= environ[i];
+         len= strlen(var);
+         if ( (len >= 16) && !strncmp( "WAYLAND_DISPLAY=", var, 16) )
+         {
+            //skip this var
+         }
+         else
+         {
+            env[j++]= environ[i];
+         }
       }
       sprintf( work, "WAYLAND_DISPLAY=%s", ctx->displayName );
       envDisplay= strdup( work );
