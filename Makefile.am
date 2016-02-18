@@ -112,6 +112,9 @@ else
 libwesteros_render_embedded_la_LDFLAGS= -lglut -lGL -lGLEW
 endif
 
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = westeros-compositor.pc
+
 distcleancheck_listfiles = *-libtool
 
 ## IPK Generation Support
