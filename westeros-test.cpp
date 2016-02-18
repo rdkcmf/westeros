@@ -137,6 +137,7 @@ static void drawFrame( AppCtx *ctx );
 static bool setupEGL( AppCtx *ctx );
 static void termEGL( AppCtx *ctx );
 static bool createSurface( AppCtx *ctx );
+static void resizeSurface( AppCtx *ctx, int dx, int dy, int width, int height );
 static void destroySurface( AppCtx *ctx );
 static bool setupGL( AppCtx *ctx );
 static bool renderGL( AppCtx *ctx );
@@ -507,6 +508,12 @@ static void processInputMain( AppCtx *ctx, int c )
       case 'l':
          printf("get all surfaces:\n");
          wl_simple_shell_get_surfaces( ctx->shell );
+         break;
+      case 'r':
+         ctx->planeWidth= (ctx->planeWidth == 1280) ? 640 : 1280;
+         ctx->planeHeight= (ctx->planeHeight == 720) ? 360 : 720;
+         printf("resize egl window to (%d,%d)\n", ctx->planeWidth, ctx->planeHeight );
+         resizeSurface( ctx, 0, 0, ctx->planeWidth, ctx->planeHeight);
          break;
    }
 }
@@ -1034,6 +1041,11 @@ static void destroySurface( AppCtx *ctx )
       wl_surface_destroy( ctx->surface );
       ctx->surface= 0;
    }
+}
+
+static void resizeSurface( AppCtx *ctx, int dx, int dy, int width, int height )
+{
+   wl_egl_window_resize( ctx->native, width, height, dx, dy );
 }
 
 static const char *vert_shader_text =
