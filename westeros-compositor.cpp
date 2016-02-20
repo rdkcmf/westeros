@@ -110,6 +110,34 @@ typedef struct _WstSeat
    WstPointer *pointer;
 } WstSeat;
 
+typedef struct _WstShm WstShm;
+typedef struct _WstShmPool WstShmPool;
+
+typedef struct _WstShmBuffer
+{
+   WstShmPool *pool;
+   struct wl_resource *bufferResource;
+   struct wl_buffer *bufferNested;
+   int32_t width;
+   int32_t height;
+   int32_t stride;
+   uint32_t format;
+} WstShmBuffer;
+
+typedef struct _WstShmPool
+{
+   WstShm *shm;
+   int32_t refCount;
+   struct wl_resource *poolResource;
+   struct wl_shm_pool *poolNested;
+} WstShmPool;
+
+typedef struct _WstShm
+{
+   WstCompositor *compositor;
+   struct wl_list resourceList;
+} WstShm;
+
 typedef enum _WstBufferType 
 {
   WstBufferType_null,
@@ -140,6 +168,7 @@ typedef struct _WstSurface
 	WstRenderer *renderer;
 	WstRenderSurface *surface;
 	std::vector<WstShellSurface*> shellSurface;
+	struct wl_surface *surfaceNested;
 	const char *roleName;
 	float zorder;
 
@@ -171,6 +200,7 @@ typedef struct _WstCompositor
    int framePeriodMillis;
    const char *rendererModule;
    bool isNested;
+   bool isRepeater;
    bool isEmbedded;
    const char *nestedDisplayName;
    unsigned int nestedWidth;
@@ -208,7 +238,8 @@ typedef struct _WstCompositor
 
    WstSeat *seat;
    WstRenderer *renderer;
-   
+
+   WstShm *shm;   
    WstNestedConnection *nc;
    void *nestedListenerUserData;
    WstNestedConnectionListener nestedListener;
@@ -240,6 +271,21 @@ static long long wstGetCurrentTimeMillis(void);
 static void wstCompositorComposeFrame( WstCompositor *ctx );
 static int wstCompositorDisplayTimeOut( void *data );
 static void wstCompositorScheduleRepaint( WstCompositor *ctx );
+static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
+static bool wstShmInit( WstCompositor *ctx );
+static void wstShmTerm( WstCompositor *ctx );
+static void wstIShmBufferDestroy(struct wl_client *client, struct wl_resource *resource);
+static void wstIShmPoolCreateBuffer( struct wl_client *client, struct wl_resource *resource,
+                                     uint32_t id, int32_t offset,
+                                     int32_t width, int32_t height,
+                                     int32_t stride, uint32_t format);
+static void wstShmBufferDestroy( struct wl_resource *resource );
+static void wstIShmPoolDestroy( struct wl_client *client, struct wl_resource *resource );
+static void wstIShmPoolResize( struct wl_client *client, struct wl_resource *resource, int32_t size );
+static void wstIShmCreatePool( struct wl_client *client, struct wl_resource *resource,
+                               uint32_t id, int fd, int32_t size );
+void wstShmDestroyPool( struct wl_resource *resource );  
+void wstShmPoolUnRef( WstShmPool *pool );                            
 static void wstCompositorBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
 static void wstDestroyCompositorCallback(struct wl_resource *resource);
 static void wstICompositorCreateSurface( struct wl_client *client, struct wl_resource *resource, uint32_t id);
@@ -407,11 +453,12 @@ static void wstDefaultNestedKeyboardHandleKey( void *userData, uint32_t time, ui
 static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mods_depressed, uint32_t mods_latched, 
                                                      uint32_t mods_locked, uint32_t group );
 static void wstDefaultNestedKeyboardHandleRepeatInfo( void *userData, int32_t rate, int32_t delay );
-static void wstDefaultNestedPointerHandleEnter( void *userData, wl_fixed_t sx, wl_fixed_t sy );
-static void wstDefaultNestedPointerHandleLeave( void *userData );
+static void wstDefaultNestedPointerHandleEnter( void *userData, struct wl_surface *surfaceNested, wl_fixed_t sx, wl_fixed_t sy );
+static void wstDefaultNestedPointerHandleLeave( void *userData, struct wl_surface *surfaceNested );
 static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy );
 static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state );
 static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
+static void wstDefaultNestedShmFormat( void *userData, uint32_t format );
 static void wstSetDefaultNestedListener( WstCompositor *ctx );
 static bool wstSeatInit( WstCompositor *ctx );
 static void wstSeatTerm( WstCompositor *ctx );
@@ -679,6 +726,39 @@ exit:
    return result;
 }
 
+bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set isRepeater while compositor is running" );
+         goto exit;
+      }
+                     
+      pthread_mutex_lock( &ctx->mutex );
+      
+      ctx->isRepeater= isRepeater;
+      if ( isRepeater )
+      {
+         ctx->isNested= true;
+         ctx->nestedWidth= 0;
+         ctx->nestedHeight= 0;
+      }
+               
+      pthread_mutex_unlock( &ctx->mutex );
+            
+      result= true;
+   }
+
+exit:
+   
+   return result;
+}
+
 bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded )
 {
    bool result= false;
@@ -918,6 +998,22 @@ bool WstCompositorGetIsNested( WstCompositor *ctx )
    }
    
    return isNested;
+}
+
+bool WstCompositorGetIsRepeater( WstCompositor *ctx )
+{
+   bool isRepeater= false;
+   
+   if ( ctx )
+   {               
+      pthread_mutex_lock( &ctx->mutex );
+      
+      isRepeater= ctx->isRepeater;
+               
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+   
+   return isRepeater;
 }
 
 bool WstCompositorGetIsEmbedded( WstCompositor *ctx )
@@ -1241,7 +1337,7 @@ bool WstCompositorStart( WstCompositor *ctx )
          ctx->rendererModule= strdup("libwesteros_render_embedded.so.0");
       }
       
-      if ( !ctx->rendererModule )
+      if ( !ctx->rendererModule && !ctx->isRepeater )
       {
          sprintf( ctx->lastErrorDetail,
                   "Error.  A renderer module must be supplied" );
@@ -1790,7 +1886,10 @@ static void simpleShellSetVisible( void* userData, uint32_t surfaceId, bool visi
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceSetVisible( ctx->renderer, surface->surface, visible );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceSetVisible( ctx->renderer, surface->surface, visible );
+      }
    }
 }
 
@@ -1801,7 +1900,10 @@ static void simpleShellGetVisible( void* userData, uint32_t surfaceId, bool *vis
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
+      }
    }
 }
 
@@ -1812,7 +1914,10 @@ static void simpleShellSetGeometry( void* userData, uint32_t surfaceId, int x, i
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceSetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceSetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+      }
    }
 }
 
@@ -1823,7 +1928,10 @@ static void simpleShellGetGeometry( void* userData, uint32_t surfaceId, int *x, 
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+      }
    }
 }
 
@@ -1834,7 +1942,10 @@ static void simpleShellSetOpacity( void* userData, uint32_t surfaceId, float opa
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceSetOpacity( ctx->renderer, surface->surface, opacity );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceSetOpacity( ctx->renderer, surface->surface, opacity );
+      }
    }
 }
 
@@ -1845,7 +1956,10 @@ static void simpleShellGetOpacity( void* userData, uint32_t surfaceId, float *op
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceGetOpacity( ctx->renderer, surface->surface, opacity );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceGetOpacity( ctx->renderer, surface->surface, opacity );
+      }
    }
 }
 
@@ -1856,10 +1970,13 @@ static void simpleShellSetZOrder( void* userData, uint32_t surfaceId, float zord
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceSetZOrder( ctx->renderer, surface->surface, zorder );
-      
-      surface->zorder= zorder;
-      wstSurfaceInsertSurface( ctx, surface );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceSetZOrder( ctx->renderer, surface->surface, zorder );
+         
+         surface->zorder= zorder;
+         wstSurfaceInsertSurface( ctx, surface );
+      }
    }
 }
 
@@ -1870,7 +1987,10 @@ static void simpleShellGetZOrder( void* userData, uint32_t surfaceId, float *zor
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, zorder );
+      if ( !surface->compositor->isRepeater )
+      {
+         WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, zorder );
+      }
    }
 }
 
@@ -1913,7 +2033,11 @@ static void* wstCompositorThread( void *arg )
 
    ctx->display= display;
 
-	wl_display_init_shm(ctx->display);
+   if ( !wstShmInit(ctx) )
+   {
+      ERROR("unable to create wl_shm interface");
+      goto exit;
+   }
 
 	if (!wl_global_create(ctx->display, &wl_compositor_interface, 3, ctx, wstCompositorBind))
 	{
@@ -1975,6 +2099,11 @@ static void* wstCompositorThread( void *arg )
 
    if ( ctx->isNested )
    {
+      if ( ctx->isRepeater )
+      {
+         ctx->nestedWidth= 0;
+         ctx->nestedHeight= 0;
+      }
       ctx->nc= WstNestedConnectionCreate( ctx, 
                                           ctx->nestedDisplayName, 
                                           ctx->nestedWidth, 
@@ -1998,11 +2127,14 @@ static void* wstCompositorThread( void *arg )
       argc= 0;
    }
    
-   ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->nc );
-   if ( !ctx->renderer )
+   if ( !ctx->isRepeater )
    {
-      ERROR("unable to initialize renderer module");
-      goto exit;
+      ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->nc );
+      if ( !ctx->renderer )
+      {
+         ERROR("unable to initialize renderer module");
+         goto exit;
+      }
    }
 
    #ifdef ENABLE_SBPROTOCOL
@@ -2071,6 +2203,11 @@ exit:
       ctx->renderer= 0;
    }
    
+   if ( ctx->shm )
+   {
+      wstShmTerm( ctx );
+   }
+   
    if ( ctx->nc )
    {
       WstNestedConnectionDestroy( ctx->nc );
@@ -2131,7 +2268,7 @@ static void wstCompositorComposeFrame( WstCompositor *ctx )
 
    ctx->needRepaint= false;
 
-   if ( !ctx->isEmbedded )
+   if ( !ctx->isEmbedded && !ctx->isRepeater )
    {
       WstRendererUpdateScene( ctx->renderer );
    }
@@ -2184,6 +2321,21 @@ static void wstCompositorScheduleRepaint( WstCompositor *ctx )
       ctx->needRepaint= true;
    }
 }
+
+static const struct wl_shm_interface shm_interface=
+{
+   wstIShmCreatePool
+};
+
+static const struct wl_shm_pool_interface shm_pool_interface= {
+   wstIShmPoolCreateBuffer,
+   wstIShmPoolDestroy,
+   wstIShmPoolResize
+};
+
+static const struct wl_buffer_interface shm_buffer_interface = {
+   wstIShmBufferDestroy
+};
 
 static const struct wl_compositor_interface compositor_interface= 
 {
@@ -2289,6 +2441,255 @@ static const struct wl_pointer_interface pointer_interface=
    wstIPointerRelease
 };
 
+static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
+{
+   WstShm *shm= (WstShm*)data;
+   struct wl_resource *resource;
+
+   DEBUG("wstShmBind: client %p data %p version %d id %d", client, data, version, id );
+
+   resource= wl_resource_create(client, 
+                                &wl_shm_interface,
+                                MIN(version, 1), 
+                                id);
+   if (!resource) 
+   {
+      wl_client_post_no_memory(client);
+      return;
+   }
+
+   wl_list_insert( &shm->resourceList, wl_resource_get_link(resource) );
+   wl_resource_set_implementation(resource, &shm_interface, shm, wstResourceUnBindCallback);
+
+	wl_shm_send_format(resource, WL_SHM_FORMAT_ARGB8888);
+	wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
+}
+
+static bool wstShmInit( WstCompositor *ctx )
+{
+   bool result= false;
+   int rc;
+   
+   /*
+    * Normally we use the shm services in wayland directly.  For a repeating
+    * compositor, however, we register our own shm service so we have
+    * access to the shared memory fd sent by the the client which allows
+    * us to forward the shared memory operations to the target compositor
+    * we are connected to.
+    */
+   if ( ctx->isRepeater )
+   {
+      ctx->shm= (WstShm*)calloc( 1, sizeof(WstShm) );
+      if ( ctx->shm )
+      {
+         ctx->shm->compositor= ctx;
+         wl_list_init( &ctx->shm->resourceList );
+         
+         if ( wl_global_create(ctx->display, &wl_shm_interface, 1, ctx->shm, wstShmBind) )
+         {
+            result= true;
+         }
+      }
+      else
+      {
+         ERROR("no memory to allocate compositor shm ctx");
+      }
+   }
+   else
+   {
+      rc= wl_display_init_shm(ctx->display);
+      if ( !rc )
+      {
+         result= true;
+      }
+   }
+   
+   return result;
+}
+
+static void wstShmTerm( WstCompositor *ctx )
+{
+   if ( ctx->isRepeater )
+   {
+      if ( ctx->shm )
+      {
+         struct wl_resource *resource;
+         WstShm *shm= ctx->shm;
+         
+         while( !wl_list_empty( &shm->resourceList ) )
+         {
+            resource= wl_container_of( shm->resourceList.next, resource, link);
+            wl_resource_destroy(resource);
+         }
+         
+         free( ctx->shm );
+         ctx->shm= 0;
+      }
+   }
+}
+
+static void wstIShmBufferDestroy(struct wl_client *client, struct wl_resource *resource)
+{
+   wl_resource_destroy(resource);
+}
+
+static void wstIShmPoolCreateBuffer( struct wl_client *client, struct wl_resource *resource,
+                                     uint32_t id, int32_t offset,
+                                     int32_t width, int32_t height,
+                                     int32_t stride, uint32_t format)
+{
+   WstShmPool *pool= (WstShmPool*)wl_resource_get_user_data(resource);
+   
+   if ( pool )
+   {
+      WstShmBuffer *buffer= (WstShmBuffer*)calloc( 1, sizeof(WstShmBuffer) );
+      if ( !buffer )
+      {
+         wl_client_post_no_memory(client);
+         return;
+      }
+      
+      buffer->pool= pool;
+      buffer->bufferResource= wl_resource_create(client, &wl_buffer_interface, 1, id);
+      if ( !buffer->bufferResource )
+      {
+         wl_client_post_no_memory(client);
+         free( buffer );
+         return;
+      }
+      
+      buffer->pool->refCount++;
+      
+      wl_resource_set_implementation(buffer->bufferResource,
+                                     &shm_buffer_interface,
+                                     buffer, wstShmBufferDestroy);
+      
+      
+      buffer->width= width;
+      buffer->height= height;
+      buffer->stride= stride;
+      buffer->format= format;
+      buffer->bufferNested= WstNestedConnectionShmPoolCreateBuffer( pool->shm->compositor->nc,
+                                                                    pool->poolNested,
+                                                                    offset,
+                                                                    width,
+                                                                    height,
+                                                                    stride,
+                                                                    format );
+   }
+}                                
+
+void wstShmBufferDestroy( struct wl_resource *resource )
+{
+   WstShmBuffer *buffer= (WstShmBuffer*)wl_resource_get_user_data(resource);
+   if ( buffer )
+   {
+      if ( buffer->bufferNested )
+      {
+         WstNestedConnectionShmBufferPoolDestroy( buffer->pool->shm->compositor->nc, buffer->pool->poolNested, buffer->bufferNested );
+      }
+      if ( buffer->pool )
+      {
+         wstShmPoolUnRef( buffer->pool );
+      }
+      free( buffer );
+   }
+}
+
+static void wstIShmPoolDestroy( struct wl_client *client, struct wl_resource *resource )
+{
+   wl_resource_destroy(resource);
+}
+
+static void wstIShmPoolResize( struct wl_client *client, struct wl_resource *resource, int32_t size )
+{
+   WstShmPool *pool= (WstShmPool*)wl_resource_get_user_data(resource);
+   
+   if ( pool )
+   {
+      WstShm *shm= pool->shm;
+
+      WstNestedConnectionShmPoolResize( shm->compositor->nc, pool->poolNested, size );         
+   }
+}
+
+static void wstIShmCreatePool( struct wl_client *client, struct wl_resource *resource,
+                              uint32_t id, int fd, int32_t size )
+{
+   WstShm *shm= (WstShm*)wl_resource_get_user_data(resource);
+   
+   if ( shm->compositor )
+   {
+      WstNestedConnection *nc;
+      
+      nc= shm->compositor->nc;
+      if ( nc )
+      {
+         WstShmPool *pool= 0;
+         
+         pool= (WstShmPool*)calloc( 1, sizeof(WstShmPool) );
+         if ( !pool )
+         {
+            wl_resource_post_no_memory(resource);
+            return;
+         }
+   
+         pool->shm= shm;      
+         pool->refCount= 1;
+         
+         pool->poolResource= wl_resource_create(client, &wl_shm_pool_interface, 1, id);
+         if ( !pool->poolResource )
+         {
+            wl_resource_post_no_memory(resource);
+            free( pool );
+            return;
+         }
+
+         wl_resource_set_implementation(pool->poolResource,
+                                        &shm_pool_interface,
+                                        pool, wstShmDestroyPool);
+         
+         pool->poolNested= WstNestedConnnectionShmCreatePool( nc, fd, size );
+         if ( !pool->poolNested )
+         {
+            wl_resource_destroy( pool->poolResource );
+            wl_resource_post_no_memory(resource);
+            free( pool );
+            return;
+         }
+      }   
+   }   
+}
+
+void wstShmDestroyPool( struct wl_resource *resource )
+{
+   WstShmPool *pool= (WstShmPool*)wl_resource_get_user_data(resource);
+   
+   if ( pool )
+   {
+      WstShm *shm= pool->shm;
+      
+      wstShmPoolUnRef( pool );
+   }
+}
+
+void wstShmPoolUnRef( WstShmPool *pool )
+{
+   if ( pool )
+   {
+      --pool->refCount;
+      if ( !pool->refCount )
+      {
+         WstShm *shm= pool->shm;
+         if ( pool->poolNested )
+         {
+            WstNestedConnectionShmDestroyPool( shm->compositor->nc, pool->poolNested );
+         }
+         free( pool );
+      }
+   }
+}
+                              
 static void wstCompositorBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
    WstCompositor *ctx= (WstCompositor*)data;
@@ -2439,19 +2840,32 @@ static WstSurface* wstSurfaceCreate( WstCompositor *ctx)
       
       surface->surfaceId= ctx->nextSurfaceId++;
       ctx->surfaceMap.insert( std::pair<int32_t,WstSurface*>( surface->surfaceId, surface ) );
-      
-      surface->renderer= ctx->renderer;
-      
-      wl_list_init(&surface->frameCallbackList);
-      
-      surface->surface= WstRendererSurfaceCreate( ctx->renderer );
-      if ( !surface->surface )
-      {
-         free( surface );
-         surface= 0;
-      }
 
-      WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, &surface->zorder );
+      wl_list_init(&surface->frameCallbackList);
+
+      if ( ctx->isRepeater )
+      {
+         surface->surfaceNested= WstNestedConnectionCreateSurface( ctx->nc );
+         if ( !surface->surfaceNested )
+         {
+            free( surface );
+            surface= 0;
+         }
+      }
+      else
+      {
+         surface->renderer= ctx->renderer;
+         
+         surface->surface= WstRendererSurfaceCreate( ctx->renderer );
+         if ( !surface->surface )
+         {
+            free( surface );
+            surface= 0;
+         }
+
+         WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, &surface->zorder );
+      }
+      
       wstSurfaceInsertSurface( ctx, surface );
    }
    
@@ -2503,6 +2917,13 @@ static void wstSurfaceDestroy( WstSurface *surface )
          ctx->surfaceMap.erase(it);
          break;
       }
+   }
+
+   // Cleanup any nested connection surface
+   if ( surface->surfaceNested )
+   {
+      WstNestedConnectionDestroySurface( ctx->nc, surface->surfaceNested );
+      surface->surfaceNested= 0;
    }
 
    // Cleanup renderer surface
@@ -2711,6 +3132,11 @@ static void wstISurfaceAttach(struct wl_client *client,
       {
          surface->attachedBufferType= WstBufferType_shm;
       }
+      else if ( surface->compositor->isRepeater && 
+                wl_resource_instance_of( buffer_resource, &wl_buffer_interface, &shm_buffer_interface ) )
+      {
+         surface->attachedBufferType= WstBufferType_shm;
+      }
       #ifdef ENABLE_SBPROTOCOL
       else if ( WstSBBufferGet( surface->compositor->sb, buffer_resource ) )
       {
@@ -2792,61 +3218,88 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
       {
          case WstBufferType_shm:
             {
+               int width, height;
                struct wl_shm_buffer *shmBuffer;
                
-               shmBuffer= wl_shm_buffer_get( surface->attachedBufferResource );
-               if ( shmBuffer )
+               if ( surface->compositor->isRepeater )
                {
-                  int width, height, stride, format;
-                  void *data;
-                  
-                  width= wl_shm_buffer_get_width(shmBuffer);
-                  height= wl_shm_buffer_get_height(shmBuffer);
-                  stride= wl_shm_buffer_get_stride(shmBuffer);
-                  switch( wl_shm_buffer_get_format(shmBuffer) )
+                  if ( wl_resource_instance_of( surface->attachedBufferResource, &wl_buffer_interface, &shm_buffer_interface ) )
                   {
-                     case WL_SHM_FORMAT_ARGB8888:
-                        format= WstRenderer_format_ARGB8888;
-                        break;
-                     case WL_SHM_FORMAT_XRGB8888:
-                        format= WstRenderer_format_XRGB8888;
-                        break;
-                     case WL_SHM_FORMAT_BGRA8888:
-                        format= WstRenderer_format_BGRA8888;
-                        break;
-                     case WL_SHM_FORMAT_BGRX8888:
-                        format= WstRenderer_format_BGRX8888;
-                        break;
-                     case WL_SHM_FORMAT_RGB565:
-                        format= WstRenderer_format_RGB565;
-                        break;
-                     case WL_SHM_FORMAT_ARGB4444:
-                        format= WstRenderer_format_ARGB4444;
-                        break;
-                     default:
-                        WARNING("unsupported pixel format: %d", wl_shm_buffer_get_format(shmBuffer));
-                        format= WstRenderer_format_unknown;
-                        break;
+                     WstShmBuffer *buffer= (WstShmBuffer*)wl_resource_get_user_data(surface->attachedBufferResource);
+                     if ( buffer )
+                     {
+                        width= buffer->width;
+                        height= buffer->height;
+                        
+                        WstNestedConnectionAttachAndCommit( surface->compositor->nc,
+                                                            surface->surfaceNested,
+                                                            buffer->bufferNested,
+                                                            0,
+                                                            0,
+                                                            width, 
+                                                            height );
+
+                        wstCompositorScheduleRepaint( surface->compositor );
+                     }
                   }
-
-                  if ( format != WstRenderer_format_unknown )
+               }
+               else
+               {
+                  shmBuffer= wl_shm_buffer_get( surface->attachedBufferResource );
+                  if ( shmBuffer )
                   {
-                     wl_shm_buffer_begin_access(shmBuffer);
-                     data= wl_shm_buffer_get_data(shmBuffer);
-                     
-                     pthread_mutex_lock( &surface->compositor->mutex );
-                     WstRendererSurfaceCommitMemory( surface->renderer,
-                                                     surface->surface,
-                                                     data,
-                                                     width,
-                                                     height,
-                                                     format,
-                                                     stride );      
-                     pthread_mutex_unlock( &surface->compositor->mutex );
-                     
-                     wl_shm_buffer_end_access(shmBuffer);
+                     int stride, format;
+                     void *data;
 
-                     wstCompositorScheduleRepaint( surface->compositor );
+                     width= wl_shm_buffer_get_width(shmBuffer);
+                     height= wl_shm_buffer_get_height(shmBuffer);
+                     stride= wl_shm_buffer_get_stride(shmBuffer);
+                     
+                     switch( wl_shm_buffer_get_format(shmBuffer) )
+                     {
+                        case WL_SHM_FORMAT_ARGB8888:
+                           format= WstRenderer_format_ARGB8888;
+                           break;
+                        case WL_SHM_FORMAT_XRGB8888:
+                           format= WstRenderer_format_XRGB8888;
+                           break;
+                        case WL_SHM_FORMAT_BGRA8888:
+                           format= WstRenderer_format_BGRA8888;
+                           break;
+                        case WL_SHM_FORMAT_BGRX8888:
+                           format= WstRenderer_format_BGRX8888;
+                           break;
+                        case WL_SHM_FORMAT_RGB565:
+                           format= WstRenderer_format_RGB565;
+                           break;
+                        case WL_SHM_FORMAT_ARGB4444:
+                           format= WstRenderer_format_ARGB4444;
+                           break;
+                        default:
+                           WARNING("unsupported pixel format: %d", wl_shm_buffer_get_format(shmBuffer));
+                           format= WstRenderer_format_unknown;
+                           break;
+                     }
+
+                     if ( format != WstRenderer_format_unknown )
+                     {
+                        wl_shm_buffer_begin_access(shmBuffer);
+                        data= wl_shm_buffer_get_data(shmBuffer);
+                        
+                        pthread_mutex_lock( &surface->compositor->mutex );
+                        WstRendererSurfaceCommitMemory( surface->renderer,
+                                                        surface->surface,
+                                                        data,
+                                                        width,
+                                                        height,
+                                                        format,
+                                                        stride );      
+                        pthread_mutex_unlock( &surface->compositor->mutex );
+                        
+                        wl_shm_buffer_end_access(shmBuffer);
+
+                        wstCompositorScheduleRepaint( surface->compositor );
+                     }
                   }
                }
             }
@@ -2863,9 +3316,34 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                   deviceBuffer= WstSBBufferGetBuffer( sbBuffer );
                   if ( deviceBuffer )
                   {
-                     pthread_mutex_lock( &surface->compositor->mutex );
-                     WstRendererSurfaceCommit( surface->renderer, surface->surface, deviceBuffer );
-                     pthread_mutex_unlock( &surface->compositor->mutex );
+                     if ( surface->compositor->isRepeater )
+                     {
+                        struct wl_buffer *buffer;
+                        int width, height, stride;
+                        uint32_t format;
+                        
+                        width= WstSBBufferGetWidth( sbBuffer );
+                        height= WstSBBufferGetHeight( sbBuffer );
+                        format= WstSBBufferGetFormat( sbBuffer );
+                        stride= WstSBBufferGetStride( sbBuffer );
+                        
+                        WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
+                                                            surface->surfaceNested,
+                                                            deviceBuffer,
+                                                            format,
+                                                            stride,
+                                                            0,
+                                                            0,
+                                                            width, 
+                                                            height );
+                        
+                     }
+                     else
+                     {
+                        pthread_mutex_lock( &surface->compositor->mutex );
+                        WstRendererSurfaceCommit( surface->renderer, surface->surface, deviceBuffer );
+                        pthread_mutex_unlock( &surface->compositor->mutex );
+                     }
                      
                      wstCompositorScheduleRepaint( surface->compositor );
                   }
@@ -3620,7 +4098,7 @@ static void wstDefaultNestedKeyboardHandleRepeatInfo( void *userData, int32_t ra
    }                       
 }
 
-static void wstDefaultNestedPointerHandleEnter( void *userData, wl_fixed_t sx, wl_fixed_t sy )
+static void wstDefaultNestedPointerHandleEnter( void *userData, struct wl_surface *surfaceNested, wl_fixed_t sx, wl_fixed_t sy )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
@@ -3636,26 +4114,59 @@ static void wstDefaultNestedPointerHandleEnter( void *userData, wl_fixed_t sx, w
          if ( ctx->seat )
          {
             WstPointer *pointer= ctx->seat->pointer;
-            if (  pointer )
+            if ( pointer )
             {
                int x, y;
                
                x= wl_fixed_to_int( sx );
                y= wl_fixed_to_int( sy );
-               
-               pointer->entered= true;
-               
-               pointer->pointerX= x;
-               pointer->pointerY= y;
-               
-               wstPointerCheckFocus( pointer, x, y );
+
+               if ( ctx->isRepeater )
+               {
+                  WstSurface *surface= 0;
+                  
+                  for( int i= 0; i < ctx->surfaces.size(); ++i )
+                  {
+                     if ( ctx->surfaces[i]->surfaceNested == surfaceNested )
+                     {
+                        surface= ctx->surfaces[i];
+                        break;
+                     }
+                  }
+                  if ( surface )
+                  {
+                     uint32_t serial;
+                     struct wl_resource *resource;
+                     struct wl_client *surfaceClient;
+                     
+                     pointer->focus= surface;
+                     
+                     surfaceClient= wl_resource_get_client( pointer->focus->resource );
+                     wstPointerMoveFocusToClient( pointer, surfaceClient );
+
+                     serial= wl_display_next_serial( ctx->display );
+                     wl_resource_for_each( resource, &pointer->focusResourceList )
+                     {
+                        wl_pointer_send_enter( resource, serial, pointer->focus->resource, x, y );
+                     }
+                  }
+               }
+               else
+               {
+                  pointer->entered= true;
+                  
+                  pointer->pointerX= x;
+                  pointer->pointerY= y;
+                  
+                  wstPointerCheckFocus( pointer, x, y );
+               }
             }
          }
       }
    }
 }
 
-static void wstDefaultNestedPointerHandleLeave( void *userData )
+static void wstDefaultNestedPointerHandleLeave( void *userData, struct wl_surface *surfaceNested )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
@@ -3672,7 +4183,37 @@ static void wstDefaultNestedPointerHandleLeave( void *userData )
             WstPointer *pointer= ctx->seat->pointer;
             if (  pointer )
             {
-               wstProcessPointerLeave( pointer );
+               if ( ctx->isRepeater )
+               {
+                  WstSurface *surface= 0;
+                  
+                  for( int i= 0; i < ctx->surfaces.size(); ++i )
+                  {
+                     if ( ctx->surfaces[i]->surfaceNested == surfaceNested )
+                     {
+                        surface= ctx->surfaces[i];
+                        break;
+                     }
+                  }
+                  if ( surface )
+                  {
+                     uint32_t serial;
+                     struct wl_resource *resource;
+                     struct wl_client *surfaceClient;
+
+                     serial= wl_display_next_serial( ctx->display );
+                     surfaceClient= wl_resource_get_client( pointer->focus->resource );
+                     wl_resource_for_each( resource, &pointer->focusResourceList )
+                     {
+                        wl_pointer_send_leave( resource, serial, pointer->focus->resource );
+                     }
+                     pointer->focus= 0;
+                  }
+               }
+               else
+               {
+                  wstProcessPointerLeave( pointer );
+               }
             }
          }
       }
@@ -3752,6 +4293,21 @@ static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, ui
    }
 }
 
+static void wstDefaultNestedShmFormat( void *userData, uint32_t format )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx && ctx->shm )
+   {
+      struct wl_resource *resource;
+      
+      wl_resource_for_each( resource, &ctx->shm->resourceList )
+      {
+         wl_shm_send_format(resource, format);
+      }   
+   }
+}
+
 static void wstSetDefaultNestedListener( WstCompositor *ctx )
 {
    ctx->nestedListenerUserData= ctx;
@@ -3766,7 +4322,8 @@ static void wstSetDefaultNestedListener( WstCompositor *ctx )
    ctx->nestedListener.pointerHandleLeave= wstDefaultNestedPointerHandleLeave;
    ctx->nestedListener.pointerHandleMotion= wstDefaultNestedPointerHandleMotion;
    ctx->nestedListener.pointerHandleButton= wstDefaultNestedPointerHandleButton;
-   ctx->nestedListener.pointerHandleAxis= wstDefaultNestedPointerHandleAxis;   
+   ctx->nestedListener.pointerHandleAxis= wstDefaultNestedPointerHandleAxis;
+   ctx->nestedListener.shmFormat= wstDefaultNestedShmFormat;
 }
 
 static bool wstSeatInit( WstCompositor *ctx )
@@ -4019,7 +4576,7 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
                             seat->compositor->xkbKeymapSize );
 
    {
-      struct wl_resource *surface= 0;
+      struct wl_resource *surfaceResource= 0;
       
       if ( seat->compositor->clientInfoMap.size() > 0 )
       {
@@ -4029,18 +4586,25 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
          {
             if ( it->first == client )
             {
-               uint32_t serial;
+               WstSurface *surface;
                
-               serial= wl_display_next_serial( compositor->display );
-               surface= compositor->clientInfoMap[client]->surface->resource;
-               wl_keyboard_send_enter( resourceKbd,
-                                       serial,
-                                       surface,
-                                       &keyboard->keys );
-
-               if ( !compositor->isNested )
+               surface= compositor->clientInfoMap[client]->surface;
+               if ( surface )
                {
-                  wstKeyboardSendModifiers( keyboard, resourceKbd );
+                  uint32_t serial;
+                  
+                  serial= wl_display_next_serial( compositor->display );
+                  surfaceResource= surface->resource;
+                                 
+                  wl_keyboard_send_enter( resourceKbd,
+                                          serial,
+                                          surfaceResource,
+                                          &keyboard->keys );
+
+                  if ( !compositor->isNested )
+                  {
+                     wstKeyboardSendModifiers( keyboard, resourceKbd );
+                  }
                }
                
                break;
@@ -4103,29 +4667,38 @@ static void wstIPointerSetCursor( struct wl_client *client,
       }
    }
    
-   if ( compositor->allowModifyCursor )
+   if ( compositor->isRepeater )
    {
-      wstPointerSetPointer( pointer, surface );
-      
-      if ( pointer->pointerSurface )
-      {
-         pointer->hotSpotX= hotspot_x;
-         pointer->hotSpotY= hotspot_y;
-         
-         wstPointerUpdatePosition( pointer );
-      }
-
-      if ( compositor->invalidateCB )
-      {
-         compositor->invalidateCB( compositor, compositor->invalidateUserData );
-      }
+      WstNestedConnectionPointerSetCursor( compositor->nc, 
+                                           surface ? surface->surfaceNested : NULL, 
+                                           hotspot_x, hotspot_y );
    }
    else
    {
-      if ( surface )
+      if ( compositor->allowModifyCursor )
       {
-         // Hide the client's cursor surface. We will continue to use default pointer image.
-         WstRendererSurfaceSetVisible( compositor->renderer, surface->surface, false );
+         wstPointerSetPointer( pointer, surface );
+         
+         if ( pointer->pointerSurface )
+         {
+            pointer->hotSpotX= hotspot_x;
+            pointer->hotSpotY= hotspot_y;
+            
+            wstPointerUpdatePosition( pointer );
+         }
+
+         if ( compositor->invalidateCB )
+         {
+            compositor->invalidateCB( compositor, compositor->invalidateUserData );
+         }
+      }
+      else
+      {
+         if ( surface )
+         {
+            // Hide the client's cursor surface. We will continue to use default pointer image.
+            WstRendererSurfaceSetVisible( compositor->renderer, surface->surface, false );
+         }
       }
    }
 }
@@ -4428,38 +5001,54 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
    uint32_t time;
    struct wl_resource *resource;
 
-   pointer->pointerX= x;
-   pointer->pointerY= y;
-   
-   wstPointerCheckFocus( pointer, x, y );
-      
-   if ( pointer->focus )
+   if ( compositor->isRepeater )
    {
       wl_fixed_t xFixed, yFixed;
 
-      WstRendererSurfaceGetGeometry( compositor->renderer, pointer->focus->surface, &sx, &sy, &sw, &sh );
-      
-      if ( compositor->isEmbedded )
-      {
-         x= (x*compositor->renderer->resW/compositor->renderer->outputWidth);
-         y= (y*compositor->renderer->resH/compositor->renderer->outputHeight);
-      }
-      
-      xFixed= wl_fixed_from_int( x-sx );
-      yFixed= wl_fixed_from_int( y-sy );
+      xFixed= wl_fixed_from_int( x );
+      yFixed= wl_fixed_from_int( y );
       
       time= (uint32_t)wstGetCurrentTimeMillis();
       wl_resource_for_each( resource, &pointer->focusResourceList )
       {
          wl_pointer_send_motion( resource, time, xFixed, yFixed );
       }
+   }
+   else
+   {
+      pointer->pointerX= x;
+      pointer->pointerY= y;
       
-      if ( pointer->pointerSurface )
+      wstPointerCheckFocus( pointer, x, y );
+         
+      if ( pointer->focus )
       {
-         wstPointerUpdatePosition( pointer );
+         wl_fixed_t xFixed, yFixed;
+
+         WstRendererSurfaceGetGeometry( compositor->renderer, pointer->focus->surface, &sx, &sy, &sw, &sh );
+         
+         if ( compositor->isEmbedded )
+         {
+            x= (x*compositor->renderer->resW/compositor->renderer->outputWidth);
+            y= (y*compositor->renderer->resH/compositor->renderer->outputHeight);
+         }
+         
+         xFixed= wl_fixed_from_int( x-sx );
+         yFixed= wl_fixed_from_int( y-sy );
+         
+         time= (uint32_t)wstGetCurrentTimeMillis();
+         wl_resource_for_each( resource, &pointer->focusResourceList )
+         {
+            wl_pointer_send_motion( resource, time, xFixed, yFixed );
+         }
+         
+         if ( pointer->pointerSurface )
+         {
+            wstPointerUpdatePosition( pointer );
+         }
+         
+         wstCompositorScheduleRepaint( compositor );
       }
-      
-      wstCompositorScheduleRepaint( compositor );
    }
 }
 
@@ -4486,72 +5075,80 @@ static void wstProcessPointerButtonEvent( WstPointer *pointer, uint32_t button, 
 static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
 {
    WstCompositor *compositor= pointer->seat->compositor;
-   WstSurface *surface= 0;
-   int sx, sy, sw, sh;
-   wl_fixed_t xFixed, yFixed;
-   bool haveRoles= false;
-   WstSurface *surfaceNoRole= 0;
-
-   // Identify top-most surface containing the pointer position
-   for ( std::vector<WstSurface*>::reverse_iterator it= compositor->surfaces.rbegin(); 
-         it != compositor->surfaces.rend();
-         ++it )
+   
+   if ( !compositor->isRepeater )
    {
-      surface= (*it);
-      
-      WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
-      
-      // If this client is using surfaces with roles (eg xdg shell surfaces) then we only
-      // want to assign focus to surfaces with appropriate roles.  However, we take note of
-      // the best choice of surfaces with no role.  If we don't find a hit with a roled surface
-      // and there was no use of roles, then we set focus on the best hit with  a surface
-      // with no role.  This will happen if the client is a nested compositor instance.
-      if ( surface->roleName )
-      {
-         haveRoles= true;
-      }
+      WstSurface *surface= 0;
+      int sx, sy, sw, sh;
+      wl_fixed_t xFixed, yFixed;
+      bool haveRoles= false;
+      WstSurface *surfaceNoRole= 0;
 
-      if ( (x >= sx) && (x < sx+sw) && (y >= sy) && (y < sy+sh) )
+      // Identify top-most surface containing the pointer position
+      for ( std::vector<WstSurface*>::reverse_iterator it= compositor->surfaces.rbegin(); 
+            it != compositor->surfaces.rend();
+            ++it )
       {
-         bool eligible= true;
+         surface= (*it);
          
+         WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
+         
+         // If this client is using surfaces with roles (eg xdg shell surfaces) then we only
+         // want to assign focus to surfaces with appropriate roles.  However, we take note of
+         // the best choice of surfaces with no role.  If we don't find a hit with a roled surface
+         // and there was no use of roles, then we set focus on the best hit with  a surface
+         // with no role.  This will happen if the client is a nested compositor instance.
          if ( surface->roleName )
          {
             int len= strlen(surface->roleName );
-            if ( (len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len ) )
+            if ( !((len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len )) )
             {
-               eligible= false;
-            } 
-         }
-         else
-         {
-            if ( !surfaceNoRole )
-            {
-               surfaceNoRole= surface;
+               haveRoles= true;
             }
-            eligible= false;
          }
-         if ( eligible )
+
+         if ( (x >= sx) && (x < sx+sw) && (y >= sy) && (y < sy+sh) )
          {
-            break;
+            bool eligible= true;
+            
+            if ( surface->roleName )
+            {
+               int len= strlen(surface->roleName );
+               if ( (len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len ) )
+               {
+                  eligible= false;
+               } 
+            }
+            else
+            {
+               if ( !surfaceNoRole )
+               {
+                  surfaceNoRole= surface;
+               }
+               eligible= false;
+            }
+            if ( eligible )
+            {
+               break;
+            }
          }
+         
+         surface= 0;
       }
       
-      surface= 0;
-   }
-   
-   if ( !surface && !haveRoles )
-   {
-      surface= surfaceNoRole;
-   }
-   
-   if ( pointer->focus != surface )
-   {
-      xFixed= wl_fixed_from_int( x-sx );
-      yFixed= wl_fixed_from_int( y-sy );
+      if ( !surface && !haveRoles )
+      {
+         surface= surfaceNoRole;
+      }
+      
+      if ( pointer->focus != surface )
+      {
+         xFixed= wl_fixed_from_int( x-sx );
+         yFixed= wl_fixed_from_int( y-sy );
 
-      wstPointerSetFocus( pointer, surface, xFixed, yFixed );
-   }   
+         wstPointerSetFocus( pointer, surface, xFixed, yFixed );
+      }   
+   }
 }
 
 static void wstPointerSetPointer( WstPointer *pointer, WstSurface *surface )

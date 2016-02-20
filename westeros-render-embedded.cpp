@@ -36,8 +36,8 @@
 
 #define WST_UNUSED( n ) ((void)n)
 
-#define DEFAULT_SURFACE_WIDTH (640)
-#define DEFAULT_SURFACE_HEIGHT (360)
+#define DEFAULT_SURFACE_WIDTH (0)
+#define DEFAULT_SURFACE_HEIGHT (0)
 
 // assume premultiplied
 static const char *fTextureShaderText =

@@ -6,6 +6,10 @@
 
 #include "westeros-nested.h"
 
+#ifdef ENABLE_SBPROTOCOL
+#include "simplebuffer-client-protocol.h"
+#endif
+
 #define WST_UNUSED(x) ((void)(x))
 
 typedef struct _WstNestedConnection
@@ -14,6 +18,10 @@ typedef struct _WstNestedConnection
    struct wl_display *display;
    struct wl_registry *registry;
    struct wl_compositor *compositor;
+   struct wl_shm *shm;
+   #ifdef ENABLE_SBPROTOCOL
+   struct wl_sb *sb;
+   #endif
    struct wl_surface *surface;
    struct wl_seat *seat;
    struct wl_keyboard *keyboard;
@@ -26,6 +34,7 @@ typedef struct _WstNestedConnection
    bool started;
    bool stopRequested;
    pthread_t nestedThreadId;
+   uint32_t pointerEnterSerial;
 } WstNestedConnection;
 
 
@@ -122,8 +131,9 @@ static void pointerHandleEnter( void *data, struct wl_pointer *pointer,
    
    if ( nc->nestedListener )
    {
+      nc->pointerEnterSerial= serial;
       nc->nestedListener->pointerHandleEnter( nc->nestedListenerUserData,
-                                              sx, sy );
+                                              surface, sx, sy );
    }
 }
 
@@ -134,7 +144,7 @@ static void pointerHandleLeave( void *data, struct wl_pointer *pointer,
    
    if ( nc->nestedListener )
    {
-      nc->nestedListener->pointerHandleLeave( nc->nestedListenerUserData );
+      nc->nestedListener->pointerHandleLeave( nc->nestedListenerUserData, surface );
    }
 }
 
@@ -216,6 +226,43 @@ static const struct wl_seat_listener seatListener = {
    seatName 
 };
 
+static void shmFormat( void *data, struct wl_shm *shm, uint32_t format )
+{
+	WstNestedConnection *nc = (WstNestedConnection*)data;
+	
+   if ( nc->nestedListener )
+   {
+      switch ( format )
+      {
+         case WL_SHM_FORMAT_ARGB8888:
+         case WL_SHM_FORMAT_XRGB8888:
+            // Nothing to do for required formats
+            break;
+         default:
+            nc->nestedListener->shmFormat( nc->nestedListenerUserData, 
+                                           format );
+            break;
+      }
+   }
+}
+
+static const struct wl_shm_listener shmListener = {
+   shmFormat
+};
+
+#ifdef ENABLE_SBPROTOCOL
+static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
+{
+   WST_UNUSED(data);
+   WST_UNUSED(wl_sb);
+   WST_UNUSED(format);
+}
+
+struct wl_sb_listener sbListener = {
+	sbFormat
+};
+#endif
+
 static void registryHandleGlobal(void *data, 
                                  struct wl_registry *registry, uint32_t id,
 		                           const char *interface, uint32_t version)
@@ -232,6 +279,16 @@ static void registryHandleGlobal(void *data,
 		wl_seat_add_listener(nc->seat, &seatListener, nc);
 		wl_display_roundtrip( nc->display );
    } 
+   else if ( (len==6) && !strncmp(interface, "wl_shm", len) ) {
+      nc->shm= (struct wl_shm*)wl_registry_bind(registry, id, &wl_shm_interface, 1);
+      wl_shm_add_listener(nc->shm, &shmListener, nc);
+   }
+   #ifdef ENABLE_SBPROTOCOL
+   else if ( (len==5) && !strncmp(interface, "wl_sb", len) ) {
+      nc->sb= (struct wl_sb*)wl_registry_bind(registry, id, &wl_sb_interface, 1);
+      wl_sb_add_listener(nc->sb, &sbListener, nc);
+   }
+   #endif
 }
 
 static void registryHandleGlobalRemove(void *data, 
@@ -315,15 +372,18 @@ WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx,
          error= true;
          goto exit;
       }
-      
-      nc->surface= wl_compositor_create_surface(nc->compositor);
-      if ( !nc->surface )
+    
+      if ( (width != 0) && (height != 0) )
       {
-         printf("WstNestedConnectionCreate: failed to create compositor surface from wayland display: %s\n", displayName );
-         error= true;
-         goto exit;
+         nc->surface= wl_compositor_create_surface(nc->compositor);
+         if ( !nc->surface )
+         {
+            printf("WstNestedConnectionCreate: failed to create compositor surface from wayland display: %s\n", displayName );
+            error= true;
+            goto exit;
+         }
+         wl_display_roundtrip(nc->display);
       }
-      wl_display_roundtrip(nc->display);
       
       nc->started= false;
       nc->stopRequested= false;
@@ -399,6 +459,18 @@ void WstNestedConnectionDestroy( WstNestedConnection *nc )
          wl_surface_destroy( nc->surface );
          nc->surface= 0;
       }
+      if ( nc->shm )
+      {
+         wl_shm_destroy( nc->shm );
+         nc->shm= 0;
+      }
+      #ifdef ENABLE_SBPROTOCOL
+      if ( nc->sb )
+      {
+         wl_sb_destroy( nc->sb );
+         nc->sb= 0;
+      }
+      #endif
       if ( nc->compositor )
       {
          wl_compositor_destroy( nc->compositor );
@@ -432,7 +504,7 @@ wl_display* WstNestedConnectionGetDisplay( WstNestedConnection *nc )
    return display;
 }
 
-wl_surface* WstNestedConnectionGetSurface( WstNestedConnection *nc )
+wl_surface* WstNestedConnectionGetCompositionSurface( WstNestedConnection *nc )
 {
    wl_surface *surface= 0;
    
@@ -442,5 +514,163 @@ wl_surface* WstNestedConnectionGetSurface( WstNestedConnection *nc )
    }
    
    return surface;
+}
+
+struct wl_surface* WstNestedConnectionCreateSurface( WstNestedConnection *nc )
+{
+   wl_surface *surface= 0;
+   
+   if ( nc && nc->compositor )
+   {
+      surface= wl_compositor_create_surface(nc->compositor);
+      wl_display_flush( nc->display );      
+   }
+   
+   return surface;
+}
+
+void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surface *surface )
+{
+   WST_UNUSED(nc);
+
+   if ( surface )
+   {
+      wl_surface_destroy( surface );
+      wl_display_flush( nc->display );      
+   }
+}
+
+void WstNestedConnectionAttachAndCommit( WstNestedConnection *nc,
+                                          struct wl_surface *surface,
+                                          struct wl_buffer *buffer,
+                                          int x,
+                                          int y,
+                                          int width,
+                                          int height )
+{
+   if ( nc )
+   {
+      wl_surface_attach( surface, buffer, 0, 0 );
+      wl_surface_damage( surface, x, y, width, height);
+      wl_surface_commit( surface );
+      wl_display_flush( nc->display );      
+   }
+}                                          
+
+void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
+                                               struct wl_surface *surface,
+                                               void *deviceBuffer,
+                                               uint32_t format,
+                                               int32_t stride,
+                                               int x,
+                                               int y,
+                                               int width,
+                                               int height )
+{
+   if ( nc )
+   {
+      #ifdef ENABLE_SBPROTOCOL
+      struct wl_buffer *buffer;
+      
+      buffer= wl_sb_create_buffer( nc->sb, 
+                                   (uint32_t)deviceBuffer, 
+                                   width, 
+                                   height, 
+                                   stride,
+                                   format );
+      if ( buffer )
+      {
+         wl_surface_attach( surface, buffer, 0, 0 );
+         wl_surface_damage( surface, x, y, width, height);
+         wl_surface_commit( surface );
+         wl_display_flush( nc->display );
+         wl_buffer_destroy( buffer );
+      }
+      #endif
+   }
+}                                               
+
+void WstNestedConnectionPointerSetCursor( WstNestedConnection *nc, 
+                                          struct wl_surface *surface, 
+                                          int hotspotX, 
+                                          int hotspotY )
+{
+   if ( nc )
+   {
+      wl_pointer_set_cursor( nc->pointer,
+                             nc->pointerEnterSerial,
+                             surface,
+                             hotspotX,
+                             hotspotY );
+      wl_display_flush( nc->display );      
+   }
+}                                          
+
+struct wl_shm_pool* WstNestedConnnectionShmCreatePool( WstNestedConnection *nc, int fd, int size )
+{
+   WST_UNUSED(nc);
+   struct wl_shm_pool *pool= 0;
+   
+   if ( nc && nc->shm )
+   {
+      pool= wl_shm_create_pool( nc->shm, fd, size );
+      wl_display_flush( nc->display );      
+   }
+   
+   return pool;
+}
+
+void WstNestedConnectionShmDestroyPool( WstNestedConnection *nc, struct wl_shm_pool *pool )
+{
+   WST_UNUSED(nc);
+   if ( pool )
+   {
+      wl_shm_pool_destroy( pool );
+      wl_display_flush( nc->display );      
+   }
+}
+
+void WstNestedConnectionShmPoolResize( WstNestedConnection *nc, struct wl_shm_pool *pool, int size )
+{
+   WST_UNUSED(nc);
+   if ( pool )
+   {
+      wl_shm_pool_resize( pool, size );
+      wl_display_flush( nc->display );      
+   }
+}
+
+struct wl_buffer* WstNestedConnectionShmPoolCreateBuffer( WstNestedConnection *nc,
+                                                          struct wl_shm_pool *pool,
+                                                          int32_t offset,
+                                                          int32_t width, 
+                                                          int32_t height,
+                                                          int32_t stride, 
+                                                          uint32_t format)
+{
+   WST_UNUSED(nc);
+   struct wl_buffer *buffer= 0;
+   
+   if ( pool )
+   {
+      buffer= wl_shm_pool_create_buffer( pool, offset, width, height, stride, format );
+      wl_display_flush( nc->display );      
+   }
+   
+   return buffer;
+}                                                          
+
+void WstNestedConnectionShmBufferPoolDestroy( WstNestedConnection *nc,
+                                              struct wl_shm_pool *pool,
+                                              struct wl_buffer *buffer )
+{
+   WST_UNUSED(nc);
+   WST_UNUSED(pool);
+   
+   if ( buffer )
+   {
+      wl_buffer_destroy( buffer );
+      wl_display_flush( nc->display );      
+   }
 }
 

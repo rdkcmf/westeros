@@ -152,6 +152,19 @@ bool WstCompositorSetIsNested( WstCompositor *ctx, bool isNested );
 bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded );
 
 /**
+ * WstCompositorSetIsRepeater
+ *
+ * Specify if the compositor is to act as a repeating nested compositor.  A 
+ * normal nested compositor will compose client surfaces to produce an output
+ * surface which is then sent to a second compositor for display.  A repeating 
+ * nested compositor will not perform any composition rendering but instead 
+ * will forward surface buffers from its clients to the wayland display to 
+ * which it is connected.  Enabling repeating will also enable nested 
+ * composition.
+ */
+bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater );
+
+/**
  * WstCompositorSetNestedDisplayName
  *
  * Specify the wayland display name that this compositor instance should connect
@@ -218,6 +231,14 @@ const char *WstCompositorGetRenderModule( WstCompositor *ctx );
  * compositor or not.  This may be called at any time.
  */
 bool WstCompositorGetIsNested( WstCompositor *ctx );
+
+/**
+ * WstCompositorGetIsRepeater
+ *
+ * Determine if this compsitor instance is acting as a repeating 
+ * nested compositor or not.  This may be called at any time.
+ */
+bool WstCompositorGetIsRepeater( WstCompositor *ctx );
 
 /**
  * WstCompositorGetIsEmbedded
