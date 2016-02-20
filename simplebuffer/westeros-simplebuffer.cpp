@@ -238,6 +238,11 @@ int32_t WstSBBufferGetHeight(struct wl_sb_buffer *buffer)
    return buffer->height;
 }
 
+int32_t WstSBBufferGetStride(struct wl_sb_buffer *buffer)
+{
+   return buffer->stride[0];
+}
+
 void WstSBBufferGetPlaneOffsetAndStride(struct wl_sb_buffer *buffer, int plane, int32_t *offset, int32_t *stride )
 {
    if ( (plane >=0 ) && (plane <= 2) )

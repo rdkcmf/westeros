@@ -95,6 +95,7 @@ struct wl_sb_buffer *WstSBBufferGet( struct wl_sb *sb, struct wl_resource *resou
 uint32_t WstSBBufferGetFormat(struct wl_sb_buffer *buffer);
 int32_t WstSBBufferGetWidth(struct wl_sb_buffer *buffer);
 int32_t WstSBBufferGetHeight(struct wl_sb_buffer *buffer);
+int32_t WstSBBufferGetStride(struct wl_sb_buffer *buffer);
 void WstSBBufferGetPlaneOffsetAndStride(struct wl_sb_buffer *buffer, int plane, int32_t *offset, int32_t *stride );
 void *WstSBBufferGetBuffer(struct wl_sb_buffer *buffer);
 

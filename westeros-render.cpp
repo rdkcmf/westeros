@@ -65,7 +65,7 @@ WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, W
       if ( nc )
       {
          renderer->display= WstNestedConnectionGetDisplay( nc );
-         renderer->surface= WstNestedConnectionGetSurface( nc );
+         renderer->surface= WstNestedConnectionGetCompositionSurface( nc );
       }
             
       module= dlopen( moduleName, RTLD_NOW );

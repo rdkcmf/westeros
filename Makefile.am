@@ -82,6 +82,7 @@ libwesteros_compositor_la_includedir = $(includedir)
 libwesteros_compositor_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_SERVER_LIBS) \
+   $(WAYLAND_CLIENT_LIBS) \
    $(XKBCOMMON_LIBS) \
    -lxkbcommon \
    -lwesteros_simpleshell_server \

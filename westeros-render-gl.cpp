@@ -43,8 +43,8 @@
 #define TCM_MAPX( x, y, t ) ((x)*(t)[TCM11]+(y)*(t)[TCM21]+(t)[TCMDX])
 #define TCM_MAPY( x, y, t ) ((x)*(t)[TCM12]+(y)*(t)[TCM22]+(t)[TCMDY])
 
-#define DEFAULT_SURFACE_WIDTH (1280)
-#define DEFAULT_SURFACE_HEIGHT (720)
+#define DEFAULT_SURFACE_WIDTH (0)
+#define DEFAULT_SURFACE_HEIGHT (0)
 
 
 typedef enum _WstShaderType
@@ -329,14 +329,8 @@ static WstRenderSurface *wstRenderGLCreateSurface(WstRendererGL *renderer)
 
         surface->width= DEFAULT_SURFACE_WIDTH;
         surface->height= DEFAULT_SURFACE_HEIGHT;
-        if ( surface->width >= renderer->renderer->outputWidth )
-           surface->x= 0;
-        else
-           surface->x= (renderer->outputWidth-surface->width)/2;
-        if ( surface->height >= renderer->renderer->outputHeight )
-           surface->y= 0;
-        else
-           surface->y= (renderer->renderer->outputHeight-surface->height)/2;
+        surface->x= 0;
+        surface->y= 0;
         surface->visible= true;
         surface->opacity= 1.0;
         
