@@ -61,6 +61,25 @@ struct wl_surface* WstNestedConnectionCreateSurface( WstNestedConnection *nc );
 
 void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surface *surface );
 
+void WstNestedConnectionSurfaceSetVisible( WstNestedConnection *nc, 
+                                           struct wl_surface *surface,
+                                           bool visible );
+
+void WstNestedConnectionSurfaceSetGeometry( WstNestedConnection *nc, 
+                                            struct wl_surface *surface,
+                                            int x,
+                                            int y,
+                                            int width, 
+                                            int height );
+
+void WstNestedConnectionSurfaceSetZOrder( WstNestedConnection *nc, 
+                                           struct wl_surface *surface,
+                                           float zorder );
+
+void WstNestedConnectionSurfaceSetOpacity( WstNestedConnection *nc, 
+                                           struct wl_surface *surface,
+                                           float opacity );
+
 void WstNestedConnectionAttachAndCommit( WstNestedConnection *nc,
                                          struct wl_surface *surface,
                                          struct wl_buffer *buffer,
