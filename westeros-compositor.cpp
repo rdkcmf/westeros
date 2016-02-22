@@ -170,6 +170,13 @@ typedef struct _WstSurface
 	std::vector<WstShellSurface*> shellSurface;
 	struct wl_surface *surfaceNested;
 	const char *roleName;
+	
+	bool visible;
+	int x;
+	int y;
+	int width;
+	int height;
+	float opacity;
 	float zorder;
 
    const char *name;	
@@ -459,6 +466,15 @@ static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, 
 static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state );
 static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
 static void wstDefaultNestedShmFormat( void *userData, uint32_t format );
+static void wstDefaultNestedSurfaceStatus( void *userData, struct wl_surface *surface,
+                                           const char *name,
+                                           uint32_t visible,
+                                           int32_t x,
+                                           int32_t y,
+                                           int32_t width,
+                                           int32_t height,
+                                           wl_fixed_t opacity,
+                                           wl_fixed_t zorder);
 static void wstSetDefaultNestedListener( WstCompositor *ctx );
 static bool wstSeatInit( WstCompositor *ctx );
 static void wstSeatTerm( WstCompositor *ctx );
@@ -512,6 +528,8 @@ WstCompositor* WstCompositorCreate()
       
       ctx->outputWidth= DEFAULT_OUTPUT_WIDTH;
       ctx->outputHeight= DEFAULT_OUTPUT_HEIGHT;
+      
+      ctx->nextSurfaceId= 1;
       
       ctx->surfaceMap= std::map<int32_t, WstSurface*>();
       ctx->clientInfoMap= std::map<struct wl_client*, WstClientInfo*>();
@@ -1868,17 +1886,6 @@ static void simpleShellSetName( void* userData, uint32_t surfaceId, const char *
    }
 }
 
-static void simpleShellGetName( void* userData, uint32_t surfaceId, const char **name )
-{
-   WstCompositor *ctx= (WstCompositor*)userData;
-
-   WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
-   if ( surface )
-   {
-      *name= surface->name;
-   }
-}
-
 static void simpleShellSetVisible( void* userData, uint32_t surfaceId, bool visible )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -1886,23 +1893,14 @@ static void simpleShellSetVisible( void* userData, uint32_t surfaceId, bool visi
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      if ( !surface->compositor->isRepeater )
+      surface->visible= visible;
+      if ( surface->compositor->isRepeater )
+      {
+         WstNestedConnectionSurfaceSetVisible( ctx->nc, surface->surfaceNested, visible );
+      }
+      else
       {
          WstRendererSurfaceSetVisible( ctx->renderer, surface->surface, visible );
-      }
-   }
-}
-
-static void simpleShellGetVisible( void* userData, uint32_t surfaceId, bool *visible )
-{
-   WstCompositor *ctx= (WstCompositor*)userData;
-
-   WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
-   if ( surface )
-   {
-      if ( !surface->compositor->isRepeater )
-      {
-         WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
       }
    }
 }
@@ -1914,23 +1912,17 @@ static void simpleShellSetGeometry( void* userData, uint32_t surfaceId, int x, i
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      if ( !surface->compositor->isRepeater )
+      surface->x= x;
+      surface->y= y;
+      surface->width= width;
+      surface->height= height;
+      if ( surface->compositor->isRepeater )
+      {
+         WstNestedConnectionSurfaceSetGeometry( ctx->nc, surface->surfaceNested, x, y, width, height );
+      }
+      else
       {
          WstRendererSurfaceSetGeometry( ctx->renderer, surface->surface, x, y, width, height );
-      }
-   }
-}
-
-static void simpleShellGetGeometry( void* userData, uint32_t surfaceId, int *x, int *y, int *width, int *height )
-{
-   WstCompositor *ctx= (WstCompositor*)userData;
-
-   WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
-   if ( surface )
-   {
-      if ( !surface->compositor->isRepeater )
-      {
-         WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
       }
    }
 }
@@ -1942,23 +1934,14 @@ static void simpleShellSetOpacity( void* userData, uint32_t surfaceId, float opa
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      if ( !surface->compositor->isRepeater )
+      surface->opacity= opacity;
+      if ( surface->compositor->isRepeater )
+      {
+         WstNestedConnectionSurfaceSetOpacity( ctx->nc, surface->surfaceNested, opacity );
+      }
+      else
       {
          WstRendererSurfaceSetOpacity( ctx->renderer, surface->surface, opacity );
-      }
-   }
-}
-
-static void simpleShellGetOpacity( void* userData, uint32_t surfaceId, float *opacity )
-{
-   WstCompositor *ctx= (WstCompositor*)userData;
-
-   WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
-   if ( surface )
-   {
-      if ( !surface->compositor->isRepeater )
-      {
-         WstRendererSurfaceGetOpacity( ctx->renderer, surface->surface, opacity );
       }
    }
 }
@@ -1970,41 +1953,65 @@ static void simpleShellSetZOrder( void* userData, uint32_t surfaceId, float zord
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      if ( !surface->compositor->isRepeater )
+      surface->zorder= zorder;
+      if ( surface->compositor->isRepeater )
+      {
+         WstNestedConnectionSurfaceSetZOrder( ctx->nc, surface->surfaceNested, zorder );
+      }
+      else
       {
          WstRendererSurfaceSetZOrder( ctx->renderer, surface->surface, zorder );
          
-         surface->zorder= zorder;
          wstSurfaceInsertSurface( ctx, surface );
       }
    }
 }
 
-static void simpleShellGetZOrder( void* userData, uint32_t surfaceId, float *zorder )
+static void simpleShellGetName( void* userData, uint32_t surfaceId, const char **name )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
 
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      if ( !surface->compositor->isRepeater )
+      *name= surface->name;
+   }
+}
+
+static void simpleShellGetStatus( void* userData, uint32_t surfaceId, bool *visible,
+                                  int *x, int *y, int *width, int *height,
+                                  float *opacity, float *zorder )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
+   if ( surface )
+   {
+      if ( surface->compositor->isRepeater )
       {
-         WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, zorder );
+         *visible= surface->visible;
+         *x= surface->x;
+         *y= surface->y;
+         *width= surface->width;
+         *height= surface->height;
+         *opacity= surface->opacity;
+         *zorder= surface->zorder;
+      }
+      else
+      {
+         WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
       }
    }
 }
 
 struct wayland_simple_shell_callbacks simpleShellCallbacks= {
    simpleShellSetName,
-   simpleShellGetName,
    simpleShellSetVisible,
-   simpleShellGetVisible,
    simpleShellSetGeometry,
-   simpleShellGetGeometry,
    simpleShellSetOpacity,
-   simpleShellGetOpacity,
    simpleShellSetZOrder,
-   simpleShellGetZOrder
+   simpleShellGetName,
+   simpleShellGetStatus
 };
 
 static void* wstCompositorThread( void *arg )
@@ -2772,7 +2779,7 @@ static void wstICompositorCreateSurface( struct wl_client *client, struct wl_res
    
    if ( ctx->simpleShell )
    {
-      WstSimpleShellNotifySurfaceCreated( ctx->simpleShell, client, surface->surfaceId );
+      WstSimpleShellNotifySurfaceCreated( ctx->simpleShell, client, surface->resource, surface->surfaceId );
    }
 }
 
@@ -2843,6 +2850,8 @@ static WstSurface* wstSurfaceCreate( WstCompositor *ctx)
 
       wl_list_init(&surface->frameCallbackList);
 
+      surface->visible= true;
+      surface->opacity= 1.0;
       if ( ctx->isRepeater )
       {
          surface->surfaceNested= WstNestedConnectionCreateSurface( ctx->nc );

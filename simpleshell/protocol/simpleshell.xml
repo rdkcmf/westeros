@@ -41,6 +41,7 @@
    creator can set a surface name with the set_name request
    in response to this event.
       </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="surfaceId" type="uint"/>
     </event>
     <!-- Raised when a new surface is created by any client-->

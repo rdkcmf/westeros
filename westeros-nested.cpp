@@ -4,7 +4,10 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <map>
+
 #include "westeros-nested.h"
+#include "simpleshell-client-protocol.h"
 
 #ifdef ENABLE_SBPROTOCOL
 #include "simplebuffer-client-protocol.h"
@@ -19,6 +22,7 @@ typedef struct _WstNestedConnection
    struct wl_registry *registry;
    struct wl_compositor *compositor;
    struct wl_shm *shm;
+   struct wl_simple_shell *simpleShell;
    #ifdef ENABLE_SBPROTOCOL
    struct wl_sb *sb;
    #endif
@@ -35,6 +39,7 @@ typedef struct _WstNestedConnection
    bool stopRequested;
    pthread_t nestedThreadId;
    uint32_t pointerEnterSerial;
+   std::map<struct wl_surface*, int32_t> surfaceMap;
 } WstNestedConnection;
 
 
@@ -263,6 +268,72 @@ struct wl_sb_listener sbListener = {
 };
 #endif
 
+static void simpleShellSurfaceId(void *data,
+                                 struct wl_simple_shell *wl_simple_shell,
+                                 struct wl_surface *surface,
+                                 uint32_t surfaceId)
+{
+   WST_UNUSED(wl_simple_shell);
+	WstNestedConnection *nc = (WstNestedConnection*)data;
+
+   nc->surfaceMap.insert( std::pair<struct wl_surface*,int32_t>( surface, surfaceId ) );     
+}
+                           
+static void simpleShellSurfaceCreated(void *data,
+                                      struct wl_simple_shell *wl_simple_shell,
+                                      uint32_t surfaceId,
+                                      const char *name)
+{
+   WST_UNUSED(data);
+   WST_UNUSED(wl_simple_shell);
+   WST_UNUSED(surfaceId);
+   WST_UNUSED(name);
+}
+
+static void simpleShellSurfaceDestroyed(void *data,
+                                        struct wl_simple_shell *wl_simple_shell,
+                                        uint32_t surfaceId,
+                                        const char *name)
+{
+   WST_UNUSED(data);
+   WST_UNUSED(wl_simple_shell);
+   WST_UNUSED(surfaceId);
+   WST_UNUSED(name);
+}
+                                  
+static void simpleShellSurfaceStatus(void *data,
+                                     struct wl_simple_shell *wl_simple_shell,
+                                     uint32_t surfaceId,
+                                     const char *name,
+                                     uint32_t visible,
+                                     int32_t x,
+                                     int32_t y,
+                                     int32_t width,
+                                     int32_t height,
+                                     wl_fixed_t opacity,
+                                     wl_fixed_t zorder)
+{
+   WST_UNUSED(data);
+   WST_UNUSED(wl_simple_shell);
+   WST_UNUSED(surfaceId);
+   WST_UNUSED(name);
+   WST_UNUSED(visible);
+   WST_UNUSED(x);
+   WST_UNUSED(y);
+   WST_UNUSED(width);
+   WST_UNUSED(height);
+   WST_UNUSED(opacity);
+   WST_UNUSED(zorder);
+}                               
+
+static const struct wl_simple_shell_listener simpleShellListener = 
+{
+   simpleShellSurfaceId,
+   simpleShellSurfaceCreated,
+   simpleShellSurfaceDestroyed,
+   simpleShellSurfaceStatus
+};
+
 static void registryHandleGlobal(void *data, 
                                  struct wl_registry *registry, uint32_t id,
 		                           const char *interface, uint32_t version)
@@ -282,6 +353,10 @@ static void registryHandleGlobal(void *data,
    else if ( (len==6) && !strncmp(interface, "wl_shm", len) ) {
       nc->shm= (struct wl_shm*)wl_registry_bind(registry, id, &wl_shm_interface, 1);
       wl_shm_add_listener(nc->shm, &shmListener, nc);
+   }
+   else if ( (len==15) && !strncmp(interface, "wl_simple_shell", len) ) {
+      nc->simpleShell= (struct wl_simple_shell*)wl_registry_bind(registry, id, &wl_simple_shell_interface, 1);      
+      wl_simple_shell_add_listener(nc->simpleShell, &simpleShellListener, nc);
    }
    #ifdef ENABLE_SBPROTOCOL
    else if ( (len==5) && !strncmp(interface, "wl_sb", len) ) {
@@ -397,6 +472,8 @@ WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx,
    
       nc->nestedWidth= width;
       nc->nestedHeight= height;
+      
+      nc->surfaceMap= std::map<struct wl_surface*, int32_t>();
    }
 
 exit:
@@ -488,6 +565,7 @@ void WstNestedConnectionDestroy( WstNestedConnection *nc )
          wl_display_disconnect( nc->display );
          nc->display= 0;
       }
+      nc->surfaceMap.clear();
       free( nc );
    }
 }
@@ -531,12 +609,87 @@ struct wl_surface* WstNestedConnectionCreateSurface( WstNestedConnection *nc )
 
 void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surface *surface )
 {
-   WST_UNUSED(nc);
-
    if ( surface )
    {
+      for( std::map<struct wl_surface*,int32_t>::iterator it= nc->surfaceMap.begin(); it != nc->surfaceMap.end(); ++it )
+      {
+         if ( it->first == surface )
+         {
+            nc->surfaceMap.erase(it);
+            break;
+         }
+      }
       wl_surface_destroy( surface );
       wl_display_flush( nc->display );      
+   }
+}
+
+void WstNestedConnectionSurfaceSetVisible( WstNestedConnection *nc, 
+                                           struct wl_surface *surface,
+                                           bool visible )
+{
+   if ( surface )
+   {
+      std::map<struct wl_surface*,int32_t>::iterator it= nc->surfaceMap.find( surface );
+      if ( it != nc->surfaceMap.end() )
+      {
+         int32_t surfaceId= it->second;
+         
+         wl_simple_shell_set_visible( nc->simpleShell, surfaceId, visible );
+      }
+   }
+}
+
+void WstNestedConnectionSurfaceSetGeometry( WstNestedConnection *nc, 
+                                            struct wl_surface *surface,
+                                            int x,
+                                            int y,
+                                            int width, 
+                                            int height )
+{
+   if ( surface )
+   {
+      std::map<struct wl_surface*,int32_t>::iterator it= nc->surfaceMap.find( surface );
+      if ( it != nc->surfaceMap.end() )
+      {
+         int32_t surfaceId= it->second;
+         
+         wl_simple_shell_set_geometry( nc->simpleShell, surfaceId, x, y, width, height );
+      }
+   }
+}
+
+void WstNestedConnectionSurfaceSetZOrder( WstNestedConnection *nc, 
+                                          struct wl_surface *surface,
+                                          float zorder )
+{
+   if ( surface )
+   {
+      std::map<struct wl_surface*,int32_t>::iterator it= nc->surfaceMap.find( surface );
+      if ( it != nc->surfaceMap.end() )
+      {
+         int32_t surfaceId= it->second;
+         wl_fixed_t z= wl_fixed_from_double(zorder);
+         
+         wl_simple_shell_set_zorder( nc->simpleShell, surfaceId, z );
+      }
+   }
+}
+
+void WstNestedConnectionSurfaceSetOpacity( WstNestedConnection *nc, 
+                                           struct wl_surface *surface,
+                                           float opacity )
+{
+   if ( surface )
+   {
+      std::map<struct wl_surface*,int32_t>::iterator it= nc->surfaceMap.find( surface );
+      if ( it != nc->surfaceMap.end() )
+      {
+         int32_t surfaceId= it->second;
+         wl_fixed_t op= wl_fixed_from_double(opacity);
+         
+         wl_simple_shell_set_opacity( nc->simpleShell, surfaceId, op );
+      }
    }
 }
 

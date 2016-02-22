@@ -140,10 +140,11 @@ static void wstISimpleShellGetStatus(struct wl_client *client, struct wl_resourc
    {
       name= (const char *)DEFAULT_NAME;
    }   
-   shell->callbacks->get_visible( shell->userData, surfaceId, &visible );
-   shell->callbacks->get_geometry( shell->userData, surfaceId, &x, &y, &width, &height );
-   shell->callbacks->get_opacity( shell->userData, surfaceId, &opacity );
-   shell->callbacks->get_zorder( shell->userData, surfaceId, &zorder );
+
+   shell->callbacks->get_status( shell->userData, surfaceId,
+                                 &visible,
+                                 &x, &y, &width, &height,
+                                 &opacity, &zorder );
    
    fixedOpacity= wl_fixed_from_double( (double)opacity );
    fixedZOrder= wl_fixed_from_double( (double)zorder );
@@ -330,7 +331,8 @@ void WstSimpleShellUninit( wl_simple_shell *shell )
    }
 }
 
-void WstSimpleShellNotifySurfaceCreated( wl_simple_shell *shell, struct wl_client *client, uint32_t surfaceId )
+void WstSimpleShellNotifySurfaceCreated( wl_simple_shell *shell, struct wl_client *client, 
+                                         struct wl_resource *surface_resource, uint32_t surfaceId )
 {
    bool creatorNotified= false;
       
@@ -348,7 +350,7 @@ void WstSimpleShellNotifySurfaceCreated( wl_simple_shell *shell, struct wl_clien
          PendingBroadcastInfo pendingInfo;
          struct wl_resource *shell_resource= (*it).resource;
          
-         wl_simple_shell_send_surface_id( shell_resource, surfaceId );
+         wl_simple_shell_send_surface_id( shell_resource, surface_resource, surfaceId );
          
          creatorNotified= true;
          
@@ -385,7 +387,7 @@ void WstSimpleShellNotifySurfaceDestroyed( wl_simple_shell *shell, struct wl_cli
       name= (const char *)DEFAULT_NAME;
    }
    
-   // Broadcast the surface creation announcement
+   // Broadcast the surface destruction announcement
    for( std::vector<ShellInfo>::iterator it= shell->shells.begin(); 
         it != shell->shells.end();
         ++it )

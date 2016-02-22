@@ -32,6 +32,7 @@ static const struct wl_registry_listener registryListener =
 
 static void shellSurfaceId(void *data,
                            struct wl_simple_shell *wl_simple_shell,
+                           struct wl_surface *surface,
                            uint32_t surfaceId);
 static void shellSurfaceCreated(void *data,
                                 struct wl_simple_shell *wl_simple_shell,
@@ -251,13 +252,14 @@ static void registryHandleGlobalRemove(void *data,
 
 static void shellSurfaceId(void *data,
                            struct wl_simple_shell *wl_simple_shell,
+                           struct wl_surface *surface,
                            uint32_t surfaceId)
 {
 	AppCtx *ctx = (AppCtx*)data;
    char name[32];
   
 	sprintf( name, "westeros-test-surface-%x", surfaceId );
-   printf("shell: surface created: %x\n", surfaceId);
+   printf("shell: surface created: %p id %x\n", surface, surfaceId);
 	wl_simple_shell_set_name( ctx->shell, surfaceId, name );
    wl_simple_shell_set_geometry( ctx->shell, surfaceId, ctx->surfaceX, ctx->surfaceY, ctx->surfaceWidth, ctx->surfaceHeight );
 
