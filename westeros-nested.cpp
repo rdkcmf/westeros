@@ -421,6 +421,8 @@ WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx,
       nc->ctx= wctx;
       nc->nestedListenerUserData= userData;
       nc->nestedListener= listener;
+      
+      nc->surfaceMap= std::map<struct wl_surface*, int32_t>();
 
       nc->display= wl_display_connect( displayName );
       if ( !nc->display )
@@ -472,8 +474,6 @@ WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx,
    
       nc->nestedWidth= width;
       nc->nestedHeight= height;
-      
-      nc->surfaceMap= std::map<struct wl_surface*, int32_t>();
    }
 
 exit:
