@@ -33,6 +33,7 @@ static void showUsage()
    printf("  --renderer <module> : renderer module to use\n" );
    printf("  --framerate <rate> : frame rate in fps\n" );
    printf("  --display <name> : name of wayland display created by compositor\n" );
+   printf("  --repeater : operate as a repeating nested compositor\n" );
    printf("  --nested : operate as a nested compositor\n" );
    printf("  --nestedDisplay <name> : name of wayland display to connect to for nested composition\n" );
    printf("  --nestedInput : register nested input listeners\n" ); 
@@ -285,7 +286,7 @@ void* inputThread( void *data )
                      case EV_REL:
                         if ( !outputWidth || !outputHeight )
                         {
-                           WstCompositorGetOutputDimensions( inCtx->wctx, &outputWidth, &outputHeight );
+                           WstCompositorGetOutputSize( inCtx->wctx, &outputWidth, &outputHeight );
                         }
                         switch( e.code )
                         {
@@ -493,6 +494,16 @@ int main( int argc, char** argv)
             }
          }
       }
+      else
+      if ( (len == 10) && !strncmp( (const char*)argv[i], "--repeater", len) )
+      {
+         if ( !WstCompositorSetIsRepeater( wctx, true) )
+         {
+            error= true;
+            break;
+         }
+      }
+      else
       if ( (len == 8) && !strncmp( (const char*)argv[i], "--nested", len) )
       {
          if ( !WstCompositorSetIsNested( wctx, true) )
@@ -516,6 +527,7 @@ int main( int argc, char** argv)
             }
          }
       }
+      else
       if ( (len == 13) && !strncmp( (const char*)argv[i], "--nestedInput", len) )
       {
          if ( !WstCompositorSetKeyboardNestedListener( wctx, &keyboardListener, NULL) )
