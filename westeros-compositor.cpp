@@ -763,8 +763,6 @@ bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater )
       if ( isRepeater )
       {
          ctx->isNested= true;
-         ctx->nestedWidth= 0;
-         ctx->nestedHeight= 0;
       }
                
       pthread_mutex_unlock( &ctx->mutex );
@@ -2106,15 +2104,18 @@ static void* wstCompositorThread( void *arg )
 
    if ( ctx->isNested )
    {
+      int width= ctx->nestedWidth;
+      int height= ctx->nestedHeight;
+      
       if ( ctx->isRepeater )
       {
-         ctx->nestedWidth= 0;
-         ctx->nestedHeight= 0;
+         width= 0;
+         height= 0;
       }
       ctx->nc= WstNestedConnectionCreate( ctx, 
                                           ctx->nestedDisplayName, 
-                                          ctx->nestedWidth, 
-                                          ctx->nestedHeight,
+                                          width, 
+                                          height,
                                           &ctx->nestedListener,
                                           ctx );
       if ( !ctx->nc )
