@@ -9,6 +9,11 @@ typedef struct _WstCompositor WstCompositor;
 typedef struct _WstNestedConnection WstNestedConnection;
 
 typedef void (*WSTCallbackConnectionEnded)( void *userData );
+typedef void (*WSTCallbackOutputHandleGeometry)( void *userData, int32_t x, int32_t y, int32_t mmWidth, int32_t mmHeight,
+                                                 int32_t subPixel, const char *make, const char *model, int32_t transform );
+typedef void (*WSTCallbackOutputHandleMode)( void *userData, uint32_t flags, int32_t width, int32_t height, int32_t refreshRate );
+typedef void (*WSTCallbackOutputHandleDone)( void *UserData );
+typedef void (*WSTCallbackOutputHandleScale)( void *UserData, int32_t scale );
 typedef void (*WSTCallbackKeyboardHandleKeyMap)( void *userData, uint32_t format, int fd, uint32_t size );
 typedef void (*WSTCallbackKeyboardHandleEnter)( void *userData, struct wl_array *keys );
 typedef void (*WSTCallbackKeyboardHandleLeave)( void *userData );
@@ -28,6 +33,10 @@ typedef void (*WSTCallbackShmFormat)( void *userData, uint32_t format );
 typedef struct _WstNestedConnectionListener
 {
    WSTCallbackConnectionEnded connectionEnded;
+   WSTCallbackOutputHandleGeometry outputHandleGeometry;
+   WSTCallbackOutputHandleMode outputHandleMode;
+   WSTCallbackOutputHandleDone outputHandleDone;
+   WSTCallbackOutputHandleScale outputHandleScale;
    WSTCallbackKeyboardHandleKeyMap keyboardHandleKeyMap;
    WSTCallbackKeyboardHandleEnter keyboardHandleEnter;
    WSTCallbackKeyboardHandleLeave keyboardHandleLeave;

@@ -200,6 +200,25 @@ typedef struct _WstClientInfo
    WstSurface *surface;
 } WstClientInfo;
 
+typedef struct _WstOutput
+{
+   WstCompositor *compositor;
+   struct wl_list resourceList;
+   int x;
+   int y;
+   int width;
+   int height;
+   int refreshRate;
+   int mmWidth;
+   int mmHeight;
+   int subPixel;
+   const char *make;
+   const char *model;
+   int transform;
+   int currentScale;
+   
+} WstOutput;
+
 typedef struct _WstCompositor
 {
    const char *displayName;
@@ -242,6 +261,8 @@ typedef struct _WstCompositor
    char *xkbKeymapArea;
    
    pthread_mutex_t mutex;
+
+   WstOutput *output;
 
    WstSeat *seat;
    WstRenderer *renderer;
@@ -337,6 +358,9 @@ static void wstIRegionAdd( struct wl_client *client,
 static void wstIRegionSubtract( struct wl_client *client,
                                 struct wl_resource *resource,
                                 int32_t x, int32_t y, int32_t width, int32_t height );
+static bool wstOutputInit( WstCompositor *ctx );
+static void wstOutputTerm( WstCompositor *ctx );                                
+static void wstOutputBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);                                
 static void wstShellBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
 static void wstIShellGetShellSurface(struct wl_client *client,
                                      struct wl_resource *resource,
@@ -453,6 +477,13 @@ static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
 static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
                                              struct wl_resource *resource );
 static void wstDefaultNestedConnectionEnded( void *userData );
+static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int32_t y, int32_t mmWidth,
+                                                  int32_t mmHeight, int32_t subPixel, const char *make, 
+                                                  const char *model, int32_t transform );
+static void wstDefaultNestedOutputHandleMode( void* userData, uint32_t flags, int32_t width, 
+                                              int32_t height, int32_t refreshRate );
+static void wstDefaultNestedOutputHandleDone( void *userData );
+static void wstDefaultNestedOutputHandleScale( void *userData, int32_t scale );                                              
 static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size );
 static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array *keys );
 static void wstDefaultNestedKeyboardHandleLeave( void *userData );
@@ -802,6 +833,48 @@ exit:
    return result;
 }
 
+bool WstCompositorSetOutputSize( WstCompositor *ctx, int width, int height )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set output size while compositor is running" );
+         goto exit;
+      }      
+
+      if ( width == 0 )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Invalid argument.  The output width (%u) must be greater than zero", width );
+         goto exit;      
+      }
+
+      if ( height == 0 )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Invalid argument.  The output height (%u) must be greater than zero", height );
+         goto exit;      
+      }
+               
+      pthread_mutex_lock( &ctx->mutex );
+      
+      ctx->outputWidth= width;
+      ctx->outputHeight= height;
+               
+      pthread_mutex_unlock( &ctx->mutex );
+            
+      result= true;
+   }
+
+exit:
+   
+   return result;
+}
+
 bool WstCompositorSetNestedDisplayName( WstCompositor *ctx, const char *nestedDisplayName )
 {
    bool result= false;
@@ -920,31 +993,6 @@ exit:
    return result;
 }
 
-void WstCompositorGetOutputDimensions( WstCompositor *ctx, unsigned int *width, unsigned int *height )
-{
-   int outputWidth= 0;
-   int outputHeight= 0;
-   
-   if ( ctx )
-   {               
-      pthread_mutex_lock( &ctx->mutex );
-      
-      outputWidth= ctx->outputWidth;
-      outputHeight= ctx->outputHeight;
-               
-      pthread_mutex_unlock( &ctx->mutex );
-   }
-
-   if ( width )
-   {
-      *width= outputWidth;
-   }
-   if ( height )
-   {
-      *height= outputHeight;
-   }
-}
-
 const char *WstCompositorGetDisplayName( WstCompositor *ctx )
 {
    const char *displayName= 0;
@@ -1046,6 +1094,31 @@ bool WstCompositorGetIsEmbedded( WstCompositor *ctx )
    }
    
    return isEmbedded;
+}
+
+void WstCompositorGetOutputSize( WstCompositor *ctx, unsigned int *width, unsigned int *height )
+{
+   int outputWidth= 0;
+   int outputHeight= 0;
+   
+   if ( ctx )
+   {               
+      pthread_mutex_lock( &ctx->mutex );
+      
+      outputWidth= ctx->outputWidth;
+      outputHeight= ctx->outputHeight;
+               
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   if ( width )
+   {
+      *width= outputWidth;
+   }
+   if ( height )
+   {
+      *height= outputHeight;
+   }
 }
 
 const char *WstCompositorGetNestedDisplayName( WstCompositor *ctx )
@@ -2049,7 +2122,7 @@ static void* wstCompositorThread( void *arg )
       ERROR("unable to create wl_compositor interface");
       goto exit;
    }
-
+   
 	if (!wl_global_create(ctx->display, &wl_shell_interface, 1, ctx, wstShellBind))
 	{
       ERROR("unable to create wl_shell interface");
@@ -2059,6 +2132,12 @@ static void* wstCompositorThread( void *arg )
 	if (!wl_global_create(ctx->display, &xdg_shell_interface, 1, ctx, wstXdgShellBind))
 	{
       ERROR("unable to create xdg-shell interface");
+      goto exit;
+   }
+   
+   if ( !wstOutputInit(ctx) )
+   {
+      ERROR("unable to intialize output");
       goto exit;
    }
 
@@ -2225,6 +2304,11 @@ exit:
    if ( ctx->seat )
    {
       wstSeatTerm( ctx );
+   }
+   
+   if ( ctx->output )
+   {
+      wstOutputTerm( ctx );
    }
    
    if ( ctx->display )
@@ -3449,6 +3533,130 @@ static void wstIRegionSubtract( struct wl_client *client,
    WESTEROS_UNUSED(height);
 }
 
+static bool wstOutputInit( WstCompositor *ctx )
+{
+   bool result= false;
+   WstOutput *output= 0;
+   
+   ctx->output= (WstOutput*)calloc( 1, sizeof(WstOutput) );
+   if ( !ctx->output )
+   {
+      ERROR("no memory to allocate output");
+      goto exit;
+   }
+   output= ctx->output;
+
+   wl_list_init( &output->resourceList );
+   output->compositor= ctx;
+   
+   output->x= 0;
+   output->y= 0;
+   output->width= ctx->outputWidth;
+   output->height= ctx->outputHeight;
+   output->refreshRate= ctx->frameRate;
+   output->mmWidth= ctx->outputWidth;
+   output->mmHeight= ctx->outputHeight;
+   output->subPixel= WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB;
+   output->make= strdup("Westeros");
+   output->model= strdup("Westeros");
+   output->transform= WL_OUTPUT_TRANSFORM_NORMAL;
+   output->currentScale= 1;
+   
+	if (!wl_global_create(ctx->display, &wl_output_interface, 2, output, wstOutputBind))
+	{
+      ERROR("unable to create wl_output interface");
+      goto exit;
+   }
+   
+   result= true;
+   
+exit:
+
+   if ( !result )
+   {
+      wstOutputTerm( ctx );
+   }
+   
+   return result;
+}
+
+static void wstOutputTerm( WstCompositor *ctx )
+{
+   if ( ctx->output )
+   {
+      WstOutput *output= ctx->output;
+      struct wl_resource *resource;
+
+      while( !wl_list_empty( &output->resourceList ) )
+      {
+         resource= wl_container_of( output->resourceList.next, resource, link);
+         wl_resource_destroy(resource);
+      }
+      
+      if ( output->make )
+      {
+         free( (void*)output->make );
+         output->make= 0;
+      }
+      
+      if ( output->model )
+      {
+         free( (void*)output->model );
+         output->model= 0;
+      }
+      
+      free( output );
+      ctx->output= 0;
+   }
+}
+
+static void wstOutputBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
+{
+   WstOutput *output= (WstOutput*)data;
+   struct wl_resource *resource;
+   
+   DEBUG("wstOutputBind: client %p data %p version %d id %d", client, data, version, id );
+   
+   resource= wl_resource_create(client,
+                                &wl_output_interface,
+                                MIN(version,2),
+                                id);                                
+   if (!resource) 
+   {
+      wl_client_post_no_memory(client);
+      return;
+   }
+
+   wl_list_insert( &output->resourceList, wl_resource_get_link(resource) );
+   wl_resource_set_implementation(resource, NULL, output, wstResourceUnBindCallback);
+   
+   wl_output_send_geometry( resource,
+                            output->x,
+                            output->y,
+                            output->mmWidth,
+                            output->mmHeight,
+                            output->subPixel,
+                            output->make,
+                            output->model,
+                            output->transform );
+                  
+   if ( version >= WL_OUTPUT_SCALE_SINCE_VERSION )
+   {
+      wl_output_send_scale( resource, output->currentScale );
+   }
+
+   wl_output_send_mode( resource,
+                        WL_OUTPUT_MODE_CURRENT,
+                        output->width,
+                        output->height,
+                        output->refreshRate );
+
+   if ( version >= WL_OUTPUT_DONE_SINCE_VERSION )
+   {
+      wl_output_send_done( resource );   
+   }
+}
+
 static void wstShellBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
    WstCompositor *ctx= (WstCompositor*)data;
@@ -3950,6 +4158,67 @@ static void wstDefaultNestedConnectionEnded( void *userData )
    }
 }
 
+static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int32_t y, int32_t mmWidth,
+                                                  int32_t mmHeight, int32_t subPixel, const char *make, 
+                                                  const char *model, int32_t transform )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->output )
+   {
+      WstOutput *output= ctx->output;
+      
+      output->x= x;
+      output->y= y;
+      output->mmWidth= mmWidth;
+      output->mmHeight= mmHeight;
+      output->subPixel= subPixel;
+      if ( output->make )
+      {
+         free( (void*)output->make );         
+      }
+      output->make= strdup(make);
+      if ( output->model )
+      {
+         free( (void*)output->model );         
+      }
+      output->model= strdup(model);
+      output->transform= transform;
+   }
+}
+
+static void wstDefaultNestedOutputHandleMode( void* userData, uint32_t flags, int32_t width, 
+                                              int32_t height, int32_t refreshRate )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->output )
+   {
+      WstOutput *output= ctx->output;
+      
+      output->width= width;
+      output->height= height;
+      output->refreshRate= refreshRate;
+   }
+}
+
+static void wstDefaultNestedOutputHandleDone( void *userData )
+{
+   WESTEROS_UNUSED( userData );
+}
+
+static void wstDefaultNestedOutputHandleScale( void *userData, int32_t scale )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   
+   if ( ctx->output )
+   {
+      WstOutput *output= ctx->output;
+      
+      output->currentScale= scale;
+   }
+}
+
 static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -4322,6 +4591,10 @@ static void wstSetDefaultNestedListener( WstCompositor *ctx )
 {
    ctx->nestedListenerUserData= ctx;
    ctx->nestedListener.connectionEnded= wstDefaultNestedConnectionEnded;
+   ctx->nestedListener.outputHandleGeometry= wstDefaultNestedOutputHandleGeometry;
+   ctx->nestedListener.outputHandleMode= wstDefaultNestedOutputHandleMode;
+   ctx->nestedListener.outputHandleDone= wstDefaultNestedOutputHandleDone;
+   ctx->nestedListener.outputHandleScale= wstDefaultNestedOutputHandleScale;
    ctx->nestedListener.keyboardHandleKeyMap= wstDefaultNestedKeyboardHandleKeyMap;
    ctx->nestedListener.keyboardHandleEnter= wstDefaultNestedKeyboardHandleEnter;
    ctx->nestedListener.keyboardHandleLeave= wstDefaultNestedKeyboardHandleLeave;

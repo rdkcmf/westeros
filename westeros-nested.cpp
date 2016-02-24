@@ -21,6 +21,7 @@ typedef struct _WstNestedConnection
    struct wl_display *display;
    struct wl_registry *registry;
    struct wl_compositor *compositor;
+   struct wl_output *output;
    struct wl_shm *shm;
    struct wl_simple_shell *simpleShell;
    #ifdef ENABLE_SBPROTOCOL
@@ -42,6 +43,81 @@ typedef struct _WstNestedConnection
    std::map<struct wl_surface*, int32_t> surfaceMap;
 } WstNestedConnection;
 
+static void outputHandleGeometry( void *data, 
+                                  struct wl_output *output,
+                                  int x,
+                                  int y,
+                                  int mmWidth,
+                                  int mmHeight,
+                                  int subPixel,
+                                  const char *make,
+                                  const char *model,
+                                  int transform )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+   
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->outputHandleGeometry( nc->nestedListenerUserData,
+                                                x,
+                                                y,
+                                                mmWidth,
+                                                mmHeight,
+                                                subPixel,
+                                                make,
+                                                model,
+                                                transform );
+   }
+}
+
+static void outputHandleMode( void *data,
+                              struct wl_output *output,
+                              uint32_t flags,
+                              int width,
+                              int height,
+                              int refreshRate )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+   
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->outputHandleMode( nc->nestedListenerUserData,
+                                            flags,
+                                            width,
+                                            height,
+                                            refreshRate );
+   }
+}
+
+static void outputHandleDone( void *data,
+                              struct wl_output *output )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+   
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->outputHandleDone( nc->nestedListenerUserData );
+   }   
+}
+
+static void outputHandleScale( void *data,
+                               struct wl_output *output,
+                               int32_t scale )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+   
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->outputHandleScale( nc->nestedListenerUserData, scale );
+   }   
+}
+
+static const struct wl_output_listener outputListener = {
+   outputHandleGeometry,
+   outputHandleMode,
+   outputHandleDone,
+   outputHandleScale
+};
 
 static void keyboardHandleKeymap( void *data, struct wl_keyboard *keyboard, 
                                   uint32_t format, int fd, uint32_t size )
@@ -345,6 +421,11 @@ static void registryHandleGlobal(void *data,
    if ( ((len==13) && !strncmp(interface, "wl_compositor", len) ) ) {
       nc->compositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
    }
+   else if ( (len==9) && !strncmp(interface, "wl_output", len) ) {
+      nc->output= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
+		wl_output_add_listener(nc->output, &outputListener, nc);
+		wl_display_roundtrip( nc->display );
+   } 
    else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
       nc->seat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
 		wl_seat_add_listener(nc->seat, &seatListener, nc);
@@ -548,6 +629,11 @@ void WstNestedConnectionDestroy( WstNestedConnection *nc )
          nc->sb= 0;
       }
       #endif
+      if ( nc->output )
+      {
+         wl_output_destroy( nc->output );
+         nc->output= 0;
+      }
       if ( nc->compositor )
       {
          wl_compositor_destroy( nc->compositor );
