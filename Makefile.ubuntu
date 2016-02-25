@@ -1,5 +1,5 @@
 WID=$(shell pwd)/external/install
-XDGOPT=xdgv5
+XDGOPT ?= xdgv5
 
 all:  externals westeros-protocols westeros-simpleshell westeros
 
