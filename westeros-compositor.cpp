@@ -3957,7 +3957,27 @@ static void wstIXdgGetXdgSurface( struct wl_client *client,
                                   shellSurface, wstDestroyShellSurfaceCallback );
    
    shellSurface->surface= surface;
-   surface->shellSurface.push_back(shellSurface);   
+   surface->shellSurface.push_back(shellSurface);
+   
+   if ( surface->compositor->isEmbedded )
+   {
+      WstCompositor *compositor= surface->compositor;
+      struct wl_array states;
+      uint32_t serial;
+      uint32_t *entry;
+      
+      wl_array_init( &states );
+      entry= (uint32_t*)wl_array_add( &states, sizeof(uint32_t) );
+      *entry= XDG_SURFACE_STATE_FULLSCREEN;
+      serial= wl_display_next_serial( compositor->display );
+      xdg_surface_send_configure( shellSurface->resource,
+                                  compositor->output->width,
+                                  compositor->output->height,
+                                  &states,
+                                  serial );
+                                  
+      wl_array_release( &states );
+   }
 }
 
 static void  wstIXdgGetXdgPopup( struct wl_client *client,
