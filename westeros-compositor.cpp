@@ -271,6 +271,7 @@ typedef struct _WstCompositor
    WstNestedConnection *nc;
    void *nestedListenerUserData;
    WstNestedConnectionListener nestedListener;
+   bool hasEmbeddedMaster;
    
    void *keyboardNestedListenerUserData;
    WstKeyboardNestedListener *keyboardNestedListener;
@@ -3558,7 +3559,14 @@ static bool wstOutputInit( WstCompositor *ctx )
    output->mmHeight= ctx->outputHeight;
    output->subPixel= WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB;
    output->make= strdup("Westeros");
-   output->model= strdup("Westeros");
+   if ( ctx->isEmbedded )
+   {
+      output->model= strdup("Westeros-embedded");
+   }
+   else
+   {
+      output->model= strdup("Westeros");
+   }
    output->transform= WL_OUTPUT_TRANSFORM_NORMAL;
    output->currentScale= 1;
    
@@ -3959,7 +3967,7 @@ static void wstIXdgGetXdgSurface( struct wl_client *client,
    shellSurface->surface= surface;
    surface->shellSurface.push_back(shellSurface);
    
-   if ( surface->compositor->isEmbedded )
+   if ( surface->compositor->isEmbedded || surface->compositor->hasEmbeddedMaster )
    {
       WstCompositor *compositor= surface->compositor;
       struct wl_array states;
@@ -4204,6 +4212,11 @@ static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int
       }
       output->model= strdup(model);
       output->transform= transform;
+      
+      if ( strstr( output->model, "embedded" ) )
+      {
+         ctx->hasEmbeddedMaster= true;
+      }
    }
 }
 
