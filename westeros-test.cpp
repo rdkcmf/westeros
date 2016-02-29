@@ -218,7 +218,7 @@ static void registryHandleGlobal(void *data,
 	AppCtx *ctx = (AppCtx*)data;
 	int len;
 
-   printf("westeros-test: registry: id %d interface (%s) version %d\n", id, interface, version ); //JRW
+   printf("westeros-test: registry: id %d interface (%s) version %d\n", id, interface, version );
 
    len= strlen(interface);
    if ( (len==6) && !strncmp(interface, "wl_shm", len)) {
@@ -576,7 +576,7 @@ static void redraw( void *data, struct wl_callback *callback, uint32_t time )
 {
    AppCtx *ctx= (AppCtx*)data;
 
-   if ( g_log ) printf("redraw: time %d\n", time); //JRW
+   if ( g_log ) printf("redraw: time %d\n", time);
    wl_callback_destroy( callback );
       
    drawFrame( ctx );
