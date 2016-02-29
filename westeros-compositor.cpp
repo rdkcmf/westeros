@@ -273,6 +273,8 @@ typedef struct _WstCompositor
    WstNestedConnectionListener nestedListener;
    bool hasEmbeddedMaster;
    
+   void *outputNestedListenerUserData;
+   WstOutputNestedListener *outputNestedListener;
    void *keyboardNestedListenerUserData;
    WstKeyboardNestedListener *keyboardNestedListener;
    void *pointerNestedListenerUserData;
@@ -292,6 +294,7 @@ typedef struct _WstCompositor
    std::map<struct wl_resource*, WstSurfaceInfo*> surfaceInfoMap;
 
    bool needRepaint;
+   bool outputSizeChanged;
 } WstCompositor;
 
 static const char* wstGetNextNestedDisplayName(void);
@@ -362,6 +365,7 @@ static void wstIRegionSubtract( struct wl_client *client,
 static bool wstOutputInit( WstCompositor *ctx );
 static void wstOutputTerm( WstCompositor *ctx );                                
 static void wstOutputBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);                                
+static void wstOutputChangeSize( WstCompositor *ctx );
 static void wstShellBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
 static void wstIShellGetShellSurface(struct wl_client *client,
                                      struct wl_resource *resource,
@@ -477,6 +481,7 @@ static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
                                                 struct wl_resource *resource );
 static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
                                              struct wl_resource *resource );
+static void wstXdgSurfaceSendConfigure( WstCompositor *ctx, WstSurface *surface, uint32_t state );
 static void wstDefaultNestedConnectionEnded( void *userData );
 static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int32_t y, int32_t mmWidth,
                                                   int32_t mmHeight, int32_t subPixel, const char *make, 
@@ -840,13 +845,6 @@ bool WstCompositorSetOutputSize( WstCompositor *ctx, int width, int height )
    
    if ( ctx )
    {
-      if ( ctx->running )
-      {
-         sprintf( ctx->lastErrorDetail,
-                  "Bad state.  Cannot set output size while compositor is running" );
-         goto exit;
-      }      
-
       if ( width == 0 )
       {
          sprintf( ctx->lastErrorDetail,
@@ -865,6 +863,11 @@ bool WstCompositorSetOutputSize( WstCompositor *ctx, int width, int height )
       
       ctx->outputWidth= width;
       ctx->outputHeight= height;
+      
+      if ( ctx->running )
+      {
+         ctx->outputSizeChanged= true;
+      }
                
       pthread_mutex_unlock( &ctx->mutex );
             
@@ -1276,6 +1279,42 @@ bool WstCompositorSetClientStatusCallback( WstCompositor *ctx, WstClientStatus c
       
       ctx->clientStatusUserData= userData;
       ctx->clientStatusCB= cb;
+      
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      result= true;
+   }
+
+exit:
+
+   return result;   
+}
+
+bool WstCompositorSetOutputNestedListener( WstCompositor *ctx, WstOutputNestedListener *listener, void *userData )
+{
+  bool result= false;
+   
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set output nested listener while compositor is running" );
+         goto exit;
+      }      
+
+      if ( !ctx->isNested )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Compositor is not nested" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+      
+      ctx->outputNestedListenerUserData= userData;
+      ctx->outputNestedListener= listener;
       
       pthread_mutex_unlock( &ctx->mutex );
       
@@ -2390,6 +2429,11 @@ static int wstCompositorDisplayTimeOut( void *data )
 {
    WstCompositor *ctx= (WstCompositor*)data;
    
+   if ( ctx->outputSizeChanged )
+   {
+      wstOutputChangeSize( ctx );
+   }
+   
    if ( ctx->needRepaint )
    {
       wstCompositorComposeFrame( ctx );
@@ -2750,6 +2794,9 @@ static void wstIShmCreatePool( struct wl_client *client, struct wl_resource *res
             free( pool );
             return;
          }
+
+         // Close the fd.  Each fd sent via wayland gets duplicated.         
+         close( fd );
       }   
    }   
 }
@@ -3665,6 +3712,45 @@ static void wstOutputBind( struct wl_client *client, void *data, uint32_t versio
    }
 }
 
+static void wstOutputChangeSize( WstCompositor *ctx )
+{
+   WstOutput *output= ctx->output;
+   struct wl_resource *resource;
+   
+   ctx->outputSizeChanged= false;
+   
+   output->width= ctx->outputWidth;
+   output->height= ctx->outputHeight;
+
+   wl_resource_for_each( resource, &output->resourceList )
+   {
+      wl_output_send_mode( resource,
+                           WL_OUTPUT_MODE_CURRENT,
+                           output->width,
+                           output->height,
+                           output->refreshRate );
+   }
+   
+   if ( ctx->isEmbedded || ctx->hasEmbeddedMaster )
+   {
+      for ( std::vector<WstSurface*>::iterator it= ctx->surfaces.begin(); 
+            it != ctx->surfaces.end();
+            ++it )
+      {
+         WstSurface *surface= (*it);
+         
+         if ( surface->roleName )
+         {
+            int len= strlen( surface->roleName );
+            if ( (len == 11) && !strncmp( "xdg_surface", surface->roleName, len) )
+            {
+               wstXdgSurfaceSendConfigure( ctx, surface, XDG_SURFACE_STATE_FULLSCREEN );
+            }
+         }
+      }
+   }
+}
+
 static void wstShellBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
    WstCompositor *ctx= (WstCompositor*)data;
@@ -4170,6 +4256,33 @@ static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
    WESTEROS_UNUSED(resource);
 }                                             
 
+static void wstXdgSurfaceSendConfigure( WstCompositor *ctx, WstSurface *surface, uint32_t state )
+{
+   struct wl_array states;
+   uint32_t serial;
+   uint32_t *entry;
+   
+   wl_array_init( &states );
+   entry= (uint32_t*)wl_array_add( &states, sizeof(uint32_t) );
+   *entry= state;
+   serial= wl_display_next_serial( ctx->display );
+
+   for ( std::vector<WstShellSurface*>::iterator it= surface->shellSurface.begin(); 
+         it != surface->shellSurface.end();
+         ++it )
+   {
+      WstShellSurface *shellSurface= (*it);
+      
+      xdg_surface_send_configure( shellSurface->resource,
+                                  ctx->output->width,
+                                  ctx->output->height,
+                                  &states,
+                                  serial );
+   }
+                               
+   wl_array_release( &states );               
+}
+
 static void wstDefaultNestedConnectionEnded( void *userData )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -4192,30 +4305,42 @@ static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->output )
+   if ( ctx )
    {
-      WstOutput *output= ctx->output;
-      
-      output->x= x;
-      output->y= y;
-      output->mmWidth= mmWidth;
-      output->mmHeight= mmHeight;
-      output->subPixel= subPixel;
-      if ( output->make )
+      if ( ctx->outputNestedListener )
       {
-         free( (void*)output->make );         
+         ctx->outputNestedListener->outputHandleGeometry( ctx->outputNestedListenerUserData,
+                                                          x, y, mmWidth, mmHeight, subPixel,
+                                                          make, model, transform );
       }
-      output->make= strdup(make);
-      if ( output->model )
+      else
       {
-         free( (void*)output->model );         
-      }
-      output->model= strdup(model);
-      output->transform= transform;
-      
-      if ( strstr( output->model, "embedded" ) )
-      {
-         ctx->hasEmbeddedMaster= true;
+         if ( ctx->output )
+         {
+            WstOutput *output= ctx->output;
+            
+            output->x= x;
+            output->y= y;
+            output->mmWidth= mmWidth;
+            output->mmHeight= mmHeight;
+            output->subPixel= subPixel;
+            if ( output->make )
+            {
+               free( (void*)output->make );         
+            }
+            output->make= strdup(make);
+            if ( output->model )
+            {
+               free( (void*)output->model );         
+            }
+            output->model= strdup(model);
+            output->transform= transform;
+            
+            if ( strstr( output->model, "embedded" ) )
+            {
+               ctx->hasEmbeddedMaster= true;
+            }
+         }
       }
    }
 }
@@ -4225,30 +4350,68 @@ static void wstDefaultNestedOutputHandleMode( void* userData, uint32_t flags, in
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->output )
+   if ( ctx )
    {
-      WstOutput *output= ctx->output;
-      
-      output->width= width;
-      output->height= height;
-      output->refreshRate= refreshRate;
+      if ( ctx->outputNestedListener )
+      {
+         ctx->outputNestedListener->outputHandleMode( ctx->outputNestedListenerUserData,
+                                                      flags, width, height, refreshRate );
+      }
+      else
+      {
+         if ( ctx->output )
+         {
+            WstOutput *output= ctx->output;
+            
+            ctx->outputWidth= width;
+            ctx->outputHeight= height;
+            
+            output->width= width;
+            output->height= height;
+            output->refreshRate= refreshRate;
+            
+            ctx->outputSizeChanged= true;
+         }
+      }
    }
 }
 
 static void wstDefaultNestedOutputHandleDone( void *userData )
 {
-   WESTEROS_UNUSED( userData );
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->outputNestedListener )
+      {
+         ctx->outputNestedListener->outputHandleDone( ctx->outputNestedListenerUserData );
+      }
+      else
+      {
+         // Nothing to do
+      }
+   }
 }
 
 static void wstDefaultNestedOutputHandleScale( void *userData, int32_t scale )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    
-   if ( ctx->output )
+   if ( ctx )
    {
-      WstOutput *output= ctx->output;
-      
-      output->currentScale= scale;
+      if ( ctx->outputNestedListener )
+      {
+         ctx->outputNestedListener->outputHandleScale( ctx->outputNestedListenerUserData, scale );
+      }
+      else
+      {
+         if ( ctx->output )
+         {
+            WstOutput *output= ctx->output;
+            
+            output->currentScale= scale;
+         }
+      }
    }
 }
 
