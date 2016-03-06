@@ -10,9 +10,16 @@ AM_CXXFLAGS= \
    $(XKBCOMMON_CFLAGS)   
 AM_LDFLAGS=$(WAYLANDLIB)
 
-
-if HAVE_EGL
+## --- Configurtion -------
+if !HAVE_GLEW
 AM_CXXFLAGS += -DWESTEROS_PLATFORM_EMBEDDED
+endif
+
+if HAVE_WAYLAND_EGL
+AM_CXXFLAGS += -DWESTEROS_HAVE_WAYLAND_EGL
+WSTEGL_LIBS= -lwayland-egl
+else
+WSTEGL_LIBS= -lwesteros_egl
 endif
 
 if ENABLE_WESTEROS_SBPROTOCOL
@@ -48,22 +55,30 @@ bin_PROGRAMS = westeros_test
 endif
 endif 
 
+## --- Sample compositor app -------
 westeros_SOURCES = westeros-main.cpp
 
 westeros_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_SERVER_LIBS) \
    -lwesteros_compositor
+if HAVE_GLEW
+westeros_LDFLAGS += -lglut -lGL -lGLEW -lX11
+endif
 
+## --- Sample client -------
 westeros_test_SOURCES = westeros-test.cpp
 westeros_test_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_CLIENT_LIBS) \
    -lwesteros_simpleshell_client \
-   -lwesteros_egl \
+   $(WSTEGL_LIBS) \
    -lEGL
+if HAVE_GLEW
+westeros_test_LDFLAGS += -lGL -lGLEW
+endif   
 
-
+## --- Compositor -------
 lib_LTLIBRARIES = libwesteros_compositor.la \
                   libwesteros_render_embedded.la
 
@@ -101,16 +116,28 @@ if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_compositor_la_LDFLAGS += -lwesteros_simplebuffer_server
 endif
 
+## --- Renderer: OpenGL -------
 libwesteros_render_gl_la_SOURCES = westeros-render-gl.cpp
 libwesteros_render_gl_la_includedir = $(includedir)
-libwesteros_render_gl_la_LDFLAGS= -lwesteros_egl -lEGL -lwesteros_gl -lwesteros_nxpl
+if HAVE_GLEW
+libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
+else
+libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lwesteros_gl -lwesteros_nxpl $(WAYLAND_SERVER_LIBS)
+endif
+if ENABLE_WESTEROS_SBPROTOCOL
+libwesteros_render_gl_la_LDFLAGS += -lwesteros_simplebuffer_server
+endif
 
+## --- Renderer: Embedded -------
 libwesteros_render_embedded_la_SOURCES = westeros-render-embedded.cpp
 libwesteros_render_embedded_la_includedir = $(includedir)
-if HAVE_EGL
-libwesteros_render_embedded_la_LDFLAGS= -lEGL -lwesteros_gl -lwesteros_nxpl
+if HAVE_GLEW
+libwesteros_render_embedded_la_LDFLAGS= -lEGL -lglut -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
 else
-libwesteros_render_embedded_la_LDFLAGS= -lglut -lGL -lGLEW
+libwesteros_render_embedded_la_LDFLAGS= -lEGL -lwesteros_gl -lwesteros_nxpl $(WAYLAND_SERVER_LIBS)
+endif
+if ENABLE_WESTEROS_SBPROTOCOL
+libwesteros_render_embedded_la_LDFLAGS += -lwesteros_simplebuffer_server
 endif
 
 pkgconfigdir = $(libdir)/pkgconfig

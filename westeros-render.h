@@ -35,9 +35,7 @@ typedef void (*WSTMethodRenderTerm)( WstRenderer *renderer );
 typedef void (*WSTMethodUpdateScene)( WstRenderer *renderer );
 typedef WstRenderSurface* (*WSTMethodSurfaceCreate)( WstRenderer *renderer );
 typedef void (*WSTMethodSurfaceDestroy)( WstRenderer *renderer, WstRenderSurface *surf );
-typedef void (*WSTMethodSurfaceCommit)( WstRenderer *renderer, WstRenderSurface *surface, void *buffer );
-typedef void (*WSTMethodSurfaceCommitMemory)( WstRenderer *renderer, WstRenderSurface *surface, 
-                                              void *data, int width, int height, int format, int stride );
+typedef void (*WSTMethodSurfaceCommit)( WstRenderer *renderer, WstRenderSurface *surface, struct wl_resource *resource );
 typedef void (*WSTMethodSurfaceSetVisible)( WstRenderer *renderer, WstRenderSurface *surface, bool visible );
 typedef bool (*WSTMethodSurfaceGetVisible)( WstRenderer *renderer, WstRenderSurface *surface, bool *visible );
 typedef void (*WSTMethodSurfaceSetGeometry)( WstRenderer *renderer, WstRenderSurface *surface, int x, int y, int width, int height );
@@ -51,6 +49,8 @@ typedef struct _WstRenderer
 {
    int outputWidth;
    int outputHeight;
+   void *nativeWindow;
+   struct wl_display *display;
    void *renderer;
    
    WSTMethodRenderTerm renderTerm;
@@ -58,7 +58,6 @@ typedef struct _WstRenderer
    WSTMethodSurfaceCreate surfaceCreate;
    WSTMethodSurfaceDestroy surfaceDestroy;
    WSTMethodSurfaceCommit surfaceCommit;
-   WSTMethodSurfaceCommitMemory surfaceCommitMemory;
    WSTMethodSurfaceSetVisible surfaceSetVisible;
    WSTMethodSurfaceGetVisible surfaceGetVisible;
    WSTMethodSurfaceSetGeometry surfaceSetGeometry;
@@ -70,8 +69,8 @@ typedef struct _WstRenderer
 
    // For nested composition
    WstNestedConnection *nc;
-   wl_display *display;
-   wl_surface *surface;
+   struct wl_display *displayNested;
+   struct wl_surface *surfaceNested;
    
    // For embedded composition
    int resW;
@@ -80,15 +79,14 @@ typedef struct _WstRenderer
    float alpha;
 } WstRenderer;
 
-WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, WstNestedConnection *nc );
+WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, 
+                                struct wl_display *display, WstNestedConnection *nc );
 void WstRendererDestroy( WstRenderer *renderer );
 
 void WstRendererUpdateScene( WstRenderer *renderer );
 WstRenderSurface* WstRendererSurfaceCreate( WstRenderer *renderer );
 void WstRendererSurfaceDestroy( WstRenderer *renderer, WstRenderSurface *surface );
-void WstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *surface, void *buffer );
-void WstRendererSurfaceCommitMemory( WstRenderer *renderer, WstRenderSurface *surface,
-                                     void *data, int width, int height, int format, int stride );
+void WstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *surface, struct wl_resource *resource );
 void WstRendererSurfaceSetVisible( WstRenderer *renderer, WstRenderSurface *surface, bool visible );
 bool WstRendererSurfaceGetVisible( WstRenderer *renderer, WstRenderSurface *surface, bool *visible );
 void WstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurface *surface, int x, int y, int width, int height );

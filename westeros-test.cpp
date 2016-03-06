@@ -10,6 +10,7 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
@@ -942,7 +943,7 @@ static bool setupEGL( AppCtx *ctx )
       printf( "eglCreateContext failed: %X\n", eglGetError() );
       goto exit;
    }
-   printf("eglCreateContext: eglContext %p\n", ctx->eglContext );                                         
+   printf("eglCreateContext: eglContext %p\n", ctx->eglContext );
 
    result= true;
     
@@ -996,14 +997,14 @@ static bool createSurface( AppCtx *ctx )
     */
    ctx->eglSurfaceWindow= eglCreateWindowSurface( ctx->eglDisplay,
                                                   ctx->eglConfig,
-                                                  ctx->native,
+                                                  (EGLNativeWindowType)ctx->native,
                                                   NULL );
    if ( ctx->eglSurfaceWindow == EGL_NO_SURFACE )
    {
       printf("eglCreateWindowSurface: A: error %X\n", eglGetError() );
       ctx->eglSurfaceWindow= eglCreateWindowSurface( ctx->eglDisplay,
                                                      ctx->eglConfig,
-                                                     NULL,
+                                                     (EGLNativeWindowType)NULL,
                                                      NULL );
       if ( ctx->eglSurfaceWindow == EGL_NO_SURFACE )
       {

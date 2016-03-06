@@ -138,13 +138,6 @@ typedef struct _WstShm
    struct wl_list resourceList;
 } WstShm;
 
-typedef enum _WstBufferType 
-{
-  WstBufferType_null,
-  WstBufferType_shm,
-  WstBufferType_sb
-} WstBufferType;
-
 typedef struct _WstRegion
 {
    struct wl_resource *resource;
@@ -183,7 +176,8 @@ typedef struct _WstSurface
 	int refCount;
    
    struct wl_resource *attachedBufferResource;
-   WstBufferType attachedBufferType;
+   int attachedX;
+   int attachedY;
    
    struct wl_list frameCallbackList;
    
@@ -232,11 +226,14 @@ typedef struct _WstCompositor
    unsigned int nestedWidth;
    unsigned int nestedHeight;
    bool allowModifyCursor;
+   void *nativeWindow;
    int outputWidth;
    int outputHeight;
 
    void *terminatedUserData;
    WstTerminatedCallback terminatedCB;
+   void *dispatchUserData;
+   WstDispatchCallback dispatchCB;
    void *invalidateUserData;
    WstInvalidateSceneCallback invalidateCB;
    void *hidePointerUserData;
@@ -722,6 +719,33 @@ exit:
    return result;
 }
 
+bool WstCompositorSetNativeWindow( WstCompositor *ctx, void *nativeWindow )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set native window while compositor is running" );
+         goto exit;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+      
+      ctx->nativeWindow= nativeWindow;
+      
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      result= true;
+   }
+
+exit:
+   
+   return result;
+}
+
 bool WstCompositorSetRendererModule( WstCompositor *ctx, const char *rendererModule )
 {
    bool result= false;
@@ -800,6 +824,13 @@ bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater )
       if ( isRepeater )
       {
          ctx->isNested= true;
+         #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+         // We can't do renderless composition with wayland-egl.  Ignore the
+         // request and configure for nested composition with gl renderer
+         ctx->isRepeater= false;
+         ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
+         WARNING("WstCompositorSetIsRepeater: cannot repeat with wayland-egl: configuring nested with gl renderer");
+         #endif
       }
                
       pthread_mutex_unlock( &ctx->mutex );
@@ -1203,6 +1234,27 @@ exit:
    return result;   
 }
 
+bool WstCompositorSetDispatchCallback( WstCompositor *ctx, WstDispatchCallback cb, void *userData )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->dispatchUserData= userData;
+      ctx->dispatchCB= cb;
+      
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      result= true;
+   }
+
+exit:
+
+   return result;   
+}
+
 bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneCallback cb, void *userData )
 {
    bool result= false;
@@ -1211,14 +1263,6 @@ bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneC
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( !ctx->isEmbedded )
-      {
-         sprintf( ctx->lastErrorDetail,
-                  "Bad state.  Compositor is not embedded" );
-         pthread_mutex_unlock( &ctx->mutex );
-         goto exit;
-      }
-      
       ctx->invalidateUserData= userData;
       ctx->invalidateCB= cb;
       
@@ -1972,7 +2016,6 @@ static void sbReleaseBuffer(void *userData, struct wl_sb_buffer *buffer)
       if ( surface->attachedBufferResource == resource )
       {
          surface->attachedBufferResource= 0;
-         surface->attachedBufferType= WstBufferType_null;
          break;
       }
    }
@@ -2110,7 +2153,10 @@ static void simpleShellGetStatus( void* userData, uint32_t surfaceId, bool *visi
       }
       else
       {
+         WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
          WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+         WstRendererSurfaceGetOpacity( ctx->renderer, surface->surface, opacity );
+         WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, zorder );
       }
    }
 }
@@ -2252,11 +2298,17 @@ static void* wstCompositorThread( void *arg )
    else
    {
       argc= 0;
+      if ( ctx->nativeWindow )
+      {
+         argc += 2;
+         strcpy( arg0, "--nativeWindow" );
+         sprintf( arg1, "%p", ctx->nativeWindow );
+      }
    }
    
    if ( !ctx->isRepeater )
    {
-      ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->nc );
+      ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->display, ctx->nc );
       if ( !ctx->renderer )
       {
          ERROR("unable to initialize renderer module");
@@ -2286,6 +2338,7 @@ static void* wstCompositorThread( void *arg )
    pthread_mutex_unlock( &ctx->mutex );
    
    ctx->compositorReady= true;   
+   ctx->needRepaint= true;
    DEBUG("calling wl_display_run for display: %s", ctx->displayName );
    wl_display_run(ctx->display);
    DEBUG("done calling wl_display_run for display: %s", ctx->displayName );
@@ -2432,6 +2485,11 @@ static int wstCompositorDisplayTimeOut( void *data )
    if ( ctx->outputSizeChanged )
    {
       wstOutputChangeSize( ctx );
+   }
+
+   if ( ctx->dispatchCB )
+   {
+      ctx->dispatchCB( ctx, ctx->dispatchUserData );
    }
    
    if ( ctx->needRepaint )
@@ -2985,6 +3043,7 @@ static WstSurface* wstSurfaceCreate( WstCompositor *ctx)
 
       surface->visible= true;
       surface->opacity= 1.0;
+      surface->zorder= 0.5;
       if ( ctx->isRepeater )
       {
          surface->surfaceNested= WstNestedConnectionCreateSurface( ctx->nc );
@@ -3267,29 +3326,19 @@ static void wstISurfaceAttach(struct wl_client *client,
 {
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
 
+   if ( surface->attachedBufferResource != buffer_resource )
+   {
+      if ( surface->attachedBufferResource )
+      {
+         wl_buffer_send_release( surface->attachedBufferResource );
+         surface->attachedBufferResource= 0;
+      }
+   }
    if ( buffer_resource )
    {
       surface->attachedBufferResource= buffer_resource;
-      if ( wl_shm_buffer_get( buffer_resource ) )
-      {
-         surface->attachedBufferType= WstBufferType_shm;
-      }
-      else if ( surface->compositor->isRepeater && 
-                wl_resource_instance_of( buffer_resource, &wl_buffer_interface, &shm_buffer_interface ) )
-      {
-         surface->attachedBufferType= WstBufferType_shm;
-      }
-      #ifdef ENABLE_SBPROTOCOL
-      else if ( WstSBBufferGet( surface->compositor->sb, buffer_resource ) )
-      {
-         surface->attachedBufferType= WstBufferType_sb;
-      }
-      #endif
-      else
-      {
-         surface->attachedBufferType= WstBufferType_null;
-         ERROR("wstISurfaceAttach: buffer type: unknown");
-      }
+      surface->attachedX= sx;
+      surface->attachedY= sy;
    }
 }
 
@@ -3356,151 +3405,75 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
 
    if ( surface->attachedBufferResource )
    {
-      switch( surface->attachedBufferType )
+      if ( surface->compositor->isRepeater )
       {
-         case WstBufferType_shm:
+         if ( wl_resource_instance_of( surface->attachedBufferResource, &wl_buffer_interface, &shm_buffer_interface ) )
+         {
+            WstShmBuffer *buffer= (WstShmBuffer*)wl_resource_get_user_data(surface->attachedBufferResource);
+            if ( buffer )
             {
                int width, height;
-               struct wl_shm_buffer *shmBuffer;
                
-               if ( surface->compositor->isRepeater )
-               {
-                  if ( wl_resource_instance_of( surface->attachedBufferResource, &wl_buffer_interface, &shm_buffer_interface ) )
-                  {
-                     WstShmBuffer *buffer= (WstShmBuffer*)wl_resource_get_user_data(surface->attachedBufferResource);
-                     if ( buffer )
-                     {
-                        width= buffer->width;
-                        height= buffer->height;
-                        
-                        WstNestedConnectionAttachAndCommit( surface->compositor->nc,
-                                                            surface->surfaceNested,
-                                                            buffer->bufferNested,
-                                                            0,
-                                                            0,
-                                                            width, 
-                                                            height );
-
-                        wstCompositorScheduleRepaint( surface->compositor );
-                     }
-                  }
-               }
-               else
-               {
-                  shmBuffer= wl_shm_buffer_get( surface->attachedBufferResource );
-                  if ( shmBuffer )
-                  {
-                     int stride, format;
-                     void *data;
-
-                     width= wl_shm_buffer_get_width(shmBuffer);
-                     height= wl_shm_buffer_get_height(shmBuffer);
-                     stride= wl_shm_buffer_get_stride(shmBuffer);
-                     
-                     switch( wl_shm_buffer_get_format(shmBuffer) )
-                     {
-                        case WL_SHM_FORMAT_ARGB8888:
-                           format= WstRenderer_format_ARGB8888;
-                           break;
-                        case WL_SHM_FORMAT_XRGB8888:
-                           format= WstRenderer_format_XRGB8888;
-                           break;
-                        case WL_SHM_FORMAT_BGRA8888:
-                           format= WstRenderer_format_BGRA8888;
-                           break;
-                        case WL_SHM_FORMAT_BGRX8888:
-                           format= WstRenderer_format_BGRX8888;
-                           break;
-                        case WL_SHM_FORMAT_RGB565:
-                           format= WstRenderer_format_RGB565;
-                           break;
-                        case WL_SHM_FORMAT_ARGB4444:
-                           format= WstRenderer_format_ARGB4444;
-                           break;
-                        default:
-                           WARNING("unsupported pixel format: %d", wl_shm_buffer_get_format(shmBuffer));
-                           format= WstRenderer_format_unknown;
-                           break;
-                     }
-
-                     if ( format != WstRenderer_format_unknown )
-                     {
-                        wl_shm_buffer_begin_access(shmBuffer);
-                        data= wl_shm_buffer_get_data(shmBuffer);
-                        
-                        pthread_mutex_lock( &surface->compositor->mutex );
-                        WstRendererSurfaceCommitMemory( surface->renderer,
-                                                        surface->surface,
-                                                        data,
-                                                        width,
-                                                        height,
-                                                        format,
-                                                        stride );      
-                        pthread_mutex_unlock( &surface->compositor->mutex );
-                        
-                        wl_shm_buffer_end_access(shmBuffer);
-
-                        wstCompositorScheduleRepaint( surface->compositor );
-                     }
-                  }
-               }
+               width= buffer->width;
+               height= buffer->height;
+               
+               WstNestedConnectionAttachAndCommit( surface->compositor->nc,
+                                                   surface->surfaceNested,
+                                                   buffer->bufferNested,
+                                                   0,
+                                                   0,
+                                                   width, 
+                                                   height );
             }
-            break;
+         }
          #ifdef ENABLE_SBPROTOCOL
-         case WstBufferType_sb:
+         else if ( WstSBBufferGet( surface->attachedBufferResource ) )
+         {
+            struct wl_sb_buffer *sbBuffer;
+            void *deviceBuffer;
+            
+            sbBuffer= WstSBBufferGet( surface->attachedBufferResource );
+            if ( sbBuffer )
             {
-               struct wl_sb_buffer *sbBuffer;
-               void *deviceBuffer;
-               
-               sbBuffer= WstSBBufferGet( surface->compositor->sb, surface->attachedBufferResource );
-               if ( sbBuffer )
+               deviceBuffer= WstSBBufferGetBuffer( sbBuffer );
+               if ( deviceBuffer )
                {
-                  deviceBuffer= WstSBBufferGetBuffer( sbBuffer );
-                  if ( deviceBuffer )
-                  {
-                     if ( surface->compositor->isRepeater )
-                     {
-                        struct wl_buffer *buffer;
-                        int width, height, stride;
-                        uint32_t format;
-                        
-                        width= WstSBBufferGetWidth( sbBuffer );
-                        height= WstSBBufferGetHeight( sbBuffer );
-                        format= WstSBBufferGetFormat( sbBuffer );
-                        stride= WstSBBufferGetStride( sbBuffer );
-                        
-                        WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
-                                                            surface->surfaceNested,
-                                                            deviceBuffer,
-                                                            format,
-                                                            stride,
-                                                            0,
-                                                            0,
-                                                            width, 
-                                                            height );
-                        
-                     }
-                     else
-                     {
-                        pthread_mutex_lock( &surface->compositor->mutex );
-                        WstRendererSurfaceCommit( surface->renderer, surface->surface, deviceBuffer );
-                        pthread_mutex_unlock( &surface->compositor->mutex );
-                     }
-                     
-                     wstCompositorScheduleRepaint( surface->compositor );
-                  }
+                  struct wl_buffer *buffer;
+                  int width, height, stride;
+                  uint32_t format;
+                  
+                  width= WstSBBufferGetWidth( sbBuffer );
+                  height= WstSBBufferGetHeight( sbBuffer );
+                  format= WstSBBufferGetFormat( sbBuffer );
+                  stride= WstSBBufferGetStride( sbBuffer );
+                  
+                  WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
+                                                      surface->surfaceNested,
+                                                      deviceBuffer,
+                                                      format,
+                                                      stride,
+                                                      0,
+                                                      0,
+                                                      width, 
+                                                      height );
                }
             }
-            break;
+         }
          #endif
-         default:
-            WARNING("wstISurfaceCommit: unsupported buffer type");
-            break;
+      }
+      else
+      {
+         pthread_mutex_lock( &surface->compositor->mutex );
+
+         WstRendererSurfaceCommit( surface->renderer, surface->surface, surface->attachedBufferResource );
+
+         pthread_mutex_unlock( &surface->compositor->mutex );
       }
 
+      wstCompositorScheduleRepaint( surface->compositor );
+      
       wl_buffer_send_release( surface->attachedBufferResource );
       surface->attachedBufferResource= 0;
-      surface->attachedBufferType= WstBufferType_null;
    }
 }
 
@@ -3719,6 +3692,12 @@ static void wstOutputChangeSize( WstCompositor *ctx )
    
    ctx->outputSizeChanged= false;
    
+   if ( ctx->renderer )
+   {
+      wstCompositorScheduleRepaint(ctx);
+      ctx->renderer->outputWidth= ctx->outputWidth;
+      ctx->renderer->outputHeight= ctx->outputHeight;
+   }
    output->width= ctx->outputWidth;
    output->height= ctx->outputHeight;
 

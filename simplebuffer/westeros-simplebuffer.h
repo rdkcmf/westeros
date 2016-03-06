@@ -91,7 +91,7 @@ struct wayland_sb_callbacks {
 
 wl_sb* WstSBInit( struct wl_display *display, struct wayland_sb_callbacks *callbacks, void *userData );
 void WstSBUninit( struct wl_sb *sb );
-struct wl_sb_buffer *WstSBBufferGet( struct wl_sb *sb, struct wl_resource *resource );
+struct wl_sb_buffer *WstSBBufferGet( struct wl_resource *resource );
 uint32_t WstSBBufferGetFormat(struct wl_sb_buffer *buffer);
 int32_t WstSBBufferGetWidth(struct wl_sb_buffer *buffer);
 int32_t WstSBBufferGetHeight(struct wl_sb_buffer *buffer);

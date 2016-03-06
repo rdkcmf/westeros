@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <ctype.h>
 #include <memory.h>
 #include <assert.h>
 #include <dirent.h>
@@ -13,11 +14,43 @@
 #include <fcntl.h>
 #include <linux/input.h>
 
+#if !defined (WESTEROS_PLATFORM_EMBEDDED)
+#include <GL/glew.h>
+#include <GL/glut.h>
+#include <GL/freeglut.h>
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <X11/Xlib.h>
+#endif
+
 #include <vector>
+#include <map>
 
 #include "westeros-compositor.h"
 
+typedef struct _InputCtx
+{
+   bool started;
+   bool stopRequested;
+   std::vector<pollfd> deviceFds;
+   WstCompositor *wctx;
+} InputCtx;
+
+typedef struct _AppCtx
+{
+   WstCompositor *wctx;
+   #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   pthread_t inputThreadId;
+   InputCtx *inputCtx;
+   #else
+   char title[32];
+   void *nativeWindow;
+   int glutWindowId;
+   #endif
+} AppCtx;
+
 static bool g_running= false;
+static std::map<int,AppCtx*> g_appCtxMap= std::map<int,AppCtx*>();
 
 static void signalHandler(int signum)
 {
@@ -43,6 +76,7 @@ static void showUsage()
    printf("\n" );
 }
 
+#if defined (WESTEROS_PLATFORM_EMBEDDED)
 static const char *inputByPath= "/dev/input/by-path/";
 static const char *kbdDev= "event-kbd";
 static const char *mouseDev= "event-mouse";
@@ -144,17 +178,9 @@ void releaseDevices( std::vector<pollfd> &deviceFds )
    }
 }
 
-typedef struct _inputContext
-{
-   bool started;
-   bool stopRequested;
-   std::vector<pollfd> deviceFds;
-   WstCompositor *wctx;
-} inputContext;
-
 void* inputThread( void *data )
 {
-   inputContext *inCtx= (inputContext*)data;
+   InputCtx *inCtx= (InputCtx*)data;
    int deviceCount= inCtx->deviceFds.size();
    int i, n;
    input_event e;
@@ -315,7 +341,7 @@ void* inputThread( void *data )
                                  WstCompositorPointerEnter( inCtx->wctx );
                                  mouseEnterSent= true;
                               }
-                           
+
                               WstCompositorPointerMoveEvent( inCtx->wctx, mouseX, mouseY );
                               
                               mouseMoved= false;
@@ -332,6 +358,439 @@ void* inputThread( void *data )
    }
    
    return NULL;
+}
+
+#else
+
+AppCtx* appCtxFromWindowId( int id )
+{
+   AppCtx *appCtx= 0;
+
+   std::map<int,AppCtx*>::iterator it= g_appCtxMap.find( id );
+   if ( it != g_appCtxMap.end() )
+   {
+      appCtx= it->second;
+   }
+   
+   return appCtx;
+}
+
+void onGlutClose()
+{
+   g_running= false;
+}
+
+void onGlutDisplay()
+{
+   // Nothing to do
+}
+
+void onGlutReshape( int width, int height )
+{
+   AppCtx *appCtx= appCtxFromWindowId( glutGetWindow() );
+   if ( appCtx )
+   {
+      WstCompositorSetOutputSize( appCtx->wctx, width, height );
+   }
+}
+
+void onGlutMotion( int x, int y )
+{
+   AppCtx *appCtx= appCtxFromWindowId( glutGetWindow() );
+   if ( appCtx )
+   {
+      WstCompositorPointerMoveEvent( appCtx->wctx, x, y );
+   }
+}
+
+void onGlutMouse( int button, int state, int x, int y )
+{
+   bool haveButton= true;
+   unsigned int keyCode;
+   unsigned int keyState;
+
+   AppCtx *appCtx= appCtxFromWindowId( glutGetWindow() );
+   if ( appCtx )
+   {
+      keyState= (state == GLUT_DOWN) 
+                ?
+                  WstKeyboard_keyState_depressed
+                :
+                  WstKeyboard_keyState_released
+                ;   
+      
+      switch( button )
+      {
+         case GLUT_LEFT_BUTTON:
+            keyCode= BTN_LEFT;
+            break;
+         case GLUT_RIGHT_BUTTON:
+            keyCode= BTN_RIGHT;
+            break;
+         default:
+            haveButton= false;
+            break;
+      }
+      
+      if ( haveButton )
+      {
+         WstCompositorPointerButtonEvent( appCtx->wctx, keyCode, keyState );
+      }
+   }   
+}
+
+int keyGlutToLinux[]=
+{
+  0x00, 0x00, 0x00, KEY_C, 0x00, 0x00, 0x00, 0x00, 
+  KEY_BACKSPACE, 0x00, 0x00, 0x00, 0x00, KEY_ENTER, 0x00, 0x00, 
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+  0x00, 0x00, 0x00, KEY_ESC, 0x00, 0x00, 0x00, 0x00, 
+  KEY_SPACE, KEY_1, KEY_APOSTROPHE, KEY_3, KEY_4, KEY_5, KEY_7, KEY_APOSTROPHE,
+  KEY_KPLEFTPAREN, KEY_KPRIGHTPAREN, KEY_8, KEY_EQUAL, KEY_COMMA, KEY_MINUS, KEY_DOT, KEY_SLASH,
+  KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7,
+  KEY_8, KEY_9, KEY_SEMICOLON, KEY_SEMICOLON, KEY_COMMA, KEY_EQUAL, KEY_DOT, KEY_SLASH,
+  KEY_2, KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G,
+  KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O,
+  KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W,
+  KEY_X, KEY_Y, KEY_Z, KEY_LEFTBRACE, KEY_BACKSLASH, KEY_RIGHTBRACE, KEY_6, KEY_MINUS,
+  KEY_GRAVE, KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G,
+  KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O,
+  KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W,
+  KEY_X, KEY_Y, KEY_Z, KEY_LEFTBRACE, KEY_BACKSLASH, KEY_RIGHTBRACE, KEY_GRAVE, KEY_DELETE
+};
+
+void onGlutKeyboard( unsigned char key, int x, int y )
+{
+   AppCtx *appCtx= appCtxFromWindowId( glutGetWindow() );
+   if ( appCtx )
+   {
+      int keyCode= 0;
+      unsigned int keyModifiers= 0;
+      
+      key= tolower(key);
+      int glutModifiers= glutGetModifiers();
+      
+      if ( glutModifiers & GLUT_ACTIVE_SHIFT )
+      {
+         keyModifiers |= WstKeyboard_shift;
+      }
+      if ( glutModifiers & GLUT_ACTIVE_CTRL )
+      {
+         keyModifiers |= WstKeyboard_ctrl;
+      }
+      if ( glutModifiers & GLUT_ACTIVE_ALT )
+      {
+         keyModifiers |= WstKeyboard_alt;
+      }
+
+      if ( key < 128 )
+      {
+         keyCode= keyGlutToLinux[key];
+      }      
+      
+      if ( keyCode )
+      {
+         WstCompositorKeyEvent( appCtx->wctx,
+                                keyCode,
+                                WstKeyboard_keyState_depressed,
+                                keyModifiers );
+
+         WstCompositorKeyEvent( appCtx->wctx,
+                                keyCode,
+                                WstKeyboard_keyState_released,
+                                keyModifiers );
+      }
+   }
+}
+
+void onGlutSpecial( int key, int x, int y )
+{
+   AppCtx *appCtx= appCtxFromWindowId( glutGetWindow() );
+   if ( appCtx )
+   {
+      int keyCode= 0;
+      unsigned int keyModifiers= 0;
+      
+      key= tolower(key);
+      int glutModifiers= glutGetModifiers();
+      
+      if ( glutModifiers & GLUT_ACTIVE_SHIFT )
+      {
+         keyModifiers |= WstKeyboard_shift;
+      }
+      if ( glutModifiers & GLUT_ACTIVE_CTRL )
+      {
+         keyModifiers |= WstKeyboard_ctrl;
+      }
+      if ( glutModifiers & GLUT_ACTIVE_ALT )
+      {
+         keyModifiers |= WstKeyboard_alt;
+      }
+      
+      switch( key )
+      {
+         case GLUT_KEY_F1:
+            keyCode= KEY_F1;
+            break;
+         case GLUT_KEY_F2:
+            keyCode= KEY_F2;
+            break;
+         case GLUT_KEY_F3:
+            keyCode= KEY_F3;
+            break;
+         case GLUT_KEY_F4:
+            keyCode= KEY_F4;
+            break;
+         case GLUT_KEY_F5:
+            keyCode= KEY_F5;
+            break;
+         case GLUT_KEY_F6:
+            keyCode= KEY_F6;
+            break;
+         case GLUT_KEY_F7:
+            keyCode= KEY_F7;
+            break;
+         case GLUT_KEY_F8:
+            keyCode= KEY_F8;
+            break;
+         case GLUT_KEY_F9:
+            keyCode= KEY_F9;
+            break;
+         case GLUT_KEY_F10:
+            keyCode= KEY_F10;
+            break;
+         case GLUT_KEY_F11:
+            keyCode= KEY_F11;
+            break;
+         case GLUT_KEY_F12:
+            keyCode= KEY_F2;
+            break;
+         case GLUT_KEY_LEFT:
+            keyCode= KEY_LEFT;
+            break;
+         case GLUT_KEY_UP:
+            keyCode= KEY_UP;
+            break;
+         case GLUT_KEY_RIGHT:
+            keyCode= KEY_RIGHT;
+            break;
+         case GLUT_KEY_DOWN:
+            keyCode= KEY_DOWN;
+            break;
+         case GLUT_KEY_PAGE_UP:
+            keyCode= KEY_PAGEUP;
+            break;
+         case GLUT_KEY_PAGE_DOWN:
+            keyCode= KEY_PAGEDOWN;
+            break;
+         case GLUT_KEY_HOME:
+            keyCode= KEY_HOME;
+            break;
+         case GLUT_KEY_END:
+            keyCode= KEY_END;
+            break;
+         case GLUT_KEY_INSERT:
+            keyCode= KEY_INSERT;
+            break;
+      }
+      
+      if ( keyCode )
+      {
+         WstCompositorKeyEvent( appCtx->wctx,
+                                keyCode,
+                                WstKeyboard_keyState_depressed,
+                                keyModifiers );
+
+         WstCompositorKeyEvent( appCtx->wctx,
+                                keyCode,
+                                WstKeyboard_keyState_released,
+                                keyModifiers );
+      }
+   }   
+}
+
+void *getNativeWindowFromName( Display *display, Window window, char *name )
+{
+   void *nativeWindow= 0;
+   Window dummy;
+   Window *children;
+   unsigned int numberOfChildren;
+   char *windowName;
+   int rc, i;
+   
+   rc= XQueryTree( display, window, &dummy, &dummy, &children, &numberOfChildren );
+   if ( rc )
+   {
+      for( i= 0; i < numberOfChildren; ++i )
+      {
+         if ( XFetchName( display, children[i], &windowName ) )
+         {
+            if ( !strcmp( windowName, name ) )
+            {
+               nativeWindow= (void*)children[i];
+            }
+            XFree( windowName );
+         }
+         else
+         {
+            nativeWindow= (void *)getNativeWindowFromName( display, children[i], name);
+         }
+         
+         if ( nativeWindow )
+         {
+            break;
+         }
+      }
+   }
+   
+   return nativeWindow;
+}
+
+void *getNativeWindow( AppCtx *appCtx )
+{
+   void *nativeWindow= 0;
+   Display *display= 0;
+   
+   display= XOpenDisplay( NULL );
+   if ( display )
+   {
+      Window root= DefaultRootWindow(display);
+      
+      nativeWindow= getNativeWindowFromName( display, root, appCtx->title );
+      
+      XCloseDisplay( display );
+   }
+   
+   return nativeWindow;
+}
+
+#endif
+
+AppCtx* initApp()
+{
+   AppCtx *appCtx= 0;
+   
+   appCtx= (AppCtx*)calloc( 1, sizeof(AppCtx) );
+   if ( appCtx )
+   {
+      #if defined (WESTEROS_PLATFORM_EMBEDDED)
+      appCtx->inputCtx= (InputCtx*)calloc( 1, sizeof(InputCtx) );
+      if ( !appCtx->inputCtx )
+      {
+         free( appCtx );
+         appCtx= 0;
+         goto exit;
+      }
+
+      appCtx->inputCtx->started= false;
+      appCtx->inputCtx->stopRequested= false;
+      
+      #else
+
+      int argc= 0;
+      char **argv= 0;
+      
+      glutInit(&argc,argv);
+      glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA );
+      glutInitWindowPosition(0,0);
+      glutInitWindowSize(1280, 720);
+      
+      sprintf( appCtx->title, "Westeros-%d", getpid() );
+      appCtx->glutWindowId= glutCreateWindow(appCtx->title);
+      
+      g_appCtxMap.insert( std::pair<int,AppCtx*>( appCtx->glutWindowId, appCtx ) );
+      
+      glutSetOption(GLUT_RENDERING_CONTEXT, GLUT_USE_CURRENT_CONTEXT);
+      
+      glewInit();
+            
+      glutWMCloseFunc( onGlutClose );
+      glutDisplayFunc( onGlutDisplay );
+      glutReshapeFunc( onGlutReshape );
+      glutMotionFunc( onGlutMotion );
+      glutPassiveMotionFunc( onGlutMotion );
+      glutMouseFunc(onGlutMouse);
+      glutKeyboardFunc( onGlutKeyboard );
+      glutSpecialFunc( onGlutSpecial );
+      
+      glClearColor( 0, 0, 0, 1 );
+      
+      appCtx->nativeWindow= getNativeWindow( appCtx );
+      printf("nativeWindow= %p\n", appCtx->nativeWindow );
+      #endif
+   }
+
+exit:   
+   return appCtx;
+}
+
+bool startApp( AppCtx *appCtx, WstCompositor *wctx )
+{
+   bool result= false;
+   
+   if ( appCtx )
+   {
+      appCtx->wctx= wctx;
+      
+      #if !defined (WESTEROS_PLATFORM_EMBEDDED)
+      WstCompositorSetNativeWindow( appCtx->wctx, appCtx->nativeWindow );
+      #endif
+      
+      if ( !WstCompositorGetIsNested( appCtx->wctx ) )
+      {
+         #if defined (WESTEROS_PLATFORM_EMBEDDED)
+         InputCtx *inputCtx= appCtx->inputCtx;
+         
+         getDevices( inputCtx->deviceFds );
+         if ( inputCtx->deviceFds.size() > 0 )
+         {
+            inputCtx->wctx= wctx;
+            int rc= pthread_create( &appCtx->inputThreadId, NULL, inputThread, inputCtx );
+            if ( rc )
+            {
+               printf("unable to start input thread: error %d\n", rc );
+            }
+         }
+         #else
+         WstCompositorPointerEnter( appCtx->wctx );
+         #endif
+      }
+      
+      result= true;
+   }
+   
+   return result;
+}
+
+void termApp( AppCtx *appCtx )
+{
+   if ( appCtx )
+   {
+      if ( !WstCompositorGetIsNested( appCtx->wctx ) )
+      {
+         #if defined (WESTEROS_PLATFORM_EMBEDDED)
+         if ( appCtx->inputCtx )
+         {
+            if ( appCtx->inputCtx->started )
+            {
+               appCtx->inputCtx->stopRequested= true;
+               pthread_join( appCtx->inputThreadId, NULL );
+            }
+            releaseDevices( appCtx->inputCtx->deviceFds );
+            
+            free( appCtx->inputCtx );
+            appCtx->inputCtx= 0;
+         }
+         #else
+         if ( appCtx->glutWindowId )
+         {
+            glutDestroyWindow( appCtx->glutWindowId );
+         }
+         #endif
+      }
+      
+      free( appCtx );
+   }
 }
 
 static void keyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size )
@@ -408,9 +867,25 @@ WstPointerNestedListener pointerListener = {
    pointerHandleAxis
 };
 
-void compositorTerminated( WstCompositor *ctx, void *userData )
+void compositorTerminated( WstCompositor *wctx, void *userData )
 {
    g_running= false;
+}
+
+void compositorInvalidate( WstCompositor *wctx, void *userData )
+{
+   #if !defined (WESTEROS_PLATFORM_EMBEDDED)
+   glutSwapBuffers();
+   #endif
+}
+
+void compositorDispatch( WstCompositor *wctx, void *userData )
+{
+   AppCtx *appCtx= (AppCtx*)userData;
+   
+   #if !defined (WESTEROS_PLATFORM_EMBEDDED)
+   glutMainLoopEvent();
+   #endif
 }
 
 int main( int argc, char** argv)
@@ -422,12 +897,16 @@ int main( int argc, char** argv)
    const char *nestedDisplayName= 0;
    bool error= false;
    int len, value, width=-1, height=-1;
-   pthread_t inputThreadId;
-   inputContext inputCtx;
+   AppCtx *appCtx= 0;
    WstCompositor *wctx;
 
-   inputCtx.started= false;
-   inputCtx.stopRequested= false;
+   appCtx= initApp();
+   if ( !appCtx )
+   {
+      printf("unable to initialize app infrastructure\n");
+      nRC= -1;
+      goto exit;
+   }
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -438,6 +917,18 @@ int main( int argc, char** argv)
    }
    
    if ( !WstCompositorSetTerminatedCallback( wctx, compositorTerminated, NULL ) )
+   {
+      error= true;
+      goto exit;
+   }
+   
+   if ( !WstCompositorSetInvalidateCallback( wctx, compositorInvalidate, NULL ) )
+   {
+      error= true;
+      goto exit;
+   }
+   
+   if ( !WstCompositorSetDispatchCallback( wctx, compositorDispatch, appCtx ) )
    {
       error= true;
       goto exit;
@@ -577,11 +1068,13 @@ int main( int argc, char** argv)
    
    if ( !error )
    {
+      #if defined (WESTEROS_PLATFORM_EMBEDDED)
       if ( !WstCompositorSetAllowCursorModification( wctx, true ) )
       {
          error= true;
          goto exit;
       }
+      #endif
       
       if ( (width > 0) && (height > 0) )
       {
@@ -601,18 +1094,9 @@ int main( int argc, char** argv)
       
       if ( !error )
       {
-         if ( !WstCompositorGetIsNested( wctx ) )
+         if ( !startApp( appCtx, wctx ) )
          {
-            getDevices( inputCtx.deviceFds );
-            if ( inputCtx.deviceFds.size() > 0 )
-            {
-               inputCtx.wctx= wctx;
-               int rc= pthread_create( &inputThreadId, NULL, inputThread, &inputCtx );
-               if ( rc )
-               {
-                  printf("unable to start input thread: error %d\n", rc );
-               }
-            }
+            printf("error starting application infrastructure, continuing but expect trouble\n" );
          }
       
          g_running= true;
@@ -635,14 +1119,9 @@ int main( int argc, char** argv)
       
 exit:
 
-   if ( !WstCompositorGetIsNested( wctx ) )
+   if ( appCtx )
    {
-      if ( inputCtx.started )
-      {
-         inputCtx.stopRequested= true;
-         pthread_join( inputThreadId, NULL );
-      }
-      releaseDevices( inputCtx.deviceFds );
+      termApp( appCtx );
    }
    
    if ( wctx )

@@ -16,7 +16,12 @@ struct wl_sb
 	
 	void *userData;
    struct wayland_sb_callbacks *callbacks;
-   struct wl_buffer_interface buffer_interface;
+};
+
+static void wstISimpleBufferDestroy(struct wl_client *client, struct wl_resource *resource);
+
+const static struct wl_buffer_interface buffer_interface {
+   wstISimpleBufferDestroy
 };
 
 static void wstISBCreateBuffer(struct wl_client *client, struct wl_resource *resource,
@@ -38,7 +43,7 @@ static void wstSBCreateBuffer(struct wl_client *client,
                               int32_t offset1, int32_t stride1,
                               int32_t offset2, int32_t stride2);
 
-static void buffer_destroy(struct wl_client *client, struct wl_resource *resource)
+static void wstISimpleBufferDestroy(struct wl_client *client, struct wl_resource *resource)
 {
    wl_resource_destroy(resource);
 }
@@ -173,7 +178,7 @@ static void wstSBCreateBuffer(struct wl_client *client,
    }
 
    wl_resource_set_implementation(buffer->resource,
-                                 (void (**)(void)) &sb->buffer_interface,
+                                 (void (**)(void)) &buffer_interface,
                                  buffer, destroy_buffer);
 }
 
@@ -191,8 +196,6 @@ wl_sb* WstSBInit( struct wl_display *display, struct wayland_sb_callbacks *callb
    sb->display= display;
    sb->callbacks= callbacks;
    sb->userData= userData;
-
-   sb->buffer_interface.destroy= buffer_destroy;
   
    sb->wl_sb_global= wl_global_create(display, &wl_sb_interface, 1, sb, wstSBBind );
 
@@ -210,12 +213,12 @@ void WstSBUninit( struct wl_sb *sb )
    }
 }
 
-struct wl_sb_buffer *WstSBBufferGet( struct wl_sb *sb, struct wl_resource *resource )
+struct wl_sb_buffer *WstSBBufferGet( struct wl_resource *resource )
 {
    if( resource == NULL )
       return NULL;
 
-   if( wl_resource_instance_of( resource, &wl_buffer_interface, &sb->buffer_interface ) ) 
+   if( wl_resource_instance_of( resource, &wl_buffer_interface, &buffer_interface ) ) 
    {
       return (wl_sb_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
    }
