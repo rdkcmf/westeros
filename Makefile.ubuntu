@@ -1,22 +1,26 @@
 WID=$(shell pwd)/external/install
 XDGOPT ?= xdgv5
 
-all:  externals westeros-protocols westeros-simpleshell westeros
+all:  externals westeros-protocols westeros-simpleshell westeros-core
 
-cleanall: init
+clean: init
+
+cleanall: initall
 
 setenv= \
 	export PKG_CONFIG_PATH=$(WID)/lib/pkgconfig:$(WID)/share/pkgconfig && \
 	export ACLOCAL_PATH=$(WID)/share/aclocal && \
 	export ACLOCAL="aclocal -I $ACLOCAL_PATH"
 
-init:
+initall: init
 	rm -rf external
-	cd protocol/version4 && rm *.h && rm *.c
-	cd protocol/version5 && rm *.h && rm *.c
-	cd simpleshell/protocol && rm *.h && rm *.c
-	cd simpleshell && rm *.o && rm *.lo && rm .libs/*
-	rm *.o && rm *.lo && rm .libs/*
+   
+init:
+	cd protocol/version4 && rm -f *.h && rm -f *.c
+	cd protocol/version5 && rm -f *.h && rm -f *.c
+	cd simpleshell/protocol && rm -f *.h && rm -f *.c
+	cd simpleshell && rm -f *.o && rm -f *.lo && rm -rf .libs/*
+	rm -f *.o && rm -f *.lo && rm -f .libs/*
 	
 externals: external \
            external/.proto \
@@ -134,7 +138,7 @@ westeros-simpleshell:
 	./configure --prefix $(WID) && \
 	make && make install
 
-westeros:
+westeros-core:
 	$(call setenv) && \
 	aclocal -I cfg && \
 	libtoolize --automake && \
@@ -142,7 +146,7 @@ westeros:
 	automake --foreign --add-missing && \
 	rm -f configure && \
 	autoconf && \
-	./configure --prefix $(WID) --enable-${XDGOPT} && \
+	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test && \
 	make && make install
 
 

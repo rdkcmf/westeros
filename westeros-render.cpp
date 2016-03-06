@@ -15,11 +15,11 @@
 #define WESTEROS_UNUSED(x) ((void)(x))
 
 
-WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, WstNestedConnection *nc )
+WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, struct wl_display *display, WstNestedConnection *nc )
 {
    bool error= false;
    void *module= 0, *init;
-   
+
    WstRenderer *renderer= (WstRenderer*)calloc( 1, sizeof(WstRenderer) );
    if ( renderer )
    {
@@ -29,6 +29,7 @@ WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, W
       int len, value;
       int width= DEFAULT_OUTPUT_WIDTH;
       int height= DEFAULT_OUTPUT_HEIGHT;
+      void *nativeWindow= 0;
       
       while ( i < argc )
       {
@@ -58,14 +59,28 @@ WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, W
                }
             }
          }
+         else
+         if ( (len == 14) && (strncmp( argv[i], "--nativeWindow", len) == 0) )
+         {
+            if ( i+1 < argc )
+            {
+               void *value= 0;
+               ++i;
+               if ( sscanf( argv[i], "%p", &value ) == 1 )
+               {
+                  nativeWindow= value;
+               }
+            }
+         }
          ++i;
       }
       
+      renderer->display= display;
       renderer->nc= nc;
       if ( nc )
       {
-         renderer->display= WstNestedConnectionGetDisplay( nc );
-         renderer->surface= WstNestedConnectionGetCompositionSurface( nc );
+         renderer->displayNested= WstNestedConnectionGetDisplay( nc );
+         renderer->surfaceNested= WstNestedConnectionGetCompositionSurface( nc );
       }
             
       module= dlopen( moduleName, RTLD_NOW );
@@ -88,6 +103,7 @@ WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, W
 
       renderer->outputWidth= width;
       renderer->outputHeight= height;
+      renderer->nativeWindow= nativeWindow;
       
       rc= ((WSTMethodRenderInit)init)( renderer, argc, argv );
       if ( rc )
@@ -145,15 +161,9 @@ void WstRendererSurfaceDestroy( WstRenderer *renderer, WstRenderSurface *surface
    renderer->surfaceDestroy( renderer, surface );
 }
 
-void WstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *surface, void *buffer )
+void WstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *surface, struct wl_resource *resource )
 {
-   renderer->surfaceCommit( renderer, surface, buffer );
-}
-
-void WstRendererSurfaceCommitMemory( WstRenderer *renderer, WstRenderSurface *surface,
-                                     void *data, int width, int height, int format, int stride )
-{
-   renderer->surfaceCommitMemory( renderer, surface, data, width, height, format, stride );
+   renderer->surfaceCommit( renderer, surface, resource );
 }
 
 void WstRendererSurfaceSetVisible( WstRenderer *renderer, WstRenderSurface *surface, bool visible )

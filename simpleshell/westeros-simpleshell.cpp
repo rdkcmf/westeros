@@ -215,7 +215,7 @@ static void wstSimpleShellBroadcastCreation( struct wl_simple_shell *shell, uint
    {
       name= (const char *)DEFAULT_NAME;
    }
-   printf("broadcast for surfaceId %x name %s\n", surfaceId, name); //JRW
+   printf("broadcast for surfaceId %x name %s\n", surfaceId, name);
 
    // Broadcast the surface creation announcement
    for( std::vector<ShellInfo>::iterator it= shell->shells.begin(); 
