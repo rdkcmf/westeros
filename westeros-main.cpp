@@ -529,69 +529,28 @@ void onGlutSpecial( int key, int x, int y )
       
       switch( key )
       {
-         case GLUT_KEY_F1:
-            keyCode= KEY_F1;
-            break;
-         case GLUT_KEY_F2:
-            keyCode= KEY_F2;
-            break;
-         case GLUT_KEY_F3:
-            keyCode= KEY_F3;
-            break;
-         case GLUT_KEY_F4:
-            keyCode= KEY_F4;
-            break;
-         case GLUT_KEY_F5:
-            keyCode= KEY_F5;
-            break;
-         case GLUT_KEY_F6:
-            keyCode= KEY_F6;
-            break;
-         case GLUT_KEY_F7:
-            keyCode= KEY_F7;
-            break;
-         case GLUT_KEY_F8:
-            keyCode= KEY_F8;
-            break;
-         case GLUT_KEY_F9:
-            keyCode= KEY_F9;
-            break;
-         case GLUT_KEY_F10:
-            keyCode= KEY_F10;
-            break;
-         case GLUT_KEY_F11:
-            keyCode= KEY_F11;
-            break;
-         case GLUT_KEY_F12:
-            keyCode= KEY_F2;
-            break;
-         case GLUT_KEY_LEFT:
-            keyCode= KEY_LEFT;
-            break;
-         case GLUT_KEY_UP:
-            keyCode= KEY_UP;
-            break;
-         case GLUT_KEY_RIGHT:
-            keyCode= KEY_RIGHT;
-            break;
-         case GLUT_KEY_DOWN:
-            keyCode= KEY_DOWN;
-            break;
-         case GLUT_KEY_PAGE_UP:
-            keyCode= KEY_PAGEUP;
-            break;
-         case GLUT_KEY_PAGE_DOWN:
-            keyCode= KEY_PAGEDOWN;
-            break;
-         case GLUT_KEY_HOME:
-            keyCode= KEY_HOME;
-            break;
-         case GLUT_KEY_END:
-            keyCode= KEY_END;
-            break;
-         case GLUT_KEY_INSERT:
-            keyCode= KEY_INSERT;
-            break;
+         case GLUT_KEY_F1: keyCode= KEY_F1; break;
+         case GLUT_KEY_F2: keyCode= KEY_F2; break;
+         case GLUT_KEY_F3: keyCode= KEY_F3; break;
+         case GLUT_KEY_F4: keyCode= KEY_F4; break;
+         case GLUT_KEY_F5: keyCode= KEY_F5; break;
+         case GLUT_KEY_F6: keyCode= KEY_F6; break;
+         case GLUT_KEY_F7: keyCode= KEY_F7; break;
+         case GLUT_KEY_F8: keyCode= KEY_F8; break;
+         case GLUT_KEY_F9: keyCode= KEY_F9; break;
+         case GLUT_KEY_F10: keyCode= KEY_F10; break;
+         case GLUT_KEY_F11: keyCode= KEY_F11; break;
+         case GLUT_KEY_F12: keyCode= KEY_F2; break;
+         case GLUT_KEY_LEFT: keyCode= KEY_LEFT; break;
+         case GLUT_KEY_UP: keyCode= KEY_UP; break;
+         case GLUT_KEY_RIGHT: keyCode= KEY_RIGHT; break;
+         case GLUT_KEY_DOWN: keyCode= KEY_DOWN; break;
+         case GLUT_KEY_PAGE_UP: keyCode= KEY_PAGEUP; break;
+         case GLUT_KEY_PAGE_DOWN: keyCode= KEY_PAGEDOWN; break;
+         case GLUT_KEY_HOME: keyCode= KEY_HOME; break;
+         case GLUT_KEY_END: keyCode= KEY_END; break;
+         case GLUT_KEY_INSERT: keyCode= KEY_INSERT; break;
+         default: break;
       }
       
       if ( keyCode )
