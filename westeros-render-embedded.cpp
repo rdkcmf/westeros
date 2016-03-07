@@ -374,19 +374,21 @@ static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer )
             if ( rendererEMB->eglBindWaylandDisplayWL &&
                  rendererEMB->eglUnbindWaylandDisplayWL &&
                  rendererEMB->eglQueryWaylandBufferWL )
-            {
-               rendererEMB->haveWaylandEGL= true;
-               
+            {               
                printf("calling eglBindWaylandDisplayWL with eglDisplay %p and wayland display %p", rendererEMB->eglDisplay, renderer->display );
                EGLBoolean rc= rendererEMB->eglBindWaylandDisplayWL( rendererEMB->eglDisplay, renderer->display );
-               if ( !rc )
+               if ( rc )
+               {
+                  rendererEMB->haveWaylandEGL= true;
+               }
+               else
                {
                   printf("eglBindWaylandDisplayWL failed: %x\n", eglGetError() );
                }
             }
             else
             {
-               printf("wayland-egl support expected, and advertiesed, but methods are missing: no wayland-egl\n" );
+               printf("wayland-egl support expected, and advertised, but methods are missing: no wayland-egl\n" );
             }
          }
       }
@@ -403,6 +405,14 @@ static void wstRendererEMBDestroy( WstRendererEMB *renderer )
 {
    if ( renderer )
    {
+      #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+      if ( renderer->haveWaylandEGL )
+      {
+         renderer->eglUnbindWaylandDisplayWL( renderer->eglDisplay, renderer->renderer->display );
+         renderer->haveWaylandEGL= false;
+      }
+      #endif
+      
       if ( renderer->textureShader )
       {
          delete renderer->textureShader;

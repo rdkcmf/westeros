@@ -277,18 +277,20 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
                  rendererGL->eglUnbindWaylandDisplayWL &&
                  rendererGL->eglQueryWaylandBufferWL )
             {
-               rendererGL->haveWaylandEGL= true;
-               
                printf("calling eglBindWaylandDisplayWL with eglDisplay %p and wayland display %p\n", rendererGL->eglDisplay, renderer->display );
                EGLBoolean rc= rendererGL->eglBindWaylandDisplayWL( rendererGL->eglDisplay, renderer->display );
-               if ( !rc )
+               if ( rc )
+               {
+                  rendererGL->haveWaylandEGL= true;
+               }
+               else
                {
                   printf("eglBindWaylandDisplayWL failed: %x\n", eglGetError() );
                }
             }
             else
             {
-               printf("wayland-egl support expected, and advertiesed, but methods are missing: no wayland-egl\n" );
+               printf("wayland-egl support expected, and advertised, but methods are missing: no wayland-egl\n" );
             }
          }
       }
@@ -350,6 +352,14 @@ static void wstRendererGLDestroy( WstRendererGL *renderer )
 {
    if ( renderer )
    {
+      #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+      if ( renderer->haveWaylandEGL )
+      {
+         renderer->eglUnbindWaylandDisplayWL( renderer->eglDisplay, renderer->renderer->display );
+         renderer->haveWaylandEGL= false;
+      }
+      #endif
+      
       if ( renderer->shaderCache )
       {
          WstShader *shader;
