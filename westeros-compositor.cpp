@@ -331,7 +331,7 @@ static void wstUpdateClientInfo( WstCompositor *ctx, struct wl_client *client, s
 static void wstISurfaceDestroy(struct wl_client *client, struct wl_resource *resource);
 static void wstISurfaceAttach(struct wl_client *client,
                               struct wl_resource *resource,
-                              struct wl_resource *buffer_resource, int32_t sx, int32_t sy);
+                              struct wl_resource *bufferResource, int32_t sx, int32_t sy);
 static void wstISurfaceDamage(struct wl_client *client,
                               struct wl_resource *resource,
                               int32_t x, int32_t y, int32_t width, int32_t height);
@@ -339,10 +339,10 @@ static void wstISurfaceFrame(struct wl_client *client,
                              struct wl_resource *resource, uint32_t callback);
 static void wstISurfaceSetOpaqueRegion(struct wl_client *client,
                                        struct wl_resource *resource,
-                                       struct wl_resource *region_resource);
+                                       struct wl_resource *regionResource);
 static void wstISurfaceSetInputRegion(struct wl_client *client,
                                       struct wl_resource *resource,
-                                      struct wl_resource *region_resource);
+                                      struct wl_resource *regionResource);
 static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *resource);
 static void wstISurfaceSetBufferTransform(struct wl_client *client,
                                           struct wl_resource *resource, int transform);
@@ -367,7 +367,7 @@ static void wstShellBind( struct wl_client *client, void *data, uint32_t version
 static void wstIShellGetShellSurface(struct wl_client *client,
                                      struct wl_resource *resource,
                                      uint32_t id,
-                                     struct wl_resource *shell_resource );
+                                     struct wl_resource *surfaceResource );
 static void wstDestroyShellSurfaceCallback(struct wl_resource *resource);
 static void wstShellSurfaceDestroy( WstShellSurface *shellSurface );
 static void wstIShellSurfacePong(struct wl_client *client,
@@ -375,33 +375,33 @@ static void wstIShellSurfacePong(struct wl_client *client,
                                  uint32_t serial );
 static void wstIShellSurfaceMove(struct wl_client *client,
                                  struct wl_resource *resource,
-                                 struct wl_resource *seat_resource,
+                                 struct wl_resource *seatResource,
                                  uint32_t serial );
 static void wstIShellSurfaceResize(struct wl_client *client,
                                    struct wl_resource *resource,
-                                   struct wl_resource *seat_resource,
+                                   struct wl_resource *seatResource,
                                    uint32_t serial,
                                    uint32_t edges );
 static void wstIShellSurfaceSetTopLevel(struct wl_client *client, 
                                         struct wl_resource *resource);
 static void wstIShellSurfaceSetTransient(struct wl_client *client,
                                          struct wl_resource *resource,
-                                         struct wl_resource *parent_resource,
+                                         struct wl_resource *parentResource,
                                          int x, int y, uint32_t flags );
 static void wstIShellSurfaceSetFullscreen(struct wl_client *client,
                                           struct wl_resource *resource,
                                           uint32_t method,
                                           uint32_t framerate,
-                                          struct wl_resource *output_resource );
+                                          struct wl_resource *outputResource );
 static void wstIShellSurfaceSetPopup(struct wl_client *client,
                                      struct wl_resource *resource,
-                                     struct wl_resource *seat_resource,
+                                     struct wl_resource *seatResource,
                                      uint32_t serial,
-                                     struct wl_resource *parent_resource,
+                                     struct wl_resource *parentResource,
                                      int x, int y, uint32_t flags );
 static void wstIShellSurfaceSetMaximized(struct wl_client *client,
                                          struct wl_resource *resource,
-                                         struct wl_resource *output_resource );
+                                         struct wl_resource *outputResource );
 static void wstIShellSurfaceSetTitle(struct wl_client *client,
                                      struct wl_resource *resource,
                                      const char *title );
@@ -414,13 +414,13 @@ static void wstIXdgUseUnstableVersion( struct wl_client *client, struct wl_resou
 static void wstIXdgGetXdgSurface( struct wl_client *client, 
                                   struct wl_resource *resource,
                                   uint32_t id,
-                                  struct wl_resource *surface_resource );
+                                  struct wl_resource *surfaceResource );
 static void  wstIXdgGetXdgPopup( struct wl_client *client,
                                  struct wl_resource *resource,
                                  uint32_t id,
-                                 struct wl_resource *surface_resource,
-                                 struct wl_resource *parent_resource,
-                                 struct wl_resource *seat_resource,
+                                 struct wl_resource *surfaceResource,
+                                 struct wl_resource *parentResource,
+                                 struct wl_resource *seatResource,
                                  uint32_t serial,
                                  int32_t x,
                                  int32_t y
@@ -436,7 +436,7 @@ static void wstIXdgShellSurfaceDestroy( struct wl_client *client,
                                         struct wl_resource *resource );
 static void wstIXdgShellSurfaceSetParent( struct wl_client *client,
                                           struct wl_resource *resource,
-                                          struct wl_resource *parent_resource );
+                                          struct wl_resource *parentResource );
 static void wstIXdgShellSurfaceSetTitle( struct wl_client *client,
                                          struct wl_resource *resource,
                                          const char *title );
@@ -445,17 +445,17 @@ static void wstIXdgShellSurfaceSetAppId( struct wl_client *client,
                                          const char *app_id );
 static void wstIXdgShellSurfaceShowWindowMenu( struct wl_client *client,
                                                struct wl_resource *resource,
-                                               struct wl_resource *seat_resource,
+                                               struct wl_resource *seatResource,
                                                uint32_t serial,
                                                int32_t x,
                                                int32_t y );
 static void wstIXdgShellSurfaceMove( struct wl_client *client,
                                      struct wl_resource *resource,
-                                     struct wl_resource *seat_resource,
+                                     struct wl_resource *seatResource,
                                      uint32_t serial );
 static void wstIXdgShellSurfaceResize( struct wl_client *client,
                                        struct wl_resource *resource,
-                                       struct wl_resource *seat_resource,
+                                       struct wl_resource *seatResource,
                                        uint32_t serial,
                                        uint32_t edges );
 static void wstIXdgShellSurfaceAckConfigure( struct wl_client *client,
@@ -473,7 +473,7 @@ static void wstIXdgShellSurfaceUnSetMaximized( struct wl_client *client,
                                                struct wl_resource *resource );
 static void wstIXdgShellSurfaceSetFullscreen( struct wl_client *client,
                                               struct wl_resource *resource,
-                                              struct wl_resource *output_resource );
+                                              struct wl_resource *outputResource );
 static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
                                                 struct wl_resource *resource );
 static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
@@ -521,7 +521,7 @@ static void wstIKeyboardRelease( struct wl_client *client, struct wl_resource *r
 static void wstIPointerSetCursor( struct wl_client *client, 
                                   struct wl_resource *resource,
                                   uint32_t serial,
-                                  struct wl_resource *surface_resource,
+                                  struct wl_resource *surfaceResource,
                                   int32_t hotspot_x,
                                   int32_t hotspot_y );                                  
 static void wstIPointerRelease( struct wl_client *client, struct wl_resource *resource );
@@ -3322,11 +3322,11 @@ static void wstISurfaceDestroy(struct wl_client *client, struct wl_resource *res
 
 static void wstISurfaceAttach(struct wl_client *client,
                               struct wl_resource *resource,
-                              struct wl_resource *buffer_resource, int32_t sx, int32_t sy)
+                              struct wl_resource *bufferResource, int32_t sx, int32_t sy)
 {
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
 
-   if ( surface->attachedBufferResource != buffer_resource )
+   if ( surface->attachedBufferResource != bufferResource )
    {
       if ( surface->attachedBufferResource )
       {
@@ -3334,9 +3334,9 @@ static void wstISurfaceAttach(struct wl_client *client,
          surface->attachedBufferResource= 0;
       }
    }
-   if ( buffer_resource )
+   if ( bufferResource )
    {
-      surface->attachedBufferResource= buffer_resource;
+      surface->attachedBufferResource= bufferResource;
       surface->attachedX= sx;
       surface->attachedY= sy;
    }
@@ -3381,21 +3381,21 @@ static void wstISurfaceFrame(struct wl_client *client,
 
 static void wstISurfaceSetOpaqueRegion(struct wl_client *client,
                                        struct wl_resource *resource,
-                                       struct wl_resource *region_resource)
+                                       struct wl_resource *regionResource)
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(region_resource);
+   WESTEROS_UNUSED(regionResource);
    TRACE("wstISurfaceSetOpaqueRegion: not supported");
 }
 
 static void wstISurfaceSetInputRegion(struct wl_client *client,
                                       struct wl_resource *resource,
-                                      struct wl_resource *region_resource)
+                                      struct wl_resource *regionResource)
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(region_resource);
+   WESTEROS_UNUSED(regionResource);
    WARNING("wstISurfaceSetInputRegion: not supported");
 }
 
@@ -3753,9 +3753,9 @@ static void wstShellBind( struct wl_client *client, void *data, uint32_t version
 static void wstIShellGetShellSurface(struct wl_client *client,
                                      struct wl_resource *resource,
                                      uint32_t id,
-                                     struct wl_resource *surface_resource )
+                                     struct wl_resource *surfaceResource )
 {
-   WstSurface *surface= (WstSurface*)wl_resource_get_user_data(surface_resource);
+   WstSurface *surface= (WstSurface*)wl_resource_get_user_data(surfaceResource);
    WstShellSurface *shellSurface= 0;
    
    if ( !wstSurfaceSetRole( surface, "wl_shell_surface", 
@@ -3767,7 +3767,7 @@ static void wstIShellGetShellSurface(struct wl_client *client,
    shellSurface= (WstShellSurface*)calloc(1,sizeof(WstShellSurface));
    if ( !shellSurface )
    {
-      wl_resource_post_no_memory(surface_resource);
+      wl_resource_post_no_memory(surfaceResource);
       return;
    }
    
@@ -3842,24 +3842,24 @@ static void wstIShellSurfacePong(struct wl_client *client,
                                  
 static void wstIShellSurfaceMove(struct wl_client *client,
                                  struct wl_resource *resource,
-                                 struct wl_resource *seat_resource,
+                                 struct wl_resource *seatResource,
                                  uint32_t serial )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
 }
                                  
 static void wstIShellSurfaceResize(struct wl_client *client,
                                    struct wl_resource *resource,
-                                   struct wl_resource *seat_resource,
+                                   struct wl_resource *seatResource,
                                    uint32_t serial,
                                    uint32_t edges )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
    WESTEROS_UNUSED(edges);
 }                                   
@@ -3873,12 +3873,12 @@ static void wstIShellSurfaceSetTopLevel(struct wl_client *client,
 
 static void wstIShellSurfaceSetTransient(struct wl_client *client,
                                          struct wl_resource *resource,
-                                         struct wl_resource *parent_resource,
+                                         struct wl_resource *parentResource,
                                          int x, int y, uint32_t flags )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(parent_resource);
+   WESTEROS_UNUSED(parentResource);
    WESTEROS_UNUSED(x);
    WESTEROS_UNUSED(y);
    WESTEROS_UNUSED(flags);
@@ -3888,27 +3888,27 @@ static void wstIShellSurfaceSetFullscreen(struct wl_client *client,
                                           struct wl_resource *resource,
                                           uint32_t method,
                                           uint32_t framerate,
-                                          struct wl_resource *output_resource )
+                                          struct wl_resource *outputResource )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
    WESTEROS_UNUSED(method);
    WESTEROS_UNUSED(framerate);
-   WESTEROS_UNUSED(output_resource);
+   WESTEROS_UNUSED(outputResource);
 }
                                           
 static void wstIShellSurfaceSetPopup(struct wl_client *client,
                                      struct wl_resource *resource,
-                                     struct wl_resource *seat_resource,
+                                     struct wl_resource *seatResource,
                                      uint32_t serial,
-                                     struct wl_resource *parent_resource,
+                                     struct wl_resource *parentResource,
                                      int x, int y, uint32_t flags )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
-   WESTEROS_UNUSED(parent_resource);
+   WESTEROS_UNUSED(parentResource);
    WESTEROS_UNUSED(x);
    WESTEROS_UNUSED(y);
    WESTEROS_UNUSED(flags);
@@ -3916,11 +3916,11 @@ static void wstIShellSurfaceSetPopup(struct wl_client *client,
                                      
 static void wstIShellSurfaceSetMaximized(struct wl_client *client,
                                          struct wl_resource *resource,
-                                         struct wl_resource *output_resource )
+                                         struct wl_resource *outputResource )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(output_resource);
+   WESTEROS_UNUSED(outputResource);
 }
                                          
 static void wstIShellSurfaceSetTitle(struct wl_client *client,
@@ -3997,9 +3997,9 @@ static void wstIXdgUseUnstableVersion( struct wl_client *client, struct wl_resou
 static void wstIXdgGetXdgSurface( struct wl_client *client, 
                                   struct wl_resource *resource,
                                   uint32_t id,
-                                  struct wl_resource *surface_resource )
+                                  struct wl_resource *surfaceResource )
 {
-   WstSurface *surface= (WstSurface*)wl_resource_get_user_data(surface_resource);
+   WstSurface *surface= (WstSurface*)wl_resource_get_user_data(surfaceResource);
    WstShellSurface *shellSurface= 0;
 
    if ( !wstSurfaceSetRole( surface, "xdg_surface", 
@@ -4012,7 +4012,7 @@ static void wstIXdgGetXdgSurface( struct wl_client *client,
    shellSurface= (WstShellSurface*)calloc(1,sizeof(WstShellSurface));
    if ( !shellSurface )
    {
-      wl_resource_post_no_memory(surface_resource);
+      wl_resource_post_no_memory(surfaceResource);
       return;
    }
    
@@ -4056,9 +4056,9 @@ static void wstIXdgGetXdgSurface( struct wl_client *client,
 static void  wstIXdgGetXdgPopup( struct wl_client *client,
                                  struct wl_resource *resource,
                                  uint32_t id,
-                                 struct wl_resource *surface_resource,
-                                 struct wl_resource *parent_resource,
-                                 struct wl_resource *seat_resource,
+                                 struct wl_resource *surfaceResource,
+                                 struct wl_resource *parentResource,
+                                 struct wl_resource *seatResource,
                                  uint32_t serial,
                                  int32_t x,
                                  int32_t y
@@ -4068,8 +4068,8 @@ static void  wstIXdgGetXdgPopup( struct wl_client *client,
                                  #endif
                                 )
 {
-   WESTEROS_UNUSED(parent_resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(parentResource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
    WESTEROS_UNUSED(x);
    WESTEROS_UNUSED(y);
@@ -4079,7 +4079,7 @@ static void  wstIXdgGetXdgPopup( struct wl_client *client,
 
    WARNING("Xdg Popup not supported");
    
-   wstIXdgGetXdgSurface( client, resource, id, surface_resource );
+   wstIXdgGetXdgSurface( client, resource, id, surfaceResource );
 }
 
 static void wstIXdgPong( struct wl_client *client,
@@ -4100,11 +4100,11 @@ static void wstIXdgShellSurfaceDestroy( struct wl_client *client,
       
 static void wstIXdgShellSurfaceSetParent( struct wl_client *client,
                                           struct wl_resource *resource,
-                                          struct wl_resource *parent_resource )
+                                          struct wl_resource *parentResource )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(parent_resource);
+   WESTEROS_UNUSED(parentResource);
 }
                                           
 static void wstIXdgShellSurfaceSetTitle( struct wl_client *client,
@@ -4137,14 +4137,14 @@ static void wstIXdgShellSurfaceSetAppId( struct wl_client *client,
                                          
 static void wstIXdgShellSurfaceShowWindowMenu( struct wl_client *client,
                                                struct wl_resource *resource,
-                                               struct wl_resource *seat_resource,
+                                               struct wl_resource *seatResource,
                                                uint32_t serial,
                                                int32_t x,
                                                int32_t y )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
    WESTEROS_UNUSED(x);
    WESTEROS_UNUSED(y);
@@ -4152,24 +4152,24 @@ static void wstIXdgShellSurfaceShowWindowMenu( struct wl_client *client,
                                                
 static void wstIXdgShellSurfaceMove( struct wl_client *client,
                                      struct wl_resource *resource,
-                                     struct wl_resource *seat_resource,
+                                     struct wl_resource *seatResource,
                                      uint32_t serial )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
 }
                                      
 static void wstIXdgShellSurfaceResize( struct wl_client *client,
                                        struct wl_resource *resource,
-                                       struct wl_resource *seat_resource,
+                                       struct wl_resource *seatResource,
                                        uint32_t serial,
                                        uint32_t edges )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(seat_resource);
+   WESTEROS_UNUSED(seatResource);
    WESTEROS_UNUSED(serial);
    WESTEROS_UNUSED(edges);
 }
@@ -4214,11 +4214,11 @@ static void wstIXdgShellSurfaceUnSetMaximized( struct wl_client *client,
                                                
 static void wstIXdgShellSurfaceSetFullscreen( struct wl_client *client,
                                               struct wl_resource *resource,
-                                              struct wl_resource *output_resource )
+                                              struct wl_resource *outputResource )
 {
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(output_resource);
+   WESTEROS_UNUSED(outputResource);
 }
                                               
 static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
@@ -5095,7 +5095,7 @@ static void wstIKeyboardRelease( struct wl_client *client, struct wl_resource *r
 static void wstIPointerSetCursor( struct wl_client *client, 
                                   struct wl_resource *resource,
                                   uint32_t serial,
-                                  struct wl_resource *surface_resource,
+                                  struct wl_resource *surfaceResource,
                                   int32_t hotspot_x,
                                   int32_t hotspot_y )
 {   
@@ -5106,14 +5106,14 @@ static void wstIPointerSetCursor( struct wl_client *client,
    WstSurface *surface= 0;
    bool hidePointer= false;
    
-   if ( surface_resource )
+   if ( surfaceResource )
    {
       if ( pointer->focus &&
            (wl_resource_get_client( pointer->focus->resource ) != client) )
       {
          return;
       }
-      surface= (WstSurface*)wl_resource_get_user_data(surface_resource);
+      surface= (WstSurface*)wl_resource_get_user_data(surfaceResource);
    }
    
    if ( surface )

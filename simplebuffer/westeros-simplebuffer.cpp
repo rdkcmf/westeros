@@ -20,7 +20,7 @@ struct wl_sb
 
 static void wstISimpleBufferDestroy(struct wl_client *client, struct wl_resource *resource);
 
-const static struct wl_buffer_interface buffer_interface {
+const static struct wl_buffer_interface bufferInterface {
    wstISimpleBufferDestroy
 };
 
@@ -31,24 +31,19 @@ static void wstISBCreatePlanarBuffer(struct wl_client *client,
                                      struct wl_resource *resource,
                                      uint32_t id, uint32_t native_handle,
                                      int32_t width, int32_t height, uint32_t format,
-                                     int32_t offset0, int32_t stride0,
-                                     int32_t offset1, int32_t stride1,
-                                     int32_t offset2, int32_t stride2);
-static void wstSBCreateBuffer(struct wl_client *client, 
-                              struct wl_resource *resource,
-                              uint32_t id, uint32_t native_handle,
-                              int32_t width, int32_t height,
-                              uint32_t format,
-                              int32_t offset0, int32_t stride0,
-                              int32_t offset1, int32_t stride1,
-                              int32_t offset2, int32_t stride2);
+                                     int32_t offset0, int32_t offset1, int32_t offset2, 
+                                     int32_t stride0, int32_t stride1, int32_t stride2);
+static void wstSBCreateBuffer(struct wl_client *client, struct wl_resource *resource,
+                              uint32_t id, uint32_t native_handle, int32_t w, int32_t h,
+                              uint32_t fmt, int32_t off0, int32_t off1, int32_t off2,
+                              int32_t strd0, int32_t strd1, int32_t strd2);
 
 static void wstISimpleBufferDestroy(struct wl_client *client, struct wl_resource *resource)
 {
    wl_resource_destroy(resource);
 }
 
-static void destroy_buffer(struct wl_resource *resource)
+static void wstSBDestroyBuffer(struct wl_resource *resource)
 {
    struct wl_sb_buffer *buffer = (struct wl_sb_buffer*)resource->data;
    struct wl_sb *sb = buffer->sb;
@@ -103,16 +98,15 @@ static void wstISBCreateBuffer(struct wl_client *client, struct wl_resource *res
    }
 
    wstSBCreateBuffer(client, resource, id, native_handle, width, height, 
-                     format, 0, stride, 0, 0, 0, 0);
+                     format, 0, 0, 0, stride, 0, 0);
 }
 
 static void wstISBCreatePlanarBuffer(struct wl_client *client,
-                                      struct wl_resource *resource,
-                                      uint32_t id, uint32_t native_handle,
-                                      int32_t width, int32_t height, uint32_t format,
-                                      int32_t offset0, int32_t stride0,
-                                      int32_t offset1, int32_t stride1,
-                                      int32_t offset2, int32_t stride2)
+                                     struct wl_resource *resource,
+                                     uint32_t id, uint32_t native_handle,
+                                     int32_t width, int32_t height, uint32_t format,
+                                     int32_t offset0, int32_t offset1, int32_t offset2, 
+                                     int32_t stride0, int32_t stride1, int32_t stride2)
 {
    switch (format) 
    {
@@ -130,56 +124,52 @@ static void wstISBCreatePlanarBuffer(struct wl_client *client,
    }
 
    wstSBCreateBuffer(client, resource, id, native_handle, width, height, 
-                     format, offset0, stride0, offset1, stride1, offset2, stride2);
+                     format, offset0, offset1, offset2, stride0, stride1, stride2);
 }
 
-static void wstSBCreateBuffer(struct wl_client *client, 
-                              struct wl_resource *resource,
-                              uint32_t id, uint32_t native_handle,
-                               int32_t width, int32_t height,
-                               uint32_t format,
-                               int32_t offset0, int32_t stride0,
-                               int32_t offset1, int32_t stride1,
-                               int32_t offset2, int32_t stride2)
+static void wstSBCreateBuffer(struct wl_client *client, struct wl_resource *resource,
+                              uint32_t id, uint32_t native_handle, int32_t width, int32_t height,
+                              uint32_t fmt, int32_t off0, int32_t off1, int32_t off2,
+                              int32_t strd0, int32_t strd1, int32_t strd2)
 {
    struct wl_sb *sb= (struct wl_sb*)resource->data;
-   struct wl_sb_buffer *buffer;
-   buffer= (wl_sb_buffer*)calloc(1, sizeof *buffer);
-   if (!buffer) 
+   struct wl_sb_buffer *buff;
+   buff= (wl_sb_buffer*)calloc(1, sizeof *buff);
+   if (!buff) 
    {
       wl_resource_post_no_memory(resource);
       return;
    }
 
-   buffer->sb= sb;
-   buffer->width= width;
-   buffer->height= height;
-   buffer->format= format;
-   buffer->offset[0]= offset0;
-   buffer->stride[0]= stride0;
-   buffer->offset[1]= offset1;
-   buffer->stride[1]= stride1;
-   buffer->offset[2]= offset2;
-   buffer->stride[2]= stride2;
-
-   sb->callbacks->reference_buffer(sb->userData, client, native_handle, buffer);
-   if (buffer->driverBuffer == NULL) 
+   sb->callbacks->reference_buffer(sb->userData, client, native_handle, buff);
+   if ( !buff->driverBuffer ) 
    {
       wl_resource_post_error(resource, WL_SB_ERROR_INVALID_NATIVE_HANDLE, "invalid native_handle");
       return;
    }
 
-   buffer->resource= wl_resource_create(client, &wl_buffer_interface, 1, id);
-   if (!buffer->resource) 
+   buff->resource= wl_resource_create(client, &wl_buffer_interface, 1, id);
+   if (!buff->resource) 
    {
       wl_resource_post_no_memory(resource);
-      free(buffer);
+      free(buff);
       return;
    }
+   
+   buff->sb= sb;
+   buff->width= width;
+   buff->height= height;
+   buff->format= fmt;
+   buff->offset[0]= off0;
+   buff->offset[1]= off1;
+   buff->offset[2]= off2;
+   buff->stride[0]= strd0;
+   buff->stride[1]= strd1;
+   buff->stride[2]= strd2;
 
-   wl_resource_set_implementation(buffer->resource,
-                                 (void (**)(void)) &buffer_interface,
-                                 buffer, destroy_buffer);
+   wl_resource_set_implementation(buff->resource,
+                                 (void (**)(void)) &bufferInterface,
+                                 buff, wstSBDestroyBuffer);
 }
 
 wl_sb* WstSBInit( struct wl_display *display, struct wayland_sb_callbacks *callbacks, void *userData )
@@ -218,7 +208,7 @@ struct wl_sb_buffer *WstSBBufferGet( struct wl_resource *resource )
    if( resource == NULL )
       return NULL;
 
-   if( wl_resource_instance_of( resource, &wl_buffer_interface, &buffer_interface ) ) 
+   if( wl_resource_instance_of( resource, &wl_buffer_interface, &bufferInterface ) ) 
    {
       return (wl_sb_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
    }
