@@ -45,7 +45,7 @@
 #define ZFAR         (1000000.0f)
 #define ZSTART       (0.1f)
 #define ZINC         (0.1f)
-#define MSG_LEN      (1024)
+#define MAX_LOG_SIZE (1024)
 
 #define TCM11 (0)
 #define TCM12 (1)
@@ -211,15 +211,15 @@ static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext
 static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext *rctx, WstRenderSurface *surf );
 
 static bool wstRenderGLSetupEGL( WstRendererGL *renderer );
-static void wstMatrixIdentity(float m[16]);
-static void wstMatrixMultMatrix(float m[16], float src1[16], float src2[16]);
-static void wstMatrixTranslate(float m[16], float tx, float ty, float tz);
-static void wstMatrixOrtho(float m[16], float left, float right, float bottom, float top, float near, float far);
+static void wstMatrixIdentity(float matrix[16]);
+static void wstMatrixMultMatrix(float matrix[16], float in1[16], float in2[16]);
+static void wstMatrixTranslate(float matrix[16], float tx, float ty, float tz);
+static void wstMatrixOrtho(float matrix[16], float left, float right, float bottom, float top, float near, float far);
 static void wstSetCurrentShader( WstRendererGL *renderer, int shaderClassId );
 static WstShader* wstGetShaderForClass( WstRendererGL *renderer, int shaderClassId );
 static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass );
 static void wstDestroyShader( WstRendererGL *renderer, WstShader *shader );
-static unsigned int wstCreateGLShader(const char *pShaderText, int shaderType);
+static unsigned int wstCreateGLShader(const char *pShaderSource, bool isVertexShader );
 
 
 static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
@@ -1233,119 +1233,96 @@ exit:
 
 
 // ----------------------------------------------------------------------------
-// Set the 4x4 matrix m[16] to the identity matrix
+// Initialize the 4x4 matrix m[16] to the identity matrix
 // ----------------------------------------------------------------------------
-static void wstMatrixIdentity(float m[16])
+static void wstMatrixIdentity(float matrix[16])
 {
-    int i;
-    if (m != NULL)
+    if (matrix)
     {
-        for (i=0; i<16; i++)
-        {
-            m[i] = 0;
-        }
+        memset( matrix, 0, sizeof(matrix) );
     
-        m[0] = 1.0;
-        m[5] = 1.0; 
-        m[10] = 1.0;
-        m[15] = 1.0;
+        matrix[0]= 1.0f;
+        matrix[5]= 1.0f; 
+        matrix[10]= 1.0f;
+        matrix[15]= 1.0f;
     }
 }
 
 // ----------------------------------------------------------------------------
-// Multiply two 4x4 matrices
-// Input: src1[16], src2[16]  --- two source matrices
-// Output: m[16]              --- result matrix
+// Multiply two 4 x 4 matrices
 // ----------------------------------------------------------------------------
-static void wstMatrixMultMatrix(float m[16], float src1[16], float src2[16])
+static void wstMatrixMultMatrix(float matrix[16], float in1[16], float in2[16])
 {
-    /* src1 or src2 could be the result matrix m as well, so use an intermediate
-       matrix tm[16] to store the result */
-    float tm[16];
-    int i = 0;
+    int i= 0;
 
-    if ( m != NULL 
-         && src1 != NULL
-         && src2 != NULL )
+    /* in1 or in2 also could be the result matrix so a, 
+       working matrix temp[16] is used to store the result */
+    float temp[16];
+
+    if ( matrix && in1 && in2 )
     {
-        tm[0] =   src1[0] * src2[0] + src1[4] * src2[1] 
-                + src1[8] * src2[2] + src1[12]* src2[3];
-        tm[1] =   src1[1] * src2[0] + src1[5] * src2[1] 
-                + src1[9] * src2[2] + src1[13]* src2[3];
-        tm[2] =   src1[2] * src2[0] + src1[6] * src2[1] 
-                + src1[10]* src2[2] + src1[14]* src2[3];
-        tm[3] =   src1[3] * src2[0] + src1[7] * src2[1] 
-                + src1[11]* src2[2] + src1[15]* src2[3];
-        tm[4] =   src1[0] * src2[4] + src1[4] * src2[5] 
-                + src1[8] * src2[6] + src1[12]* src2[7];
-        tm[5] =   src1[1] * src2[4] + src1[5] * src2[5] 
-                + src1[9] * src2[6] + src1[13]* src2[7];
-        tm[6] =   src1[2] * src2[4] + src1[6] * src2[5] 
-                + src1[10]* src2[6] + src1[14]* src2[7];
-        tm[7] =   src1[3] * src2[4] + src1[7] * src2[5] 
-                + src1[11]* src2[6] + src1[15]* src2[7];
-        tm[8] =   src1[0] * src2[8] + src1[4] * src2[9] 
-                + src1[8] * src2[10]+ src1[12]* src2[11];
-        tm[9] =   src1[1] * src2[8] + src1[5] * src2[9] 
-                + src1[9] * src2[10]+ src1[13]* src2[11];
-        tm[10] =  src1[2] * src2[8] + src1[6] * src2[9] 
-                + src1[10]* src2[10]+ src1[14]* src2[11];
-        tm[11] =  src1[3] * src2[8] + src1[7] * src2[9] 
-                + src1[11]* src2[10]+ src1[15]* src2[11];
-        tm[12] =  src1[0] * src2[12]+ src1[4] * src2[13] 
-                + src1[8] * src2[14]+ src1[12]* src2[15];
-        tm[13] =  src1[1] * src2[12]+ src1[5] * src2[13] 
-                + src1[9] * src2[14]+ src1[13]* src2[15];
-        tm[14] =  src1[2] * src2[12]+ src1[6] * src2[13] 
-                + src1[10]* src2[14]+ src1[14]* src2[15];
-        tm[15] =  src1[3] * src2[12]+ src1[7] * src2[13] 
-                + src1[11]* src2[14]+ src1[15]* src2[15];
+        temp[0]= in1[0] * in2[0] + in1[4] * in2[1] + in1[8] * in2[2] + in1[12] * in2[3];
+        temp[1]= in1[1] * in2[0] + in1[5] * in2[1] + in1[9] * in2[2] + in1[13] * in2[3];
+        temp[2]= in1[2] * in2[0] + in1[6] * in2[1] + in1[10] * in2[2] + in1[14] * in2[3];
+        temp[3]= in1[3] * in2[0] + in1[7] * in2[1] + in1[11] * in2[2] + in1[15] * in2[3];
+        temp[4]= in1[0] * in2[4] + in1[4] * in2[5] + in1[8] * in2[6] + in1[12] * in2[7];
+        temp[5]= in1[1] * in2[4] + in1[5] * in2[5] + in1[9] * in2[6] + in1[13] * in2[7];
+        temp[6]= in1[2] * in2[4] + in1[6] * in2[5] + in1[10] * in2[6] + in1[14] * in2[7];
+        temp[7]= in1[3] * in2[4] + in1[7] * in2[5] + in1[11] * in2[6] + in1[15] * in2[7];
+        temp[8]= in1[0] * in2[8] + in1[4] * in2[9] + in1[8] * in2[10] + in1[12] * in2[11];
+        temp[9]= in1[1] * in2[8] + in1[5] * in2[9] + in1[9] * in2[10] + in1[13] * in2[11];
+        temp[10]= in1[2] * in2[8] + in1[6] * in2[9] + in1[10] * in2[10] + in1[14] * in2[11];
+        temp[11]= in1[3] * in2[8] + in1[7] * in2[9] + in1[11] * in2[10] + in1[15] * in2[11];
+        temp[12]= in1[0] * in2[12] + in1[4] * in2[13] + in1[8] * in2[14] + in1[12] * in2[15];
+        temp[13]= in1[1] * in2[12] + in1[5] * in2[13] + in1[9] * in2[14] + in1[13] * in2[15];
+        temp[14]= in1[2] * in2[12] + in1[6] * in2[13] + in1[10] * in2[14] + in1[14] * in2[15];
+        temp[15]= in1[3] * in2[12] + in1[7] * in2[13] + in1[11] * in2[14] + in1[15] * in2[15];
 
         for (i=0; i<16; i++)
         {
-            m[i] = tm[i];
+            matrix[i]= temp[i];
         }
     }
 }
 // ----------------------------------------------------------------------------
-// Translate the 3D object in the scene
-// Input: tx , ty, tz    --- the offset for translation in X, Y, and Z dirctions 
-// Output: m[16]   --- the matrix after the translate
+// Apply translation to 4x4 matrix
 // ----------------------------------------------------------------------------
-static void wstMatrixTranslate(float m[16], float tx, float ty, float tz)
+static void wstMatrixTranslate(float matrix[16], float dx, float dy, float dz)
 {
-    if (m != NULL )
+    if ( matrix )
     {
-        m[12] = m[0] * tx + m[4] * ty + m[8] * tz + m[12];
-        m[13] = m[1] * tx + m[5] * ty + m[9] * tz + m[13];
-        m[14] = m[2] * tx + m[6] * ty + m[10] * tz + m[14];
-        m[15] = m[3] * tx + m[7] * ty + m[11] * tz + m[15];
+        matrix[12] += (dx * matrix[0] + dy * matrix[4] + dz * matrix[8]);
+        matrix[13] += (dx * matrix[1] + dy * matrix[5] + dz * matrix[9]);
+        matrix[14] += (dx * matrix[2] + dy * matrix[6] + dz * matrix[10]);
+        matrix[15] += (dx * matrix[3] + dy * matrix[7] + dz * matrix[11]);
     }
 }
 
 // ----------------------------------------------------------------------------
-// Orthogonal projection transformation
-// Input: left, right, bottom, top, near, far parameters similar to glOrtho 
-//        function
-// Output: m[16]  4x4 projection matrix
+// Establish an orthogonal projection matrix
 // ----------------------------------------------------------------------------
-static void wstMatrixOrtho(float m[16], float left, float right, float bottom, float top, float near, float far)
+static void wstMatrixOrtho(float matrix[16], float left, float right, float bottom, float top, float near, float far)
 {
-    // temporary 4x4 matrix for intermediate values
-    float tm[16] = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};                
+    // working 4x4 matrix for intermediate values
+    float temp[16] = { 1.0f, 0.0f, 0.0f, 0.0f,
+                       0.0f, 1.0f, 0.0f, 0.0f,
+                       0.0f, 0.0f, 1.0f, 0.0f,
+                       0.0f, 0.0f, 0.0f, 1.0f };                
    
-    if (m != NULL)
+    if (matrix)
     { 
-        if (right != left && top != bottom && far != near)
+        if ( (left != right) && 
+             (bottom != top) && 
+             (near != far) )
         {
-            tm[0] = 2 / (right - left);
-            tm[5] = 2 / (top - bottom);
-            tm[10] = 2 / (near - far);
-            tm[12] = (right + left) / (right - left);
-            tm[13] = (top + bottom) / (top - bottom);
-            tm[14] = (far + near) / (far - near);
+            temp[12]= ((right + left) / (right - left));
+            temp[13]= ((top + bottom) / (top - bottom));
+            temp[14]= ((far + near) / (far - near));
+            temp[0]= (2.0f / (right - left));
+            temp[5]= (2.0f / (top - bottom));
+            temp[10]= (2.0f / (near - far));
 
-            wstMatrixMultMatrix(m, m, tm);
+            wstMatrixMultMatrix(matrix, matrix, temp);
         }
     }
 }
@@ -1424,7 +1401,7 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
    GLuint attribIndex;
    int shaderStatus = GL_FALSE; 
    int infoLen;
-   char infoLog[MSG_LEN+1];
+   char infoLog[MAX_LOG_SIZE+1];
 
 
    shaderNew= (WstShader*)calloc( 1, sizeof(WstShader) );
@@ -1511,7 +1488,7 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
       WST_TRACE( "vertex source:\n(\n%s\n)\n", shaderSource );
 
       // Create vertex shader from source
-      vertexShaderId = wstCreateGLShader(shaderSource, 1);
+      vertexShaderId = wstCreateGLShader(shaderSource, true);
       WST_TRACE( "shader class %X vertexShaderId=%d\n", shaderClass.id, vertexShaderId );
 
 
@@ -1613,7 +1590,7 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
       WST_TRACE( "fragment source:\n(\n%s\n)\n", shaderSource );
 
       // Create fragment shader from source
-      fragmentShaderId = wstCreateGLShader(shaderSource, 2);
+      fragmentShaderId = wstCreateGLShader(shaderSource, false);
       WST_TRACE( "shader class %X fragmentShaderId=%d\n", shaderClass.id, fragmentShaderId );
 
       free( shaderSource );
@@ -1645,10 +1622,10 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
        if (shaderStatus != GL_TRUE)
        {
            fprintf(stderr,"Error: Failed to link GLSL program\n");
-           glGetProgramInfoLog(programId, MSG_LEN, &infoLen, infoLog);
-           if (infoLen > MSG_LEN)
+           glGetProgramInfoLog(programId, MAX_LOG_SIZE, &infoLen, infoLog);
+           if (infoLen > MAX_LOG_SIZE)
            {
-               infoLog[MSG_LEN] = '\0';
+               infoLog[MAX_LOG_SIZE] = '\0';
            }
            fprintf(stderr,"%s\n",infoLog);
            error= 1;
@@ -1660,10 +1637,10 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
            if (shaderStatus != GL_TRUE)
            {
                fprintf(stderr,"Error: Failed to validate GLSL program\n");
-               glGetProgramInfoLog(programId, MSG_LEN, &infoLen, infoLog);
-               if (infoLen > MSG_LEN)
+               glGetProgramInfoLog(programId, MAX_LOG_SIZE, &infoLen, infoLog);
+               if (infoLen > MAX_LOG_SIZE)
                {
-                   infoLog[MSG_LEN] = '\0';
+                   infoLog[MAX_LOG_SIZE] = '\0';
                }
                fprintf(stderr,"%s\n",infoLog);
                error= 1;
@@ -1784,61 +1761,41 @@ static void wstDestroyShader( WstRendererGL *renderer, WstShader *shader )
 // ----------------------------------------------------------------------------
 // Create a shader from source code
 // ----------------------------------------------------------------------------
-static unsigned int wstCreateGLShader(const char *pShaderText, int shaderType)
+static unsigned int wstCreateGLShader(const char *pShaderSource, bool isVertexShader)
 {
-    GLuint shaderId = 0;       // vertex or fragment shader Id
-    char pInfoLog[MSG_LEN+1];    // error message
-    int shaderStatus, infoLogLength;    //shader's status and error information length
-    int shaderTexLen = -1;      // shader text length
-    if (pShaderText != NULL)
+    GLuint shaderId= 0;
+    int status, loglen, shaderSourceLen= -1;
+    char log[MAX_LOG_SIZE+1];
+
+    if ( pShaderSource )
     {
-        if( 1 == shaderType )
+        shaderId= glCreateShader( isVertexShader ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER );
+        if ( !shaderId )
         {
-            shaderId = glCreateShader(GL_VERTEX_SHADER);
-        }
-        else 
-        {
-            shaderId = glCreateShader(GL_FRAGMENT_SHADER);
-        }
-        if (shaderId == 0)
-        {
-            if( 1 == shaderType )
-            {
-                fprintf(stderr,"Error: Failed to create vertex Shader\n");
-            }
-            else
-            {
-                fprintf(stderr,"Error: Failed to create fragment Shader\n");
-            }
+            fprintf(stderr,"Error: Failed to create %s Shader\n", isVertexShader ? "vertex" : "fragment");
             return 0;
         }
-        glShaderSource(shaderId, 1, (const char **)&pShaderText, &shaderTexLen);
+        
+        glShaderSource(shaderId, 1, (const char **)&pShaderSource, &shaderSourceLen);
         glCompileShader(shaderId);
 
-        glGetShaderiv( shaderId, GL_COMPILE_STATUS, &shaderStatus);
-        if (shaderStatus != GL_TRUE)
+        glGetShaderiv( shaderId, GL_COMPILE_STATUS, &status);
+        if (GL_TRUE != status )
         {
-            if( 1 == shaderType )
+            fprintf(stderr,"Error: Failed to compile GL %s Shader\n", isVertexShader ? "vertex" : "fragment" );
+            glGetShaderInfoLog( shaderId, MAX_LOG_SIZE, &loglen, log);
+            if (loglen > MAX_LOG_SIZE)
             {
-                fprintf(stderr,"Error: Failed to compile GL vertex Shader\n");
-            }
-            else
-            {    
-                fprintf(stderr,"Error: Failed to compile GL fragment Shader\n");
-            }
-            glGetShaderInfoLog( shaderId, MSG_LEN, &infoLogLength, pInfoLog);
-            if (infoLogLength > MSG_LEN)
-            {
-                 pInfoLog[MSG_LEN] = '\0';
+                 log[MAX_LOG_SIZE]= '\0';
             }
             else
             {
-                pInfoLog[infoLogLength] = '\0';
+                log[loglen]= '\0';
             }
-            fprintf(stderr, "%s\n",pInfoLog);
-
+            fprintf(stderr, "%s\n",log);
         }
     }
+    
     return shaderId;
 }
 
