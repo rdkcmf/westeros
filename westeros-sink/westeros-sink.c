@@ -72,7 +72,6 @@ static void shellSurfaceId(void *data,
    sink->surfaceId= surfaceId;
    char name[32];
    wl_fixed_t z, op;
-   gboolean dispatching;
    WESTEROS_UNUSED(wl_simple_shell);
    WESTEROS_UNUSED(surface);
   
@@ -313,7 +312,6 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
       sink->shell= 0;
       sink->compositor= 0;
       sink->surfaceId= 0;
-      sink->sinkDispatching= FALSE;
 
       sink->display= wl_display_connect(NULL);
 
@@ -404,7 +402,6 @@ static void gst_westeros_sink_finalize(GObject *object)
 static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec) 
 {
    GstWesterosSink *sink = GST_WESTEROS_SINK(object);
-   gboolean dispatching;
   
    WESTEROS_UNUSED(pspec);
    WESTEROS_UNUSED(value);
