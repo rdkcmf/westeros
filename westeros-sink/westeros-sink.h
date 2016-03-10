@@ -52,7 +52,6 @@ struct _GstWesterosSink
    float opacity;
    float zorder;
 
-   gboolean sinkDispatching;
    gboolean videoStarted;
    gboolean startAfterLink;
    
