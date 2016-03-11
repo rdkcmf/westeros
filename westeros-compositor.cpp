@@ -40,6 +40,10 @@
 #define DEFAULT_KEY_REPEAT_DELAY (1000)
 #define DEFAULT_KEY_REPEAT_RATE  (5)
 
+#if !defined (XKB_KEYMAP_COMPILE_NO_FLAGS)
+#define XKB_KEYMAP_COMPILE_NO_FLAGS XKB_MAP_COMPILE_NO_FLAGS
+#endif
+
 #define WESTEROS_UNUSED(x) ((void)(x))
 
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
