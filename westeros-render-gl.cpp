@@ -481,6 +481,8 @@ static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface 
    int width, height, stride;
    GLint formatGL;
    GLenum type;
+   bool transformPixelsA= false;
+   bool transformPixelsB= false;
    bool fillAlpha= false;
    void *data;
 
@@ -491,31 +493,108 @@ static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface 
       height= wl_shm_buffer_get_height(shmBuffer);
       stride= wl_shm_buffer_get_stride(shmBuffer);
       
+      // The SHM formats describe the structure of the color channels for a pixel as
+      // they would appear in a machine register not the byte order in memory.  For 
+      // example WL_SHM_FORMAT_ARGB8888 is a 32 bit pixel with alpha in the 8 most significant
+      // bits and blue in the 8 list significant bits.  On a little endian machine the
+      // byte order in memory would be B, G, R, A.
       switch( wl_shm_buffer_get_format(shmBuffer) )
       {
          case WL_SHM_FORMAT_ARGB8888:
-            #if defined (WESTEROS_PLATFORM_EMBEDDED)
-            formatGL= GL_BGRA_EXT;
+            #ifdef BIG_ENDIAN_CPU
+               formatGL= GL_RGBA;
+               transformPixelsA= true;
             #else
-            formatGL= GL_RGBA;
+               #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+               if ( rendererGL->haveWaylandEGL )
+               {
+                  formatGL= GL_BGRA_EXT;
+               }
+               else
+               {
+                  formatGL= GL_RGBA;
+                  transformPixelsB= true;
+               }
+               #elif defined (WESTEROS_PLATFORM_EMBEDDED)
+               formatGL= GL_BGRA_EXT;
+               #else
+               formatGL= GL_RGBA;
+               transformPixelsB= true;
+               #endif
             #endif
             type= GL_UNSIGNED_BYTE;
             break;
          case WL_SHM_FORMAT_XRGB8888:
-            #if defined (WESTEROS_PLATFORM_EMBEDDED)
-            formatGL= GL_BGRA_EXT;
+            #ifdef BIG_ENDIAN_CPU
+               formatGL= GL_RGBA;
+               transformPixelsA= true;
             #else
-            formatGL= GL_RGBA;
+               #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+               if ( rendererGL->haveWaylandEGL )
+               {
+                  formatGL= GL_BGRA_EXT;
+               }
+               else
+               {
+                  formatGL= GL_RGBA;
+                  transformPixelsB= true;
+               }
+               #elif defined (WESTEROS_PLATFORM_EMBEDDED)
+               formatGL= GL_BGRA_EXT;
+               #else
+               formatGL= GL_RGBA;
+               transformPixelsB= true;
+               #endif
             #endif
             type= GL_UNSIGNED_BYTE;
             fillAlpha= true;
             break;
          case WL_SHM_FORMAT_BGRA8888:
-            formatGL= GL_RGBA;
+            #ifdef BIG_ENDIAN_CPU
+               #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+               if ( rendererGL->haveWaylandEGL )
+               {
+                  formatGL= GL_BGRA_EXT;
+               }
+               else
+               {
+                  formatGL= GL_RGBA;
+                  transformPixelsB= true;
+               }
+               #elif defined (WESTEROS_PLATFORM_EMBEDDED)
+               formatGL= GL_BGRA_EXT;
+               #else
+               formatGL= GL_RGBA;
+               transformPixelsB= true;
+               #endif
+            #else
+               formatGL= GL_RGBA;
+               transformPixelsA= true;
+            #endif
             type= GL_UNSIGNED_BYTE;
             break;
          case WL_SHM_FORMAT_BGRX8888:
-            formatGL= GL_RGBA;
+            #ifdef BIG_ENDIAN_CPU
+               #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+               if ( rendererGL->haveWaylandEGL )
+               {
+                  formatGL= GL_BGRA_EXT;
+               }
+               else
+               {
+                  formatGL= GL_RGBA;
+                  transformPixelsB= true;
+               }
+               #elif defined (WESTEROS_PLATFORM_EMBEDDED)
+               formatGL= GL_BGRA_EXT;
+               #else
+               formatGL= GL_RGBA;
+               transformPixelsB= true;
+               #endif
+            #else
+               formatGL= GL_RGBA;
+               transformPixelsA= true;
+            #endif
             type= GL_UNSIGNED_BYTE;
             fillAlpha= true;
             break;
@@ -556,34 +635,56 @@ static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface 
          if ( surface->mem )
          {
             memcpy( surface->mem, data, stride*height );
-            #if defined (WESTEROS_PLATFORM_EMBEDDED)
-            if ( fillAlpha )
+            
+            if ( transformPixelsA )
             {
+               // transform ARGB to RGBA
+               unsigned int pixel, alpha;
+               unsigned int *pixdata= (unsigned int*)surface->mem;
+               for( int y= 0; y < height; ++y )
+               {
+                  for( int x= 0; x < width; ++x )
+                  {
+                     pixel= pixdata[y*width+x];
+                     alpha= (fillAlpha ? 0xFF : (pixel>>24));
+                     pixel= (pixel<<8)|alpha;
+                     pixdata[y*width+x]= pixel;
+                  }
+               }
+            }
+            else if ( transformPixelsB )
+            {
+               // transform BGRA to RGBA
                unsigned char *pixdata= (unsigned char*)surface->mem;
                for( int y= 0; y < height; ++y )
                {
                   for( int x= 0; x < width; ++x )
                   {
-                     pixdata[y*width*4 + x*4 +3]= 0xFF;
+                     if ( fillAlpha )
+                     {
+                        pixdata[y*width*4 + x*4 +3]= 0xFF;
+                     }
+                     unsigned char temp= pixdata[y*width*4 + x*4 +2];
+                     pixdata[y*width*4 + x*4 +2]= pixdata[y*width*4 + x*4 +0];
+                     pixdata[y*width*4 + x*4 +0]= temp;
                   }
                }
             }
-            #else
-            unsigned char *pixdata= (unsigned char*)surface->mem;
-            for( int y= 0; y < height; ++y )
+            else if ( fillAlpha )
             {
-               for( int x= 0; x < width; ++x )
+               if ( fillAlpha )
                {
-                  if ( fillAlpha )
+                  unsigned char *pixdata= (unsigned char*)surface->mem;
+                  for( int y= 0; y < height; ++y )
                   {
-                     pixdata[y*width*4 + x*4 +3]= 0xFF;
+                     for( int x= 0; x < width; ++x )
+                     {
+                        pixdata[y*width*4 + x*4 +3]= 0xFF;
+                     }
                   }
-                  unsigned char temp= pixdata[y*width*4 + x*4 +2];
-                  pixdata[y*width*4 + x*4 +2]= pixdata[y*width*4 + x*4 +0];
-                  pixdata[y*width*4 + x*4 +0]= temp;
                }
             }
-            #endif
+            
             surface->bufferWidth= width;
             surface->bufferHeight= height;
             surface->memWidth= width;
