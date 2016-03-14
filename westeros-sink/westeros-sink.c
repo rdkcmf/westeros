@@ -74,14 +74,23 @@ static void shellSurfaceId(void *data,
    wl_fixed_t z, op;
    WESTEROS_UNUSED(wl_simple_shell);
    WESTEROS_UNUSED(surface);
-  
-	sprintf( name, "westeros-sink-surface-%x", surfaceId );
+
+	sprintf( name, "westeros-sink-surface-%x", surfaceId );	
 	wl_simple_shell_set_name( sink->shell, surfaceId, name );
-   wl_simple_shell_set_geometry( sink->shell, surfaceId, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
-   z= wl_fixed_from_double(sink->zorder);
-   wl_simple_shell_set_zorder( sink->shell, sink->surfaceId, z);
-   op= wl_fixed_from_double(sink->opacity);
-   wl_simple_shell_set_opacity( sink->shell, sink->surfaceId, op);
+   if ( (sink->windowWidth == 0) || (sink->windowHeight == 0) )
+   {
+      wl_simple_shell_set_visible( sink->shell, sink->surfaceId, false);
+   }
+   else
+   {
+      wl_simple_shell_set_geometry( sink->shell, surfaceId, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+      z= wl_fixed_from_double(sink->zorder);
+      wl_simple_shell_set_zorder( sink->shell, sink->surfaceId, z);
+      op= wl_fixed_from_double(sink->opacity);
+      wl_simple_shell_set_opacity( sink->shell, sink->surfaceId, op);
+      wl_simple_shell_get_status( sink->shell, sink->surfaceId );
+   }
+   wl_display_flush(sink->display);
 }                           
 
 static void shellSurfaceCreated(void *data,
@@ -177,6 +186,8 @@ static void registryHandleGlobal(void *data,
    }
    
    gst_westeros_sink_soc_registryHandleGlobal( sink, registry, id, interface, version );
+
+   wl_display_flush(sink->display);
 }
 
 static void registryHandleGlobalRemove(void *data, 
@@ -296,7 +307,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->windowWidth= DEFAULT_WINDOW_WIDTH;
    sink->windowHeight= DEFAULT_WINDOW_HEIGHT;
    
-   sink->visible= true;
+   sink->visible= false;
+   
    sink->opacity= 1.0;
    sink->zorder= 0.0;
    
@@ -328,8 +340,10 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
                wl_display_roundtrip_queue(sink->display,sink->queue);
                
                sink->surface= wl_compositor_create_surface(sink->compositor);
-               printf("gst_westeros_sink_init: surface=%p\n", (void*)sink->surface);   
+               printf("gst_westeros_sink_init: surface=%p\n", (void*)sink->surface);
                wl_proxy_set_queue((struct wl_proxy*)sink->surface, sink->queue);
+               
+               wl_display_flush( sink->display );
             }
             else
             {
@@ -425,15 +439,24 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
             sink->windowWidth= atoi( parts[2] );
             sink->windowHeight= atoi( parts[3] );
             
-            if ( sink->shell )
+            if ( sink->shell && sink->surfaceId )
             {
                wl_simple_shell_set_geometry( sink->shell, sink->surfaceId, 
                                              sink->windowX, sink->windowY, 
                                              sink->windowWidth, sink->windowHeight );
-            }
-            
-            printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n", 
-                    sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+                                             
+               printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n", 
+                       sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+                       
+               if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
+               {
+                  wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
+                  
+                  wl_simple_shell_get_status( sink->shell, sink->surfaceId);
+                  
+                  wl_display_flush( sink->display );
+               }
+            }            
                     
             sink->srcWidth= sink->windowWidth;
             sink->srcHeight= sink->windowHeight;
