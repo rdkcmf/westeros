@@ -34,6 +34,7 @@ struct _GstWesterosSink
    GstPad *peerPad; 
    gboolean rejectPrerollBuffers;
    
+   gboolean initialized;
    #ifdef GLIB_VERSION_2_32 
    GMutex mutex;
    #else
@@ -55,6 +56,7 @@ struct _GstWesterosSink
    gboolean videoStarted;
    gboolean startAfterLink;
    
+   gboolean eosDetected;
    gint64 startPTS;
    gint64 firstPTS;
    gint64 currentPTS;

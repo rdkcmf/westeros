@@ -40,6 +40,7 @@ G_DEFINE_TYPE (GstWesterosSink, gst_westeros_sink, GST_TYPE_BASE_SINK)
 GST_BOILERPLATE (GstWesterosSink, gst_westeros_sink, GstBaseSink, GST_TYPE_BASE_SINK)
 #endif
 
+static void gst_westeros_sink_term(GstWesterosSink *sink); 
 static void gst_westeros_sink_finalize(GObject *object); 
 static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
 static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
@@ -289,6 +290,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    gst_base_sink_set_sync(GST_BASE_SINK(sink), FALSE);
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), FALSE);
 
+   sink->initialized= TRUE;
+   
    #ifdef GLIB_VERSION_2_32 
    g_mutex_init( &sink->mutex );
    #else
@@ -312,6 +315,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->opacity= 1.0;
    sink->zorder= 0.0;
    
+   sink->eosDetected= FALSE;
    sink->startPTS= 0;
    sink->firstPTS= 0;
    sink->currentPTS= 0;
@@ -366,10 +370,10 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    }
 }
 
-static void gst_westeros_sink_finalize(GObject *object) 
+static void gst_westeros_sink_term(GstWesterosSink *sink)
 {
-   GstWesterosSink *sink = GST_WESTEROS_SINK(object);
-
+   sink->initialized= FALSE;
+   
    gst_westeros_sink_soc_term( sink );
    
    if ( sink->surface )
@@ -409,6 +413,16 @@ static void gst_westeros_sink_finalize(GObject *object)
    #else
    g_mutex_free( sink->mutex );
    #endif  
+}
+
+static void gst_westeros_sink_finalize(GObject *object) 
+{
+   GstWesterosSink *sink = GST_WESTEROS_SINK(object);
+
+   if ( sink->initialized )
+   {
+      gst_westeros_sink_term( sink );
+   }
 
    GST_CALL_PARENT (G_OBJECT_CLASS, finalize, (object));
 }
@@ -525,6 +539,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       case GST_STATE_CHANGE_NULL_TO_READY:
       {
          sink->position= 0;         
+         sink->eosDetected= FALSE;
          if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
          {
             result= GST_STATE_CHANGE_FAILURE;
@@ -565,6 +580,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
       case GST_STATE_CHANGE_PAUSED_TO_READY:
       {
+         sink->eosDetected= FALSE;
          if ( gst_westeros_sink_soc_paused_to_ready( sink, &passToDefault ) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
@@ -574,9 +590,13 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
       case GST_STATE_CHANGE_READY_TO_NULL:
       {
-         if ( !gst_westeros_sink_soc_ready_to_null( sink, &passToDefault ) )
+         if ( sink->initialized )
          {
-            result= GST_STATE_CHANGE_FAILURE;
+            gst_westeros_sink_term( sink );
+            if ( !gst_westeros_sink_soc_ready_to_null( sink, &passToDefault ) )
+            {
+               result= GST_STATE_CHANGE_FAILURE;
+            }
          }
          break;
       }
@@ -875,6 +895,7 @@ static GstFlowReturn gst_westeros_sink_preroll(GstBaseSink *base_sink, GstBuffer
 
 void gst_westeros_sink_eos_detected( GstWesterosSink *sink )
 {
+   sink->eosDetected= TRUE;
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_eos_detected: posting EOS");
    gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));   
 }
