@@ -2485,6 +2485,7 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
 {
    int i;
    
+   pthread_mutex_lock( &ctx->mutex );
    for( i= 0; i < ctx->eventIndex; ++i )
    {
       switch( ctx->eventQueue[i].type )
@@ -2624,6 +2625,7 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
       }
    }
    ctx->eventIndex= 0;
+   pthread_mutex_unlock( &ctx->mutex );
 }
 
 static void wstCompositorComposeFrame( WstCompositor *ctx )
