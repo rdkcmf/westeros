@@ -62,6 +62,29 @@
 #define DEBUG(FORMAT, ...)          INT_DEBUG(FORMAT, ##__VA_ARGS__)
 #define TRACE(FORMAT, ...)          INT_TRACE(FORMAT, ##__VA_ARGS__)
 
+#define WST_EVENT_QUEUE_SIZE (64)
+
+typedef enum _WstEventType
+{
+   WstEventType_key,
+   WstEventType_keyCode,
+   WstEventType_keyModifiers,
+   WstEventType_pointerEnter,
+   WstEventType_pointerLeave,
+   WstEventType_pointerMove,
+   WstEventType_pointerButton,
+} WstEventType;
+
+typedef struct _WstEvent
+{
+   WstEventType type;
+   void *p1;
+   unsigned int v1;
+   unsigned int v2;
+   unsigned int v3;
+   unsigned int v4;
+} WstEvent;
+
 typedef struct _WstSurface WstSurface;
 typedef struct _WstSeat WstSeat;
 
@@ -233,6 +256,9 @@ typedef struct _WstCompositor
    void *nativeWindow;
    int outputWidth;
    int outputHeight;
+   
+   int eventIndex;   
+   WstEvent eventQueue[WST_EVENT_QUEUE_SIZE];
 
    void *terminatedUserData;
    WstTerminatedCallback terminatedCB;
@@ -301,6 +327,7 @@ typedef struct _WstCompositor
 static const char* wstGetNextNestedDisplayName(void);
 static void* wstCompositorThread( void *arg );
 static long long wstGetCurrentTimeMillis(void);
+static void wstCompositorProcessEvents( WstCompositor *ctx );
 static void wstCompositorComposeFrame( WstCompositor *ctx );
 static int wstCompositorDisplayTimeOut( void *data );
 static void wstCompositorScheduleRepaint( WstCompositor *ctx );
@@ -533,10 +560,10 @@ static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
 static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_t keyState, uint32_t modifiers );
 static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource *resource );
-static void wstProcessPointerEnter( WstPointer *pointer );
-static void wstProcessPointerLeave( WstPointer *pointer );
+static void wstProcessPointerEnter( WstPointer *pointer, int x, int y, struct wl_surface *surfaceNested );
+static void wstProcessPointerLeave( WstPointer *pointer, struct wl_surface *surfaceNested );
 static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t y );
-static void wstProcessPointerButtonEvent( WstPointer *pointer, uint32_t button, uint32_t buttonState );
+static void wstProcessPointerButtonEvent( WstPointer *pointer, uint32_t button, uint32_t buttonState, uint32_t time );
 static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y );
 static void wstPointerSetPointer( WstPointer *pointer, WstSurface *surface );
 static void wstPointerUpdatePosition( WstPointer *pointer );
@@ -1623,12 +1650,14 @@ void WstCompositorKeyEvent( WstCompositor *ctx, int keyCode, unsigned int keySta
 
       if ( ctx->seat && !ctx->isNested )
       {
-         WstKeyboard *keyboard= ctx->seat->keyboard;
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_key;
+         ctx->eventQueue[eventIndex].v1= keyCode;
+         ctx->eventQueue[eventIndex].v2= keyState;
+         ctx->eventQueue[eventIndex].v3= modifiers;
          
-         if ( keyboard )
-         {
-            wstProcessKeyEvent( keyboard, keyCode, keyState, modifiers );
-         }
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
       }
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -1643,12 +1672,14 @@ void WstCompositorPointerEnter( WstCompositor *ctx )
 
       if ( ctx->seat && !ctx->isNested )
       {
-         WstPointer *pointer= ctx->seat->pointer;
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerEnter;
+         ctx->eventQueue[eventIndex].v1= 0;
+         ctx->eventQueue[eventIndex].v2= 0;
+         ctx->eventQueue[eventIndex].p1= 0;
          
-         if ( pointer )
-         {
-            wstProcessPointerEnter( pointer );
-         }
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
       }
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -1663,12 +1694,12 @@ void WstCompositorPointerLeave( WstCompositor *ctx )
 
       if ( ctx->seat && !ctx->isNested )
       {
-         WstPointer *pointer= ctx->seat->pointer;
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerLeave;
+         ctx->eventQueue[eventIndex].p1= 0;
          
-         if ( pointer )
-         {
-            wstProcessPointerLeave( pointer );
-         }
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
       }
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -1683,12 +1714,13 @@ void WstCompositorPointerMoveEvent( WstCompositor *ctx, int x, int y )
 
       if ( ctx->seat && !ctx->isNested )
       {
-         WstPointer *pointer= ctx->seat->pointer;
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerMove;
+         ctx->eventQueue[eventIndex].v1= x;
+         ctx->eventQueue[eventIndex].v2= y;
          
-         if ( pointer )
-         {
-            wstProcessPointerMoveEvent( pointer, x, y );
-         }
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
       }
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -1703,12 +1735,14 @@ void WstCompositorPointerButtonEvent( WstCompositor *ctx, unsigned int button, u
 
       if ( ctx->seat && !ctx->isNested )
       {
-         WstPointer *pointer= ctx->seat->pointer;
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerButton;
+         ctx->eventQueue[eventIndex].v1= button;
+         ctx->eventQueue[eventIndex].v2= buttonState;
+         ctx->eventQueue[eventIndex].v3= 0; //no time
          
-         if ( pointer )
-         {
-            wstProcessPointerButtonEvent( pointer, button, buttonState );
-         }
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
       }
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -2447,6 +2481,151 @@ static long long wstGetCurrentTimeMillis(void)
    return utcCurrentTimeMillis;
 }
 
+static void wstCompositorProcessEvents( WstCompositor *ctx )
+{
+   int i;
+   
+   for( i= 0; i < ctx->eventIndex; ++i )
+   {
+      switch( ctx->eventQueue[i].type )
+      {
+         case WstEventType_key:
+            {
+               WstKeyboard *keyboard= ctx->seat->keyboard;
+               
+               if ( keyboard )
+               {
+                  wstProcessKeyEvent( keyboard, 
+                                      ctx->eventQueue[i].v1, //keyCode
+                                      ctx->eventQueue[i].v2, //keyState
+                                      ctx->eventQueue[i].v3  //modifiers
+                                    );
+               }
+            }
+            break;
+         case WstEventType_keyCode:
+            {
+               if ( ctx->seat )
+               {
+                  WstKeyboard *keyboard= ctx->seat->keyboard;
+                  
+                  if ( keyboard )
+                  {
+                     uint32_t serial;
+                     struct wl_resource *resource;
+                     
+                     serial= wl_display_next_serial( ctx->display );
+                     wl_resource_for_each( resource, &keyboard->resourceList )
+                     {
+                        wl_keyboard_send_key( resource, 
+                                              serial,
+                                              ctx->eventQueue[i].v1,  //time
+                                              ctx->eventQueue[i].v2,  //key
+                                              ctx->eventQueue[i].v3   //state
+                                            );
+                     }   
+                  }
+               }
+            }
+            break;
+         case WstEventType_keyModifiers:
+            {
+               if ( ctx->seat )
+               {
+                  WstKeyboard *keyboard= ctx->seat->keyboard;
+                  
+                  if ( keyboard )
+                  {
+                     uint32_t serial;
+                     struct wl_resource *resource;
+                     
+                     serial= wl_display_next_serial( ctx->display );
+                     wl_resource_for_each( resource, &keyboard->resourceList )
+                     {
+                        wl_keyboard_send_modifiers( resource,
+                                                    serial,
+                                                    ctx->eventQueue[i].v1, // mod depressed
+                                                    ctx->eventQueue[i].v2, // mod latched
+                                                    ctx->eventQueue[i].v3, // mod locked
+                                                    ctx->eventQueue[i].v4  // mod group
+                                                  );
+                     }   
+                  }
+               }
+            }
+            break;
+         case WstEventType_pointerEnter:
+            {
+               WstPointer *pointer= ctx->seat->pointer;
+               
+               if ( pointer )
+               {
+                  wstProcessPointerEnter( pointer,
+                                          ctx->eventQueue[i].v1, //x
+                                          ctx->eventQueue[i].v2, //y
+                                          (struct wl_surface*)ctx->eventQueue[i].p1  //surfaceNested
+                                        );
+               }
+            }
+            break;
+         case WstEventType_pointerLeave:
+            {
+               WstPointer *pointer= ctx->seat->pointer;
+               
+               if ( pointer )
+               {
+                  wstProcessPointerLeave( pointer,
+                                          (struct wl_surface*)ctx->eventQueue[i].p1  //surfaceNested
+                                        );
+               }
+            }
+            break;
+         case WstEventType_pointerMove:
+            {
+               WstPointer *pointer= ctx->seat->pointer;
+               
+               if ( pointer )
+               {
+                  wstProcessPointerMoveEvent( pointer, 
+                                              ctx->eventQueue[i].v1, //x
+                                              ctx->eventQueue[i].v2  //y
+                                            );
+               }
+            }
+            break;
+         case WstEventType_pointerButton:
+            {
+               WstPointer *pointer= ctx->seat->pointer;
+               
+               uint32_t time;
+               
+               if ( ctx->eventQueue[i].v3 )
+               {
+                  time= ctx->eventQueue[i].v4;
+               }
+               else
+               {
+                  time= (uint32_t)wstGetCurrentTimeMillis();
+               }
+               
+               if ( pointer )
+               {
+                  wstProcessPointerButtonEvent( pointer, 
+                                                ctx->eventQueue[i].v1, //button
+                                                ctx->eventQueue[i].v2, //buttonState
+                                                time
+                                               );
+               }
+            }
+            break;
+         default:
+            WARNING("wstCompositorProcessEvents: unknown event type %d", ctx->eventQueue[i].type );
+            break;
+      }
+   }
+   ctx->eventIndex= 0;
+}
+
 static void wstCompositorComposeFrame( WstCompositor *ctx )
 {
    uint32_t frameTime;
@@ -2485,6 +2664,8 @@ static void wstCompositorComposeFrame( WstCompositor *ctx )
 static int wstCompositorDisplayTimeOut( void *data )
 {
    WstCompositor *ctx= (WstCompositor*)data;
+   
+   wstCompositorProcessEvents( ctx );
    
    if ( ctx->outputSizeChanged )
    {
@@ -4302,6 +4483,7 @@ static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int
          {
             WstOutput *output= ctx->output;
             
+            pthread_mutex_lock( &ctx->mutex );
             output->x= x;
             output->y= y;
             output->mmWidth= mmWidth;
@@ -4323,6 +4505,7 @@ static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int
             {
                ctx->hasEmbeddedMaster= true;
             }
+            pthread_mutex_unlock( &ctx->mutex );
          }
       }
    }
@@ -4346,6 +4529,7 @@ static void wstDefaultNestedOutputHandleMode( void* userData, uint32_t flags, in
          {
             WstOutput *output= ctx->output;
             
+            pthread_mutex_lock( &ctx->mutex );
             ctx->outputWidth= width;
             ctx->outputHeight= height;
             
@@ -4354,6 +4538,7 @@ static void wstDefaultNestedOutputHandleMode( void* userData, uint32_t flags, in
             output->refreshRate= refreshRate;
             
             ctx->outputSizeChanged= true;
+            pthread_mutex_unlock( &ctx->mutex );
          }
       }
    }
@@ -4392,7 +4577,9 @@ static void wstDefaultNestedOutputHandleScale( void *userData, int32_t scale )
          {
             WstOutput *output= ctx->output;
             
+            pthread_mutex_lock( &ctx->mutex );
             output->currentScale= scale;
+            pthread_mutex_unlock( &ctx->mutex );
          }
       }
    }
@@ -4404,9 +4591,11 @@ static void wstDefaultNestedKeyboardHandleKeyMap( void *userData, uint32_t forma
 
    if ( ctx )
    {
+      pthread_mutex_lock( &ctx->mutex );
       ctx->xkbKeymapFormat= format;
       ctx->xkbKeymapFd= fd;
       ctx->xkbKeymapSize= size;
+      pthread_mutex_unlock( &ctx->mutex );
 
       if ( ctx->keyboardNestedListener )
       {
@@ -4431,7 +4620,9 @@ static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array
       {
          if ( ctx->seat )
          {
+            pthread_mutex_lock( &ctx->mutex );
             wl_array_copy( &ctx->seat->keyboard->keys, keys );
+            pthread_mutex_unlock( &ctx->mutex );
          }
       }
    }   
@@ -4470,26 +4661,16 @@ static void wstDefaultNestedKeyboardHandleKey( void *userData, uint32_t time, ui
       }
       else
       {
-         if ( ctx->seat )
-         {
-            WstKeyboard *keyboard= ctx->seat->keyboard;
-            
-            if ( keyboard )
-            {
-               uint32_t serial;
-               struct wl_resource *resource;
-               
-               serial= wl_display_next_serial( ctx->display );
-               wl_resource_for_each( resource, &keyboard->resourceList )
-               {
-                  wl_keyboard_send_key( resource, 
-                                        serial,
-                                        time,
-                                        key,
-                                        state );
-               }   
-            }
-         }
+         int eventIndex= ctx->eventIndex;
+         pthread_mutex_lock( &ctx->mutex );
+         ctx->eventQueue[eventIndex].type= WstEventType_keyCode;
+         ctx->eventQueue[eventIndex].v1= time;
+         ctx->eventQueue[eventIndex].v2= key;
+         ctx->eventQueue[eventIndex].v3= state;
+         
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );         
       }
    }   
 }
@@ -4508,28 +4689,17 @@ static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mo
       }
       else
       {
-         if ( ctx->seat )
-         {
-            WstKeyboard *keyboard= ctx->seat->keyboard;
-            
-            if ( keyboard )
-            {
-               uint32_t serial;
-               struct wl_resource *resource;
-               
-               serial= wl_display_next_serial( ctx->display );
-               wl_resource_for_each( resource, &keyboard->resourceList )
-               {
-                  wl_keyboard_send_modifiers( resource,
-                                              serial,
-                                              mods_depressed, // mod depressed
-                                              mods_latched,   // mod latched
-                                              mods_locked,    // mod locked
-                                              group           // mod group
-                                            );
-               }   
-            }
-         }
+         int eventIndex= ctx->eventIndex;
+         pthread_mutex_lock( &ctx->mutex );
+         ctx->eventQueue[eventIndex].type= WstEventType_keyCode;
+         ctx->eventQueue[eventIndex].v1= mods_depressed;
+         ctx->eventQueue[eventIndex].v2= mods_latched;
+         ctx->eventQueue[eventIndex].v3= mods_locked;
+         ctx->eventQueue[eventIndex].v4= group;
+         
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
       }
    }
 }
@@ -4549,8 +4719,10 @@ static void wstDefaultNestedKeyboardHandleRepeatInfo( void *userData, int32_t ra
       {
          if ( ctx->seat )
          {
+            pthread_mutex_lock( &ctx->mutex );
             ctx->seat->keyRepeatDelay;
             ctx->seat->keyRepeatRate;
+            pthread_mutex_unlock( &ctx->mutex );
          }
       }
    }                       
@@ -4569,57 +4741,21 @@ static void wstDefaultNestedPointerHandleEnter( void *userData, struct wl_surfac
       }
       else
       {
-         if ( ctx->seat )
-         {
-            WstPointer *pointer= ctx->seat->pointer;
-            if ( pointer )
-            {
-               int x, y;
-               
-               x= wl_fixed_to_int( sx );
-               y= wl_fixed_to_int( sy );
+         int x, y;
+         int eventIndex= ctx->eventIndex;
+         
+         x= wl_fixed_to_int( sx );
+         y= wl_fixed_to_int( sy );
 
-               if ( ctx->isRepeater )
-               {
-                  WstSurface *surface= 0;
-                  
-                  for( int i= 0; i < ctx->surfaces.size(); ++i )
-                  {
-                     if ( ctx->surfaces[i]->surfaceNested == surfaceNested )
-                     {
-                        surface= ctx->surfaces[i];
-                        break;
-                     }
-                  }
-                  if ( surface )
-                  {
-                     uint32_t serial;
-                     struct wl_resource *resource;
-                     struct wl_client *surfaceClient;
-                     
-                     pointer->focus= surface;
-                     
-                     surfaceClient= wl_resource_get_client( pointer->focus->resource );
-                     wstPointerMoveFocusToClient( pointer, surfaceClient );
-
-                     serial= wl_display_next_serial( ctx->display );
-                     wl_resource_for_each( resource, &pointer->focusResourceList )
-                     {
-                        wl_pointer_send_enter( resource, serial, pointer->focus->resource, x, y );
-                     }
-                  }
-               }
-               else
-               {
-                  pointer->entered= true;
-                  
-                  pointer->pointerX= x;
-                  pointer->pointerY= y;
-                  
-                  wstPointerCheckFocus( pointer, x, y );
-               }
-            }
-         }
+         pthread_mutex_lock( &ctx->mutex );
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerEnter;
+         ctx->eventQueue[eventIndex].v1= x;
+         ctx->eventQueue[eventIndex].v2= y;
+         ctx->eventQueue[eventIndex].p1= surfaceNested;
+         
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
       }
    }
 }
@@ -4636,44 +4772,13 @@ static void wstDefaultNestedPointerHandleLeave( void *userData, struct wl_surfac
       }
       else
       {
-         if ( ctx->seat )
-         {
-            WstPointer *pointer= ctx->seat->pointer;
-            if (  pointer )
-            {
-               if ( ctx->isRepeater )
-               {
-                  WstSurface *surface= 0;
-                  
-                  for( int i= 0; i < ctx->surfaces.size(); ++i )
-                  {
-                     if ( ctx->surfaces[i]->surfaceNested == surfaceNested )
-                     {
-                        surface= ctx->surfaces[i];
-                        break;
-                     }
-                  }
-                  if ( surface )
-                  {
-                     uint32_t serial;
-                     struct wl_resource *resource;
-                     struct wl_client *surfaceClient;
-
-                     serial= wl_display_next_serial( ctx->display );
-                     surfaceClient= wl_resource_get_client( pointer->focus->resource );
-                     wl_resource_for_each( resource, &pointer->focusResourceList )
-                     {
-                        wl_pointer_send_leave( resource, serial, pointer->focus->resource );
-                     }
-                     pointer->focus= 0;
-                  }
-               }
-               else
-               {
-                  wstProcessPointerLeave( pointer );
-               }
-            }
-         }
+         int eventIndex= ctx->eventIndex;
+         pthread_mutex_lock( &ctx->mutex );
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerLeave;
+         
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
       }
    }
 }
@@ -4691,19 +4796,20 @@ static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, 
       }
       else
       {
-         if ( ctx->seat )
-         {
-            WstPointer *pointer= ctx->seat->pointer;
-            if (  pointer )
-            {
-               int x, y;
-               
-               x= wl_fixed_to_int( sx );
-               y= wl_fixed_to_int( sy );
+         int x, y;
+         int eventIndex= ctx->eventIndex;
+         
+         x= wl_fixed_to_int( sx );
+         y= wl_fixed_to_int( sy );
 
-               wstProcessPointerMoveEvent( pointer, x, y );
-            }
-         }
+         pthread_mutex_lock( &ctx->mutex );
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerMove;
+         ctx->eventQueue[eventIndex].v1= x;
+         ctx->eventQueue[eventIndex].v2= y;
+         
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
       }
    }
 }
@@ -4721,14 +4827,17 @@ static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, 
       }
       else
       {
-         if ( ctx->seat )
-         {
-            WstPointer *pointer= ctx->seat->pointer;
-            if (  pointer )
-            {
-               wstProcessPointerButtonEvent( pointer, button, state );
-            }
-         }
+         int eventIndex= ctx->eventIndex;
+         pthread_mutex_lock( &ctx->mutex );
+         ctx->eventQueue[eventIndex].type= WstEventType_pointerButton;
+         ctx->eventQueue[eventIndex].v1= button;
+         ctx->eventQueue[eventIndex].v2= state;
+         ctx->eventQueue[eventIndex].v3= 1; // have time
+         ctx->eventQueue[eventIndex].v4= time;
+         
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
       }
    }
 }
@@ -5421,38 +5530,121 @@ static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource 
                              );
 }
 
-static void wstProcessPointerEnter( WstPointer *pointer )
+static void wstProcessPointerEnter( WstPointer *pointer, int x, int y, struct wl_surface *surfaceNested )
 {
-   pointer->entered= true;
+   WstCompositor *ctx= pointer->seat->compositor;
+   
+   if ( ctx->isNested )
+   {
+      if ( ctx->seat )
+      {
+         if ( ctx->isRepeater )
+         {
+            WstSurface *surface= 0;
+            
+            for( int i= 0; i < ctx->surfaces.size(); ++i )
+            {
+               if ( ctx->surfaces[i]->surfaceNested == surfaceNested )
+               {
+                  surface= ctx->surfaces[i];
+                  break;
+               }
+            }
+            if ( surface )
+            {
+               uint32_t serial;
+               struct wl_resource *resource;
+               struct wl_client *surfaceClient;
+               
+               pointer->focus= surface;
+               
+               surfaceClient= wl_resource_get_client( pointer->focus->resource );
+               wstPointerMoveFocusToClient( pointer, surfaceClient );
+
+               serial= wl_display_next_serial( ctx->display );
+               wl_resource_for_each( resource, &pointer->focusResourceList )
+               {
+                  wl_pointer_send_enter( resource, serial, pointer->focus->resource, x, y );
+               }
+            }
+         }
+         else
+         {
+            pointer->entered= true;
+            
+            pointer->pointerX= x;
+            pointer->pointerY= y;
+            
+            wstPointerCheckFocus( pointer, x, y );
+         }
+      }
+   }
+   else
+   {
+      pointer->entered= true;
+   }
 }
 
-static void wstProcessPointerLeave( WstPointer *pointer )
+static void wstProcessPointerLeave( WstPointer *pointer, struct wl_surface *surfaceNested )
 {
-   WstCompositor *compositor= pointer->seat->compositor;
+   WstCompositor *ctx= pointer->seat->compositor;
 
-   if ( pointer->focus )
+   if ( ctx->isNested && ctx->isRepeater )
    {
-      wstPointerSetFocus( pointer, 
-                          0,    // surface 
-                          0,    // x
-                          0     // y
-                        );
-   }
-   
-   if ( pointer->pointerSurface )
-   {
-      wstPointerSetPointer( pointer, 0 );
-   }   
-   
-   pointer->pointerX= 0;
-   pointer->pointerY= 0;
-   
-   if ( compositor->invalidateCB )
-   {
-      compositor->invalidateCB( compositor, compositor->invalidateUserData );
-   }
+      if ( ctx->seat )
+      {
+         WstSurface *surface= 0;
+         
+         for( int i= 0; i < ctx->surfaces.size(); ++i )
+         {
+            if ( ctx->surfaces[i]->surfaceNested == surfaceNested )
+            {
+               surface= ctx->surfaces[i];
+               break;
+            }
+         }
+         if ( surface )
+         {
+            uint32_t serial;
+            struct wl_resource *resource;
+            struct wl_client *surfaceClient;
 
-   pointer->entered= false;
+            serial= wl_display_next_serial( ctx->display );
+            surfaceClient= wl_resource_get_client( pointer->focus->resource );
+            wl_resource_for_each( resource, &pointer->focusResourceList )
+            {
+               wl_pointer_send_leave( resource, serial, pointer->focus->resource );
+            }
+            pointer->focus= 0;
+         }
+      }
+   }
+   else
+   {
+      if ( pointer->focus )
+      {
+         wstPointerSetFocus( pointer, 
+                             0,    // surface 
+                             0,    // x
+                             0     // y
+                           );
+      }
+      
+      if ( pointer->pointerSurface )
+      {
+         wstPointerSetPointer( pointer, 0 );
+      }   
+      
+      pointer->pointerX= 0;
+      pointer->pointerY= 0;
+      
+      if ( ctx->invalidateCB )
+      {
+         ctx->invalidateCB( ctx, ctx->invalidateUserData );
+      }
+
+      pointer->entered= false;
+   }
 }
 
 static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t y )
@@ -5514,16 +5706,15 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
    }
 }
 
-static void wstProcessPointerButtonEvent( WstPointer *pointer, uint32_t button, uint32_t buttonState )
+static void wstProcessPointerButtonEvent( WstPointer *pointer, uint32_t button, uint32_t buttonState, uint32_t time )
 {
    WstCompositor *compositor= pointer->seat->compositor;
-   uint32_t serial, time, btnState;
+   uint32_t serial, btnState;
    struct wl_resource *resource;
    
    if ( pointer->focus )
    {
       serial= wl_display_next_serial( compositor->display );
-      time= (uint32_t)wstGetCurrentTimeMillis();
       btnState= (buttonState == WstPointer_buttonState_depressed) 
                 ? WL_POINTER_BUTTON_STATE_PRESSED 
                 : WL_POINTER_BUTTON_STATE_RELEASED;
