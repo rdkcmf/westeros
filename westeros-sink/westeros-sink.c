@@ -141,12 +141,19 @@ static void shellSurfaceStatus(void *data,
    sink->zorder= zorder;
 }
 
+static void shellGetSurfacesDone(void *data, struct wl_simple_shell *wl_simple_shell )
+{
+   WESTEROS_UNUSED(data);
+   WESTEROS_UNUSED(wl_simple_shell);
+}
+
 static const struct wl_simple_shell_listener shellListener = 
 {
    shellSurfaceId,
    shellSurfaceCreated,
    shellSurfaceDestroyed,
-   shellSurfaceStatus
+   shellSurfaceStatus,
+   shellGetSurfacesDone
 };
 
 static void registryHandleGlobal(void *data, 

@@ -165,6 +165,8 @@ static void wstISimpleShellGetSurfaces(struct wl_client *client, struct wl_resou
       uint32_t surfaceId= (*it);
       wstISimpleShellGetStatus(client, resource, surfaceId );
    }
+   
+   wl_simple_shell_send_get_surfaces_done( resource );
 }
 
 static void destroy_shell(struct wl_resource *resource)
