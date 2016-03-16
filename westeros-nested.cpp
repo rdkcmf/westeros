@@ -402,12 +402,20 @@ static void simpleShellSurfaceStatus(void *data,
    WST_UNUSED(zorder);
 }                               
 
+static void simpleShellGetSurfacesDone(void *data,
+                                       struct wl_simple_shell *wl_simple_shell)
+{
+   WST_UNUSED(data);
+   WST_UNUSED(wl_simple_shell);
+}                                        
+
 static const struct wl_simple_shell_listener simpleShellListener = 
 {
    simpleShellSurfaceId,
    simpleShellSurfaceCreated,
    simpleShellSurfaceDestroyed,
-   simpleShellSurfaceStatus
+   simpleShellSurfaceStatus,
+   simpleShellGetSurfacesDone
 };
 
 static void registryHandleGlobal(void *data, 

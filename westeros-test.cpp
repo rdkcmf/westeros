@@ -54,13 +54,16 @@ static void shellSurfaceStatus(void *data,
                                int32_t height,
                                wl_fixed_t opacity,
                                wl_fixed_t zorder);
+static void shellGetSurfacesDone(void *data,
+                                 struct wl_simple_shell *wl_simple_shell);
 
 static const struct wl_simple_shell_listener shellListener = 
 {
    shellSurfaceId,
    shellSurfaceCreated,
    shellSurfaceDestroyed,
-   shellSurfaceStatus
+   shellSurfaceStatus,
+   shellGetSurfacesDone
 };
 
 typedef enum _InputState
@@ -328,6 +331,13 @@ static void shellSurfaceStatus(void *data,
    ctx->surfaceOpacity= wl_fixed_to_double(opacity);
    ctx->surfaceZOrder= wl_fixed_to_double(zorder);   
 }                               
+
+static void shellGetSurfacesDone(void *data,
+                                 struct wl_simple_shell *wl_simple_shell)
+{
+	AppCtx *ctx = (AppCtx*)data;
+	printf("shell: get all surfaces done\n");
+}                                        
 
 #define NON_BLOCKING_ENABLED (0)
 #define NON_BLOCKING_DISABLED (1)

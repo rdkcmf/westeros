@@ -78,6 +78,13 @@
       <arg name="opacity" type="fixed"/>
       <arg name="zorder" type="fixed"/>
     </event>
+    <!-- Raised to mark the end of surface_status events for get_surfaces -->
+    <event name="get_surfaces_done">
+      <description summary="marks end of surface_status events for get_surfaces">
+   This event is sent to a client that issues a get_surfaces request after the last
+   surface_status event is sent.
+      </description>
+    </event>
     
     <!-- Set the name of a surface -->
     <request name="set_name">
