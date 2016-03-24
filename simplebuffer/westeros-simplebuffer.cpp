@@ -20,7 +20,7 @@ struct wl_sb
 
 static void wstISimpleBufferDestroy(struct wl_client *client, struct wl_resource *resource);
 
-const static struct wl_buffer_interface bufferInterface {
+const static struct wl_buffer_interface bufferInterface = {
    wstISimpleBufferDestroy
 };
 
