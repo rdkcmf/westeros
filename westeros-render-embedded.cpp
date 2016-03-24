@@ -18,6 +18,10 @@
   #include "westeros-gl.h"
 #endif
 
+#if defined (WESTEROS_PLATFORM_RPI)
+  #include <bcm_host.h>
+#endif
+
 #include "westeros-render.h"
 #include "wayland-server.h"
 #include "wayland-client.h"
@@ -257,6 +261,7 @@ struct _WstRenderSurface
    float zorder;
    
    bool dirty;
+   bool invertedY;
 };
 
 typedef struct _WstRendererEMB
@@ -733,6 +738,93 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
       bufferHeight= value;
    }                                                        
    
+   #if defined (WESTEROS_PLATFORM_RPI)
+   /* 
+    * The Userland wayland-egl implementation used on RPI isn't complete in that it does not
+    * support the use of eglCreateImageKHR using the wl_buffer resource and target EGL_WAYLAND_BUFFER_WL.
+    * For that reason we need to supply a different method for handling buffers received via
+    * wayland-egl on RPI
+    */
+   {
+      int stride;
+      GLint formatGL;
+      GLenum type;
+
+      switch ( format )
+      {
+         case EGL_TEXTURE_RGB:
+         case EGL_TEXTURE_RGBA:
+            {
+               stride= 4*bufferWidth;
+               formatGL= GL_BGRA_EXT;
+               type= GL_UNSIGNED_BYTE;
+
+               if ( surface->mem &&
+                    (
+                      (surface->memWidth != bufferWidth) ||
+                      (surface->memHeight != bufferHeight) ||
+                      (surface->memFormatGL != formatGL) ||
+                      (surface->memType != type)
+                    )
+                  )
+               {
+                  free( surface->mem );
+                  surface->mem= 0;
+               }
+               if ( !surface->mem )
+               {
+                  surface->mem= (unsigned char*)malloc( stride*bufferHeight );
+               }
+               if ( surface->mem )
+               {
+                  DISPMANX_RESOURCE_HANDLE_T dispResource;
+                  VC_RECT_T rect;
+                  
+                  rect.x= 0;
+                  rect.y= 0;
+                  rect.width= bufferWidth;
+                  rect.height= bufferHeight;
+                  
+                  dispResource= vc_dispmanx_get_handle_from_wl_buffer(resource);
+                  if ( dispResource != DISPMANX_NO_HANDLE )
+                  {
+                     int result= vc_dispmanx_resource_read_data( dispResource,
+                                                                 &rect,
+                                                                 surface->mem,
+                                                                 stride );
+                     if ( result >= 0 )
+                     {
+                        surface->bufferWidth= bufferWidth;
+                        surface->bufferHeight= bufferHeight;
+                        surface->memWidth= bufferWidth;
+                        surface->memHeight= bufferHeight;
+                        surface->memFormatGL= formatGL;
+                        surface->memType= type;
+                        surface->memDirty= true;
+                     }
+                  }
+               }            
+            }
+            break;
+         
+         case EGL_TEXTURE_Y_U_V_WL:
+            printf("wstRendererEMBCommitWaylandEGL: EGL_TEXTURE_Y_U_V_WL not supported\n" );
+            break;
+          
+         case EGL_TEXTURE_Y_UV_WL:
+            printf("wstRendererEMBCommitWaylandEGL: EGL_TEXTURE_Y_UV_WL not supported\n" );
+            break;
+            
+         case EGL_TEXTURE_Y_XUXV_WL:
+            printf("wstRendererEMBCommitWaylandEGL: EGL_TEXTURE_Y_XUXV_WL not supported\n" );
+            break;
+            
+         default:
+            printf("wstRendererEMBCommitWaylandEGL: unknown texture format: %x\n", format );
+            break;
+      }
+   }
+   #else
    if ( (surface->bufferWidth != bufferWidth) || (surface->bufferHeight != bufferHeight) )
    {
       surface->bufferWidth= bufferWidth;
@@ -787,8 +879,12 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
          printf("wstRendererEMBCommitWaylandEGL: unknown texture format: %x\n", format );
          break;
    }
+   #endif
+   #if WESTEROS_INVERTED_Y
+   surface->invertedY= true;
+   #endif
 }
-#endif
+#endif                                           
 
 #ifdef ENABLE_SBPROTOCOL
 static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *surface, struct wl_resource *resource )
@@ -860,6 +956,9 @@ static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *
          }
       }
    }
+   #if WESTEROS_INVERTED_Y
+   surface->invertedY= true;
+   #endif
 }
 #endif
 
@@ -911,13 +1010,23 @@ static void wstRenderEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurfac
       { surface->x+surface->width, surface->y+surface->height }
    };
  
-   const float uv[4][2] = 
+   const float uvNormal[4][2] = 
    {
       { 0,  0 },
       { 1,  0 },
       { 0,  1 },
       { 1,  1 }
    };
+
+   const float uvYInverted[4][2] = 
+   {
+      { 0,  1 },
+      { 1,  1 },
+      { 0,  0 },
+      { 1,  0 }
+   };
+
+   const float *uv= surface->invertedY ? (const float*)uvYInverted : (const float*)uvNormal;   
    
    renderer->textureShader->draw( renderer->renderer->resW,
                                   renderer->renderer->resH,
@@ -975,6 +1084,11 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
    
    glFlush();
    glFinish();
+
+   #if defined (WESTEROS_PLATFORM_RPI)   
+   // Are glFlush and glFinish unreliable on RPI with userland?
+   usleep(20000);
+   #endif
 }
 
 static WstRenderSurface* wstRendererSurfaceCreate( WstRenderer *renderer )

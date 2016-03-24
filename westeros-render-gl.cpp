@@ -18,6 +18,10 @@
   #include "westeros-gl.h"
 #endif
 
+#if defined (WESTEROS_PLATFORM_RPI)
+  #include <bcm_host.h>
+#endif
+
 #include "westeros-render.h"
 #include "wayland-server.h"
 #include "wayland-client.h"
@@ -144,6 +148,7 @@ struct _WstRenderSurface
 
    int vertexCoordsDirty;
    int texCoordsDirty;
+   bool invertedY;
 
    GLfloat vertexCoords[4*2];
    GLfloat textureCoords[4*2];
@@ -220,7 +225,6 @@ static WstShader* wstGetShaderForClass( WstRendererGL *renderer, int shaderClass
 static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass );
 static void wstDestroyShader( WstRendererGL *renderer, WstShader *shader );
 static unsigned int wstCreateGLShader(const char *pShaderSource, bool isVertexShader );
-
 
 static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
 {
@@ -627,6 +631,7 @@ static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface 
          {
             free( surface->mem );
             surface->mem= 0;
+            surface->vertexCoordsDirty= 1;
          }
          if ( !surface->mem )
          {
@@ -691,7 +696,6 @@ static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface 
             surface->memHeight= height;
             surface->memFormatGL= formatGL;
             surface->memType= type;
-            surface->vertexCoordsDirty= 1;
             surface->memDirty= true;
          }      
          
@@ -738,6 +742,94 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
       surface->eglImage= 0;
    }
 
+   #if defined (WESTEROS_PLATFORM_RPI)
+   /* 
+    * The Userland wayland-egl implementation used on RPI isn't complete in that it does not
+    * support the use of eglCreateImageKHR using the wl_buffer resource and target EGL_WAYLAND_BUFFER_WL.
+    * For that reason we need to supply a different path for handling buffers received via
+    * wayland-egl on RPI
+    */
+   {
+      int stride;
+      GLint formatGL;
+      GLenum type;
+
+      switch ( format )
+      {
+         case EGL_TEXTURE_RGB:
+         case EGL_TEXTURE_RGBA:
+            {
+               stride= 4*bufferWidth;
+               formatGL= GL_BGRA_EXT;
+               type= GL_UNSIGNED_BYTE;
+
+               if ( surface->mem &&
+                    (
+                      (surface->memWidth != bufferWidth) ||
+                      (surface->memHeight != bufferHeight) ||
+                      (surface->memFormatGL != formatGL) ||
+                      (surface->memType != type)
+                    )
+                  )
+               {
+                  free( surface->mem );
+                  surface->mem= 0;
+                  surface->vertexCoordsDirty= 1;
+               }
+               if ( !surface->mem )
+               {
+                  surface->mem= (unsigned char*)malloc( stride*bufferHeight );
+               }
+               if ( surface->mem )
+               {
+                  DISPMANX_RESOURCE_HANDLE_T dispResource;
+                  VC_RECT_T rect;
+                  
+                  rect.x= 0;
+                  rect.y= 0;
+                  rect.width= bufferWidth;
+                  rect.height= bufferHeight;
+
+                  dispResource= vc_dispmanx_get_handle_from_wl_buffer(resource);
+                  if ( dispResource != DISPMANX_NO_HANDLE )
+                  {
+                     int result= vc_dispmanx_resource_read_data( dispResource,
+                                                                 &rect,
+                                                                 surface->mem,
+                                                                 stride );
+                     if ( result >= 0 )
+                     {
+                        surface->bufferWidth= bufferWidth;
+                        surface->bufferHeight= bufferHeight;
+                        surface->memWidth= bufferWidth;
+                        surface->memHeight= bufferHeight;
+                        surface->memFormatGL= formatGL;
+                        surface->memType= type;
+                        surface->memDirty= true;
+                     }
+                  }
+               }            
+            }
+            break;
+         
+         case EGL_TEXTURE_Y_U_V_WL:
+            printf("wstRendererGLCommitWaylandEGL: EGL_TEXTURE_Y_U_V_WL not supported\n" );
+            break;
+          
+         case EGL_TEXTURE_Y_UV_WL:
+            printf("wstRendererGLCommitWaylandEGL: EGL_TEXTURE_Y_UV_WL not supported\n" );
+            break;
+            
+         case EGL_TEXTURE_Y_XUXV_WL:
+            printf("wstRendererGLCommitWaylandEGL: EGL_TEXTURE_Y_XUXV_WL not supported\n" );
+            break;
+            
+         default:
+            printf("wstRendererGLCommitWaylandEGL: unknown texture format: %x\n", format );
+            break;
+      }
+   }
+   #else
    switch ( format )
    {
       case EGL_TEXTURE_RGB:
@@ -779,6 +871,10 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
          printf("wstRendererGLCommitWaylandEGL: unknown texture format: %x\n", format );
          break;
    }
+   #endif
+   #if WESTEROS_INVERTED_Y
+   surface->invertedY= true;
+   #endif
 }
 #endif
 
@@ -853,6 +949,9 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
          }
       }
    }
+   #if WESTEROS_INVERTED_Y
+   surface->invertedY= true;
+   #endif
 }
 #endif
 
@@ -1076,6 +1175,12 @@ static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext
            WST_TRACE("surf textureLocation %d\n", surf->textureLocation);
 
            textureCoords= surf->textureCoords;
+
+           if ( surf->invertedY )
+           {
+              tymin= 1.0f-tymin;
+              tymax= 1.0f-tymax;
+           }
            
            textureCoords[0]= txmin;
            textureCoords[1]= tymin;
@@ -2006,6 +2111,11 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
  
    glFlush();
    glFinish();
+
+   #if defined (WESTEROS_PLATFORM_RPI)   
+   // Are glFlush and glFinish unreliable on RPI with userland?
+   usleep(20000);
+   #endif
 
    #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
    eglSwapBuffers(rendererGL->eglDisplay, rendererGL->eglSurface);
