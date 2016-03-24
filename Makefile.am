@@ -17,7 +17,7 @@ endif
 
 if HAVE_WAYLAND_EGL
 AM_CXXFLAGS += -DWESTEROS_HAVE_WAYLAND_EGL
-WSTEGL_LIBS= -lwayland-egl
+WSTEGL_LIBS= -lwayland-egl -lGLESv2
 else
 WSTEGL_LIBS= -lwesteros_egl
 endif
@@ -122,7 +122,7 @@ libwesteros_render_gl_la_includedir = $(includedir)
 if HAVE_GLEW
 libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
 else
-libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lwesteros_gl -lwesteros_nxpl $(WAYLAND_SERVER_LIBS)
+libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lwesteros_gl $(WESTEROS_PLATFORM_LIBS) $(WAYLAND_SERVER_LIBS)
 endif
 if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_gl_la_LDFLAGS += -lwesteros_simplebuffer_server
@@ -134,7 +134,7 @@ libwesteros_render_embedded_la_includedir = $(includedir)
 if HAVE_GLEW
 libwesteros_render_embedded_la_LDFLAGS= -lEGL -lglut -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
 else
-libwesteros_render_embedded_la_LDFLAGS= -lEGL -lwesteros_gl -lwesteros_nxpl $(WAYLAND_SERVER_LIBS)
+libwesteros_render_embedded_la_LDFLAGS= -lEGL -lwesteros_gl $(WESTEROS_PLATFORM_LIBS) $(WAYLAND_SERVER_LIBS)
 endif
 if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_embedded_la_LDFLAGS += -lwesteros_simplebuffer_server

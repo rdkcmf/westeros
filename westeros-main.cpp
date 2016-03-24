@@ -188,7 +188,7 @@ void* inputThread( void *data )
    int mouseAccel= 1;
    int mouseX= 0;
    int mouseY= 0;
-   unsigned int outputWidth, outputHeight;
+   unsigned int outputWidth= 0, outputHeight= 0;
    bool mouseEnterSent= false;
    bool mouseMoved= false;
    
