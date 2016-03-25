@@ -101,7 +101,8 @@ char *getDevice( const char *devType, const char *path, char *devName )
 {
    int len, lenDev;
    char *devPathName= 0;
-   
+   if ( !devType || !devName )
+      return devPathName; 
    len= strlen( devName );
    
    lenDev= strlen(devType);
@@ -125,45 +126,28 @@ char *getDevice( const char *devType, const char *path, char *devName )
 
 void getDevices( std::vector<pollfd> &deviceFds )
 {
-   int maxName, buffSize;
    DIR * dir;
-   struct dirent *entry= 0;
    struct dirent *result;
    char *devPathName;
-   
-   maxName= pathconf( inputByPath, _PC_NAME_MAX );
-   if ( maxName < 0 ) maxName= 255;
-   
-   buffSize= offsetof(struct dirent, d_name) + maxName + 1;
-   entry= (struct dirent*)malloc( buffSize );
-   if ( entry )
+   if ( NULL != (dir = opendir( inputByPath )) )
    {
-      dir= opendir( inputByPath );
-      if ( dir )
+      while( NULL != (result = readdir( dir )) )
       {
-         while( !readdir_r( dir, entry, &result) )
+         printf(" [%s] ", result->d_name);
+         devPathName= getDevice( kbdDev, inputByPath, result->d_name );
+         if ( !devPathName )
          {
-            if ( !result )
-            {
-               break;
-            }
-            
-            devPathName= getDevice( kbdDev, inputByPath, result->d_name );
-            if ( !devPathName )
-            {
-               devPathName= getDevice( mouseDev, inputByPath, result->d_name );
-            }
-
-            if ( devPathName )
-            {
-               openDevice( deviceFds, devPathName );
-               free( devPathName );
-            }
+            devPathName= getDevice( mouseDev, inputByPath, result->d_name );
          }
-         
-         closedir( dir );
+
+         if ( devPathName )
+         {
+            openDevice( deviceFds, devPathName );
+            free( devPathName );
+         }
       }
-      free( entry );
+
+      closedir( dir );
    }
 }
 
