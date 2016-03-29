@@ -756,7 +756,7 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
          case EGL_TEXTURE_RGBA:
             {
                stride= 4*bufferWidth;
-               formatGL= GL_BGRA_EXT;
+               formatGL= GL_RGBA;
                type= GL_UNSIGNED_BYTE;
 
                if ( surface->mem &&
@@ -1084,11 +1084,6 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
    
    glFlush();
    glFinish();
-
-   #if defined (WESTEROS_PLATFORM_RPI)   
-   // Are glFlush and glFinish unreliable on RPI with userland?
-   usleep(20000);
-   #endif
 }
 
 static WstRenderSurface* wstRendererSurfaceCreate( WstRenderer *renderer )
