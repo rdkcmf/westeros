@@ -312,6 +312,11 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
 #ifdef ENABLE_SBPROTOCOL
 static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *surface, struct wl_resource *resource );
 #endif
+#if defined (WESTEROS_PLATFORM_RPI)
+static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSurface *surface, 
+                                         DISPMANX_RESOURCE_HANDLE_T dispResource,
+                                         EGLint format, int bufferWidth, int bufferHeight );
+#endif                                         
 static void wstRenderEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface );
 
 #define RED_SIZE (8)
@@ -746,82 +751,10 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
     * wayland-egl on RPI
     */
    {
-      int stride;
-      GLint formatGL;
-      GLenum type;
-
-      switch ( format )
+      DISPMANX_RESOURCE_HANDLE_T dispResource= vc_dispmanx_get_handle_from_wl_buffer(resource);
+      if ( dispResource != DISPMANX_NO_HANDLE )
       {
-         case EGL_TEXTURE_RGB:
-         case EGL_TEXTURE_RGBA:
-            {
-               stride= 4*bufferWidth;
-               formatGL= GL_RGBA;
-               type= GL_UNSIGNED_BYTE;
-
-               if ( surface->mem &&
-                    (
-                      (surface->memWidth != bufferWidth) ||
-                      (surface->memHeight != bufferHeight) ||
-                      (surface->memFormatGL != formatGL) ||
-                      (surface->memType != type)
-                    )
-                  )
-               {
-                  free( surface->mem );
-                  surface->mem= 0;
-               }
-               if ( !surface->mem )
-               {
-                  surface->mem= (unsigned char*)malloc( stride*bufferHeight );
-               }
-               if ( surface->mem )
-               {
-                  DISPMANX_RESOURCE_HANDLE_T dispResource;
-                  VC_RECT_T rect;
-                  
-                  rect.x= 0;
-                  rect.y= 0;
-                  rect.width= bufferWidth;
-                  rect.height= bufferHeight;
-                  
-                  dispResource= vc_dispmanx_get_handle_from_wl_buffer(resource);
-                  if ( dispResource != DISPMANX_NO_HANDLE )
-                  {
-                     int result= vc_dispmanx_resource_read_data( dispResource,
-                                                                 &rect,
-                                                                 surface->mem,
-                                                                 stride );
-                     if ( result >= 0 )
-                     {
-                        surface->bufferWidth= bufferWidth;
-                        surface->bufferHeight= bufferHeight;
-                        surface->memWidth= bufferWidth;
-                        surface->memHeight= bufferHeight;
-                        surface->memFormatGL= formatGL;
-                        surface->memType= type;
-                        surface->memDirty= true;
-                     }
-                  }
-               }            
-            }
-            break;
-         
-         case EGL_TEXTURE_Y_U_V_WL:
-            printf("wstRendererEMBCommitWaylandEGL: EGL_TEXTURE_Y_U_V_WL not supported\n" );
-            break;
-          
-         case EGL_TEXTURE_Y_UV_WL:
-            printf("wstRendererEMBCommitWaylandEGL: EGL_TEXTURE_Y_UV_WL not supported\n" );
-            break;
-            
-         case EGL_TEXTURE_Y_XUXV_WL:
-            printf("wstRendererEMBCommitWaylandEGL: EGL_TEXTURE_Y_XUXV_WL not supported\n" );
-            break;
-            
-         default:
-            printf("wstRendererEMBCommitWaylandEGL: unknown texture format: %x\n", format );
-            break;
+         wstRendererEMBCommitDispmanx( renderer, surface, dispResource, format, bufferWidth, bufferHeight );
       }
    }
    #else
@@ -891,9 +824,40 @@ static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *
 {
    struct wl_sb_buffer *sbBuffer;
    void *deviceBuffer;
+   int bufferWidth, bufferHeight;
+
+   #if defined WESTEROS_PLATFORM_RPI
+   int sbFormat;
+   EGLint format= EGL_NONE;
+   
+   sbBuffer= WstSBBufferGet( resource );
+   if ( sbBuffer )
+   {
+      deviceBuffer= WstSBBufferGetBuffer( sbBuffer );
+      if ( deviceBuffer )
+      {
+         DISPMANX_RESOURCE_HANDLE_T dispResource= (DISPMANX_RESOURCE_HANDLE_T)deviceBuffer;
+         
+         bufferWidth= WstSBBufferGetWidth( sbBuffer );
+         bufferHeight= WstSBBufferGetHeight( sbBuffer );
+         sbFormat= WstSBBufferGetFormat( sbBuffer );
+         switch( sbFormat )
+         {
+            case WL_SB_FORMAT_ARGB8888:
+            case WL_SB_FORMAT_XRGB8888:
+               format= EGL_TEXTURE_RGBA;
+               break;
+         }
+         
+         if ( format != EGL_NONE )
+         {
+            wstRendererEMBCommitDispmanx( renderer, surface, dispResource, format, bufferWidth, bufferHeight );
+         }
+      }
+   }
+   #else
    EGLNativePixmapType eglPixmap= 0;
    EGLImageKHR eglImage= 0;
-   int bufferWidth, bufferHeight;
    bool resize= false;
    
    sbBuffer= WstSBBufferGet( resource );
@@ -956,9 +920,94 @@ static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *
          }
       }
    }
+   #endif
    #if WESTEROS_INVERTED_Y
    surface->invertedY= true;
    #endif
+}
+#endif
+
+#if defined (WESTEROS_PLATFORM_RPI)
+static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSurface *surface, 
+                                         DISPMANX_RESOURCE_HANDLE_T dispResource,
+                                         EGLint format, int bufferWidth, int bufferHeight )
+{
+   int stride;
+   GLint formatGL;
+   GLenum type;
+
+   if ( dispResource != DISPMANX_NO_HANDLE )
+   {
+      switch ( format )
+      {
+         case EGL_TEXTURE_RGB:
+         case EGL_TEXTURE_RGBA:
+            {
+               stride= 4*bufferWidth;
+               formatGL= GL_RGBA;
+               type= GL_UNSIGNED_BYTE;
+
+               if ( surface->mem &&
+                    (
+                      (surface->memWidth != bufferWidth) ||
+                      (surface->memHeight != bufferHeight) ||
+                      (surface->memFormatGL != formatGL) ||
+                      (surface->memType != type)
+                    )
+                  )
+               {
+                  free( surface->mem );
+                  surface->mem= 0;
+               }
+               if ( !surface->mem )
+               {
+                  surface->mem= (unsigned char*)malloc( stride*bufferHeight );
+               }
+               if ( surface->mem )
+               {
+                  VC_RECT_T rect;
+                  int result;
+                  
+                  rect.x= 0;
+                  rect.y= 0;
+                  rect.width= bufferWidth;
+                  rect.height= bufferHeight;
+
+                  result= vc_dispmanx_resource_read_data( dispResource,
+                                                          &rect,
+                                                          surface->mem,
+                                                          stride );
+                  if ( result >= 0 )
+                  {
+                     surface->bufferWidth= bufferWidth;
+                     surface->bufferHeight= bufferHeight;
+                     surface->memWidth= bufferWidth;
+                     surface->memHeight= bufferHeight;
+                     surface->memFormatGL= formatGL;
+                     surface->memType= type;
+                     surface->memDirty= true;
+                  }
+               }            
+            }
+            break;
+         
+         case EGL_TEXTURE_Y_U_V_WL:
+            printf("wstRendererEMBCommitDispmanx: EGL_TEXTURE_Y_U_V_WL not supported\n" );
+            break;
+          
+         case EGL_TEXTURE_Y_UV_WL:
+            printf("wstRendererEMBCommitDispmanx: EGL_TEXTURE_Y_UV_WL not supported\n" );
+            break;
+            
+         case EGL_TEXTURE_Y_XUXV_WL:
+            printf("wstRendererEMBCommitDispmanx: EGL_TEXTURE_Y_XUXV_WL not supported\n" );
+            break;
+            
+         default:
+            printf("wstRendererEMBCommitDispmanx: unknown texture format: %x\n", format );
+            break;
+      }
+   }
 }
 #endif
 

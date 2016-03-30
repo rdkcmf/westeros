@@ -4,6 +4,7 @@
 #include <pthread.h>
 
 #include "wayland-client.h"
+#include "wayland-server.h"
 
 typedef struct _WstCompositor WstCompositor;
 typedef struct _WstNestedConnection WstNestedConnection;
@@ -99,6 +100,7 @@ void WstNestedConnectionAttachAndCommit( WstNestedConnection *nc,
                                           
 void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
                                                struct wl_surface *surface,
+                                               struct wl_resource *bufferRemote,
                                                void *deviceBuffer,
                                                uint32_t format,
                                                int32_t stride,

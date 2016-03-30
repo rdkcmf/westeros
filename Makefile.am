@@ -99,6 +99,7 @@ libwesteros_compositor_la_LDFLAGS= \
    $(WAYLAND_SERVER_LIBS) \
    $(WAYLAND_CLIENT_LIBS) \
    $(XKBCOMMON_LIBS) \
+   $(WESTEROS_COMPOSITOR_EXTRA_LIBS) \
    -lxkbcommon \
    -lwesteros_simpleshell_server \
    -lpthread \
