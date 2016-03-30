@@ -804,8 +804,26 @@ void WstNestedConnectionAttachAndCommit( WstNestedConnection *nc,
    }
 }                                          
 
+static void buffer_release( void *data, struct wl_buffer *buffer )
+{
+   struct wl_resource *bufferRemote= (struct wl_resource*)data;
+   
+   wl_buffer_destroy( buffer );
+   
+   if ( bufferRemote )
+   {
+      wl_buffer_send_release( bufferRemote );
+   }
+}
+
+static struct wl_buffer_listener wl_buffer_listener= 
+{
+   buffer_release
+};
+
 void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
                                                struct wl_surface *surface,
+                                               struct wl_resource *bufferRemote,
                                                void *deviceBuffer,
                                                uint32_t format,
                                                int32_t stride,
@@ -827,11 +845,18 @@ void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
                                    format );
       if ( buffer )
       {
+         if ( bufferRemote )
+         {
+            wl_buffer_add_listener( buffer, &wl_buffer_listener, bufferRemote );
+         }
          wl_surface_attach( surface, buffer, 0, 0 );
          wl_surface_damage( surface, x, y, width, height);
          wl_surface_commit( surface );
          wl_display_flush( nc->display );
-         wl_buffer_destroy( buffer );
+         if ( !bufferRemote )
+         {
+            wl_buffer_destroy( buffer );
+         }
       }
       #endif
    }

@@ -19,6 +19,13 @@
 
 #include <xkbcommon/xkbcommon.h>
 
+#if defined (WESTEROS_HAVE_WAYLAND_EGL) && defined (WESTEROS_PLATFORM_RPI)
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <bcm_host.h>
+#include "wayland-egl.h"
+#endif
+
 #include "wayland-server.h"
 #include "westeros-nested.h"
 #ifdef ENABLE_SBPROTOCOL
@@ -328,7 +335,7 @@ static const char* wstGetNextNestedDisplayName(void);
 static void* wstCompositorThread( void *arg );
 static long long wstGetCurrentTimeMillis(void);
 static void wstCompositorProcessEvents( WstCompositor *ctx );
-static void wstCompositorComposeFrame( WstCompositor *ctx );
+static void wstCompositorComposeFrame( WstCompositor *ctx, uint32_t frameTime );
 static int wstCompositorDisplayTimeOut( void *data );
 static void wstCompositorScheduleRepaint( WstCompositor *ctx );
 static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
@@ -855,7 +862,7 @@ bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater )
       if ( isRepeater )
       {
          ctx->isNested= true;
-         #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && !defined(WESTEROS_PLATFORM_RPI)
          // We can't do renderless composition with wayland-egl.  Ignore the
          // request and configure for nested composition with gl renderer
          ctx->isRepeater= false;
@@ -1539,6 +1546,11 @@ bool WstCompositorStart( WstCompositor *ctx )
       if ( !ctx->rendererModule && ctx->isEmbedded )
       {
          ctx->rendererModule= strdup("libwesteros_render_embedded.so.0");
+      }
+
+      if ( !ctx->rendererModule && ctx->isRepeater )
+      {
+         ctx->rendererModule= strdup("libwesteros_render_gl.so.0");      
       }
       
       if ( !ctx->rendererModule && !ctx->isRepeater )
@@ -2343,8 +2355,12 @@ static void* wstCompositorThread( void *arg )
          sprintf( arg1, "%p", ctx->nativeWindow );
       }
    }
-   
+
+   #if !defined (WESTEROS_PLATFORM_RPI)
+   // We normally don't need a renderer when acting as a nested repeater, but for RPI
+   // we need to initialize the renderer so that the wl_dispmanx protocol gets added
    if ( !ctx->isRepeater )
+   #endif
    {
       ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->display, ctx->nc );
       if ( !ctx->renderer )
@@ -2628,12 +2644,8 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
    pthread_mutex_unlock( &ctx->mutex );
 }
 
-static void wstCompositorComposeFrame( WstCompositor *ctx )
+static void wstCompositorComposeFrame( WstCompositor *ctx, uint32_t frameTime )
 {
-   uint32_t frameTime;
-   
-   frameTime= (uint32_t)wstGetCurrentTimeMillis();
-   
    pthread_mutex_lock( &ctx->mutex );
 
    ctx->needRepaint= false;
@@ -2666,6 +2678,10 @@ static void wstCompositorComposeFrame( WstCompositor *ctx )
 static int wstCompositorDisplayTimeOut( void *data )
 {
    WstCompositor *ctx= (WstCompositor*)data;
+   long long frameTime, now;
+   int nextFrameDelay;
+   
+   frameTime= wstGetCurrentTimeMillis();   
    
    wstCompositorProcessEvents( ctx );
    
@@ -2681,7 +2697,7 @@ static int wstCompositorDisplayTimeOut( void *data )
    
    if ( ctx->needRepaint )
    {
-      wstCompositorComposeFrame( ctx );
+      wstCompositorComposeFrame( ctx, (uint32_t)frameTime );
       
       if ( ctx->invalidateCB )
       {
@@ -2689,8 +2705,12 @@ static int wstCompositorDisplayTimeOut( void *data )
       }
    }
 
+   now= wstGetCurrentTimeMillis();
+   nextFrameDelay= (ctx->framePeriodMillis-(now-frameTime));
+   if ( nextFrameDelay < 1 ) nextFrameDelay= 1;
+
    pthread_mutex_lock( &ctx->mutex );
-   wl_event_source_timer_update( ctx->displayTimer, ctx->framePeriodMillis );
+   wl_event_source_timer_update( ctx->displayTimer, nextFrameDelay );
    pthread_mutex_unlock( &ctx->mutex );
    
    return 0;
@@ -3592,6 +3612,8 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
 
    if ( surface->attachedBufferResource )
    {
+      pthread_mutex_lock( &surface->compositor->mutex );
+      
       if ( surface->compositor->isRepeater )
       {
          if ( wl_resource_instance_of( surface->attachedBufferResource, &wl_buffer_interface, &shm_buffer_interface ) )
@@ -3636,6 +3658,7 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                   
                   WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
                                                       surface->surfaceNested,
+                                                      0,
                                                       deviceBuffer,
                                                       format,
                                                       stride,
@@ -3647,20 +3670,96 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
             }
          }
          #endif
+         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && defined (WESTEROS_PLATFORM_RPI)
+         else if ( vc_dispmanx_get_handle_from_wl_buffer( surface->attachedBufferResource ) )
+         {
+            static PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL= 0;
+            static EGLDisplay eglDisplay= EGL_NO_DISPLAY;
+            
+            if ( !eglQueryWaylandBufferWL )
+            {
+               eglQueryWaylandBufferWL= (PFNEGLQUERYWAYLANDBUFFERWL)eglGetProcAddress("eglQueryWaylandBufferWL");
+               eglDisplay= eglGetDisplay( EGL_DEFAULT_DISPLAY );
+            }
+            
+            if ( eglQueryWaylandBufferWL && eglDisplay )
+            {
+               EGLint value;
+               uint32_t format= 0;
+               int stride, bufferWidth= 0, bufferHeight= 0;
+               void *deviceBuffer;
+
+               if (EGL_TRUE == eglQueryWaylandBufferWL( eglDisplay,
+                                                        surface->attachedBufferResource,
+                                                        EGL_WIDTH,
+                                                        &value ) )
+               {
+                  bufferWidth= value;
+               }
+
+               if (EGL_TRUE == eglQueryWaylandBufferWL( eglDisplay,
+                                                        surface->attachedBufferResource,
+                                                        EGL_HEIGHT,
+                                                        &value ) )
+               {
+                  bufferHeight= value;
+               }
+
+               if (EGL_TRUE == eglQueryWaylandBufferWL( eglDisplay,
+                                                        surface->attachedBufferResource,
+                                                        EGL_TEXTURE_FORMAT,
+                                                        &value ) )
+               {
+                  switch ( value )
+                  {
+                     case EGL_TEXTURE_RGB:
+                        format= WL_SB_FORMAT_XRGB8888;
+                        stride= bufferWidth*4;
+                        break;
+                     case EGL_TEXTURE_RGBA:
+                        format= WL_SB_FORMAT_ARGB8888;
+                        stride= bufferWidth*4;
+                        break;
+                  }
+               }
+            
+               deviceBuffer= (void*)vc_dispmanx_get_handle_from_wl_buffer( surface->attachedBufferResource );
+               if ( deviceBuffer &&
+                    (format != 0) &&
+                    (bufferWidth != 0) &&
+                    (bufferHeight != 0) )
+               {
+                  WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
+                                                      surface->surfaceNested,
+                                                      surface->attachedBufferResource,
+                                                      deviceBuffer,
+                                                      format,
+                                                      stride,
+                                                      0,
+                                                      0,
+                                                      bufferWidth, 
+                                                      bufferHeight );
+
+                  surface->attachedBufferResource= 0;
+               }
+            }
+         }
+         #endif
       }
       else
       {
-         pthread_mutex_lock( &surface->compositor->mutex );
-
          WstRendererSurfaceCommit( surface->renderer, surface->surface, surface->attachedBufferResource );
-
-         pthread_mutex_unlock( &surface->compositor->mutex );
       }
 
       wstCompositorScheduleRepaint( surface->compositor );
+
+      if ( surface->attachedBufferResource )
+      {      
+         wl_buffer_send_release( surface->attachedBufferResource );
+         surface->attachedBufferResource= 0;
+      }
       
-      wl_buffer_send_release( surface->attachedBufferResource );
-      surface->attachedBufferResource= 0;
+      pthread_mutex_unlock( &surface->compositor->mutex );
    }
 }
 
