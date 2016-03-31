@@ -1923,11 +1923,24 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
       }
       
       pthread_mutex_unlock( &ctx->mutex );
+
+      FILE *pClientLog= 0;
+      char *clientLogName= getenv( "WESTEROS_CAPTURE_CLIENT_STDOUT" );
+      if ( clientLogName )
+      {
+         pClientLog= fopen( clientLogName, "w" );
+         printf("capturing stdout for client %s to file %s\n", args[0], clientLogName );
+      }
       
       // Launch client
       int pid= fork();
       if ( pid == 0 )
       {
+         if ( pClientLog )
+         {
+            dup2( fileno(pClientLog), STDOUT_FILENO );
+         }
+
          rc= execvpe( args[0], args, env );
          if ( rc < 0 )
          {
@@ -1949,6 +1962,11 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
          if ( pidChild != 0 )
          {
             int clientStatus, detail= 0;
+
+            if ( pClientLog )
+            {
+               fclose( pClientLog );
+            }
             
             if ( WIFSIGNALED(status) )
             {
