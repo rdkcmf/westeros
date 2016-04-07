@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 dnl AC_PREREQ([2.65])
-AC_INIT(westeros, version-1.0, jeff_wannamaker@cable.comcast.com,westeros)
+AC_INIT(westeros, 1.0.0, jeff_wannamaker@cable.comcast.com,westeros)
 AC_CONFIG_SRCDIR([])
 AC_CONFIG_HEADERS([cfg/config.h])
 AC_CONFIG_MACRO_DIR([cfg])

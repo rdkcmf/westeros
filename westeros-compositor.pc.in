@@ -7,6 +7,6 @@ includedir=@includedir@
 
 Name: Westeros Compositor
 Description: Westeros Wayland compositor library
-Version: @WESTEROS_VERSION@
+Version: @PACKAGE_VERSION@
 Cflags: -I${includedir}
 Libs: -L${libdir} -lwesteros_compositor
