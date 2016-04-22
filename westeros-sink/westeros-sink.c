@@ -706,19 +706,19 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
 {
    GstWesterosSink *sink= GST_WESTEROS_SINK(gst_pad_get_parent(pad));
 #endif
-   gboolean result= TRUE; 
+   gboolean result= TRUE;
+   gboolean passToDefault= FALSE;
 
    switch (GST_EVENT_TYPE(event))
    {
       case GST_EVENT_FLUSH_START:
          sink->position= 0;
          gst_westeros_sink_soc_flush( sink );
-         gst_event_unref(event);
+         passToDefault= TRUE;
          break;
           
       case GST_EVENT_EOS:
          gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
-         gst_event_unref(event);
          break;
          
       #ifdef USE_GST1
@@ -754,23 +754,26 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
                gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
             }
-
-            gst_event_ref(event);
          }
          break;
-        
-      default:
-         if (sink->parentEventFunc) 
-         {
-            #ifdef USE_GST1
-            result= sink->parentEventFunc(pad, parent, event); 
-            #else
-            result= sink->parentEventFunc(pad, event); 
-            #endif
-         }
+       default:
+         passToDefault= TRUE;
          break;
    }
-  
+
+   if (passToDefault && sink->parentEventFunc)
+   {
+      #ifdef USE_GST1
+      result= sink->parentEventFunc(pad, parent, event);
+      #else
+      result= sink->parentEventFunc(pad, event);
+      #endif
+   }
+   else
+   {
+      gst_event_ref(event);
+   }
+
    #ifndef USE_GST1
    gst_object_unref(sink);
    #endif
