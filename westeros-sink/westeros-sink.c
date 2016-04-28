@@ -878,8 +878,9 @@ static void gst_westeros_sink_unlink(GstPad *pad)
 
 static GstFlowReturn gst_westeros_sink_render(GstBaseSink *base_sink, GstBuffer *buffer)
 {  
-   WESTEROS_UNUSED(base_sink);
-   WESTEROS_UNUSED(buffer);
+   GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
+   
+   gst_westeros_sink_soc_render( sink, buffer );
 
    return GST_FLOW_OK;
 }
