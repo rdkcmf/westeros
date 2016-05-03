@@ -1,3 +1,21 @@
+/*
+ * If not stated otherwise in this file or this component's Licenses.txt file the
+ * following copyright and licenses apply:
+ *
+ * Copyright 2016 RDK Management
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #include <stdlib.h>
 #include <stdio.h>
 #include <memory.h>
@@ -1078,29 +1096,30 @@ static const char *frag_shader_text =
 	"  gl_FragColor = v_color;\n"
 	"}\n";
 
-static GLuint create_shader(AppCtx *ctx, const char *source, GLenum shader_type)
+static GLuint createShader(AppCtx *ctx, GLenum shaderType, const char *shaderSource )
 {
-	GLuint shader;
-	GLint status;
-
-	shader = glCreateShader(shader_type);
-	assert(shader != 0);
-
-	glShaderSource(shader, 1, (const char **) &source, NULL);
-	glCompileShader(shader);
-
-	glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
-	if (!status) {
-		char log[1000];
-		GLsizei len;
-		glGetShaderInfoLog(shader, 1000, &len, log);
-		fprintf(stderr, "Error: compiling %s: %*s\n",
-			shader_type == GL_VERTEX_SHADER ? "vertex" : "fragment",
-			len, log);
-		exit(1);
-	}
-
-	return shader;
+   GLuint shader= 0;
+   GLint shaderStatus;
+   GLsizei length;
+   const logText[1000];
+   
+   shader= glCreateShader( shaderType );
+   if ( shader )
+   {
+      glShaderSource( shader, 1, (const char **)&shaderSource, NULL );
+      glCompileShader( shader );
+      glGetShaderiv( shader, GL_COMPILE_STATUS, &shaderStatus );
+      if ( !shaderStatus )
+      {
+         glGetShaderInfoLog( shader, sizeof(logText), &length, logText );
+         printf("Error compiling %s shader: %*s\n",
+                ((shaderType == GL_VERTEX_SHADER) ? "vertex" : "fragment"),
+                length,
+                logText );
+      }
+   }
+   
+   return shader;
 }
 
 static bool setupGL( AppCtx *ctx )
