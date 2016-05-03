@@ -1,6 +1,8 @@
 #ifndef _WESTEROS_RENDER_H
 #define _WESTEROS_RENDER_H
 
+#include <vector>
+
 #include "wayland-client.h"
 
 /*
@@ -26,6 +28,14 @@ typedef enum _WstRenderer_format
    WstRenderer_format_ARGB4444
 } WstRenderer_format;
 
+typedef struct _WstRect
+{
+   int x;
+   int y;
+   int width;
+   int height;
+} WstRect;
+
 typedef struct _WstRenderer WstRenderer;
 typedef struct _WstRenderSurface WstRenderSurface;
 typedef struct _WstNestedConnection WstNestedConnection;
@@ -44,6 +54,7 @@ typedef void (*WSTMethodSurfaceSetOpacity)( WstRenderer *renderer, WstRenderSurf
 typedef float (*WSTMethodSurfaceGetOpacity)( WstRenderer *renderer, WstRenderSurface *surface, float *opaticty );
 typedef void (*WSTMethodSurfaceSetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float z );
 typedef float (*WSTMethodSurfaceGetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float *z );
+typedef void (*WSTMethodDelegateUpdateScene)( WstRenderer *renderer, std::vector<WstRect> &rects );
 
 typedef struct _WstRenderer
 {
@@ -66,6 +77,7 @@ typedef struct _WstRenderer
    WSTMethodSurfaceGetOpacity surfaceGetOpacity;
    WSTMethodSurfaceSetZOrder surfaceSetZOrder;
    WSTMethodSurfaceGetZOrder surfaceGetZOrder;
+   WSTMethodDelegateUpdateScene delegateUpdateScene;
 
    // For nested composition
    WstNestedConnection *nc;
@@ -73,10 +85,13 @@ typedef struct _WstRenderer
    struct wl_surface *surfaceNested;
    
    // For embedded composition
-   int resW;
-   int resH;
+   int outputX;
+   int outputY;
    float *matrix;
    float alpha;
+   bool fastHint;
+   bool needHolePunch;
+   std::vector<WstRect> rects;
 } WstRenderer;
 
 WstRenderer* WstRendererCreate( const char *moduleName, int argc, char **argv, 
@@ -95,6 +110,7 @@ void WstRendererSurfaceSetOpacity( WstRenderer *renderer, WstRenderSurface *surf
 float WstRendererSurfaceGetOpacity( WstRenderer *renderer, WstRenderSurface *surface, float *opacity );
 void WstRendererSurfaceSetZOrder( WstRenderer *renderer, WstRenderSurface *surface, float z );
 float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surface, float *z );
+void WstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<WstRect> &rects );
 
 #endif
 
