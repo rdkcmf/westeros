@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <memory.h>
 #include <assert.h>
+#include <dlfcn.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -262,6 +263,8 @@ struct _WstRenderSurface
    
    bool dirty;
    bool invertedY;
+   
+   WstRenderSurface *surfaceFast;
 };
 
 typedef struct _WstRendererEMB
@@ -296,14 +299,18 @@ typedef struct _WstRendererEMB
    
    std::vector<WstRenderSurface*> surfaces;
 
+   bool fastPathActive;   
+   WstRenderer *rendererFast;
+
 } WstRendererEMB;
 
 
-static bool wstRenderEMBSetupEGL( WstRendererEMB *renderer );
+static bool wstRendererEMBSetupEGL( WstRendererEMB *renderer );
 static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer );
 static void wstRendererEMBDestroy( WstRendererEMB *renderer );
-static WstRenderSurface *wstRenderEMBCreateSurface(WstRendererEMB *renderer);
-static void wstRenderEMBDestroySurface( WstRendererEMB *renderer, WstRenderSurface *surface );
+static WstRenderSurface *wstRendererEMBCreateSurface(WstRendererEMB *renderer);
+static void wstRendererEMBDestroySurface( WstRendererEMB *renderer, WstRenderSurface *surface );
+static void wstRendererEMBFlushSurface( WstRendererEMB *renderer, WstRenderSurface *surface );
 static void wstRendererEMBCommitShm( WstRendererEMB *renderer, WstRenderSurface *surface, struct wl_resource *resource );
 #if defined (WESTEROS_HAVE_WAYLAND_EGL)
 static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderSurface *surface, 
@@ -317,7 +324,10 @@ static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSur
                                          DISPMANX_RESOURCE_HANDLE_T dispResource,
                                          EGLint format, int bufferWidth, int bufferHeight );
 #endif                                         
-static void wstRenderEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface );
+static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface );
+static void wstRendererInitFastPath( WstRendererEMB *renderer );
+static bool wstRendererActivateFastPath( WstRendererEMB *renderer );
+static void wstRendererDeactivateFastPath( WstRendererEMB *renderer );
 
 #define RED_SIZE (8)
 #define GREEN_SIZE (8)
@@ -435,11 +445,16 @@ static void wstRendererEMBDestroy( WstRendererEMB *renderer )
          renderer->glCtx= 0;
       }
       #endif
+      if ( renderer->rendererFast )
+      {
+         renderer->rendererFast->renderTerm( renderer->rendererFast );
+         renderer->rendererFast= 0;
+      }
       free( renderer );
    }
 }
 
-static WstRenderSurface *wstRenderEMBCreateSurface(WstRendererEMB *renderer)
+static WstRenderSurface *wstRendererEMBCreateSurface(WstRendererEMB *renderer)
 {
     WstRenderSurface *surface= 0;
 
@@ -458,12 +473,38 @@ static WstRenderSurface *wstRenderEMBCreateSurface(WstRendererEMB *renderer)
         surface->zorder= 0.5;
         
         surface->dirty= true;
+        
+        if ( renderer->fastPathActive )
+        {
+            surface->surfaceFast= renderer->rendererFast->surfaceCreate( renderer->rendererFast );
+            if ( !surface->surfaceFast )
+            {
+               wstRendererDeactivateFastPath( renderer );
+            }
+        }
     }
    
     return surface;
 }
 
-static void wstRenderEMBDestroySurface( WstRendererEMB *renderer, WstRenderSurface *surface )
+static void wstRendererEMBDestroySurface( WstRendererEMB *renderer, WstRenderSurface *surface )
+{
+    if ( surface )
+    {
+        wstRendererEMBFlushSurface( renderer, surface );
+        if ( renderer->rendererFast )
+        {
+            if ( surface->surfaceFast )
+            {
+               renderer->rendererFast->surfaceDestroy( renderer->rendererFast, surface->surfaceFast );
+               surface->surfaceFast= 0;
+            }
+        }
+        free( surface );
+    }
+}
+
+static void wstRendererEMBFlushSurface( WstRendererEMB *renderer, WstRenderSurface *surface )
 {
     if ( surface )
     {
@@ -491,7 +532,6 @@ static void wstRenderEMBDestroySurface( WstRendererEMB *renderer, WstRenderSurfa
         {
            free( surface->mem );
         }
-        free( surface );
     }
 }
 
@@ -1011,7 +1051,7 @@ static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSur
 }
 #endif
 
-static void wstRenderEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface )
+static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface )
 {
    if ( (surface->textureId == GL_NONE) || surface->memDirty )
    {
@@ -1074,13 +1114,21 @@ static void wstRenderEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurfac
       { 0,  0 },
       { 1,  0 }
    };
+   
+   const float matrix[4][4] =
+   {
+      {1, 0, 0, 0},
+      {0, 1, 0, 0},
+      {0, 0, 1, 0},
+      {0, 0, 0, 1}
+   };
 
    const float *uv= surface->invertedY ? (const float*)uvYInverted : (const float*)uvNormal;   
    
-   renderer->textureShader->draw( renderer->renderer->resW,
-                                  renderer->renderer->resH,
-                                  renderer->renderer->matrix,
-                                  renderer->renderer->alpha*surface->opacity,
+   renderer->textureShader->draw( renderer->renderer->outputWidth,
+                                  renderer->renderer->outputHeight,
+                                  (float*)matrix,
+                                  surface->opacity,
                                   surface->textureId,
                                   4,
                                   (const float*)verts, 
@@ -1101,6 +1149,21 @@ static void wstRendererTerm( WstRenderer *renderer )
 static void wstRendererUpdateScene( WstRenderer *renderer )
 {
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
+
+   if ( rendererEMB->fastPathActive )
+   {
+      rendererEMB->rendererFast->outputX= renderer->outputX;
+      rendererEMB->rendererFast->outputY= renderer->outputY;
+      rendererEMB->rendererFast->outputWidth= renderer->outputWidth;
+      rendererEMB->rendererFast->outputHeight= renderer->outputHeight;
+      rendererEMB->rendererFast->matrix= renderer->matrix;
+      rendererEMB->rendererFast->alpha= renderer->alpha;
+
+      rendererEMB->rendererFast->delegateUpdateScene( rendererEMB->rendererFast, renderer->rects );
+
+      renderer->needHolePunch= true;
+      return;
+   }
 
    if ( !rendererEMB->textureShader )
    {
@@ -1127,7 +1190,7 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
           )
         )
       {
-         wstRenderEMBRenderSurface( rendererEMB, surface );
+         wstRendererEMBRenderSurface( rendererEMB, surface );
       }
    }
    
@@ -1140,7 +1203,7 @@ static WstRenderSurface* wstRendererSurfaceCreate( WstRenderer *renderer )
    WstRenderSurface *surface;
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
 
-   surface= wstRenderEMBCreateSurface(rendererEMB);
+   surface= wstRendererEMBCreateSurface(rendererEMB);
    
    std::vector<WstRenderSurface*>::iterator it= rendererEMB->surfaces.begin();
    while ( it != rendererEMB->surfaces.end() )
@@ -1171,13 +1234,30 @@ static void wstRendererSurfaceDestroy( WstRenderer *renderer, WstRenderSurface *
       }
    }   
    
-   wstRenderEMBDestroySurface( rendererEMB, surface );
+   wstRendererEMBDestroySurface( rendererEMB, surface );
 }
 
 static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *surface, struct wl_resource *resource )
 {
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
    EGLint value;
+
+   if ( renderer->fastHint && rendererEMB->rendererFast && !rendererEMB->fastPathActive )
+   {
+      rendererEMB->fastPathActive= wstRendererActivateFastPath( rendererEMB );
+   }
+   
+   if ( !renderer->fastHint && rendererEMB->fastPathActive )
+   {
+      wstRendererDeactivateFastPath( rendererEMB );
+      rendererEMB->fastPathActive= false;
+   }
+   
+   if ( rendererEMB->fastPathActive )
+   {
+      rendererEMB->rendererFast->surfaceCommit( rendererEMB->rendererFast, surface->surfaceFast, resource );
+      return;
+   }
 
    if ( wl_shm_buffer_get( resource ) )
    {
@@ -1212,6 +1292,13 @@ static void wstRendererSurfaceSetVisible( WstRenderer *renderer, WstRenderSurfac
    if ( surface )
    {
       surface->visible= visible;
+
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceSetVisible( rendererEMB->rendererFast,
+                                                       surface->surfaceFast,
+                                                       visible );
+      }
    }
 }
 
@@ -1222,6 +1309,13 @@ static bool wstRendererSurfaceGetVisible( WstRenderer *renderer, WstRenderSurfac
 
    if ( surface )
    {
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceGetVisible( rendererEMB->rendererFast,
+                                                       surface->surfaceFast,
+                                                       &surface->visible );
+      }
+
       isVisible= surface->visible;
       
       *visible= isVisible;
@@ -1241,6 +1335,13 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
       surface->width= width;
       surface->height= height;
       surface->dirty= true;
+
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceSetGeometry( rendererEMB->rendererFast,
+                                                        surface->surfaceFast,
+                                                        x, y, width, height );
+      }
    }
 }
 
@@ -1250,6 +1351,16 @@ void wstRendererSurfaceGetGeometry( WstRenderer *renderer, WstRenderSurface *sur
 
    if ( surface )
    {
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceGetGeometry( rendererEMB->rendererFast,
+                                                        surface->surfaceFast,
+                                                        &surface->x,
+                                                        &surface->y,
+                                                        &surface->width,
+                                                        &surface->height );
+      }
+
       *x= surface->x;
       *y= surface->y;
       *width= surface->width;
@@ -1264,6 +1375,13 @@ static void wstRendererSurfaceSetOpacity( WstRenderer *renderer, WstRenderSurfac
    if ( surface )
    {
       surface->opacity= opacity;
+
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceSetOpacity( rendererEMB->rendererFast,
+                                                       surface->surfaceFast,
+                                                       opacity );
+      }
    }
 }
 
@@ -1274,6 +1392,13 @@ static float wstRendererSurfaceGetOpacity( WstRenderer *renderer, WstRenderSurfa
    
    if ( surface )
    {
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceGetOpacity( rendererEMB->rendererFast,
+                                                       surface->surfaceFast,
+                                                       &surface->opacity );
+      }
+
       opacityLevel= surface->opacity;
       
       *opacity= opacityLevel;
@@ -1313,6 +1438,13 @@ static void wstRendererSurfaceSetZOrder( WstRenderer *renderer, WstRenderSurface
          ++it;
       }
       rendererEMB->surfaces.insert(it,surface);
+      
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceSetZOrder( rendererEMB->rendererFast,
+                                                      surface->surfaceFast,
+                                                      z );
+      }
    }
 }
 
@@ -1323,12 +1455,164 @@ static float wstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurfac
    
    if ( surface )
    {
+      if ( surface->surfaceFast )
+      {
+         rendererEMB->rendererFast->surfaceGetZOrder( rendererEMB->rendererFast,
+                                                      surface->surfaceFast,
+                                                      &surface->zorder );
+      }
+
       zLevel= surface->zorder;
       
       *z= zLevel;
    }
    
    return zLevel;
+}
+
+static void wstRendererInitFastPath( WstRendererEMB *renderer )
+{
+   bool error= false;
+   void *module= 0, *init;
+   WstRenderer *rendererFast= 0;
+   int rc;
+
+   char *moduleName= getenv("WESTEROS_FAST_RENDER");
+   if ( moduleName )
+   {
+      module= dlopen( moduleName, RTLD_NOW );
+      if ( !module )
+      {
+         printf("wstRendererInitFastPath: failed to load module (%s)\n", moduleName);
+         printf("  detail: %s\n", dlerror() );
+         error= true;
+         goto exit;
+      }
+      
+      init= dlsym( module, RENDERER_MODULE_INIT );
+      if ( !init )
+      {
+         printf("wstRendererInitFastPath: failed to find module (%s) method (%s)\n", moduleName, RENDERER_MODULE_INIT );
+         printf("  detail: %s\n", dlerror() );
+         error= true;
+         goto exit;
+      }
+      
+      rendererFast= (WstRenderer*)calloc( 1, sizeof(WstRenderer) );
+      if ( !rendererFast )
+      {
+         printf("wstRendererInitFastPath: no memory to allocate WstRender\n");
+         error= true;
+         goto exit;
+      }
+
+      rendererFast->outputWidth= renderer->renderer->outputWidth;
+      rendererFast->outputHeight= renderer->renderer->outputHeight;
+      rendererFast->nativeWindow= renderer->renderer->nativeWindow;
+      
+      rc= ((WSTMethodRenderInit)init)( rendererFast, 0, NULL );
+      if ( rc )
+      {
+         printf("wstRendererInitFastPath: module (%s) init failed: %d\n", moduleName, rc );
+         error= true;
+         goto exit;
+      }
+      
+      if ( !rendererFast->delegateUpdateScene )
+      {
+         printf("wstRendererInitFastPath: module (%s) does not support delegation\n", moduleName );
+         error= true;
+         goto exit;
+      }
+      
+      renderer->rendererFast= rendererFast;
+      
+      printf("wstRendererInitFastPath: module (%s) loaded and intialized\n", moduleName );
+   }
+   
+exit:
+
+   if ( error )
+   {
+      if ( rendererFast )
+      {
+         if ( rendererFast->renderer )
+         {
+            rendererFast->renderTerm( rendererFast );
+            rendererFast->renderer= 0;
+         }
+         free( rendererFast );      
+      }
+      
+      if ( module )
+      {
+         dlclose( module );
+      }
+   }
+}
+
+static bool wstRendererActivateFastPath( WstRendererEMB *renderer )
+{
+   bool result= false;
+   
+   if ( renderer->rendererFast )
+   {
+      result= true;
+      
+      // Create fast surface instances for each surface
+      int imax= renderer->surfaces.size();
+      for( int i= 0; i < imax; ++i )
+      {
+         WstRenderSurface *surface= renderer->surfaces[i];
+
+         if ( !surface->surfaceFast )
+         {
+            surface->surfaceFast= renderer->rendererFast->surfaceCreate( renderer->rendererFast );
+            if ( !surface->surfaceFast )
+            {
+               result= false;
+               break;
+            }
+            renderer->rendererFast->surfaceSetGeometry( renderer->rendererFast,
+                                                        surface->surfaceFast,
+                                                        surface->x, 
+                                                        surface->y, 
+                                                        surface->width, 
+                                                        surface->height );
+         }
+      }
+      
+      if ( result )
+      {
+         // Discard texture info for all surfaces
+         for( int i= 0; i < imax; ++i )
+         {
+            WstRenderSurface *surface= renderer->surfaces[i];
+
+            wstRendererEMBFlushSurface( renderer, surface );
+         }
+      }
+   }
+   
+   return result;
+}
+
+static void wstRendererDeactivateFastPath( WstRendererEMB *renderer )
+{
+   if ( renderer->rendererFast )
+   {
+      // Discard all fast surfaces
+      int imax= renderer->surfaces.size();
+      for( int i= 0; i < imax; ++i )
+      {
+         WstRenderSurface *surface= renderer->surfaces[i];
+         if ( surface->surfaceFast )
+         {
+            renderer->rendererFast->surfaceDestroy( renderer->rendererFast, surface->surfaceFast );
+            surface->surfaceFast= 0;
+         }
+      }
+   }
 }
 
 extern "C"
@@ -1356,6 +1640,8 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceGetOpacity= wstRendererSurfaceGetOpacity;
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
+      
+      wstRendererInitFastPath( rendererEMB );
    }
    else
    {

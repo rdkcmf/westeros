@@ -206,4 +206,8 @@ float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surf
    return renderer->surfaceGetZOrder( renderer, surface, z );
 }
 
+void WstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<WstRect> &rects )
+{
+   renderer->delegateUpdateScene( renderer, rects );
+}
 

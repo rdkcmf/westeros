@@ -1480,7 +1480,11 @@ exit:
    return result;   
 }
 
-bool WstCompositorComposeEmbedded( WstCompositor *ctx, int width, int height, int resW, int resH, float *matrix, float alpha )
+bool WstCompositorComposeEmbedded( WstCompositor *ctx, 
+                                   int x, int y, int width, int height,
+                                   float *matrix, float alpha, 
+                                   unsigned int hints, 
+                                   bool *needHolePunch, std::vector<WstRect> &rects )
 {
    bool result= false;
 
@@ -1508,12 +1512,18 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx, int width, int height, in
       {   
          ctx->renderer->outputWidth= width;
          ctx->renderer->outputHeight= height;
-         ctx->renderer->resW= resW;
-         ctx->renderer->resH= resH;
+         ctx->renderer->outputX= x;
+         ctx->renderer->outputY= y;
          ctx->renderer->matrix= matrix;
          ctx->renderer->alpha= alpha;
+         ctx->renderer->fastHint= (hints & WstHints_noRotation);
+         ctx->renderer->needHolePunch= false;
+         ctx->renderer->rects.clear();
          
          WstRendererUpdateScene( ctx->renderer );
+         
+         *needHolePunch= ctx->renderer->needHolePunch;
+         rects= ctx->renderer->rects;
       }
       
       pthread_mutex_unlock( &ctx->mutex );
@@ -3307,6 +3317,13 @@ static void wstSurfaceDestroy( WstSurface *surface )
    
    if (--surface->refCount > 0)
       return;
+
+   // Release any attached buffer
+   if ( surface->attachedBufferResource )
+   {      
+      wl_buffer_send_release( surface->attachedBufferResource );
+      surface->attachedBufferResource= 0;
+   }
 
    // Remove from pointer focus
    if ( ctx->seat->pointer &&
@@ -5799,12 +5816,6 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
          wl_fixed_t xFixed, yFixed;
 
          WstRendererSurfaceGetGeometry( compositor->renderer, pointer->focus->surface, &sx, &sy, &sw, &sh );
-         
-         if ( compositor->isEmbedded )
-         {
-            x= (x*compositor->renderer->resW/compositor->renderer->outputWidth);
-            y= (y*compositor->renderer->resH/compositor->renderer->outputHeight);
-         }
          
          xFixed= wl_fixed_from_int( x-sx );
          yFixed= wl_fixed_from_int( y-sy );
