@@ -770,6 +770,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                ) 
             {
                sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
+               sink->position= GST_TIME_AS_NSECONDS(segmentStart);
                gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
             }
          }
