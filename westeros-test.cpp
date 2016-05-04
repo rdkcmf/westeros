@@ -1101,7 +1101,7 @@ static GLuint createShader(AppCtx *ctx, GLenum shaderType, const char *shaderSou
    GLuint shader= 0;
    GLint shaderStatus;
    GLsizei length;
-   const logText[1000];
+   char logText[1000];
    
    shader= glCreateShader( shaderType );
    if ( shader )
@@ -1129,8 +1129,8 @@ static bool setupGL( AppCtx *ctx )
 	GLuint program;
 	GLint status;
 
-	frag= create_shader(ctx, frag_shader_text, GL_FRAGMENT_SHADER);
-	vert= create_shader(ctx, vert_shader_text, GL_VERTEX_SHADER);
+	frag= createShader(ctx, GL_FRAGMENT_SHADER, frag_shader_text);
+	vert= createShader(ctx, GL_VERTEX_SHADER, vert_shader_text);
 
 	program= glCreateProgram();
 	glAttachShader(program, frag);
