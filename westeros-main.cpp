@@ -29,6 +29,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/inotify.h>
 #include <fcntl.h>
 #include <linux/input.h>
 
@@ -95,9 +96,7 @@ static void showUsage()
 }
 
 #if defined (WESTEROS_PLATFORM_EMBEDDED)
-static const char *inputByPath= "/dev/input/by-path/";
-static const char *kbdDev= "event-kbd";
-static const char *mouseDev= "event-mouse";
+static const char *inputPath= "/dev/input/";
 
 int openDevice( std::vector<pollfd> &deviceFds, const char *devPathName )
 {
@@ -115,28 +114,21 @@ int openDevice( std::vector<pollfd> &deviceFds, const char *devPathName )
    }
 }
 
-char *getDevice( const char *devType, const char *path, char *devName )
+char *getDevice( const char *path, char *devName )
 {
    int len, lenDev;
    char *devPathName= 0;
-   if ( !devType || !devName )
+   if ( !devName )
       return devPathName; 
    len= strlen( devName );
    
-   lenDev= strlen(devType);
-   if ( len > lenDev )
+   devPathName= (char *)malloc( strlen(path)+len+1);
+   if ( devPathName )
    {
-     if ( !strncmp( devName+len-lenDev, devType, lenDev) )
-     {
-        devPathName= (char *)malloc( strlen(path)+len+1);
-        if ( devPathName )
-        {
-           strcpy( devPathName, path );
-           strcat( devPathName, devName );
-           
-           printf( "found %s: %s\n", devType, devPathName );           
-        }
-     }
+      strcpy( devPathName, path );
+      strcat( devPathName, devName );
+     
+      printf( "found %s\n", devPathName );           
    }
    
    return devPathName;
@@ -147,21 +139,25 @@ void getDevices( std::vector<pollfd> &deviceFds )
    DIR * dir;
    struct dirent *result;
    char *devPathName;
-   if ( NULL != (dir = opendir( inputByPath )) )
+   int devNum;
+   if ( NULL != (dir = opendir( inputPath )) )
    {
       while( NULL != (result = readdir( dir )) )
       {
-         printf(" [%s] ", result->d_name);
-         devPathName= getDevice( kbdDev, inputByPath, result->d_name );
-         if ( !devPathName )
+         int len= strlen( result->d_name );
+         if ( (len >= 5) && !strncmp(result->d_name, "event", 5) )
          {
-            devPathName= getDevice( mouseDev, inputByPath, result->d_name );
-         }
+            if ( sscanf( result->d_name, "event%d", &devNum ) == 1 )
+            {
+               printf(" [%s] ", result->d_name);
+               devPathName= getDevice( inputPath, result->d_name );
 
-         if ( devPathName )
-         {
-            openDevice( deviceFds, devPathName );
-            free( devPathName );
+               if ( devPathName )
+               {
+                  openDevice( deviceFds, devPathName );
+                  free( devPathName );
+               }
+            }
          }
       }
 
@@ -183,7 +179,7 @@ void releaseDevices( std::vector<pollfd> &deviceFds )
 void* inputThread( void *data )
 {
    InputCtx *inCtx= (InputCtx*)data;
-   int deviceCount= inCtx->deviceFds.size();
+   int deviceCount;
    int i, n;
    input_event e;
    unsigned int keyModifiers= 0;
@@ -193,8 +189,21 @@ void* inputThread( void *data )
    unsigned int outputWidth= 0, outputHeight= 0;
    bool mouseEnterSent= false;
    bool mouseMoved= false;
+   int notifyFd= -1, watchFd=-1;
+   char intfyEvent[512];
+   pollfd pfd;
    
    inCtx->started= true;
+
+   notifyFd= inotify_init();
+   if ( notifyFd >= 0 )
+   {
+      pfd.fd= notifyFd;
+      watchFd= inotify_add_watch( notifyFd, inputPath, IN_CREATE | IN_DELETE );
+      inCtx->deviceFds.push_back( pfd );
+   }
+
+   deviceCount= inCtx->deviceFds.size();
       
    while( !inCtx->stopRequested )
    {
@@ -211,152 +220,185 @@ void* inputThread( void *data )
          {
             if ( inCtx->deviceFds[i].revents & POLLIN )
             {
-               n= read( inCtx->deviceFds[i].fd, &e, sizeof(input_event) );
-               if ( n > 0 )
+               if ( inCtx->deviceFds[i].fd == notifyFd )
                {
-                  switch( e.type )
+                  // A hotplug event has occurred
+                  n= read( notifyFd, &intfyEvent, sizeof(intfyEvent) );
+                  if ( n >= sizeof(struct inotify_event) )
                   {
-                     case EV_KEY:
-                        switch( e.code )
-                        {
-                           case BTN_LEFT:
-                           case BTN_RIGHT:
-                           case BTN_MIDDLE:
-                           case BTN_SIDE:
-                           case BTN_EXTRA:
+                     struct inotify_event *iev= (struct inotify_event*)intfyEvent;
+                     if ( (iev->len >= 5) && !strncmp( iev->name, "event", 5 ) )
+                     {
+                        // Re-discover devices                        
+                        printf("inotify: mask %x (%s) wd %d (%d)\n", iev->mask, iev->name, iev->wd, watchFd );
+                        inCtx->deviceFds.pop_back();
+                        releaseDevices( inCtx->deviceFds );
+                        usleep( 10000 );
+                        getDevices( inCtx->deviceFds );
+                        inCtx->deviceFds.push_back( pfd );
+                        deviceCount= inCtx->deviceFds.size();
+                     }
+                  }
+               }
+               else
+               {
+                  n= read( inCtx->deviceFds[i].fd, &e, sizeof(input_event) );
+                  if ( n > 0 )
+                  {
+                     switch( e.type )
+                     {
+                        case EV_KEY:
+                           switch( e.code )
+                           {
+                              case BTN_LEFT:
+                              case BTN_RIGHT:
+                              case BTN_MIDDLE:
+                              case BTN_SIDE:
+                              case BTN_EXTRA:
+                                 {
+                                    unsigned int keyCode= e.code;
+                                    unsigned int keyState;
+                                    
+                                    if ( !mouseEnterSent )
+                                    {
+                                       WstCompositorPointerEnter( inCtx->wctx );
+                                       mouseEnterSent= true;
+                                    }
+                                    switch ( e.value )
+                                    {
+                                       case 0:
+                                          keyState= WstKeyboard_keyState_released;
+                                          break;
+                                       case 1:
+                                          keyState= WstKeyboard_keyState_depressed;
+                                          break;
+                                       default:
+                                          keyState= WstKeyboard_keyState_none;
+                                          break;
+                                    }
+
+                                    if ( keyState != WstKeyboard_keyState_none )
+                                    {
+                                       WstCompositorPointerButtonEvent( inCtx->wctx, keyCode, keyState );
+                                    }
+                                 }
+                                 break;
+                              default:
+                                 {
+                                    int keyCode= e.code;
+                                    unsigned int keyState;
+
+                                    switch( keyCode )
+                                    {
+                                       case KEY_LEFTSHIFT:
+                                       case KEY_RIGHTSHIFT:
+                                          if ( e.value )
+                                             keyModifiers |= WstKeyboard_shift;
+                                          else
+                                             keyModifiers &= ~WstKeyboard_shift;
+                                          break;
+                                          
+                                       case KEY_LEFTCTRL:
+                                       case KEY_RIGHTCTRL:
+                                          if ( e.value )
+                                             keyModifiers |= WstKeyboard_ctrl;
+                                          else
+                                             keyModifiers &= ~WstKeyboard_ctrl;
+                                          break;
+
+                                       case KEY_LEFTALT:
+                                       case KEY_RIGHTALT:
+                                          if ( e.value )
+                                             keyModifiers |= WstKeyboard_alt;
+                                          else
+                                             keyModifiers &= ~WstKeyboard_alt;
+                                          break;
+                                        default:
+                                           {
+                                             switch ( e.value )
+                                             {
+                                                case 0:
+                                                   keyState= WstKeyboard_keyState_released;
+                                                   break;
+                                                case 1:
+                                                   keyState= WstKeyboard_keyState_depressed;
+                                                   break;
+                                                default:
+                                                   keyState= WstKeyboard_keyState_none;
+                                                   break;
+                                             }
+
+                                             if ( keyState != WstKeyboard_keyState_none )
+                                             {
+                                                WstCompositorKeyEvent( inCtx->wctx,
+                                                                       keyCode,
+                                                                       keyState,
+                                                                       keyModifiers );
+                                             }                                          
+                                           }
+                                           break;
+                                    }                                 
+                                 }
+                                 break;
+                           }
+                           break;
+                        case EV_REL:
+                           if ( !outputWidth || !outputHeight )
+                           {
+                              WstCompositorGetOutputSize( inCtx->wctx, &outputWidth, &outputHeight );
+                           }
+                           switch( e.code )
+                           {
+                              case REL_X:
+                                 mouseX= mouseX + e.value * mouseAccel;
+                                 if ( mouseX < 0 ) mouseX= 0;
+                                 if ( mouseX > outputWidth ) mouseX= outputWidth;
+                                 mouseMoved= true;
+                                 break;
+                              case REL_Y:
+                                 mouseY= mouseY + e.value * mouseAccel;
+                                 if ( mouseY < 0 ) mouseY= 0;
+                                 if ( mouseY > outputHeight ) mouseY= outputHeight;
+                                 mouseMoved= true;
+                                 break;
+                              default:
+                                 break;
+                           }
+                           break;
+                        case EV_SYN:
+                           {
+                              if ( mouseMoved )
                               {
-                                 unsigned int keyCode= e.code;
-                                 unsigned int keyState;
-                                 
                                  if ( !mouseEnterSent )
                                  {
                                     WstCompositorPointerEnter( inCtx->wctx );
                                     mouseEnterSent= true;
                                  }
-                                 switch ( e.value )
-                                 {
-                                    case 0:
-                                       keyState= WstKeyboard_keyState_released;
-                                       break;
-                                    case 1:
-                                       keyState= WstKeyboard_keyState_depressed;
-                                       break;
-                                    default:
-                                       keyState= WstKeyboard_keyState_none;
-                                       break;
-                                 }
 
-                                 if ( keyState != WstKeyboard_keyState_none )
-                                 {
-                                    WstCompositorPointerButtonEvent( inCtx->wctx, keyCode, keyState );
-                                 }
+                                 WstCompositorPointerMoveEvent( inCtx->wctx, mouseX, mouseY );
+                                 
+                                 mouseMoved= false;
                               }
-                              break;
-                           default:
-                              {
-                                 int keyCode= e.code;
-                                 unsigned int keyState;
-
-                                 switch( keyCode )
-                                 {
-                                    case KEY_LEFTSHIFT:
-                                    case KEY_RIGHTSHIFT:
-                                       if ( e.value )
-                                          keyModifiers |= WstKeyboard_shift;
-                                       else
-                                          keyModifiers &= ~WstKeyboard_shift;
-                                       break;
-                                       
-                                    case KEY_LEFTCTRL:
-                                    case KEY_RIGHTCTRL:
-                                       if ( e.value )
-                                          keyModifiers |= WstKeyboard_ctrl;
-                                       else
-                                          keyModifiers &= ~WstKeyboard_ctrl;
-                                       break;
-
-                                    case KEY_LEFTALT:
-                                    case KEY_RIGHTALT:
-                                       if ( e.value )
-                                          keyModifiers |= WstKeyboard_alt;
-                                       else
-                                          keyModifiers &= ~WstKeyboard_alt;
-                                       break;
-                                     default:
-                                        {
-                                          switch ( e.value )
-                                          {
-                                             case 0:
-                                                keyState= WstKeyboard_keyState_released;
-                                                break;
-                                             case 1:
-                                                keyState= WstKeyboard_keyState_depressed;
-                                                break;
-                                             default:
-                                                keyState= WstKeyboard_keyState_none;
-                                                break;
-                                          }
-
-                                          if ( keyState != WstKeyboard_keyState_none )
-                                          {
-                                             WstCompositorKeyEvent( inCtx->wctx,
-                                                                    keyCode,
-                                                                    keyState,
-                                                                    keyModifiers );
-                                          }                                          
-                                        }
-                                        break;
-                                 }                                 
-                              }
-                              break;
-                        }
-                        break;
-                     case EV_REL:
-                        if ( !outputWidth || !outputHeight )
-                        {
-                           WstCompositorGetOutputSize( inCtx->wctx, &outputWidth, &outputHeight );
-                        }
-                        switch( e.code )
-                        {
-                           case REL_X:
-                              mouseX= mouseX + e.value * mouseAccel;
-                              if ( mouseX < 0 ) mouseX= 0;
-                              if ( mouseX > outputWidth ) mouseX= outputWidth;
-                              mouseMoved= true;
-                              break;
-                           case REL_Y:
-                              mouseY= mouseY + e.value * mouseAccel;
-                              if ( mouseY < 0 ) mouseY= 0;
-                              if ( mouseY > outputHeight ) mouseY= outputHeight;
-                              mouseMoved= true;
-                              break;
-                           default:
-                              break;
-                        }
-                        break;
-                     case EV_SYN:
-                        {
-                           if ( mouseMoved )
-                           {
-                              if ( !mouseEnterSent )
-                              {
-                                 WstCompositorPointerEnter( inCtx->wctx );
-                                 mouseEnterSent= true;
-                              }
-
-                              WstCompositorPointerMoveEvent( inCtx->wctx, mouseX, mouseY );
-                              
-                              mouseMoved= false;
                            }
-                        }
-                        break;
-                     default:
-                        break;
+                           break;
+                        default:
+                           break;
+                     }
                   }
-               }
+               }               
             }
          }
       }
+   }
+   
+   if ( notifyFd )
+   {
+      if ( watchFd )
+      {
+         inotify_rm_watch( notifyFd, watchFd );
+      }
+      inCtx->deviceFds.pop_back();
+      close( notifyFd );
    }
    
    return NULL;
