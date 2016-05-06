@@ -329,7 +329,7 @@ public:
     glUniform1i(mTextureYLoc, 1);
     glActiveTexture(GL_TEXTURE2); 
     glBindTexture(GL_TEXTURE_2D, textureUVId);
-    glUniform1i(mTextureYLoc, 2);
+    glUniform1i(mTextureUVLoc, 2);
     glVertexAttribPointer(mPosLoc, 2, GL_FLOAT, GL_FALSE, 0, pos);
     glVertexAttribPointer(mTexYLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
     glVertexAttribPointer(mTexUVLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
@@ -1369,10 +1369,10 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
       if ( surface->visible && 
           (
             #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
-            surface->eglImage ||
+            surface->eglImage[0] ||
             #endif
             surface->memDirty ||
-            (surface->textureId != GL_NONE)
+            (surface->textureId[0] != GL_NONE)
           )
         )
       {

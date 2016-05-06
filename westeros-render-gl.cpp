@@ -2273,10 +2273,10 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
       if ( surface->visible && 
           (
             #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
-            surface->eglImage ||
+            surface->eglImage[0] ||
             #endif
             surface->memDirty ||
-            (surface->textureId != GL_NONE)
+            (surface->textureId[0] != GL_NONE)
           )
         )
       {

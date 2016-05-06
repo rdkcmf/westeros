@@ -38,17 +38,18 @@
 #include <EGL/eglext.h>
 #endif
 
-#if defined (WESTEROS_PLATFORM_EMBEDDED)
-  #include "westeros-gl.h"
-#endif
-
 #if !defined (WESTEROS_PLATFORM_EMBEDDED)
 #include <GL/glew.h>
 #include <GL/glut.h>
 #include <GL/freeglut.h>
-#include <GL/gl.h>
-#include <GL/glext.h>
 #include <X11/Xlib.h>
+#elif defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h> 
+#endif
+
+#if defined (WESTEROS_PLATFORM_EMBEDDED)
+  #include "westeros-gl.h"
 #endif
 
 #include <vector>
@@ -1116,10 +1117,12 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
                       appCtx->eglSurface, 
                       appCtx->eglContext );
 
-      #if !defined (WESTEROS_PLATFORM_EMBEDDED)
+      GLfloat priorColor[4];
+      glGetFloatv( GL_COLOR_CLEAR_VALUE, priorColor );
+      glBlendFuncSeparate( GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE );
       glClearColor( 0.0, 0.0, 0.0, 0.0 );
       glClear( GL_COLOR_BUFFER_BIT );
-      #endif
+      glEnable(GL_BLEND);
 
       appCtx->rects.clear();
       WstCompositorComposeEmbedded( wctx, 
@@ -1132,6 +1135,8 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
                                     hints,
                                     &needHolePunch,
                                     appCtx->rects );
+
+      glClearColor( priorColor[0], priorColor[1], priorColor[2], priorColor[3] );   
 
       eglSwapBuffers(appCtx->eglDisplay, appCtx->eglSurface);
    }   

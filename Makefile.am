@@ -84,6 +84,9 @@ westeros_LDFLAGS += -lglut -lGL -lGLEW -lX11 -lEGL
 endif
 if !HAVE_GLEW
 westeros_LDFLAGS += -lEGL -lwesteros_gl
+if HAVE_WAYLAND_EGL
+westeros_LDFLAGS += -lGLESv2
+endif
 endif
 
 ## --- Sample client -------
