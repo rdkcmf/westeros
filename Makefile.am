@@ -80,7 +80,10 @@ westeros_LDFLAGS= \
    $(WAYLAND_SERVER_LIBS) \
    -lwesteros_compositor
 if HAVE_GLEW
-westeros_LDFLAGS += -lglut -lGL -lGLEW -lX11
+westeros_LDFLAGS += -lglut -lGL -lGLEW -lX11 -lEGL
+endif
+if !HAVE_GLEW
+westeros_LDFLAGS += -lEGL -lwesteros_gl
 endif
 
 ## --- Sample client -------
@@ -152,7 +155,7 @@ libwesteros_render_embedded_la_includedir = $(includedir)
 if HAVE_GLEW
 libwesteros_render_embedded_la_LDFLAGS= -lEGL -lglut -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
 else
-libwesteros_render_embedded_la_LDFLAGS= -lEGL -lwesteros_gl $(WESTEROS_PLATFORM_LIBS) $(WAYLAND_SERVER_LIBS)
+libwesteros_render_embedded_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lwesteros_gl $(WESTEROS_PLATFORM_LIBS) $(WAYLAND_SERVER_LIBS)
 endif
 if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_embedded_la_LDFLAGS += -lwesteros_simplebuffer_server
