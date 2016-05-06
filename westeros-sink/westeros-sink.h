@@ -73,12 +73,16 @@ struct _GstWesterosSink
 
    gboolean videoStarted;
    gboolean startAfterLink;
+   gboolean flushStarted;
    
    gboolean eosDetected;
    gint64 startPTS;
    gint64 firstPTS;
    gint64 currentPTS;
    gint64 position;
+   gint64 positionSegmentStart;
+
+   unsigned segmentNumber;
    
    struct wl_display *display;
    struct wl_registry *registry;
