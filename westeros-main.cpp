@@ -33,6 +33,15 @@
 #include <fcntl.h>
 #include <linux/input.h>
 
+#if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#endif
+
+#if defined (WESTEROS_PLATFORM_EMBEDDED)
+  #include "westeros-gl.h"
+#endif
+
 #if !defined (WESTEROS_PLATFORM_EMBEDDED)
 #include <GL/glew.h>
 #include <GL/glut.h>
@@ -58,14 +67,26 @@ typedef struct _InputCtx
 typedef struct _AppCtx
 {
    WstCompositor *wctx;
+   bool isEmbedded;
+   float matrix[16];
+   float alpha;
+   int x, y, width, height;
+   std::vector<WstRect> rects;
+   #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+   EGLDisplay eglDisplay;
+   EGLConfig eglConfig;
+   EGLContext eglContext;   
+   EGLSurface eglSurface;
+   #endif
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
    pthread_t inputThreadId;
    InputCtx *inputCtx;
+   WstGLCtx *glCtx;
    #else
    char title[32];
-   void *nativeWindow;
    int glutWindowId;
    #endif
+   void *nativeWindow;
 } AppCtx;
 
 static bool g_running= false;
@@ -85,6 +106,7 @@ static void showUsage()
    printf("  --renderer <module> : renderer module to use\n" );
    printf("  --framerate <rate> : frame rate in fps\n" );
    printf("  --display <name> : name of wayland display created by compositor\n" );
+   printf("  --embedded : operate as an embedded compositor\n" );
    printf("  --repeater : operate as a repeating nested compositor\n" );
    printf("  --nested : operate as a nested compositor\n" );
    printf("  --nestedDisplay <name> : name of wayland display to connect to for nested composition\n" );
@@ -94,6 +116,182 @@ static void showUsage()
    printf("  -? : show usage\n" );
    printf("\n" );
 }
+
+#if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+
+#define RED_SIZE (8)
+#define GREEN_SIZE (8)
+#define BLUE_SIZE (8)
+#define ALPHA_SIZE (8)
+#define DEPTH_SIZE (0)
+
+static void setupEGL( AppCtx *appCtx )
+{
+   EGLBoolean b;
+   EGLint major, minor;
+   EGLint configCount;
+   EGLConfig *eglConfigs= 0;
+   EGLint attr[32];
+   EGLint redSize, greenSize, blueSize, alphaSize, depthSize;
+   EGLint ctxAttrib[3];
+   int i;
+
+   #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   appCtx->glCtx= WstGLInit();
+   if ( !appCtx->glCtx )
+   {
+      printf("Unable to create GL context\n");
+      goto exit;
+   }
+   #endif
+
+   appCtx->eglDisplay= eglGetDisplay( EGL_DEFAULT_DISPLAY );
+   if ( appCtx->eglDisplay == EGL_NO_DISPLAY )
+   {
+      printf("Unable to open default EGL display\n");
+      goto exit;
+   }
+   
+   b= eglInitialize( appCtx->eglDisplay, &major, &minor );
+   if ( !b )
+   {
+      printf("Unable to initialize EGL display\n");
+      goto exit;
+   }
+   printf("Initialized EGL display: major %d minor: %d\n", major, minor );
+
+   b= eglGetConfigs( appCtx->eglDisplay, NULL, 0, &configCount );
+   if ( !b )
+   {
+      printf("Unable to get count of EGL configurations: %X\n", eglGetError() );
+      goto exit;
+   }
+   printf("Number of EGL configurations: %d\n", configCount );
+    
+   eglConfigs= (EGLConfig*)malloc( configCount*sizeof(EGLConfig) );
+   if ( !eglConfigs )
+   {
+      printf("Unable to alloc memory for EGL configurations\n");
+      goto exit;
+   }
+
+   i= 0;
+   attr[i++]= EGL_RED_SIZE;
+   attr[i++]= RED_SIZE;
+   attr[i++]= EGL_GREEN_SIZE;
+   attr[i++]= GREEN_SIZE;
+   attr[i++]= EGL_BLUE_SIZE;
+   attr[i++]= BLUE_SIZE;
+   attr[i++]= EGL_DEPTH_SIZE;
+   attr[i++]= DEPTH_SIZE;
+   attr[i++]= EGL_STENCIL_SIZE;
+   attr[i++]= 0;
+   attr[i++]= EGL_SURFACE_TYPE;
+   attr[i++]= EGL_WINDOW_BIT;
+   attr[i++]= EGL_RENDERABLE_TYPE;
+   attr[i++]= EGL_OPENGL_ES2_BIT;
+   attr[i++]= EGL_NONE;
+    
+   // Get a list of configurations that meet or exceed our requirements
+   b= eglChooseConfig( appCtx->eglDisplay, attr, eglConfigs, configCount, &configCount );
+   if ( !b )
+   {
+      printf("eglChooseConfig failed: %X\n", eglGetError() );
+      goto exit;
+   }
+   printf("eglChooseConfig: matching configurations: %d\n", configCount );
+
+   // Choose a suitable configuration
+   for( i= 0; i < configCount; ++i )
+   {
+      eglGetConfigAttrib( appCtx->eglDisplay, eglConfigs[i], EGL_RED_SIZE, &redSize );
+      eglGetConfigAttrib( appCtx->eglDisplay, eglConfigs[i], EGL_GREEN_SIZE, &greenSize );
+      eglGetConfigAttrib( appCtx->eglDisplay, eglConfigs[i], EGL_BLUE_SIZE, &blueSize );
+      eglGetConfigAttrib( appCtx->eglDisplay, eglConfigs[i], EGL_ALPHA_SIZE, &alphaSize );
+      eglGetConfigAttrib( appCtx->eglDisplay, eglConfigs[i], EGL_DEPTH_SIZE, &depthSize );
+
+      printf("config %d: red: %d green: %d blue: %d alpha: %d depth: %d\n",
+              i, redSize, greenSize, blueSize, alphaSize, depthSize );
+      if ( (redSize == RED_SIZE) &&
+           (greenSize == GREEN_SIZE) &&
+           (blueSize == BLUE_SIZE) &&
+           (alphaSize == ALPHA_SIZE) &&
+           (depthSize == DEPTH_SIZE) )
+      {
+         printf( "choosing config %d\n", i);
+         break;
+      }
+   }
+   if ( i == configCount )
+   {
+      printf("No suitable configuration available\n");
+      goto exit;
+   }
+   appCtx->eglConfig= eglConfigs[i];
+
+   #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   appCtx->nativeWindow= WstGLCreateNativeWindow( appCtx->glCtx, appCtx->x, appCtx->y, appCtx->width, appCtx->height );
+   #endif
+   printf("nativeWindow %p\n", appCtx->nativeWindow );
+   if ( !appCtx->nativeWindow )
+   {
+      goto exit;
+   }
+
+   // Create an EGL window surface
+   appCtx->eglSurface= eglCreateWindowSurface( appCtx->eglDisplay, 
+                                               appCtx->eglConfig, 
+                                               (EGLNativeWindowType)appCtx->nativeWindow,
+                                               NULL );
+   printf("eglSurface %p\n", appCtx->eglSurface );
+   if ( !appCtx->eglSurface )
+   {
+      goto exit;
+   }
+
+   ctxAttrib[0]= EGL_CONTEXT_CLIENT_VERSION;
+   ctxAttrib[1]= 2; // ES2
+   ctxAttrib[2]= EGL_NONE;
+
+   // Create an EGL context
+   appCtx->eglContext= eglCreateContext( appCtx->eglDisplay, appCtx->eglConfig, EGL_NO_CONTEXT, ctxAttrib );
+   if ( appCtx->eglContext == EGL_NO_CONTEXT )
+   {
+      printf( "Unable to create EGL context: %X\n", eglGetError() );
+      goto exit;
+   }
+   printf("eglContext %p\n", appCtx->eglContext );
+
+   eglMakeCurrent( appCtx->eglDisplay, appCtx->eglSurface, appCtx->eglSurface, appCtx->eglContext );
+   
+   eglSwapInterval( appCtx->eglDisplay, 1 );
+   
+exit:
+   
+   return;
+}
+
+static void termEGL( AppCtx *appCtx )
+{
+   if ( appCtx->eglSurface )
+   {
+      eglDestroySurface( appCtx->eglDisplay, appCtx->eglSurface );
+      appCtx->eglSurface= 0;
+   }
+   #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   if ( appCtx->nativeWindow )
+   {
+      WstGLDestroyNativeWindow( appCtx->glCtx, appCtx->nativeWindow );
+      appCtx->nativeWindow= 0;
+   }
+   if ( appCtx->glCtx )
+   {
+      WstGLTerm( appCtx->glCtx );
+      appCtx->glCtx= 0;
+   }
+   #endif
+}
+#endif
 
 #if defined (WESTEROS_PLATFORM_EMBEDDED)
 static const char *inputPath= "/dev/input/";
@@ -759,6 +957,20 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
          #endif
       }
       
+      if ( appCtx->isEmbedded )
+      {
+         appCtx->matrix[0]= 1.0f;
+         appCtx->matrix[5]= 1.0f;
+         appCtx->matrix[10]= 1.0f;
+         appCtx->matrix[15]= 1.0f;
+         appCtx->x= 0;
+         appCtx->y= 0;
+         appCtx->width= 1280;
+         appCtx->height= 720;
+         
+         appCtx->alpha= 1.0f;
+      }
+      
       result= true;
    }
    
@@ -872,11 +1084,59 @@ WstPointerNestedListener pointerListener = {
 
 void compositorTerminated( WstCompositor *wctx, void *userData )
 {
+   AppCtx *appCtx= (AppCtx*)userData;
+
+   #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+   if ( appCtx->isEmbedded )
+   {
+      termEGL( appCtx );
+   }
+   #endif
+
    g_running= false;
 }
 
 void compositorInvalidate( WstCompositor *wctx, void *userData )
 {
+   AppCtx *appCtx= (AppCtx*)userData;
+
+   #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+   if ( appCtx->isEmbedded )
+   {
+      bool needHolePunch= false;
+      int hints= WstHints_noRotation;
+
+      if ( appCtx->eglDisplay == EGL_NO_DISPLAY )
+      {
+         setupEGL( appCtx );
+      }      
+
+      eglMakeCurrent( appCtx->eglDisplay, 
+                      appCtx->eglSurface, 
+                      appCtx->eglSurface, 
+                      appCtx->eglContext );
+
+      #if !defined (WESTEROS_PLATFORM_EMBEDDED)
+      glClearColor( 0.0, 0.0, 0.0, 0.0 );
+      glClear( GL_COLOR_BUFFER_BIT );
+      #endif
+
+      appCtx->rects.clear();
+      WstCompositorComposeEmbedded( wctx, 
+                                    appCtx->x,
+                                    appCtx->y,
+                                    appCtx->width,
+                                    appCtx->height,
+                                    appCtx->matrix,
+                                    appCtx->alpha,
+                                    hints,
+                                    &needHolePunch,
+                                    appCtx->rects );
+
+      eglSwapBuffers(appCtx->eglDisplay, appCtx->eglSurface);
+   }   
+   #endif
+   
    #if !defined (WESTEROS_PLATFORM_EMBEDDED)
    glutSwapBuffers();
    #endif
@@ -919,13 +1179,13 @@ int main( int argc, char** argv)
       goto exit;
    }
    
-   if ( !WstCompositorSetTerminatedCallback( wctx, compositorTerminated, NULL ) )
+   if ( !WstCompositorSetTerminatedCallback( wctx, compositorTerminated, appCtx ) )
    {
       error= true;
       goto exit;
    }
    
-   if ( !WstCompositorSetInvalidateCallback( wctx, compositorInvalidate, NULL ) )
+   if ( !WstCompositorSetInvalidateCallback( wctx, compositorInvalidate, appCtx ) )
    {
       error= true;
       goto exit;
@@ -987,6 +1247,16 @@ int main( int argc, char** argv)
                break;
             }
          }
+      }
+      else
+      if ( (len == 10) && !strncmp( (const char*)argv[i], "--embedded", len) )
+      {
+         if ( !WstCompositorSetIsEmbedded( wctx, true) )
+         {
+            error= true;
+            break;
+         }
+         appCtx->isEmbedded= true;
       }
       else
       if ( (len == 10) && !strncmp( (const char*)argv[i], "--repeater", len) )

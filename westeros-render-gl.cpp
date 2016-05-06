@@ -86,8 +86,9 @@
 typedef enum _WstShaderType
 {
    WstShaderType_texture,
+   WstShaderType_textureYUV,
    WstShaderType_fill,
-   WstShaderType_alphaText
+   WstShaderType_alphaText,
 } WstShaderType;
 
 typedef struct _WstShaderClassBits
@@ -104,6 +105,8 @@ typedef union _WstShaderClass
    int id;
 } WstShaderClass;
 
+#define MAX_TEXTURES (2)
+
 #define WST_MAX_MASK 16
 typedef struct _WstShader
 {
@@ -113,9 +116,11 @@ typedef struct _WstShader
    GLuint fragmentShaderId;
    GLuint mvpLocation;
    GLuint vertexLocation;
-   GLuint textureLocation;
+   GLuint textureLocation[MAX_TEXTURES];
    GLuint fillColorLocation;
    GLuint opacityLocation;
+   GLuint textureUnit0;
+   GLuint textureUnit1;
    GLuint alphaTextColorLocation;
    GLuint maskAttribLocation[WST_MAX_MASK];   
    GLuint maskUniformLocation[WST_MAX_MASK];   
@@ -132,9 +137,10 @@ typedef struct _WstRenderContext
 
 struct _WstRenderSurface
 {
-   GLuint textureId;
    void *nativePixmap;
-   EGLImageKHR eglImage;
+   int textureCount;
+   GLuint textureId[MAX_TEXTURES];
+   EGLImageKHR eglImage[MAX_TEXTURES];
 
    int bufferWidth;
    int bufferHeight;
@@ -158,7 +164,7 @@ struct _WstRenderSurface
    int onScreen;
 
    int vertexLocation;
-   int textureLocation;
+   int textureLocation[MAX_TEXTURES];
 
    float transform[6];
 
@@ -328,7 +334,7 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
       glGetIntegerv( GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &rendererGL->maxTextureUnits );
       WST_TRACE( "WstRendererGL: WstRendererGLCreate: maxTextureUnits=%d\n", rendererGL->maxTextureUnits );
 
-      rendererGL->shaderCacheSize= 4 *                // texture + fill + alphaText + unused
+      rendererGL->shaderCacheSize= 4 *                // texture + textureYUV + fill + alphaText
                                    2 *                // opacity on/off                        
                                    rendererGL->maxTextureUnits;
       rendererGL->shaderCache= (WstShader**)calloc( 1, rendererGL->shaderCacheSize*sizeof(WstShader*) );
@@ -341,7 +347,8 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
       rendererGL->nullShader.fragmentShaderId= GL_NONE;
       rendererGL->nullShader.mvpLocation= -1;
       rendererGL->nullShader.vertexLocation= -1;
-      rendererGL->nullShader.textureLocation= -1;
+      rendererGL->nullShader.textureLocation[0]= -1;
+      rendererGL->nullShader.textureLocation[1]= -1;
       rendererGL->nullShader.fillColorLocation= -1;
       rendererGL->nullShader.opacityLocation= -1;
       for( int i= 0; i < WST_MAX_MASK; ++i )
@@ -452,7 +459,8 @@ static WstRenderSurface *wstRenderGLCreateSurface(WstRendererGL *renderer)
     surface= (WstRenderSurface*)calloc( 1, sizeof(WstRenderSurface) );
     if ( surface )
     {
-        surface->textureId= GL_NONE;
+        surface->textureCount= 1;
+        surface->textureId[0]= GL_NONE;
 
         surface->width= DEFAULT_SURFACE_WIDTH;
         surface->height= DEFAULT_SURFACE_HEIGHT;
@@ -476,16 +484,19 @@ static void wstRenderGLDestroySurface( WstRendererGL *renderer, WstRenderSurface
     WST_UNUSED(renderer);    
     if ( surface )
     {
-        if ( surface->textureId )
+        for( int i= 0; i < MAX_TEXTURES; ++i )
         {
-           glDeleteTextures( 1, &surface->textureId );
-           surface->textureId= GL_NONE;
-        }
-        if ( surface->eglImage )
-        {
-            renderer->eglDestroyImageKHR( renderer->eglDisplay,
-                                          surface->eglImage );
-            surface->eglImage= 0;
+           if ( surface->textureId[i] )
+           {
+              glDeleteTextures( 1, &surface->textureId[i] );
+              surface->textureId[i]= GL_NONE;
+           }
+           if ( surface->eglImage[i] )
+           {
+               renderer->eglDestroyImageKHR( renderer->eglDisplay,
+                                             surface->eglImage[i] );
+               surface->eglImage[i]= 0;
+           }
         }
         #if defined (WESTEROS_PLATFORM_EMBEDDED)
         if ( surface->nativePixmap )
@@ -733,6 +744,7 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
 {
    EGLImageKHR eglImage= 0;
    EGLint value;
+   EGLint attrList[3];
    int bufferWidth= 0, bufferHeight= 0;
 
    if (EGL_TRUE == rendererGL->eglQueryWaylandBufferWL( rendererGL->eglDisplay,
@@ -758,11 +770,14 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
       surface->vertexCoordsDirty= 1;
    }
 
-   if ( surface->eglImage )
+   for( int i= 0; i < MAX_TEXTURES; ++i )
    {
-      rendererGL->eglDestroyImageKHR( rendererGL->eglDisplay,
-                                      surface->eglImage );
-      surface->eglImage= 0;
+      if ( surface->eglImage[i] )
+      {
+         rendererGL->eglDestroyImageKHR( rendererGL->eglDisplay,
+                                         surface->eglImage[i] );
+         surface->eglImage[i]= 0;
+      }
    }
 
    #if defined (WESTEROS_PLATFORM_RPI)
@@ -796,12 +811,13 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
              * We have a new eglImage.  Mark the surface as having no texture to
              * trigger texture creation during the next scene render
              */
-            surface->eglImage= eglImage;
-            if ( surface->textureId != GL_NONE )
+            surface->eglImage[0]= eglImage;
+            if ( surface->textureId[0] != GL_NONE )
             {
-               glDeleteTextures( 1, &surface->textureId );
+               glDeleteTextures( 1, &surface->textureId[0] );
             }
-            surface->textureId= GL_NONE;
+            surface->textureId[0]= GL_NONE;
+            surface->textureCount= 1;
          }
          break;
       
@@ -810,7 +826,29 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
          break;
        
       case EGL_TEXTURE_Y_UV_WL:
-         printf("wstRendererGLCommitWaylandEGL: EGL_TEXTURE_Y_UV_WL not supported\n" );
+         attrList[0]= EGL_WAYLAND_PLANE_WL;
+         attrList[2]= EGL_NONE;
+         for( int i= 0; i < 2; ++i )
+         {
+            attrList[1]= i;
+            
+            eglImage= rendererGL->eglCreateImageKHR( rendererGL->eglDisplay,
+                                                     EGL_NO_CONTEXT,
+                                                     EGL_WAYLAND_BUFFER_WL,
+                                                     resource,
+                                                     attrList
+                                                    );
+            if ( eglImage )
+            {
+               surface->eglImage[i]= eglImage;
+               if ( surface->textureId[i] != GL_NONE )
+               {
+                  glDeleteTextures( 1, &surface->textureId[i] );
+               }
+               surface->textureId[i]= GL_NONE;
+            }
+         }
+         surface->textureCount= 2;
          break;
          
       case EGL_TEXTURE_Y_XUXV_WL:
@@ -897,15 +935,15 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
                 * (because the attached buffer dimensions changed, for example) then we
                 * need to create a new texture
                 */
-               if ( surface->eglImage )
+               if ( surface->eglImage[0] )
                {
                   rendererGL->eglDestroyImageKHR( rendererGL->eglDisplay,
-                                                  surface->eglImage );
-                  surface->eglImage= 0;
+                                                  surface->eglImage[0] );
+                  surface->eglImage[0]= 0;
                }
                eglPixmap= WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap);
             }
-            if ( !surface->eglImage )
+            if ( !surface->eglImage[0] )
             {
                eglImage= rendererGL->eglCreateImageKHR( rendererGL->eglDisplay,
                                                         EGL_NO_CONTEXT,
@@ -919,12 +957,12 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
                    * We have a new eglImage.  Mark the surface as having no texture to
                    * trigger texture creation during the next scene render
                    */
-                  surface->eglImage= eglImage;
-                  if ( surface->textureId != GL_NONE )
+                  surface->eglImage[0]= eglImage;
+                  if ( surface->textureId[0] != GL_NONE )
                   {
-                     glDeleteTextures( 1, &surface->textureId );
+                     glDeleteTextures( 1, &surface->textureId[0] );
                   }
-                  surface->textureId= GL_NONE;
+                  surface->textureId[0]= GL_NONE;
                }
             }
          }
@@ -1057,49 +1095,56 @@ static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext
           tcupdate= 1;
        }
        
-       if ( (surf->textureId == GL_NONE) || surf->memDirty )
+       if ( (surf->textureId[0] == GL_NONE) || surf->memDirty )
        {
-           if ( surf->textureId == GL_NONE )
+           for ( int i= 0; i < surf->textureCount; ++i )
            {
-              glGenTextures(1, &surf->textureId );
-              WST_TRACE("WstPrepareSurface: surf %p surface textureId=%d\n", surf, surf->textureId );
+              if ( surf->textureId[i] == GL_NONE )
+              {
+                 glGenTextures(1, &surf->textureId[i] );
+                 WST_TRACE("WstPrepareSurface: surf %p surface textureId=%d\n", surf, surf->textureId[i] );
+              }
+             
+              /* Bind the egl image as a texture */
+              glActiveTexture(GL_TEXTURE0+i);
+              glBindTexture(GL_TEXTURE_2D, surf->textureId[i] );
+              #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+              if ( surf->eglImage[i] )
+              {
+                 renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, surf->eglImage[i]);
+              }
+              else
+              #endif
+              if ( i == 0 )
+              {
+                 if ( surf->mem )
+                 {
+                    glTexImage2D( GL_TEXTURE_2D,
+                                  0, //level
+                                  surf->memFormatGL, //internalFormat
+                                  surf->memWidth,
+                                  surf->memHeight,
+                                  0, // border
+                                  surf->memFormatGL, //format
+                                  surf->memType,
+                                  surf->mem );
+                    surf->memDirty= false;
+                 }
+              }
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+              glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+              glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+              WST_TRACE("WstPrepareSurface: after binding texture: glGetError=%X\n", glGetError() );
            }
-          
-           /* Bind the egl image as a texture */
-           glBindTexture(GL_TEXTURE_2D, surf->textureId );
-           #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
-           if ( surf->eglImage )
-           {
-              renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, surf->eglImage);
-           }
-           else
-           #endif
-           if ( surf->mem )
-           {
-              glTexImage2D( GL_TEXTURE_2D,
-                            0, //level
-                            surf->memFormatGL, //internalFormat
-                            surf->memWidth,
-                            surf->memHeight,
-                            0, // border
-                            surf->memFormatGL, //format
-                            surf->memType,
-                            surf->mem );
-              surf->memDirty= false;
-           }
-           glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-           glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-           glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-           glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-           WST_TRACE("WstPrepareSurface: after binding texture: glGetError=%X\n", glGetError() );
        }
 
        if ( vcupdate || tcupdate || surf->vertexCoordsDirty )
        {
            surf->width= surf->bufferWidth;
            surf->height= surf->bufferHeight;
-           
-           itemShaderClass.bits.type= WstShaderType_texture;
+                      
+           itemShaderClass.bits.type= (surf->textureCount == 1) ? WstShaderType_texture : WstShaderType_textureYUV;
            itemShaderClass.bits.opacity= 0;
            itemShaderClass.bits.unused= 0;
            itemShaderClass.bits.maskCount= 0;
@@ -1238,8 +1283,11 @@ static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext
        {
            GLfloat *textureCoords;
 
-           surf->textureLocation= renderer->currentShader->textureLocation;
-           WST_TRACE("surf textureLocation %d\n", surf->textureLocation);
+           for ( int i= 0; i < surf->textureCount; ++i )
+           {
+              surf->textureLocation[i]= renderer->currentShader->textureLocation[i];
+              WST_TRACE("surf textureLocation[%d] %d\n", i, surf->textureLocation[i]);
+           }
 
            textureCoords= surf->textureCoords;
 
@@ -1273,7 +1321,7 @@ static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext 
        WST_TRACE( "WstRenderSurface: surface %p onScreen %d", surf, surf->onScreen );
        if ( surf->onScreen || renderer->noScreenClip )
        {
-           itemShaderClass.bits.type= WstShaderType_texture;
+           itemShaderClass.bits.type= (surf->textureCount == 1) ? WstShaderType_texture : WstShaderType_textureYUV;
            itemShaderClass.bits.opacity= (opacity < 0.99f) ? 1 : 0;
            itemShaderClass.bits.unused= 0;
            itemShaderClass.bits.maskCount= 0;
@@ -1302,16 +1350,32 @@ static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext 
                       surf->textureCoords[2], surf->textureCoords[3], 
                       surf->textureCoords[4], surf->textureCoords[5], 
                       surf->textureCoords[6], surf->textureCoords[7] );
-           glVertexAttribPointer(surf->textureLocation, 2, GL_FLOAT, GL_FALSE, 0, surf->textureCoords);
-           WST_TRACE("WstRenderSurface: enable texture attrib array %d", surf->textureLocation);
-           glEnableVertexAttribArray(surf->textureLocation);
+           glVertexAttribPointer(surf->textureLocation[0], 2, GL_FLOAT, GL_FALSE, 0, surf->textureCoords);
+           WST_TRACE("WstRenderSurface: enable texture attrib array %d", surf->textureLocation[0]);
+           glEnableVertexAttribArray(surf->textureLocation[0]);
 
            glActiveTexture(GL_TEXTURE0);
-           if ( renderer->activeTextureId[0] != surf->textureId )
+           glUniform1i( renderer->currentShader->textureUnit0, 0 );
+           if ( renderer->activeTextureId[0] != surf->textureId[0] )
            {
-              renderer->activeTextureId[0]= surf->textureId;
-              WST_TRACE("WstRenderSurface: calling glBindTexture textureId %d", surf->textureId);
-              glBindTexture(GL_TEXTURE_2D, surf->textureId);
+              renderer->activeTextureId[0]= surf->textureId[0];
+              WST_TRACE("WstRenderSurface: calling glBindTexture textureId %d", surf->textureId[0]);
+              glBindTexture(GL_TEXTURE_2D, surf->textureId[0]);
+           }
+           if ( surf->textureCount > 1 )
+           {
+              glVertexAttribPointer(surf->textureLocation[1], 2, GL_FLOAT, GL_FALSE, 0, surf->textureCoords);
+              WST_TRACE("WstRenderSurface: enable texture attrib array %d", surf->textureLocation[1]);
+              glEnableVertexAttribArray(surf->textureLocation[1]);
+
+              glActiveTexture(GL_TEXTURE1);
+              glUniform1i( renderer->currentShader->textureUnit1, 1 );
+              if ( renderer->activeTextureId[1] != surf->textureId[1] )
+              {
+                 renderer->activeTextureId[1]= surf->textureId[1];
+                 WST_TRACE("WstRenderSurface: calling glBindTexture textureId %d", surf->textureId[1]);
+                 glBindTexture(GL_TEXTURE_2D, surf->textureId[1]);
+              }
            }
            if ( enableBlend )
            {
@@ -1325,6 +1389,7 @@ static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext 
            }
            glBindTexture(GL_TEXTURE_2D, GL_NONE);
            renderer->activeTextureId[0]= GL_NONE;
+           renderer->activeTextureId[1]= GL_NONE;
        }
     }
 }
@@ -1696,6 +1761,10 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
          case WstShaderType_texture:
             EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord;\n" );
             break;
+         case WstShaderType_textureYUV:
+            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord0;\n" );
+            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord1;\n" );
+            break;
          case WstShaderType_fill:
             EMIT( "varying " WST_SHADER_PRECISION " vec4 basecolor;\n" );
             break;
@@ -1716,7 +1785,8 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
       }
 
       EMIT( "attribute vec4 position;\n" );
-      EMIT( "attribute vec2 inputtexture;\n" );
+      EMIT( "attribute vec2 inputtexture0;\n" );
+      EMIT( "attribute vec2 inputtexture1;\n" );
       EMIT( "attribute vec4 inputcolor;\n" );
 
       for( i= 0; i < shaderClass.bits.maskCount; ++i )
@@ -1731,13 +1801,17 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
       switch ( shaderClass.bits.type )
       {
          case WstShaderType_texture:
-            EMIT( "   texcoord = inputtexture;\n" );
+            EMIT( "   texcoord = inputtexture0;\n" );
+            break;
+         case WstShaderType_textureYUV:
+            EMIT( "   texcoord0 = inputtexture0;\n" );
+            EMIT( "   texcoord1 = inputtexture1;\n" );
             break;
          case WstShaderType_fill:
             EMIT( "   basecolor = inputcolor;\n" );
             break;
          case WstShaderType_alphaText:
-            EMIT( "   texcoord = inputtexture;\n" );
+            EMIT( "   texcoord = inputtexture0;\n" );
             break;
          default:
             assert(0);
@@ -1772,6 +1846,10 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
          case WstShaderType_texture:
             EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord;\n" );
             break;
+         case WstShaderType_textureYUV:
+            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord0;\n" );
+            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord1;\n" );
+            break;
          case WstShaderType_fill:
             EMIT( "varying " WST_SHADER_PRECISION " vec4 basecolor;\n" );
             break;
@@ -1795,6 +1873,14 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
       {
          EMIT( "uniform sampler2D texture;\n" );
       }
+      else if ( shaderClass.bits.type == WstShaderType_textureYUV )
+      {
+         EMIT( "uniform sampler2D textureY;\n" );
+         EMIT( "uniform sampler2D textureUV;\n" );
+         EMIT( "const " WST_SHADER_PRECISION " vec3 cc_r = vec3(1.0, -0.8604, 1.59580);\n" );
+         EMIT( "const " WST_SHADER_PRECISION " vec4 cc_g = vec4(1.0, 0.539815, -0.39173, -0.81290);\n" );
+         EMIT( "const " WST_SHADER_PRECISION " vec3 cc_b = vec3(1.0, -1.071, 2.01700);\n" );
+      }
       for( i= 0; i < shaderClass.bits.maskCount; ++i )
       {
          snprintf( name, sizeof(name)-1, "mask%d", i );
@@ -1817,6 +1903,12 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
            (shaderClass.bits.type == WstShaderType_alphaText) )
       {
          EMIT( "   " WST_SHADER_PRECISION " vec4 texcolor = texture2D(texture, texcoord);\n" );
+      }
+      else if ( shaderClass.bits.type == WstShaderType_textureYUV )
+      {
+         EMIT( "   " WST_SHADER_PRECISION " vec4 y_vec = texture2D(textureY, texcoord0);\n" );
+         EMIT( "   " WST_SHADER_PRECISION " vec4 c_vec = texture2D(textureUV, texcoord1);\n" );
+         EMIT( "   " WST_SHADER_PRECISION " vec4 temp_vec = vec4(y_vec.a, 1.0, c_vec.b, c_vec.a);\n" );
       }
       for( i= 0; i < shaderClass.bits.maskCount; ++i )
       {
@@ -1847,6 +1939,9 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
       {
          case WstShaderType_texture:
             EMIT( "texcolor;\n" );
+            break;
+         case WstShaderType_textureYUV:
+            EMIT( "vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), 1.0 );\n" );
             break;
          case WstShaderType_fill:
             EMIT( "vec4( basecolor.a*basecolor.r, basecolor.a*basecolor.g, basecolor.a*basecolor.b, basecolor.a );\n" );
@@ -1881,7 +1976,8 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
 
        attribIndex= 0;
        glBindAttribLocation(programId, attribIndex++, "position");
-       glBindAttribLocation(programId, attribIndex++, "inputtexture" );
+       glBindAttribLocation(programId, attribIndex++, "inputtexture0" );
+       glBindAttribLocation(programId, attribIndex++, "inputtexture1" );
        glBindAttribLocation(programId, attribIndex++, "inputcolor" );
        for( i= 0; i < shaderClass.bits.maskCount; ++i )
        {
@@ -1929,7 +2025,8 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
 
            // Get attribute locations
            shaderNew->vertexLocation= glGetAttribLocation(programId, "position");
-           shaderNew->textureLocation= glGetAttribLocation(programId, "inputtexture");
+           shaderNew->textureLocation[0]= glGetAttribLocation(programId, "inputtexture0");
+           shaderNew->textureLocation[1]= glGetAttribLocation(programId, "inputtexture1");
            shaderNew->fillColorLocation= glGetAttribLocation(programId, "inputcolor");
            for( i= 0; i < shaderClass.bits.maskCount; ++i )
            {
@@ -1952,11 +2049,23 @@ static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
               snprintf( name, sizeof(name)-1, "mask%d", i );
               shaderNew->maskUniformLocation[i] = glGetUniformLocation(programId, name);
            }
+           if ( shaderClass.bits.type == WstShaderType_texture )
+           {
+              shaderNew->textureUnit0= glGetUniformLocation(programId,"texture");
+           }
+           else if ( shaderClass.bits.type == WstShaderType_textureYUV )
+           {
+              shaderNew->textureUnit0= glGetUniformLocation(programId,"textureY");
+              shaderNew->textureUnit1= glGetUniformLocation(programId,"textureUV");
+           }
 
            #ifdef WST_DEBUG
            WST_TRACE("shader %p created for class %X:", shaderNew, shaderNew->shaderClass.id );
-           WST_TRACE("programId=%d vertexShaderId=%d fragmentShaderId=%d", shaderNew->programId, shaderNew->vertexShaderId, shaderNew->fragmentShaderId );
-           WST_TRACE("vertexLocation= %d textureLocation=%d fillColorLocation=%d mvpLocation= %d", shaderNew->vertexLocation, shaderNew->textureLocation, shaderNew->fillColorLocation, shaderNew->mvpLocation );
+           WST_TRACE("programId=%d vertexShaderId=%d fragmentShaderId=%d", 
+                     shaderNew->programId, shaderNew->vertexShaderId, shaderNew->fragmentShaderId );
+           WST_TRACE("vertexLocation= %d textureLocation[0]=%d textureLocation[1]=%d fillColorLocation=%d mvpLocation= %d", 
+                     shaderNew->vertexLocation, shaderNew->textureLocation[0], shaderNew->textureLocation[1],
+                     shaderNew->fillColorLocation, shaderNew->mvpLocation );
            if ( shaderNew->shaderClass.bits.opacity )
            {
               WST_TRACE("opacityLocation= %d", shaderNew->opacityLocation );
