@@ -48,6 +48,7 @@ void gst_westeros_sink_soc_registryHandleGlobalRemove(GstWesterosSink *sink,
 			                        uint32_t name);
 gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps );
 void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts );
+void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer );
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink );
 gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink );
 
