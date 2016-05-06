@@ -325,6 +325,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
 
    sink->videoStarted= FALSE;
    sink->startAfterLink= FALSE;	
+   sink->flushStarted= FALSE;
    sink->rejectPrerollBuffers= FALSE;
    
    sink->srcWidth= 1280;
@@ -345,6 +346,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->firstPTS= 0;
    sink->currentPTS= 0;
    sink->position= 0;
+   sink->positionSegmentStart= 0;
+   sink->segmentNumber= 0;
 
    if ( gst_westeros_sink_soc_init( sink ) == TRUE )
    {
@@ -666,8 +669,10 @@ static gboolean gst_westeros_sink_query(GstElement *element, GstQuery *query)
             else
             {
                LOCK( sink );
-               gst_query_set_position(query, GST_FORMAT_TIME, sink->position);
+               gint64 position= sink->position;
                UNLOCK( sink );
+               GST_DEBUG_OBJECT(sink, "POSITION: %" GST_TIME_FORMAT, GST_TIME_ARGS (position));
+               gst_query_set_position(query, GST_FORMAT_TIME, position);
                return TRUE;
             }
          }
@@ -730,8 +735,12 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
    switch (GST_EVENT_TYPE(event))
    {
       case GST_EVENT_FLUSH_START:
+         LOCK( sink );
          sink->position= 0;
+         sink->flushStarted= TRUE;
+         sink->currentPTS= 0;
          gst_westeros_sink_soc_flush( sink );
+         UNLOCK( sink );
          passToDefault= TRUE;
          break;
           
@@ -761,7 +770,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             #endif
             
             GST_LOG_OBJECT(sink, 
-                           "segment: start %" GST_TIME_FORMAT ", stop %" GST_TIME_FORMAT,
+                           "segment: start %" GST_TIME_FORMAT ", position %" GST_TIME_FORMAT,
                             GST_TIME_ARGS(segmentStart), GST_TIME_ARGS(segmentPosition));
 
             if ( 
@@ -769,9 +778,15 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                  ( (segmentStart != 0) || (sink->startPTS != 0) )
                ) 
             {
-               sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
+               LOCK( sink );
+               sink->segmentNumber++;
+               sink->eosDetected= FALSE;
+               sink->flushStarted= FALSE;
                sink->position= GST_TIME_AS_NSECONDS(segmentStart);
+               sink->positionSegmentStart= GST_TIME_AS_NSECONDS(segmentStart);
+               sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
                gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
+               UNLOCK( sink );
             }
          }
          break;
