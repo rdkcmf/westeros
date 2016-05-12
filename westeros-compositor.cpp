@@ -37,10 +37,12 @@
 
 #include <xkbcommon/xkbcommon.h>
 
-#if defined (WESTEROS_HAVE_WAYLAND_EGL) && defined (WESTEROS_PLATFORM_RPI)
+#if defined (WESTEROS_HAVE_WAYLAND_EGL)
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#if defined (WESTEROS_PLATFORM_RPI)
 #include <bcm_host.h>
+#endif
 #include "wayland-egl.h"
 #endif
 
@@ -880,8 +882,8 @@ bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater )
       if ( isRepeater )
       {
          ctx->isNested= true;
-         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && !defined(WESTEROS_PLATFORM_RPI)
-         // We can't do renderless composition with wayland-egl.  Ignore the
+         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && !defined(WESTEROS_PLATFORM_RPI) && !defined(WESTEROS_PLATFORM_NEXUS)
+         // We can't do renderless composition with some wayland-egl.  Ignore the
          // request and configure for nested composition with gl renderer
          ctx->isRepeater= false;
          ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
@@ -2402,9 +2404,12 @@ static void* wstCompositorThread( void *arg )
       }
    }
 
-   #if !defined (WESTEROS_PLATFORM_RPI)
-   // We normally don't need a renderer when acting as a nested repeater, but for RPI
-   // we need to initialize the renderer so that the wl_dispmanx protocol gets added
+   #if !( defined (WESTEROS_HAVE_WAYLAND_EGL) && \
+         (defined (WESTEROS_PLATFORM_RPI) || defined (WESTEROS_PLATFORM_NEXUS)) \
+       )
+   // We normally don't need a renderer when acting as a nested repeater, but for platforms
+   // using wayland-egl that support renderless nested composition, we need to
+   // initialize the renderer so that the wayland-egl impl can add its protocols
    if ( !ctx->isRepeater )
    #endif
    {
@@ -3723,8 +3728,13 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
             }
          }
          #endif
-         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && defined (WESTEROS_PLATFORM_RPI)
+         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && \
+             (defined (WESTEROS_PLATFORM_RPI) || defined (WESTEROS_PLATFORM_NEXUS))
+         #if defined (WESTEROS_PLATFORM_RPI)
          else if ( vc_dispmanx_get_handle_from_wl_buffer( surface->attachedBufferResource ) )
+         #elif defined (WESTEROS_PLATFORM_NEXUS)
+         else if ( wl_egl_get_device_buffer( surface->attachedBufferResource ) )
+         #endif
          {
             static PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL= 0;
             static EGLDisplay eglDisplay= EGL_NO_DISPLAY;
@@ -3776,7 +3786,11 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                   }
                }
             
+               #if defined (WESTEROS_PLATFORM_RPI)
                deviceBuffer= (void*)vc_dispmanx_get_handle_from_wl_buffer( surface->attachedBufferResource );
+               #elif defined (WESTEROS_PLATFORM_NEXUS)
+               deviceBuffer= (void*)wl_egl_get_device_buffer( surface->attachedBufferResource );
+               #endif
                if ( deviceBuffer &&
                     (format != 0) &&
                     (bufferWidth != 0) &&

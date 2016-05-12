@@ -500,8 +500,7 @@ static void* wstNestedThread( void *data )
       {
          break;
       }
-      
-      usleep( 50000 );
+      wl_display_flush( nc->display );
    }
  
    nc->started= false;
