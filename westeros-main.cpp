@@ -80,6 +80,8 @@ typedef struct _AppCtx
    EGLSurface eglSurface;
    #endif
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   bool showCursor;
+   bool cursorReady;
    pthread_t inputThreadId;
    InputCtx *inputCtx;
    WstGLCtx *glCtx;
@@ -114,6 +116,9 @@ static void showUsage()
    printf("  --nestedInput : register nested input listeners\n" ); 
    printf("  --width <width> : width of nested composition surface\n" );
    printf("  --height <width> : height of nested composition surface\n" );
+   #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   printf("  --enableCursor : display default pointer cursor\n" );
+   #endif
    printf("  -? : show usage\n" );
    printf("\n" );
 }
@@ -1009,6 +1014,188 @@ void termApp( AppCtx *appCtx )
    }
 }
 
+#if defined (WESTEROS_PLATFORM_EMBEDDED)
+static void drawLine( unsigned char *data, 
+                      int width, int height,
+                      int x1, int y1,
+                      int x2, int y2,
+                      unsigned int color,
+                      int thickness )
+{
+   unsigned int *p;
+   unsigned int alpha;
+   int x, y, ht;
+   unsigned int c;
+   
+   // Draw vertical, horizontal, or 45 degree lines
+   x= x1;
+   y= y1;
+   for( ; ; )
+   {
+      p= (unsigned int*)(data + (y*width+x)*4);
+      for ( int i= 0; i < thickness; ++i )
+      {        
+         if ( (i == 0) || (i == thickness-1) )
+            alpha= 0x7F;
+         else
+            alpha= 0xFF;
+         
+         c= ((color&0xFFFFFF)|(alpha<<24));
+         *p= c;
+         
+         if ( y1 != y2 )
+            p += 1;
+         else
+            p += width;
+      }
+      
+      if ( (x == x2) && (y == y2) )
+         break;
+      
+      if ( x1 == x2 )
+         if (  y1 <= y2 )
+            y= y+1;
+         else
+            y= y-1;
+      else if ( y1 == y2 )
+         if ( x1 <= x2 )
+            x= x+1;
+         else
+            x= x-1;
+      else
+      {
+         if (  y1 <= y2 )
+            y= y+1;
+         else
+            y= y-1;
+         if ( x1 <= x2 )
+            x= x+1;
+         else
+            x= x-1;
+      }
+   }
+}
+
+static void fillShape( unsigned char *data, int width, int height, unsigned int color, int thickness )
+{
+   unsigned int *p, *f;
+   bool inside;
+   unsigned char prev;
+   int xl, xr, t;
+   
+   for( int y= 0; y < height; y++ )
+   {
+      prev= 0;
+      inside= false;
+      xl= xr= -1;
+      t= 0;
+      p= (unsigned int *)(data+y*width*4);
+      for( int x= 0; x < width; x++ )
+      {
+         if ( xl == -1 )
+         {
+            if ( *p )
+            {
+               ++t;
+            }
+            if ( (prev != 0) && (*p == 0 ) )
+            {
+               if ( !inside && (t == thickness) )
+               {
+                  inside= !inside;
+               }
+               if ( inside )
+                  xl= x;
+               t= 0;
+            }
+         }
+         else
+         {
+            if ( *p != 0 )
+            {
+               if ( inside && (xl >= 0) && (xr == -1) )
+               {
+                  xr= x;
+                  f= (unsigned int *)(data+(y*width+xl)*4);
+                  for( int n= xl; n < xr; ++n )
+                  {
+                     *f= color;
+                     ++f;
+                  }
+               }
+               ++t;
+               if ( t == thickness )
+               {
+                  t= 0;
+                  xl= xr= -1;
+                  if ( p[1] == 0 )
+                    inside= !inside;
+               }
+            }
+         }
+         
+         prev= *p;
+         ++p;
+      }
+   }
+}
+
+static bool initCursor( AppCtx *appCtx )
+{
+   bool result= false;
+   unsigned char *data= 0;
+   int width, height;
+   int allocSize;
+   unsigned int edgeColor= 0xFFE6DF11;
+   unsigned int fillColor= 0x70000000;
+   
+   // Create a default cursor image
+   width= 64;
+   height= 64;
+   allocSize= width*4*height;
+   
+   data= (unsigned char *)calloc( 1, allocSize );
+   if ( !data )
+   {
+      printf("Unable to allocate memory for default pointer cursor - cursor disabled\n");
+      goto exit;
+   }
+
+   drawLine( data, width, height, 0, 0, 0, 43, edgeColor, 3 );   
+   drawLine( data, width, height, 0, 0, 43, 0, edgeColor, 3 );      
+   drawLine( data, width, height, 1, 43, 16, 28, edgeColor, 3 );
+   drawLine( data, width, height, 43, 0, 28, 15, edgeColor, 3 );
+   drawLine( data, width, height, 28, 16, 55, 43, edgeColor, 3 );
+   drawLine( data, width, height, 17, 28, 44, 55, edgeColor, 3 );
+   drawLine( data, width, height, 45, 54, 55, 44, edgeColor, 3 );
+   
+   fillShape( data, width, height, fillColor, 3 );
+   
+   drawLine( data, width, height, 0, 44, 2, 44, edgeColor, 1);
+   drawLine( data, width, height, 0, 45, 1, 45, edgeColor, 1);
+
+   if ( !WstCompositorSetDefaultCursor( appCtx->wctx, data, width, height, 0, 0 ) )
+   {
+      const char *detail= WstCompositorGetLastErrorDetail( appCtx->wctx );
+      printf("Unable to set default cursor: error: (%s)\n", detail );
+      goto exit;
+   }
+   
+   appCtx->cursorReady= true;
+   
+   result= true;
+   
+exit:
+
+   if ( data )
+   {
+      free( data );
+   }
+   
+   return result;
+}
+#endif
+
 static void keyboardHandleKeyMap( void *userData, uint32_t format, int fd, uint32_t size )
 {
    printf("keyboardHandleKeyMap: format %d fd %d size %d\n", format, fd, size );
@@ -1140,6 +1327,13 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
 
       eglSwapBuffers(appCtx->eglDisplay, appCtx->eglSurface);
    }   
+   #endif
+
+   #if defined (WESTEROS_PLATFORM_EMBEDDED)
+   if  ( appCtx->showCursor && !appCtx->cursorReady )
+   {
+      appCtx->showCursor= initCursor( appCtx );
+   }
    #endif
    
    #if !defined (WESTEROS_PLATFORM_EMBEDDED)
@@ -1336,6 +1530,13 @@ int main( int argc, char** argv)
             }
          }
       }
+      #if defined (WESTEROS_PLATFORM_EMBEDDED)
+      else
+      if ( (len == 14) && !strncmp( argv[i], "--enableCursor", len) )
+      {
+         appCtx->showCursor= true;      
+      }
+      #endif
       else
       if ( (len == 2) && !strncmp( (const char*)argv[i], "-?", len) )
       {
@@ -1347,10 +1548,13 @@ int main( int argc, char** argv)
    if ( !error )
    {
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
-      if ( !WstCompositorSetAllowCursorModification( wctx, true ) )
+      if  ( !appCtx->showCursor )
       {
-         error= true;
-         goto exit;
+         if ( !WstCompositorSetAllowCursorModification( wctx, true ) )
+         {
+            error= true;
+            goto exit;
+         }
       }
       #endif
       
