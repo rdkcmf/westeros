@@ -246,7 +246,19 @@ bool WstCompositorSetNestedSize( WstCompositor *ctx, unsigned int width, unsigne
  * image.  This must be called prior to WstCompositorStart.
  */
 bool WstCompositorSetAllowCursorModification( WstCompositor *ctx, bool allow );
- 
+
+/**
+ * WstCompositorSetDefaultCursor
+ *
+ * Supplies a default pointer cursor image for the compositor to display.  The
+ * data should be supplied in ARGB888 format as an array of 32 bit ARGB samples
+ * containing width*height*4 bytes.  To remove a previously set curosr, call
+ * with imgData set to NULL.  This should only be called while the 
+ * conpositor is running.
+ */
+bool WstCompositorSetDefaultCursor( WstCompositor *ctx, unsigned char *imgData,
+                                    int width, int height, int hotSpotX, int hotSpotY );
+                                     
 /**
  * WstCompositorGetDisplayName
  *
@@ -434,6 +446,15 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
                                    float *matrix, float alpha, 
                                    unsigned int hints, 
                                    bool *needHolePunch, std::vector<WstRect> &rects );
+
+/**
+ * WstCompositorInvalidateScene
+ *
+ * Causes the compositor to invalidate its scene and schedule a repaint.  This only has an effect
+ * when the compositor is running.
+ *
+ */
+void WstCompositorInvalidateScene( WstCompositor *ctx );
 
 /**
  * WstCompositorStart

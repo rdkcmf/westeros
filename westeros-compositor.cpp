@@ -349,6 +349,22 @@ typedef struct _WstCompositor
 
    bool needRepaint;
    bool outputSizeChanged;
+   
+   struct wl_display *dcDisplay;
+   struct wl_registry *dcRegistry;
+   struct wl_shm *dcShm;
+   struct wl_compositor *dcCompositor;
+   struct wl_seat *dcSeat;
+   struct wl_pointer *dcPointer;
+   struct wl_shm_pool *dcPool;
+   struct wl_surface *dcCursorSurface;
+   struct wl_client *dcClient;
+   void *dcPoolData;
+   int dcPoolSize;
+   int dcPoolFd;
+   int dcPid;
+   bool dcDefaultCursor;
+   
 } WstCompositor;
 
 static const char* wstGetNextNestedDisplayName(void);
@@ -596,6 +612,11 @@ static void wstPointerSetPointer( WstPointer *pointer, WstSurface *surface );
 static void wstPointerUpdatePosition( WstPointer *pointer );
 static void wstPointerSetFocus( WstPointer *pointer, WstSurface *surface, wl_fixed_t x, wl_fixed_t y );
 static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *client );
+static void wstRemoveTempFile( int fd );
+static bool wstInitializeDefaultCursor( WstCompositor *compositor, 
+                                        unsigned char *imgData, int width, int height,
+                                        int hotspotX, int hotspotY  );
+static void wstTerminateDefaultCursor( WstCompositor *compositor );
 
 extern char **environ;
 static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
@@ -631,6 +652,8 @@ WstCompositor* WstCompositorCreate()
       ctx->xkbNames.model= strdup("pc105");
       ctx->xkbNames.layout= strdup("us");
       ctx->xkbKeymapFd= -1;
+
+      ctx->dcPoolFd= -1;
 
       wstSetDefaultNestedListener( ctx );
    }
@@ -1085,6 +1108,81 @@ exit:
    
    return result;
 }
+
+/**
+ * WstCompositorSetDefaultCursor
+ *
+ * Supplies a default pointer cursor image for the compositor to display.  The
+ * data should be supplied in ARGB888 format as an array of 32 bit ARGB samples
+ * containing width*height*4 bytes.  To remove a previously set curosr, call
+ * with imgData set to NULL.  This should only be called while the 
+ * conpositor is running.
+ */
+bool WstCompositorSetDefaultCursor( WstCompositor *ctx, unsigned char *imgData,
+                                    int width, int height, int hotSpotX, int hotSpotY )
+{
+   bool result= false;
+   
+   if ( ctx )
+   {
+      if ( !ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set default cursor unless the compositor is running" );
+         goto exit;
+      }
+
+      if ( ctx->isRepeater )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Cannot set default cursor when operating as a repeating nested compositor" );
+         goto exit;
+      }
+
+      if ( ctx->isNested )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Cannot set default cursor when operating as a nested compositor" );
+         goto exit;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( ctx->dcClient )
+      {
+         wl_client_destroy( ctx->dcClient );
+         ctx->dcClient= 0;
+         ctx->dcPid= 0;
+         ctx->dcDefaultCursor= false;
+         pthread_mutex_unlock( &ctx->mutex );
+         usleep( 100000 );
+         pthread_mutex_lock( &ctx->mutex );
+      }
+      else
+      {
+         wstTerminateDefaultCursor( ctx );
+      }
+      
+      if ( imgData )
+      {
+         if ( !wstInitializeDefaultCursor( ctx, imgData, width, height, hotSpotX, hotSpotY ) )
+         {
+            sprintf( ctx->lastErrorDetail,
+                     "Error.  Unable to set default cursor" );
+            pthread_mutex_unlock( &ctx->mutex );
+            goto exit;
+         }
+      }
+               
+      pthread_mutex_unlock( &ctx->mutex );
+            
+      result= true;
+   }
+
+exit:
+   
+   return result;
+}                                    
 
 const char *WstCompositorGetDisplayName( WstCompositor *ctx )
 {
@@ -1554,6 +1652,18 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
 exit:
    
    return result;
+}
+
+void WstCompositorInvalidateScene( WstCompositor *ctx )
+{
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      wstCompositorScheduleRepaint( ctx );
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
 }
 
 bool WstCompositorStart( WstCompositor *ctx )
@@ -3353,7 +3463,10 @@ static void wstSurfaceDestroy( WstSurface *surface )
         (ctx->seat->pointer->focus == surface) )
    {
       ctx->seat->pointer->focus= 0;
-      wstPointerSetPointer( ctx->seat->pointer, 0 );
+      if ( !ctx->dcDefaultCursor )
+      {
+         wstPointerSetPointer( ctx->seat->pointer, 0 );
+      }
    }
    
    // Remove as pointer surface
@@ -5386,7 +5499,8 @@ static void wstIPointerSetCursor( struct wl_client *client,
    WstCompositor *compositor= pointer->seat->compositor;
    WstSurface *surface= 0;
    bool hidePointer= false;
-   
+   int pid= 0;
+
    if ( surfaceResource )
    {
       if ( pointer->focus &&
@@ -5414,8 +5528,15 @@ static void wstIPointerSetCursor( struct wl_client *client,
    }
    else
    {
-      if ( compositor->allowModifyCursor )
+      wl_client_get_credentials( client, &pid, NULL, NULL );
+   
+      if ( compositor->allowModifyCursor || (pid == compositor->dcPid) )
       {
+         if ( pid == compositor->dcPid )
+         {
+            compositor->dcClient= client;
+            compositor->dcDefaultCursor= true;
+         }
          wstPointerSetPointer( pointer, surface );
          
          if ( pointer->pointerSurface )
@@ -5505,7 +5626,7 @@ static bool wstInitializeKeymap( WstCompositor *ctx )
    if ( lenDidWrite != ctx->xkbKeymapSize )
    {
       sprintf( ctx->lastErrorDetail,
-               "Error.  Unable to create write xkb keymap strint to temp file" );
+               "Error.  Unable to create write xkb keymap string to temp file" );
       goto exit;      
    }
 
@@ -5545,31 +5666,7 @@ static void wstTerminateKeymap( WstCompositor *ctx )
    
    if ( ctx->xkbKeymapFd >= 0 )
    {
-      int pid= getpid();
-      int len, prefixlen;
-      char path[32];
-      char link[256];
-      bool haveTempFilename= false;
-      
-      prefixlen= strlen(TEMPFILE_PREFIX);
-      sprintf(path, "/proc/%d/fd/%d", pid, ctx->xkbKeymapFd );
-      len= readlink( path, link, sizeof(link)-1 );
-      if ( len > prefixlen )
-      {
-         link[len]= '\0';
-         if ( strncmp( link, TEMPFILE_PREFIX, prefixlen ) == 0 )
-         {
-            haveTempFilename= true;
-         }
-      }
-      
-      close( ctx->xkbKeymapFd );
-      
-      if ( haveTempFilename )
-      {
-         DEBUG( "removing tempory file (%s)", link );
-         remove( link );
-      }
+      wstRemoveTempFile( ctx->xkbKeymapFd );
       
       ctx->xkbKeymapFd= -1;
    }
@@ -5787,7 +5884,7 @@ static void wstProcessPointerLeave( WstPointer *pointer, struct wl_surface *surf
          }
       }
    }
-   else
+   else if ( !ctx->dcDefaultCursor )
    {
       if ( pointer->focus )
       {
@@ -5843,19 +5940,22 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
       
       wstPointerCheckFocus( pointer, x, y );
          
-      if ( pointer->focus )
+      if ( pointer->focus || compositor->dcDefaultCursor )
       {
-         wl_fixed_t xFixed, yFixed;
-
-         WstRendererSurfaceGetGeometry( compositor->renderer, pointer->focus->surface, &sx, &sy, &sw, &sh );
-         
-         xFixed= wl_fixed_from_int( x-sx );
-         yFixed= wl_fixed_from_int( y-sy );
-         
-         time= (uint32_t)wstGetCurrentTimeMillis();
-         wl_resource_for_each( resource, &pointer->focusResourceList )
+         if ( pointer->focus )
          {
-            wl_pointer_send_motion( resource, time, xFixed, yFixed );
+            wl_fixed_t xFixed, yFixed;
+
+            WstRendererSurfaceGetGeometry( compositor->renderer, pointer->focus->surface, &sx, &sy, &sw, &sh );
+            
+            xFixed= wl_fixed_from_int( x-sx );
+            yFixed= wl_fixed_from_int( y-sy );
+            
+            time= (uint32_t)wstGetCurrentTimeMillis();
+            wl_resource_for_each( resource, &pointer->focusResourceList )
+            {
+               wl_pointer_send_motion( resource, time, xFixed, yFixed );
+            }
          }
          
          if ( pointer->pointerSurface )
@@ -6053,7 +6153,7 @@ static void wstPointerSetFocus( WstPointer *pointer, WstSurface *surface, wl_fix
             wl_pointer_send_enter( resource, serial, pointer->focus->resource, x, y );
          }
       }
-      else
+      else if ( !compositor->dcDefaultCursor )
       {
          wstPointerSetPointer( pointer, 0 );
       }
@@ -6078,4 +6178,283 @@ static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *
    }
 }
 
+static void wstRemoveTempFile( int fd )
+{
+   int pid= getpid();
+   int len, prefixlen;
+   char path[32];
+   char link[256];
+   bool haveTempFilename= false;
+   
+   prefixlen= strlen(TEMPFILE_PREFIX);
+   sprintf(path, "/proc/%d/fd/%d", pid, fd );
+   len= readlink( path, link, sizeof(link)-1 );
+   if ( len > prefixlen )
+   {
+      link[len]= '\0';
+      if ( strncmp( link, TEMPFILE_PREFIX, prefixlen ) == 0 )
+      {
+         haveTempFilename= true;
+      }
+   }
+   
+   close( fd );
+   
+   if ( haveTempFilename )
+   {
+      DEBUG( "removing tempory file (%s)", link );
+      remove( link );
+   }
+}
+
+static void dcSeatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
+{
+   WstCompositor *compositor= (WstCompositor*)data;
+
+   printf("seat %p caps: %X\n", seat, capabilities );
+   if ( capabilities & WL_SEAT_CAPABILITY_POINTER )
+   {
+      printf("  seat has pointer\n");
+      compositor->dcPointer= wl_seat_get_pointer( compositor->dcSeat );
+      printf("  pointer %p\n", compositor->dcPointer );
+   }
+}
+
+static void dcSeatName( void *data, struct wl_seat *seat, const char *name )
+{
+   WESTEROS_UNUSED( data );
+   WESTEROS_UNUSED( seat );
+   WESTEROS_UNUSED( name );
+}
+
+static const struct wl_seat_listener dcSeatListener = {
+   dcSeatCapabilities,
+   dcSeatName 
+};
+
+static void dcRegistryHandleGlobal(void *data, 
+                                 struct wl_registry *registry, uint32_t id,
+		                           const char *interface, uint32_t version)
+{
+   WstCompositor *compositor= (WstCompositor*)data;
+	int len;
+
+   len= strlen(interface);
+   if ( (len==6) && !strncmp(interface, "wl_shm", len)) {
+      compositor->dcShm= (struct wl_shm*)wl_registry_bind(registry, id, &wl_shm_interface, 1);
+   }
+   else if ( (len==13) && !strncmp(interface, "wl_compositor", len) ) {
+      compositor->dcCompositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
+   } 
+   else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
+      compositor->dcSeat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
+		wl_seat_add_listener(compositor->dcSeat, &dcSeatListener, compositor);
+   } 
+}
+
+static void dcRegistryHandleGlobalRemove(void *data, 
+                                       struct wl_registry *registry,
+			                              uint32_t name)
+{
+   WESTEROS_UNUSED(data);
+   WESTEROS_UNUSED(registry);
+   WESTEROS_UNUSED(name);
+}
+
+static const struct wl_registry_listener dcRegistryListener = 
+{
+	dcRegistryHandleGlobal,
+	dcRegistryHandleGlobalRemove
+};
+
+static bool wstInitializeDefaultCursor( WstCompositor *compositor, 
+                                        unsigned char *imgData, int width, int height,
+                                        int hotspotX, int hotspotY  )
+{
+   bool result= false;
+
+   int pid= fork();
+   if ( pid == 0 )
+   {
+      struct wl_buffer *buffer= 0;
+      int imgDataSize;
+      char filename[32];
+	   int fd;
+	   int lenDidWrite;
+	   void *data;
+
+      compositor->dcDisplay= wl_display_connect( compositor->displayName );
+      if ( !compositor->display )
+      {
+         goto exit;
+      }
+      
+      compositor->dcRegistry= wl_display_get_registry(compositor->dcDisplay);
+      if ( !compositor->dcRegistry )
+      {
+         goto exit;
+      }
+
+      wl_registry_add_listener(compositor->dcRegistry, &dcRegistryListener, compositor);
+      wl_display_roundtrip(compositor->dcDisplay);
+
+      if ( !compositor->dcCompositor ||
+           !compositor->dcShm ||
+           !compositor->dcSeat )
+      {
+         goto exit;
+      }
+      
+      wl_display_roundtrip(compositor->dcDisplay);
+      
+      if ( !compositor->dcPointer )
+      {
+         goto exit;
+      }
+      
+      compositor->dcCursorSurface= wl_compositor_create_surface(compositor->dcCompositor);
+      wl_display_roundtrip(compositor->dcDisplay);
+      if ( !compositor->dcCursorSurface )
+      {
+         goto exit;
+      }
+      
+      imgDataSize= 512+height*width*4;
+
+      strcpy( filename, "/tmp/westeros-XXXXXX" );
+      fd= mkostemp( filename, O_CLOEXEC );
+      if ( fd < 0 )
+      {
+         goto exit;
+      }
+
+      lenDidWrite= write( fd, imgData, imgDataSize );
+      if ( lenDidWrite != imgDataSize )
+      {
+         sprintf( compositor->lastErrorDetail,
+                  "Error.  Unable to create write default cursor img data to temp file" );
+         goto exit;      
+      }
+
+	   data = mmap(NULL, imgDataSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	   if ( data == MAP_FAILED ) 
+	   {
+	      goto exit;
+	   }
+	
+	   compositor->dcPoolData= data;
+	   compositor->dcPoolSize= imgDataSize;
+	   compositor->dcPoolFd= fd;
+	   memcpy( data, imgData, height*width*4 );
+      
+      compositor->dcPool= wl_shm_create_pool(compositor->dcShm, fd, imgDataSize);
+      wl_display_roundtrip(compositor->dcDisplay);
+
+    	buffer= wl_shm_pool_create_buffer(compositor->dcPool, 
+    	                                  0, //offset
+                                        width,
+                                        height,
+                                        width*4, //stride
+                                        WL_SHM_FORMAT_ARGB8888 );
+      wl_display_roundtrip(compositor->dcDisplay);
+      if ( !buffer )
+      {
+         goto exit;
+      }
+      
+      wl_surface_attach( compositor->dcCursorSurface, buffer, 0, 0 );
+      wl_surface_damage( compositor->dcCursorSurface, 0, 0, width, height);
+      wl_surface_commit( compositor->dcCursorSurface );
+      wl_pointer_set_cursor( compositor->dcPointer, 
+                             0,
+                             compositor->dcCursorSurface,
+                             hotspotX, hotspotY );
+      wl_display_roundtrip(compositor->dcDisplay);
+
+      wl_display_dispatch( compositor->dcDisplay );         
+      
+   exit:
+
+      if ( !result )
+      {
+         wstTerminateDefaultCursor( compositor );
+      }
+      
+      exit(0);
+   }
+   else if ( pid < 0 )
+   {
+      sprintf( compositor->lastErrorDetail,
+               "Error.  Unable to fork process" );
+   }
+   else
+   {
+      compositor->dcPid= pid;
+      DEBUG("default cursor client spawned: pid %d\n", pid );
+      result= true;
+   }
+   
+   return result;
+}
+
+static void wstTerminateDefaultCursor( WstCompositor *compositor )
+{
+   if ( compositor->dcCursorSurface )
+   {
+      wl_pointer_set_cursor( compositor->dcPointer, 
+                             0,
+                             NULL,
+                             0, 0 );
+      wl_surface_destroy( compositor->dcCursorSurface );
+      compositor->dcCursorSurface= 0;
+   }
+   
+   if ( compositor->dcPool )
+   {
+      wl_shm_pool_destroy( compositor->dcPool);
+      compositor->dcPool= 0;
+   }
+   
+   if ( compositor->dcPoolData )
+   {
+      munmap( compositor->dcPoolData, compositor->dcPoolSize );
+      compositor->dcPoolData= 0;
+   }
+   
+   if ( compositor->dcPoolFd >= 0)
+   {
+      wstRemoveTempFile( compositor->dcPoolFd );
+      compositor->dcPoolFd= -1;
+   }
+   
+   if ( compositor->dcPointer )
+   {
+      wl_pointer_destroy( compositor->dcPointer );
+      compositor->dcPointer= 0;
+   }
+   
+   if ( compositor->dcShm )
+   {
+      wl_shm_destroy( compositor->dcShm );
+      compositor->dcShm= 0;
+   }
+   
+   if ( compositor->dcCompositor )
+   {
+      wl_compositor_destroy( compositor->dcCompositor );
+      compositor->dcCompositor= 0;
+   }
+
+   if ( compositor->dcRegistry )
+   {
+      wl_registry_destroy( compositor->dcRegistry );
+      compositor->dcRegistry= 0;
+   }
+   
+   if ( compositor->dcDisplay )
+   {
+      wl_display_disconnect( compositor->dcDisplay );
+      compositor->dcDisplay= 0;
+   }
+}
 
