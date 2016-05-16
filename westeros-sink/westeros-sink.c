@@ -784,6 +784,11 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                            "segment: start %" GST_TIME_FORMAT ", position %" GST_TIME_FORMAT,
                             GST_TIME_ARGS(segmentStart), GST_TIME_ARGS(segmentPosition));
 
+            
+            LOCK( sink );
+            sink->flushStarted= FALSE;
+            UNLOCK( sink );
+            
             if ( 
                  (segmentFormat == GST_FORMAT_TIME) && 
                  ( (segmentStart != 0) || (sink->startPTS != 0) )
@@ -793,7 +798,6 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                sink->segmentNumber++;
                sink->eosEventSeen= FALSE;
                sink->eosDetected= FALSE;
-               sink->flushStarted= FALSE;
                sink->position= GST_TIME_AS_NSECONDS(segmentStart);
                sink->positionSegmentStart= GST_TIME_AS_NSECONDS(segmentStart);
                sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
