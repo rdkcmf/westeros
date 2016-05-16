@@ -576,9 +576,10 @@ static gpointer captureThread(gpointer data)
    {
       LOCK( sink );
       gboolean videoStarted= sink->videoStarted;
+      gboolean eosDetected= sink->eosDetected;
       UNLOCK( sink );
       
-      if ( videoStarted && sink->visible )
+      if ( videoStarted && sink->visible && !eosDetected )
       {
          processFrame( sink );
       }
@@ -586,7 +587,7 @@ static gpointer captureThread(gpointer data)
       if ( wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
       {
          wl_display_flush(sink->display);
-         if ( !sink->eosDetected )
+         if ( !eosDetected )
          {
             wl_display_roundtrip_queue(sink->display,sink->queue);
          }
@@ -638,6 +639,7 @@ static void processFrame( GstWesterosSink *sink )
    NEXUS_SurfaceHandle captureSurface= NULL;
    unsigned numReturned= 0;
    unsigned segmentNumber= 0;
+   gboolean eosDetected= FALSE;
    
    GST_DEBUG_OBJECT(sink, "processFrame: enter");
    
@@ -648,6 +650,7 @@ static void processFrame( GstWesterosSink *sink )
 
    LOCK( sink );
    segmentNumber= sink->segmentNumber;
+   eosDetected= sink->eosDetected;
    UNLOCK( sink );
 
    for( ; ; )
@@ -706,7 +709,7 @@ static void processFrame( GstWesterosSink *sink )
             }
          }
       }
-      else if ( !sink->eosDetected )
+      else if ( !eosDetected )
       {
          int limit= (sink->currentPTS > sink->firstPTS) 
                     ? EOS_DETECT_DELAY
@@ -716,6 +719,7 @@ static void processFrame( GstWesterosSink *sink )
          {
             GST_INFO_OBJECT(sink, "processFrame: eos detected: firstPTS %lld currentPTS %lld\n", sink->firstPTS, sink->currentPTS);
             gst_westeros_sink_eos_detected( sink );
+            sink->soc.noFrameCount= 0;
          }
          break;
       }

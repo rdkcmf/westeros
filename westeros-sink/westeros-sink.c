@@ -341,6 +341,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->opacity= 1.0;
    sink->zorder= 0.0;
    
+   sink->eosEventSeen= FALSE;
    sink->eosDetected= FALSE;
    sink->startPTS= 0;
    sink->firstPTS= 0;
@@ -568,6 +569,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          sink->position= 0;         
          sink->eosDetected= FALSE;
+         sink->eosEventSeen= FALSE;
          if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
          {
             result= GST_STATE_CHANGE_FAILURE;
@@ -608,6 +610,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
       case GST_STATE_CHANGE_PAUSED_TO_READY:
       {
+         sink->eosEventSeen= FALSE;
          sink->eosDetected= FALSE;
          if ( gst_westeros_sink_soc_paused_to_ready( sink, &passToDefault ) )
          {
@@ -745,7 +748,15 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          break;
           
       case GST_EVENT_EOS:
-         gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+         {
+            LOCK( sink );
+            gboolean eosDetected= sink->eosDetected;
+            sink->eosEventSeen= TRUE;
+            UNLOCK( sink );
+            if (eosDetected) {
+               gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+            }
+         }
          break;
          
       #ifdef USE_GST1
@@ -780,6 +791,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             {
                LOCK( sink );
                sink->segmentNumber++;
+               sink->eosEventSeen= FALSE;
                sink->eosDetected= FALSE;
                sink->flushStarted= FALSE;
                sink->position= GST_TIME_AS_NSECONDS(segmentStart);
@@ -914,6 +926,10 @@ static GstFlowReturn gst_westeros_sink_render(GstBaseSink *base_sink, GstBuffer 
 {  
    GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
    
+   LOCK( sink );
+   sink->eosDetected= FALSE;
+   UNLOCK( sink );
+
    gst_westeros_sink_soc_render( sink, buffer );
 
    return GST_FLOW_OK;
@@ -940,9 +956,14 @@ static GstFlowReturn gst_westeros_sink_preroll(GstBaseSink *base_sink, GstBuffer
 
 void gst_westeros_sink_eos_detected( GstWesterosSink *sink )
 {
+   LOCK( sink );
+   gboolean eosEventSeen= sink->eosEventSeen;
    sink->eosDetected= TRUE;
-   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_eos_detected: posting EOS");
-   gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));   
+   UNLOCK( sink );
+   if (eosEventSeen) {
+      GST_DEBUG_OBJECT(sink, "gst_westeros_sink_eos_detected: posting EOS");
+      gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+   }
 }
 
 static gboolean westeros_sink_init (GstPlugin * plugin)

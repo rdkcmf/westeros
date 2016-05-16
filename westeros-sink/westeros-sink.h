@@ -75,6 +75,7 @@ struct _GstWesterosSink
    gboolean startAfterLink;
    gboolean flushStarted;
    
+   gboolean eosEventSeen;
    gboolean eosDetected;
    gint64 startPTS;
    gint64 firstPTS;
