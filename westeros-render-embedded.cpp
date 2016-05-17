@@ -1445,29 +1445,36 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
       return;
    }
 
-   if ( wl_shm_buffer_get( resource ) )
+   if ( resource )
    {
-      wstRendererEMBCommitShm( rendererEMB, surface, resource );
+      if ( wl_shm_buffer_get( resource ) )
+      {
+         wstRendererEMBCommitShm( rendererEMB, surface, resource );
+      }
+      #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+      else if ( rendererEMB->haveWaylandEGL && 
+                (EGL_TRUE == rendererEMB->eglQueryWaylandBufferWL( rendererEMB->eglDisplay,
+                                                                   resource,
+                                                                   EGL_TEXTURE_FORMAT,
+                                                                   &value ) ) )
+      {
+         wstRendererEMBCommitWaylandEGL( rendererEMB, surface, resource, value );
+      }
+      #endif
+      #ifdef ENABLE_SBPROTOCOL
+      else if ( WstSBBufferGet( resource ) )
+      {
+         wstRendererEMBCommitSB( rendererEMB, surface, resource );
+      }
+      #endif
+      else
+      {
+         printf("wstRenderSurfaceCommit: unsupported buffer type\n");
+      }
    }
-   #if defined (WESTEROS_HAVE_WAYLAND_EGL)
-   else if ( rendererEMB->haveWaylandEGL && 
-             (EGL_TRUE == rendererEMB->eglQueryWaylandBufferWL( rendererEMB->eglDisplay,
-                                                                resource,
-                                                                EGL_TEXTURE_FORMAT,
-                                                                &value ) ) )
-   {
-      wstRendererEMBCommitWaylandEGL( rendererEMB, surface, resource, value );
-   }
-   #endif
-   #ifdef ENABLE_SBPROTOCOL
-   else if ( WstSBBufferGet( resource ) )
-   {
-      wstRendererEMBCommitSB( rendererEMB, surface, resource );
-   }
-   #endif
    else
    {
-      printf("wstRenderSurfaceCommit: unsupported buffer type\n");
+      wstRendererEMBFlushSurface( rendererEMB, surface );
    }
 }
 

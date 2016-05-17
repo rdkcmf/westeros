@@ -228,6 +228,7 @@ static WstRendererGL* wstRendererGLCreate( int width, int height );
 static void wstRendererGLDestroy( WstRendererGL *renderer );
 static WstRenderSurface *wstRenderGLCreateSurface(WstRendererGL *renderer);
 static void wstRenderGLDestroySurface( WstRendererGL *renderer, WstRenderSurface *surface );
+static void wstRendererGLFlushSurface( WstRendererGL *renderer, WstRenderSurface *surface );
 static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface *surface, struct wl_resource *resource );
 #if defined (WESTEROS_HAVE_WAYLAND_EGL)
 static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderSurface *surface, 
@@ -484,6 +485,15 @@ static void wstRenderGLDestroySurface( WstRendererGL *renderer, WstRenderSurface
     WST_UNUSED(renderer);    
     if ( surface )
     {
+        wstRendererGLFlushSurface( renderer, surface );
+        free( surface );
+    }
+}
+
+static void wstRendererGLFlushSurface( WstRendererGL *renderer, WstRenderSurface *surface )
+{
+    if ( surface )
+    {
         for( int i= 0; i < MAX_TEXTURES; ++i )
         {
            if ( surface->textureId[i] )
@@ -509,7 +519,6 @@ static void wstRenderGLDestroySurface( WstRendererGL *renderer, WstRenderSurface
         {
            free( surface->mem );
         }
-        free( surface );
     }
 }
 
@@ -2337,29 +2346,36 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
    WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
    EGLint value;
 
-   if ( wl_shm_buffer_get( resource ) )
+   if ( resource )
    {
-      wstRendererGLCommitShm( rendererGL, surface, resource );
+      if ( wl_shm_buffer_get( resource ) )
+      {
+         wstRendererGLCommitShm( rendererGL, surface, resource );
+      }
+      #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+      else if ( rendererGL->haveWaylandEGL && 
+                (EGL_TRUE == rendererGL->eglQueryWaylandBufferWL( rendererGL->eglDisplay,
+                                                                  resource,
+                                                                  EGL_TEXTURE_FORMAT,
+                                                                  &value ) ) )
+      {
+         wstRendererGLCommitWaylandEGL( rendererGL, surface, resource, value );
+      }
+      #endif
+      #ifdef ENABLE_SBPROTOCOL
+      else if ( WstSBBufferGet( resource ) )
+      {
+         wstRendererGLCommitSB( rendererGL, surface, resource );
+      }
+      #endif
+      else
+      {
+         printf("wstRenderSurfaceCommit: unsupported buffer type\n");
+      }
    }
-   #if defined (WESTEROS_HAVE_WAYLAND_EGL)
-   else if ( rendererGL->haveWaylandEGL && 
-             (EGL_TRUE == rendererGL->eglQueryWaylandBufferWL( rendererGL->eglDisplay,
-                                                               resource,
-                                                               EGL_TEXTURE_FORMAT,
-                                                               &value ) ) )
-   {
-      wstRendererGLCommitWaylandEGL( rendererGL, surface, resource, value );
-   }
-   #endif
-   #ifdef ENABLE_SBPROTOCOL
-   else if ( WstSBBufferGet( resource ) )
-   {
-      wstRendererGLCommitSB( rendererGL, surface, resource );
-   }
-   #endif
    else
    {
-      printf("wstRenderSurfaceCommit: unsupported buffer type\n");
+      wstRendererGLFlushSurface( rendererGL, surface );
    }
 }
 
