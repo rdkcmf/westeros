@@ -588,25 +588,32 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
    WstRendererNX *rendererNX= (WstRendererNX*)renderer->renderer;
    EGLint value;
 
-   if ( wl_shm_buffer_get( resource ) )
+   if ( resource )
    {
-      wstRendererNXCommitShm( rendererNX, surface, resource );
+      if ( wl_shm_buffer_get( resource ) )
+      {
+         wstRendererNXCommitShm( rendererNX, surface, resource );
+      }
+      #ifdef ENABLE_SBPROTOCOL
+      else if ( WstSBBufferGet( resource ) )
+      {
+         wstRendererNXCommitSB( rendererNX, surface, resource );
+      }
+      #endif
+      #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+      else if ( wl_egl_get_device_buffer( resource ) )
+      {
+         wstRendererNXCommitBNXS( rendererNX, surface, resource );
+      }
+      #endif
+      else
+      {
+         printf("wstRendererSurfaceCommit: unsupported buffer type\n");
+      }
    }
-   #ifdef ENABLE_SBPROTOCOL
-   else if ( WstSBBufferGet( resource ) )
-   {
-      wstRendererNXCommitSB( rendererNX, surface, resource );
-   }
-   #endif
-   #if defined (WESTEROS_HAVE_WAYLAND_EGL)
-   else if ( wl_egl_get_device_buffer( resource ) )
-   {
-      wstRendererNXCommitBNXS( rendererNX, surface, resource );
-   }
-   #endif
    else
    {
-      printf("wstRendererSurfaceCommit: unsupported buffer type\n");
+      NEXUS_SurfaceClient_Clear(surface->gfxSurfaceClient);
    }
 }
 

@@ -3781,10 +3781,10 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
 {
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
 
+   pthread_mutex_lock( &surface->compositor->mutex );
+
    if ( surface->attachedBufferResource )
-   {
-      pthread_mutex_lock( &surface->compositor->mutex );
-      
+   {      
       if ( surface->compositor->isRepeater )
       {
          if ( wl_resource_instance_of( surface->attachedBufferResource, &wl_buffer_interface, &shm_buffer_interface ) )
@@ -3929,18 +3929,36 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
       else
       {
          WstRendererSurfaceCommit( surface->renderer, surface->surface, surface->attachedBufferResource );
-      }
-
-      wstCompositorScheduleRepaint( surface->compositor );
-
-      if ( surface->attachedBufferResource )
-      {      
-         wl_buffer_send_release( surface->attachedBufferResource );
-         surface->attachedBufferResource= 0;
-      }
-      
-      pthread_mutex_unlock( &surface->compositor->mutex );
+      }      
    }
+   else
+   {
+      if ( surface->compositor->isRepeater )
+      {
+         WstNestedConnectionAttachAndCommit( surface->compositor->nc,
+                                             surface->surfaceNested,
+                                             0, // null buffer
+                                             0,
+                                             0,
+                                             0, //width
+                                             0  //height
+                                           );
+      }
+      else
+      {
+         WstRendererSurfaceCommit( surface->renderer, surface->surface, 0 );
+      }
+   }
+
+   wstCompositorScheduleRepaint( surface->compositor );
+
+   if ( surface->attachedBufferResource )
+   {      
+      wl_buffer_send_release( surface->attachedBufferResource );
+      surface->attachedBufferResource= 0;
+   }
+
+   pthread_mutex_unlock( &surface->compositor->mutex );
 }
 
 static void wstISurfaceSetBufferTransform(struct wl_client *client,
