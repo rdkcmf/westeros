@@ -53,6 +53,7 @@
 #endif
 #include "westeros-simpleshell.h"
 #include "xdg-shell-server-protocol.h"
+#include "vpc-server-protocol.h"
 
 #define WST_MAX_ERROR_DETAIL (512)
 
@@ -122,6 +123,21 @@ typedef struct _WstShellSurface
    const char* title;
    const char* className;
 } WstShellSurface;
+
+typedef struct _WstVpcSurface
+{
+   struct wl_resource *resource;
+   WstSurface *surface;
+   WstCompositor *compositor;
+   struct wl_vpc_surface *vpcSurfaceNested;
+   bool useHWPath;
+   int xTrans;
+   int yTrans;
+   int xScaleNum;
+   int xScaleDenom;
+   int yScaleNum;
+   int yScaleDenom;
+} WstVpcSurface;
 
 typedef struct _WstKeyboard
 {
@@ -211,23 +227,24 @@ typedef struct _WstSurface
    
    WstCompositor *compositor;
    int surfaceId;
-	
-	WstRenderer *renderer;
-	WstRenderSurface *surface;
-	std::vector<WstShellSurface*> shellSurface;
-	struct wl_surface *surfaceNested;
-	const char *roleName;
-	
-	bool visible;
-	int x;
-	int y;
-	int width;
-	int height;
-	float opacity;
-	float zorder;
+   
+   WstRenderer *renderer;
+   WstRenderSurface *surface;
+   std::vector<WstShellSurface*> shellSurface;
+   WstVpcSurface *vpcSurface;
+   struct wl_surface *surfaceNested;
+   const char *roleName;
+   
+   bool visible;
+   int x;
+   int y;
+   int width;
+   int height;
+   float opacity;
+   float zorder;
 
-   const char *name;	
-	int refCount;
+   const char *name;   
+   int refCount;
    
    struct wl_resource *attachedBufferResource;
    int attachedX;
@@ -343,6 +360,7 @@ typedef struct _WstCompositor
 
    int nextSurfaceId;
    std::vector<WstSurface*> surfaces;
+   std::vector<WstVpcSurface*> vpcSurfaces;
    std::map<int32_t, WstSurface*> surfaceMap;
    std::map<struct wl_client*, WstClientInfo*> clientInfoMap;
    std::map<struct wl_resource*, WstSurfaceInfo*> surfaceInfoMap;
@@ -574,6 +592,15 @@ static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, 
 static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state );
 static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
 static void wstDefaultNestedShmFormat( void *userData, uint32_t format );
+static void wstDefaultNestedVpcVideoPathChange( void *userData, struct wl_surface *surfaceNested, uint32_t newVideoPath );
+static void wstDefaultNestedVpcVideoXformChange( void *userData,
+                                                 struct wl_surface *surfaceNested,
+                                                 int32_t x_translation,
+                                                 int32_t y_translation,
+                                                 uint32_t x_scale_num,
+                                                 uint32_t x_scale_denom,
+                                                 uint32_t y_scale_num,
+                                                 uint32_t y_scale_denom );
 static void wstDefaultNestedSurfaceStatus( void *userData, struct wl_surface *surface,
                                            const char *name,
                                            uint32_t visible,
@@ -599,6 +626,12 @@ static void wstIPointerSetCursor( struct wl_client *client,
                                   int32_t hotspot_x,
                                   int32_t hotspot_y );                                  
 static void wstIPointerRelease( struct wl_client *client, struct wl_resource *resource );
+static void wstVpcBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
+static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *resource, 
+                                  uint32_t id, struct wl_resource *surfaceResource);
+static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource);
+static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface );
+static void wstUpdateVPCSurfaces( WstCompositor *ctx );
 static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
 static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_t keyState, uint32_t modifiers );
@@ -1638,6 +1671,11 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
          ctx->renderer->needHolePunch= false;
          ctx->renderer->rects.clear();
          
+         if ( ctx->vpcSurfaces.size() )
+         {
+            wstUpdateVPCSurfaces( ctx );
+         }
+         
          WstRendererUpdateScene( ctx->renderer );
          
          *needHolePunch= ctx->renderer->needHolePunch;
@@ -2384,13 +2422,13 @@ static void* wstCompositorThread( void *arg )
    WstCompositor *ctx= (WstCompositor*)arg;
    int rc;
    struct wl_display *display= 0;
-	struct wl_event_loop *loop= 0;
-	int argc;
-	char arg0[MAX_NESTED_NAME_LEN+1];
-	char arg1[MAX_NESTED_NAME_LEN+1];
-	char arg2[MAX_NESTED_NAME_LEN+1];
-	char arg3[MAX_NESTED_NAME_LEN+1];
-	char *argv[4]= { arg0, arg1, arg2, arg3 };
+   struct wl_event_loop *loop= 0;
+   int argc;
+   char arg0[MAX_NESTED_NAME_LEN+1];
+   char arg1[MAX_NESTED_NAME_LEN+1];
+   char arg2[MAX_NESTED_NAME_LEN+1];
+   char arg3[MAX_NESTED_NAME_LEN+1];
+   char *argv[4]= { arg0, arg1, arg2, arg3 };
 
    ctx->compositorThreadStarted= true;
 
@@ -2411,21 +2449,27 @@ static void* wstCompositorThread( void *arg )
       goto exit;
    }
 
-	if (!wl_global_create(ctx->display, &wl_compositor_interface, 3, ctx, wstCompositorBind))
-	{
+   if (!wl_global_create(ctx->display, &wl_compositor_interface, 3, ctx, wstCompositorBind))
+   {
       ERROR("unable to create wl_compositor interface");
       goto exit;
    }
    
-	if (!wl_global_create(ctx->display, &wl_shell_interface, 1, ctx, wstShellBind))
-	{
+   if (!wl_global_create(ctx->display, &wl_shell_interface, 1, ctx, wstShellBind))
+   {
       ERROR("unable to create wl_shell interface");
       goto exit;
    }
 
-	if (!wl_global_create(ctx->display, &xdg_shell_interface, 1, ctx, wstXdgShellBind))
-	{
+   if (!wl_global_create(ctx->display, &xdg_shell_interface, 1, ctx, wstXdgShellBind))
+   {
       ERROR("unable to create xdg-shell interface");
+      goto exit;
+   }
+   
+   if (!wl_global_create(ctx->display, &wl_vpc_interface, 1, ctx, wstVpcBind ))
+   {
+      ERROR("unable to create wl_vpc interface");
       goto exit;
    }
    
@@ -2441,18 +2485,18 @@ static void* wstCompositorThread( void *arg )
       goto exit;
    }
    
-	if (!wl_global_create(ctx->display, &wl_seat_interface, 4, ctx->seat, wstSeatBind))
-	{
+   if (!wl_global_create(ctx->display, &wl_seat_interface, 4, ctx->seat, wstSeatBind))
+   {
       ERROR("unable to create wl_seat interface");
       goto exit;
    }
 
-	loop= wl_display_get_event_loop(ctx->display);
-	if ( !loop )
-	{
+   loop= wl_display_get_event_loop(ctx->display);
+   if ( !loop )
+   {
       ERROR("unable to get wayland event loop");
       goto exit;
-	}
+   }
    
    if ( ctx->displayName )
    {
@@ -2903,7 +2947,7 @@ static const struct wl_buffer_interface shm_buffer_interface = {
 static const struct wl_compositor_interface compositor_interface= 
 {
    wstICompositorCreateSurface,
-	wstICompositorCreateRegion
+   wstICompositorCreateRegion
 };
 
 static const struct wl_surface_interface surface_interface= 
@@ -3004,6 +3048,11 @@ static const struct wl_pointer_interface pointer_interface=
    wstIPointerRelease
 };
 
+static const struct wl_vpc_interface vpc_interface_impl=
+{
+   wstIVpcGetVpcSurface
+};
+
 static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
    WstShm *shm= (WstShm*)data;
@@ -3024,8 +3073,8 @@ static void wstShmBind( struct wl_client *client, void *data, uint32_t version, 
    wl_list_insert( &shm->resourceList, wl_resource_get_link(resource) );
    wl_resource_set_implementation(resource, &shm_interface, shm, wstResourceUnBindCallback);
 
-	wl_shm_send_format(resource, WL_SHM_FORMAT_ARGB8888);
-	wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
+   wl_shm_send_format(resource, WL_SHM_FORMAT_ARGB8888);
+   wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
 }
 
 static bool wstShmInit( WstCompositor *ctx )
@@ -3526,6 +3575,16 @@ static void wstSurfaceDestroy( WstSurface *surface )
       {
          shellSurface->surface= 0;
          wl_resource_destroy( shellSurface->resource );
+      }
+   }
+   
+   // Cleanup vpc surface
+   if ( surface->vpcSurface )
+   {
+      if ( surface->vpcSurface->resource )
+      {
+         surface->vpcSurface->surface= 0;
+         wl_resource_destroy( surface->vpcSurface->resource );
       }
    }
 
@@ -4074,8 +4133,8 @@ static bool wstOutputInit( WstCompositor *ctx )
    output->transform= WL_OUTPUT_TRANSFORM_NORMAL;
    output->currentScale= 1;
    
-	if (!wl_global_create(ctx->display, &wl_output_interface, 2, output, wstOutputBind))
-	{
+   if (!wl_global_create(ctx->display, &wl_output_interface, 2, output, wstOutputBind))
+   {
       ERROR("unable to create wl_output interface");
       goto exit;
    }
@@ -5174,6 +5233,59 @@ static void wstDefaultNestedShmFormat( void *userData, uint32_t format )
    }
 }
 
+static void wstDefaultNestedVpcVideoPathChange( void *userData, struct wl_surface *surfaceNested, uint32_t newVideoPath )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   WstSurface *surface= 0;
+   
+   for( int i= 0; i < ctx->surfaces.size(); ++i )
+   {
+      WstSurface *surface= ctx->surfaces[i];
+      if ( surface->surfaceNested == surfaceNested )
+      {
+         WstVpcSurface *vpcSurface= surface->vpcSurface;
+         if ( vpcSurface )
+         {
+            wl_vpc_surface_send_video_path_change( vpcSurface->resource, newVideoPath ); 
+         }
+         break;
+      }
+   }
+}
+
+static void wstDefaultNestedVpcVideoXformChange( void *userData, 
+                                                 struct wl_surface *surfaceNested,
+                                                 int32_t x_translation,
+                                                 int32_t y_translation,
+                                                 uint32_t x_scale_num,
+                                                 uint32_t x_scale_denom,
+                                                 uint32_t y_scale_num,
+                                                 uint32_t y_scale_denom )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+   WstSurface *surface= 0;
+   
+   for( int i= 0; i < ctx->surfaces.size(); ++i )
+   {
+      WstSurface *surface= ctx->surfaces[i];
+      if ( surface->surfaceNested == surfaceNested )
+      {
+         WstVpcSurface *vpcSurface= surface->vpcSurface;
+         if ( vpcSurface )
+         {
+            wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
+                                                    x_translation,
+                                                    y_translation,
+                                                    x_scale_num,
+                                                    x_scale_denom,
+                                                    y_scale_num,
+                                                    y_scale_denom );                                                 
+         }
+         break;
+      }
+   }
+}                                                 
+
 static void wstSetDefaultNestedListener( WstCompositor *ctx )
 {
    ctx->nestedListenerUserData= ctx;
@@ -5194,6 +5306,8 @@ static void wstSetDefaultNestedListener( WstCompositor *ctx )
    ctx->nestedListener.pointerHandleButton= wstDefaultNestedPointerHandleButton;
    ctx->nestedListener.pointerHandleAxis= wstDefaultNestedPointerHandleAxis;
    ctx->nestedListener.shmFormat= wstDefaultNestedShmFormat;
+   ctx->nestedListener.vpcVideoPathChange= wstDefaultNestedVpcVideoPathChange;
+   ctx->nestedListener.vpcVideoXformChange= wstDefaultNestedVpcVideoXformChange;
 }
 
 static bool wstSeatInit( WstCompositor *ctx )
@@ -5589,6 +5703,159 @@ static void wstIPointerRelease( struct wl_client *client, struct wl_resource *re
    WstCompositor *compositor= pointer->seat->compositor;
 
    wl_resource_destroy(resource);
+}
+
+static void wstVpcBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
+{
+   WstCompositor *ctx= (WstCompositor*)data;
+   struct wl_resource *resource;
+
+   resource= wl_resource_create(client, 
+                                &wl_vpc_interface,
+                                MIN(version, 1), 
+                                id);
+   if (!resource)
+   {
+      wl_client_post_no_memory(client);
+      return;
+   }
+
+   wl_resource_set_implementation(resource, &vpc_interface_impl, ctx, NULL);
+}
+
+static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *resource, uint32_t id, struct wl_resource *surfaceResource )
+{
+   WstSurface *surface= (WstSurface*)wl_resource_get_user_data(surfaceResource);
+   WstVpcSurface *vpcSurface= 0;
+
+   vpcSurface= (WstVpcSurface*)calloc(1,sizeof(WstVpcSurface));
+   if ( !vpcSurface )
+   {
+      wl_resource_post_no_memory(surfaceResource);
+      return;
+   }
+   
+   vpcSurface->resource= wl_resource_create(client,
+                                            &wl_vpc_surface_interface, 1, id);
+   if (!vpcSurface->resource) 
+   {
+      free(vpcSurface);
+      wl_client_post_no_memory(client);
+      return;
+   }
+   
+   wl_resource_set_implementation(vpcSurface->resource,
+                                  NULL,
+                                  vpcSurface, wstDestroyVpcSurfaceCallback );
+   
+   vpcSurface->surface= surface;
+   vpcSurface->xScaleNum= 1;
+   vpcSurface->xScaleDenom= 1;
+   vpcSurface->yScaleNum= 1;
+   vpcSurface->yScaleDenom= 1;
+   vpcSurface->compositor= surface->compositor;
+   surface->compositor->vpcSurfaces.push_back( vpcSurface );
+   
+   surface->vpcSurface= vpcSurface;
+   
+   if ( surface->compositor->isRepeater )
+   {
+      vpcSurface->vpcSurfaceNested= WstNestedConnectionGetVpcSurface( surface->compositor->nc,
+                                                                      surface->surfaceNested );
+   }
+}
+
+static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource)
+{
+   WstVpcSurface *vpcSurface= (WstVpcSurface*)wl_resource_get_user_data(resource);
+
+   vpcSurface->resource= NULL;
+   wstVpcSurfaceDestroy(vpcSurface);
+}
+
+static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
+{
+   if ( vpcSurface->compositor )
+   {
+      WstCompositor *ctx= vpcSurface->compositor;
+
+      if ( vpcSurface->vpcSurfaceNested )
+      {
+         WstNestedConnectionDestroyVpcSurface( ctx->nc, vpcSurface->vpcSurfaceNested );
+         vpcSurface->vpcSurfaceNested= 0;
+      }
+      
+      // Remove from vpc surface list
+      for ( std::vector<WstVpcSurface*>::iterator it= ctx->vpcSurfaces.begin(); 
+            it != ctx->vpcSurfaces.end();
+            ++it )
+      {
+         if ( vpcSurface == (*it) )
+         {
+            ctx->vpcSurfaces.erase(it);
+            break;
+         }
+      }
+   }
+
+   if ( vpcSurface->surface )
+   {
+      vpcSurface->surface->vpcSurface= 0;
+   }
+   
+   assert(vpcSurface->resource == NULL);
+   
+   free( vpcSurface );
+}
+
+static void wstUpdateVPCSurfaces( WstCompositor *ctx )
+{
+   bool useHWPath= ctx->renderer->fastHint;
+   int scaleXNum= ctx->renderer->matrix[0]*1000000;
+   int scaleXDenom= 1000000; 
+   int scaleYNum= ctx->renderer->matrix[5]*1000000;
+   int scaleYDenom= 1000000;
+   int transX= (int)ctx->renderer->matrix[12];
+   int transY= (int)ctx->renderer->matrix[13];
+   
+   for ( std::vector<WstVpcSurface*>::iterator it= ctx->vpcSurfaces.begin(); 
+         it != ctx->vpcSurfaces.end();
+         ++it )
+   {
+      WstVpcSurface *vpcSurface= (*it);
+
+      if ( (transX != vpcSurface->xTrans) ||
+           (transY != vpcSurface->yTrans) ||
+           (scaleXNum != vpcSurface->xScaleNum) ||
+           (scaleXDenom != vpcSurface->xScaleDenom) ||
+           (scaleYNum != vpcSurface->yScaleNum) ||
+           (scaleYDenom != vpcSurface->yScaleDenom) )
+      {
+         vpcSurface->xTrans= transX;
+         vpcSurface->yTrans= transY;
+         vpcSurface->xScaleNum= scaleXNum;
+         vpcSurface->xScaleDenom= scaleXDenom;
+         vpcSurface->yScaleNum= scaleYNum;
+         vpcSurface->yScaleDenom= scaleYDenom;
+         
+         wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
+                                                 vpcSurface->xTrans,
+                                                 vpcSurface->yTrans,
+                                                 vpcSurface->xScaleNum,
+                                                 vpcSurface->xScaleDenom,
+                                                 vpcSurface->yScaleNum,
+                                                 vpcSurface->yScaleDenom );                                                 
+      }
+      
+      if ( useHWPath != vpcSurface->useHWPath )
+      {
+         DEBUG("vpcSurface %p useHWPath %d\n", vpcSurface, useHWPath );
+         vpcSurface->useHWPath= useHWPath;
+         wl_vpc_surface_send_video_path_change( vpcSurface->resource, 
+                                                useHWPath ? WL_VPC_SURFACE_PATHWAY_HARDWARE
+                                                          : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
+      }
+   }
 }
 
 #define TEMPFILE_PREFIX "/tmp/westeros-"
@@ -6252,10 +6519,10 @@ static const struct wl_seat_listener dcSeatListener = {
 
 static void dcRegistryHandleGlobal(void *data, 
                                  struct wl_registry *registry, uint32_t id,
-		                           const char *interface, uint32_t version)
+                                 const char *interface, uint32_t version)
 {
    WstCompositor *compositor= (WstCompositor*)data;
-	int len;
+   int len;
 
    len= strlen(interface);
    if ( (len==6) && !strncmp(interface, "wl_shm", len)) {
@@ -6266,13 +6533,13 @@ static void dcRegistryHandleGlobal(void *data,
    } 
    else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
       compositor->dcSeat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
-		wl_seat_add_listener(compositor->dcSeat, &dcSeatListener, compositor);
+      wl_seat_add_listener(compositor->dcSeat, &dcSeatListener, compositor);
    } 
 }
 
 static void dcRegistryHandleGlobalRemove(void *data, 
                                        struct wl_registry *registry,
-			                              uint32_t name)
+                                       uint32_t name)
 {
    WESTEROS_UNUSED(data);
    WESTEROS_UNUSED(registry);
@@ -6281,8 +6548,8 @@ static void dcRegistryHandleGlobalRemove(void *data,
 
 static const struct wl_registry_listener dcRegistryListener = 
 {
-	dcRegistryHandleGlobal,
-	dcRegistryHandleGlobalRemove
+   dcRegistryHandleGlobal,
+   dcRegistryHandleGlobalRemove
 };
 
 static bool wstInitializeDefaultCursor( WstCompositor *compositor, 
@@ -6297,9 +6564,9 @@ static bool wstInitializeDefaultCursor( WstCompositor *compositor,
       struct wl_buffer *buffer= 0;
       int imgDataSize;
       char filename[32];
-	   int fd;
-	   int lenDidWrite;
-	   void *data;
+      int fd;
+      int lenDidWrite;
+      void *data;
 
       compositor->dcDisplay= wl_display_connect( compositor->displayName );
       if ( !compositor->display )
@@ -6354,22 +6621,22 @@ static bool wstInitializeDefaultCursor( WstCompositor *compositor,
          goto exit;      
       }
 
-	   data = mmap(NULL, imgDataSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	   if ( data == MAP_FAILED ) 
-	   {
-	      goto exit;
-	   }
-	
-	   compositor->dcPoolData= data;
-	   compositor->dcPoolSize= imgDataSize;
-	   compositor->dcPoolFd= fd;
-	   memcpy( data, imgData, height*width*4 );
+      data = mmap(NULL, imgDataSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+      if ( data == MAP_FAILED ) 
+      {
+         goto exit;
+      }
+   
+      compositor->dcPoolData= data;
+      compositor->dcPoolSize= imgDataSize;
+      compositor->dcPoolFd= fd;
+      memcpy( data, imgData, height*width*4 );
       
       compositor->dcPool= wl_shm_create_pool(compositor->dcShm, fd, imgDataSize);
       wl_display_roundtrip(compositor->dcDisplay);
 
-    	buffer= wl_shm_pool_create_buffer(compositor->dcPool, 
-    	                                  0, //offset
+      buffer= wl_shm_pool_create_buffer(compositor->dcPool, 
+                                        0, //offset
                                         width,
                                         height,
                                         width*4, //stride

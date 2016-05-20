@@ -49,6 +49,16 @@ typedef void (*WSTCallbackPointerHandleAxis)( void *userData, uint32_t time, uin
 
 typedef void (*WSTCallbackShmFormat)( void *userData, uint32_t format );
 
+typedef void (*WSTCallbackVpcVideoPathChange)( void *userData, struct wl_surface *surface, uint32_t new_pathway );
+typedef void (*WSTCallbackVpcVideoXformChange)( void *userData,
+                                                struct wl_surface *surface,
+                                                int32_t x_translation,
+                                                int32_t y_translation,
+                                                uint32_t x_scale_num,
+                                                uint32_t x_scale_denom,
+                                                uint32_t y_scale_num,
+                                                uint32_t y_scale_denom );
+
 typedef struct _WstNestedConnectionListener
 {
    WSTCallbackConnectionEnded connectionEnded;
@@ -68,6 +78,8 @@ typedef struct _WstNestedConnectionListener
    WSTCallbackPointerHandleButton pointerHandleButton;
    WSTCallbackPointerHandleAxis pointerHandleAxis;
    WSTCallbackShmFormat shmFormat;
+   WSTCallbackVpcVideoPathChange vpcVideoPathChange;
+   WSTCallbackVpcVideoXformChange vpcVideoXformChange;
 } WstNestedConnectionListener;
 
 WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx, 
@@ -88,6 +100,10 @@ wl_surface* WstNestedConnectionGetCompositionSurface( WstNestedConnection *nc );
 struct wl_surface* WstNestedConnectionCreateSurface( WstNestedConnection *nc );
 
 void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surface *surface );
+
+struct wl_vpc_surface* WstNestedConnectionGetVpcSurface( WstNestedConnection *nc, struct wl_surface *surface );
+
+void WstNestedConnectionDestroyVpcSurface( WstNestedConnection *nc, struct wl_vpc_surface *vpcSurface );
 
 void WstNestedConnectionSurfaceSetVisible( WstNestedConnection *nc, 
                                            struct wl_surface *surface,

@@ -112,11 +112,14 @@ endif
 libwesteros_compositor_la_SOURCES = \
    westeros-compositor.cpp \
    westeros-nested.cpp \
-   westeros-render.cpp
+   westeros-render.cpp \
+   protocol/vpc-protocol.c
 libwesteros_compositor_la_include_HEADERS = \
    westeros-compositor.h \
-   westeros-render.h
+   westeros-render.h \
+   protocol/vpc-client-protocol.h
 libwesteros_compositor_la_includedir = $(includedir)
+libwesteros_compositor_la_CXXFLAGS = $(AM_CXXFLAGS) -I$(srcdir)/protocol
 libwesteros_compositor_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_SERVER_LIBS) \

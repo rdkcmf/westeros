@@ -28,6 +28,7 @@
 #include "nexus_simple_video_decoder.h"
 
 #include "simplebuffer-client-protocol.h"
+#include "vpc-client-protocol.h"
 
 #define WESTEROS_SINK_CAPS \
            "video/x-brcm-avd;"
@@ -61,7 +62,22 @@ struct _GstWesterosSinkSoc
    int captureCount;
    int frameCount;
    int noFrameCount;
+   gboolean captureEnabled;
+   
+   int transX;
+   int transY;
+   int scaleXNum;
+   int scaleXDenom;
+   int scaleYNum;
+   int scaleYDenom;
 
+   int videoX;
+   int videoY;
+   int videoWidth;
+   int videoHeight;
+
+   struct wl_vpc *vpc;
+   struct wl_vpc_surface *vpcSurface;
    struct wl_sb *sb;
    int activeBuffers;
 };

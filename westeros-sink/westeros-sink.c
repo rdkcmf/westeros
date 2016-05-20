@@ -330,11 +330,12 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    
    sink->srcWidth= 1280;
    sink->srcHeight= 720;
-    
+
    sink->windowX= DEFAULT_WINDOW_X;
    sink->windowY= DEFAULT_WINDOW_Y;
    sink->windowWidth= DEFAULT_WINDOW_WIDTH;
    sink->windowHeight= DEFAULT_WINDOW_HEIGHT;
+   sink->windowChange= false;    
    
    sink->visible= false;
    
@@ -476,11 +477,14 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
             GST_ERROR( "Bad window properties string" );
          }
          else
-         {         
+         {
+            LOCK( sink );
+            sink->windowChange= true;       
             sink->windowX= atoi( parts[0] );
             sink->windowY= atoi( parts[1] );
             sink->windowWidth= atoi( parts[2] );
             sink->windowHeight= atoi( parts[3] );
+            UNLOCK( sink );
             
             if ( sink->shell && sink->surfaceId )
             {

@@ -17,7 +17,7 @@
 # limitations under the License.
 #
 
-all: xdgv4 xdgv5
+all: xdgv4 xdgv5 vpc
 
 xdgv4: xgd-server-header-v4 xgd-code-v4
 
@@ -35,7 +35,18 @@ xgd-server-header-v5:
 xgd-code-v5:
 	$(SCANNER_TOOL) code < version5/xdg-shell.xml > version5/xdg-shell-protocol.c
 
+vpc: vpc-client-header vpc-server-header vpc-code
+
+vpc-client-header:
+	$(SCANNER_TOOL) client-header < vpc.xml > vpc-client-protocol.h
+
+vpc-server-header:
+	$(SCANNER_TOOL) server-header < vpc.xml > vpc-server-protocol.h
+
+vpc-code:
+	$(SCANNER_TOOL) code < vpc.xml > vpc-protocol.c
+
 clean:
-	@rm -f xdg-shell-server-protocol.h xdg-shell-protocol.c
+	@rm -f xdg-shell-server-protocol.h xdg-shell-protocol.c vpc-client-protocol.h vpc-server-protocol.h vpc-protocol.c
 
 

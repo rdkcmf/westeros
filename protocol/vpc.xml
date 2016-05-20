@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wl_vpc">
+  
+    <copyright>
+    If not stated otherwise in this file or this component's Licenses.txt file the
+    following copyright and licenses apply:
+
+    Copyright 2016 RDK Management
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+    -------
+    Copyright © 2008-2011 Kristian Høgsberg
+    Copyright © 2010-2011 Intel Corporation
+    Copyright © 2016 RDK Management
+    Permission to use, copy, modify, distribute, and sell this
+    software and its documentation for any purpose is hereby granted
+    without fee, provided that\n the above copyright notice appear in
+    all copies and that both that copyright notice and this permission
+    notice appear in supporting documentation, and that the name of
+    the copyright holders not be used in advertising or publicity
+    pertaining to distribution of the software without specific,
+    written prior permission.  The copyright holders make no
+    representations about the suitability of this software for any
+    purpose.  It is provided "as is" without express or implied
+    warranty.
+    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    THIS SOFTWARE.
+  </copyright>
+  <interface name="wl_vpc" version="1">
+    
+    <description summary="Video path control">
+      The video path control protocol provides a mechanism for the compositor and client to
+      cooperate in the control of the decoding path used for video.  The compositor can
+      request the client to use a fully accelerated hardware path or a video-as-graphics
+      path.
+    </description>
+    
+    <request name="get_vpc_surface">
+      <arg name="id" type="new_id" interface="wl_vpc_surface"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+    
+  </interface>
+
+  <interface name="wl_vpc_surface" version="1">
+
+    <description summary="vpc surface">
+    An interface that may be implemented by a wl_surface which is being used to
+    present video which allows the compositor to control the decoding pathway
+    being used for the video and to adjust its positioning.
+    </description>
+
+    <enum name="pathway">
+      <entry name="unspecified" value="0"/>
+      <entry name="hardware" value="1"/>
+      <entry name="graphics" value="2"/>
+    </enum>
+
+    <event name="video_path_change">
+      <arg name="new_pathway" type="uint"/>
+    </event>
+
+    <event name="video_xform_change">
+      <arg name="x_translation" type="int" summary="x-axis translation"/>
+      <arg name="y_translation" type="int" summary="y-axis translation"/>
+      <arg name="x_scale_num" type="uint"  summary="x scale factor numerator"/>
+      <arg name="x_scale_denom" type="uint"  summary="x scale factor denominator"/>
+      <arg name="y_scale_num" type="uint"  summary="y scale factor numerator"/>
+      <arg name="y_scale_denom" type="uint"  summary="y scale factor denominator"/>
+    </event>
+
+  </interface>
+
+</protocol>
+

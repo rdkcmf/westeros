@@ -66,6 +66,7 @@ struct _GstWesterosSink
    int windowY;
    int windowWidth;
    int windowHeight;
+   bool windowChange;
    
    bool visible;
    float opacity;

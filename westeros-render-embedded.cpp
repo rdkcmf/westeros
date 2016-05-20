@@ -1772,6 +1772,9 @@ static bool wstRendererActivateFastPath( WstRendererEMB *renderer )
                                                         surface->y, 
                                                         surface->width, 
                                                         surface->height );
+            renderer->rendererFast->surfaceSetOpacity( renderer->rendererFast,
+                                                       surface->surfaceFast,
+                                                       surface->opacity );
          }
       }
       
@@ -1799,7 +1802,7 @@ static void wstRendererDeactivateFastPath( WstRendererEMB *renderer )
       for( int i= 0; i < imax; ++i )
       {
          WstRenderSurface *surface= renderer->surfaces[i];
-         if ( surface->surfaceFast )
+         if ( surface->surfaceFast && (surface->zorder != 1000000.0) )
          {
             renderer->rendererFast->surfaceDestroy( renderer->rendererFast, surface->surfaceFast );
             surface->surfaceFast= 0;

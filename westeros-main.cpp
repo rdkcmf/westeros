@@ -27,6 +27,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/inotify.h>
@@ -73,11 +74,37 @@ typedef struct _AppCtx
    float alpha;
    int x, y, width, height;
    std::vector<WstRect> rects;
+   int hints;
+   int tickCount;
    #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
    EGLDisplay eglDisplay;
    EGLConfig eglConfig;
    EGLContext eglContext;   
    EGLSurface eglSurface;
+   GLuint fboId;
+   GLuint fboTextureId;
+   GLuint fboProgram;
+   GLuint fboFrag;
+   GLuint fboVert;
+   GLint fboPosLoc;
+   GLint fboUVLoc;
+   GLint fboResLoc;
+   GLint fboMatrixLoc;
+   GLint fboAlphaLoc;
+   GLint fboTextureLoc;
+   bool enableAnimation;
+   bool animationRunning;
+   float scale;
+   float startScale;
+   float targetScale;
+   int transX;
+   int startTransX;
+   int targetTransX;
+   int transY;
+   int startTransY;
+   int targetTransY;
+   long long animationStartTime;
+   long long animationDuration;
    #endif
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
    bool showCursor;
@@ -116,8 +143,11 @@ static void showUsage()
    printf("  --nestedInput : register nested input listeners\n" ); 
    printf("  --width <width> : width of nested composition surface\n" );
    printf("  --height <width> : height of nested composition surface\n" );
+   #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+   printf("  --animate : enable animation (use with --embedded)\n" );
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
    printf("  --enableCursor : display default pointer cursor\n" );
+   #endif
    #endif
    printf("  -? : show usage\n" );
    printf("\n" );
@@ -296,6 +326,244 @@ static void termEGL( AppCtx *appCtx )
       appCtx->glCtx= 0;
    }
    #endif
+}
+
+static const char *fragShaderText =
+  "#ifdef GL_ES\n"
+  "precision mediump float;\n"
+  "#endif\n"
+  "uniform sampler2D s_texture;\n"
+  "uniform float u_alpha;\n"
+  "varying vec2 v_uv;\n"
+  "void main()\n"
+  "{\n"
+  "  gl_FragColor = texture2D(s_texture, v_uv) * u_alpha;\n"
+  "}\n";
+
+static const char *vertexShaderText =
+  "uniform vec2 u_resolution;\n"
+  "uniform mat4 amymatrix;\n"
+  "attribute vec2 pos;\n"
+  "attribute vec2 uv;\n"
+  "varying vec2 v_uv;\n"
+  "void main()\n"
+  "{\n"
+  "  vec4 p = amymatrix * vec4(pos, 0, 1);\n"
+  "  vec4 zeroToOne = p / vec4(u_resolution, u_resolution.x, 1);\n"
+  "  vec4 zeroToTwo = zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
+  "  vec4 clipSpace = zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
+  "  clipSpace.w = 1.0+clipSpace.z;\n"
+  "  gl_Position =  clipSpace * vec4(1, -1, 1, 1);\n"
+  "  v_uv = uv;\n"
+  "}\n";
+
+static GLuint createShader(AppCtx *appCtx, GLenum shaderType, const char *shaderSource )
+{
+   GLuint shader= 0;
+   GLint shaderStatus;
+   GLsizei length;
+   char logText[1000];
+   
+   shader= glCreateShader( shaderType );
+   if ( shader )
+   {
+      glShaderSource( shader, 1, (const char **)&shaderSource, NULL );
+      glCompileShader( shader );
+      glGetShaderiv( shader, GL_COMPILE_STATUS, &shaderStatus );
+      if ( !shaderStatus )
+      {
+         glGetShaderInfoLog( shader, sizeof(logText), &length, logText );
+         printf("Error compiling %s shader: %*s\n",
+                ((shaderType == GL_VERTEX_SHADER) ? "vertex" : "fragment"),
+                length,
+                logText );
+      }
+   }
+   
+   return shader;
+}
+
+static void createFBO( AppCtx *appCtx )
+{
+   GLenum statusFBO;
+	GLuint frag, vert;
+	GLuint program;
+	GLint statusShader;
+
+   glGenFramebuffers( 1, &appCtx->fboId );
+   glGenTextures( 1, &appCtx->fboTextureId );
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, appCtx->fboTextureId);
+   glTexImage2D( GL_TEXTURE_2D,
+                 0, //level
+                 GL_RGBA, //internalFormat
+                 appCtx->width,
+                 appCtx->height,
+                 0, // border
+                 GL_RGBA, //format
+                 GL_UNSIGNED_BYTE,
+                 NULL );
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+   glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+   glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, appCtx->fboTextureId, 0 );
+   statusFBO= glCheckFramebufferStatus( GL_FRAMEBUFFER );
+   if ( statusFBO != GL_FRAMEBUFFER_COMPLETE )
+   {
+      printf("Error: bad fbo status: %d\n", statusFBO );
+   }
+   glBindFramebuffer( GL_FRAMEBUFFER, 0 );   
+
+
+	frag= createShader(appCtx, GL_FRAGMENT_SHADER, fragShaderText);
+	vert= createShader(appCtx, GL_VERTEX_SHADER, vertexShaderText);
+
+	program= glCreateProgram();
+	glAttachShader(program, frag);
+	glAttachShader(program, vert);
+
+   appCtx->fboPosLoc= 0;
+   appCtx->fboUVLoc= 1;
+   glBindAttribLocation(program, appCtx->fboPosLoc, "pos");
+   glBindAttribLocation(program, appCtx->fboUVLoc, "uv");
+   
+	glLinkProgram(program);
+
+	glGetProgramiv(program, GL_LINK_STATUS, &statusShader);
+	if (!statusShader) 
+	{
+		char log[1000];
+		GLsizei len;
+		glGetProgramInfoLog(program, 1000, &len, log);
+		fprintf(stderr, "Error: linking:\n%*s\n", len, log);
+	}
+
+   appCtx->fboResLoc= glGetUniformLocation(program,"u_resolution");
+   appCtx->fboMatrixLoc= glGetUniformLocation(program,"amymatrix");
+   appCtx->fboAlphaLoc= glGetUniformLocation(program,"u_alpha");
+   appCtx->fboTextureLoc= glGetUniformLocation(program,"s_texture");
+   
+   appCtx->fboProgram= program;
+   appCtx->fboVert= vert;
+   appCtx->fboFrag= frag;
+}
+
+static void destroyFBO( AppCtx *appCtx )
+{
+   if ( appCtx->fboVert )
+   {
+      glDeleteShader( appCtx->fboVert );
+      appCtx->fboVert= 0;
+   }
+   if ( appCtx->fboFrag )
+   {
+      glDeleteShader( appCtx->fboFrag );
+      appCtx->fboFrag= 0;
+   }
+   if ( appCtx->fboProgram )
+   {
+      glDeleteProgram( appCtx->fboProgram );
+      appCtx->fboProgram= 0;
+   }
+   if ( appCtx->fboId )
+   {
+      glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+      glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0 );
+      glBindFramebuffer( GL_FRAMEBUFFER, 0 );
+      if ( appCtx->fboTextureId )
+      {
+         glDeleteTextures( 1, &appCtx->fboTextureId );
+         appCtx->fboTextureId= 0;
+      }
+      glDeleteFramebuffers( 1, &appCtx->fboId );
+      appCtx->fboId= 0;
+   }
+}
+
+static void drawFBO ( AppCtx *appCtx )
+{
+   int x, y, w, h;
+   
+   x= appCtx->x;
+   y= appCtx->y;
+   w= appCtx->width;
+   h= appCtx->height;
+      
+   const float verts[4][2] = 
+   {
+      { x, y },
+      { x+w, y },
+      { x,  y+h },
+      { x+w, y+h }
+   };
+ 
+   #if defined (WESTEROS_INVERTED_Y)
+   const float uv[4][2] = 
+   {
+      { 0,  0 },
+      { 1,  0 },
+      { 0,  1 },
+      { 1,  1 }
+   };
+   #else
+   const float uv[4][2] = 
+   {
+      { 0,  1 },
+      { 1,  1 },
+      { 0,  0 },
+      { 1,  0 }
+   };
+   #endif
+   
+   glUseProgram(appCtx->fboProgram);
+   glUniform2f(appCtx->fboResLoc, appCtx->width, appCtx->height);
+   glUniformMatrix4fv(appCtx->fboMatrixLoc, 1, GL_FALSE, (GLfloat*)appCtx->matrix);
+   glUniform1f(appCtx->fboAlphaLoc, 1.0f);
+
+   glActiveTexture(GL_TEXTURE0); 
+   glBindTexture(GL_TEXTURE_2D, appCtx->fboTextureId);
+   glUniform1i(appCtx->fboTextureLoc, 0);
+   glVertexAttribPointer(appCtx->fboPosLoc, 2, GL_FLOAT, GL_FALSE, 0, verts);
+   glVertexAttribPointer(appCtx->fboUVLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
+   glEnableVertexAttribArray(appCtx->fboPosLoc);
+   glEnableVertexAttribArray(appCtx->fboUVLoc);
+   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+   glDisableVertexAttribArray(appCtx->fboPosLoc);
+   glDisableVertexAttribArray(appCtx->fboUVLoc);
+
+   glFlush();
+   glFinish();
+}
+
+static bool isRotated( AppCtx *appCtx )
+{
+   float *f= appCtx->matrix;
+   const float e= 1.0e-2;
+   
+   if ( (fabsf(f[1]) > e) ||
+        (fabsf(f[2]) > e) ||
+        (fabsf(f[4]) > e) ||
+        (fabsf(f[6]) > e) ||
+        (fabsf(f[8]) > e) ||
+        (fabsf(f[9]) > e) )
+   {
+      return true;
+   }
+   
+   return false;
+}
+
+static long long getCurrentTimeMillis(void)
+{
+   struct timeval tv;
+   long long utcCurrentTimeMillis;
+
+   gettimeofday(&tv,0);
+   utcCurrentTimeMillis= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+
+   return utcCurrentTimeMillis;
 }
 #endif
 
@@ -975,6 +1243,11 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
          appCtx->height= 720;
          
          appCtx->alpha= 1.0f;
+         appCtx->hints= WstHints_noRotation;
+         appCtx->tickCount= 0;
+         appCtx->animationRunning= false;
+         appCtx->scale= 1.0;
+         appCtx->targetScale= 1.0;
       }
       
       result= true;
@@ -1277,6 +1550,7 @@ void compositorTerminated( WstCompositor *wctx, void *userData )
    #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
    if ( appCtx->isEmbedded )
    {
+      destroyFBO( appCtx );
       termEGL( appCtx );
    }
    #endif
@@ -1292,22 +1566,27 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
    if ( appCtx->isEmbedded )
    {
       bool needHolePunch= false;
-      int hints= WstHints_noRotation;
 
       if ( appCtx->eglDisplay == EGL_NO_DISPLAY )
       {
          setupEGL( appCtx );
-      }      
+         createFBO( appCtx );
+      }
 
       eglMakeCurrent( appCtx->eglDisplay, 
                       appCtx->eglSurface, 
                       appCtx->eglSurface, 
                       appCtx->eglContext );
 
+      glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+      glClear( GL_COLOR_BUFFER_BIT );
+
+      glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+
       GLfloat priorColor[4];
       glGetFloatv( GL_COLOR_CLEAR_VALUE, priorColor );
       glBlendFuncSeparate( GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE );
-      glClearColor( 0.0, 0.0, 0.0, 0.0 );
+      glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
       glClear( GL_COLOR_BUFFER_BIT );
       glEnable(GL_BLEND);
 
@@ -1319,12 +1598,52 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
                                     appCtx->height,
                                     appCtx->matrix,
                                     appCtx->alpha,
-                                    hints,
+                                    appCtx->hints,
                                     &needHolePunch,
                                     appCtx->rects );
 
-      glClearColor( priorColor[0], priorColor[1], priorColor[2], priorColor[3] );   
+      glBindFramebuffer( GL_FRAMEBUFFER, 0 );
 
+      if ( needHolePunch )
+      {
+         GLint priorBox[4];
+         GLint viewport[4];
+         bool wasEnabled= glIsEnabled(GL_SCISSOR_TEST);
+         glGetIntegerv( GL_SCISSOR_BOX, priorBox );
+         glGetIntegerv( GL_VIEWPORT, viewport );
+
+         // Fill with opaque black to show that hole punch is working        
+         glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
+         glClear( GL_COLOR_BUFFER_BIT );
+
+         glEnable( GL_SCISSOR_TEST );
+         glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+         for( unsigned int i= 0; i < appCtx->rects.size(); ++i )
+         {
+            WstRect r= appCtx->rects[i];
+            if ( r.width && r.height )
+            {
+               glScissor( r.x, viewport[3]-(r.y+r.height), r.width, r.height );
+               glClear( GL_COLOR_BUFFER_BIT );
+            }
+         }
+        
+         if ( wasEnabled )
+         {
+            glScissor( priorBox[0], priorBox[1], priorBox[2], priorBox[3] );
+         }
+         else
+         {
+            glDisable( GL_SCISSOR_TEST );
+         }
+      }
+      else
+      {
+         drawFBO( appCtx );
+      }
+
+      glClearColor( priorColor[0], priorColor[1], priorColor[2], priorColor[3] );
+      
       eglSwapBuffers(appCtx->eglDisplay, appCtx->eglSurface);
    }   
    #endif
@@ -1347,6 +1666,90 @@ void compositorDispatch( WstCompositor *wctx, void *userData )
    
    #if !defined (WESTEROS_PLATFORM_EMBEDDED)
    glutMainLoopEvent();
+   #endif
+
+   #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+   if ( appCtx->isEmbedded )
+   {
+      int hints;
+      int tick;
+      
+      if ( appCtx->enableAnimation )
+      {
+         if ( !appCtx->animationRunning )
+         {
+            tick= ++appCtx->tickCount % 600;
+            if ( tick < 599 )
+            {
+               hints= WstHints_noRotation;
+            }
+            else
+            {
+               appCtx->animationRunning= true;
+               appCtx->animationStartTime= getCurrentTimeMillis();
+               appCtx->animationDuration= 2000;
+               appCtx->targetScale= (appCtx->targetScale == 1.0 ? 0.5 : 1.0);
+               appCtx->startScale= appCtx->scale;
+               //appCtx->targetTransX= (appCtx->targetTransX == 0 ? 320 : 0);
+               appCtx->targetTransX= (appCtx->targetTransX == 0 ? 620 : 0);
+               appCtx->startTransX= appCtx->transX;
+               //appCtx->targetTransY= (appCtx->targetTransY == 0 ? 180 : 0);
+               appCtx->targetTransY= (appCtx->targetTransY == 0 ? 340 : 0);
+               appCtx->startTransY= appCtx->transY;
+               hints= WstHints_none;
+            }
+         }
+         else
+         {
+            long long now= getCurrentTimeMillis();
+            long long timePos= now - appCtx->animationStartTime;
+            hints= WstHints_none;
+            if ( timePos >= appCtx->animationDuration )
+            {            
+               appCtx->animationRunning= false;
+               appCtx->scale= appCtx->targetScale;
+               appCtx->transX= appCtx->targetTransX;
+               appCtx->transY= appCtx->targetTransY;
+               appCtx->matrix[0]= appCtx->scale;
+               appCtx->matrix[1]= 0.0f;
+               appCtx->matrix[4]= 0.0f;
+               appCtx->matrix[5]= appCtx->scale;
+               appCtx->matrix[10]= appCtx->scale;
+               appCtx->matrix[12]= appCtx->transX;
+               appCtx->matrix[13]= appCtx->transY;
+               hints= WstHints_noRotation;
+               appCtx->tickCount= 0;
+            }
+            else
+            {
+               float sina, cosa;
+               float pos= (float)timePos/(float)appCtx->animationDuration;
+               float angle= pos*360.0*M_PI/180.0;
+               sincosf(angle, &sina, &cosa);
+               float cx= appCtx->width/2;
+               float cy= appCtx->height/2;
+               appCtx->scale= appCtx->startScale + pos*(appCtx->targetScale-appCtx->startScale);
+               appCtx->transX= appCtx->startTransX + pos*(appCtx->targetTransX-appCtx->startTransX);
+               appCtx->transY= appCtx->startTransY + pos*(appCtx->targetTransY-appCtx->startTransY);
+               cx += appCtx->transX;
+               cy += appCtx->transY;
+               appCtx->matrix[0]= cosa*appCtx->scale;
+               appCtx->matrix[1]= sina*appCtx->scale;
+               appCtx->matrix[4]= -sina*appCtx->scale;
+               appCtx->matrix[5]= cosa*appCtx->scale;
+               appCtx->matrix[10]= appCtx->scale;
+               appCtx->matrix[12]= cx-appCtx->scale*cx*cosa+appCtx->scale*cy*sina;
+               appCtx->matrix[13]= cy-appCtx->scale*cx*sina-appCtx->scale*cy*cosa;
+            }
+         }
+      }
+
+      if ( hints != appCtx->hints )
+      {
+         appCtx->hints= hints;
+         WstCompositorInvalidateScene(appCtx->wctx);
+      }
+   }
    #endif
 }
 
@@ -1530,12 +1933,19 @@ int main( int argc, char** argv)
             }
          }
       }
+      #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+      else
+      if ( (len == 9) && !strncmp( argv[i], "--animate", len) )
+      {
+         appCtx->enableAnimation= true;
+      }
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       else
       if ( (len == 14) && !strncmp( argv[i], "--enableCursor", len) )
       {
          appCtx->showCursor= true;      
       }
+      #endif
       #endif
       else
       if ( (len == 2) && !strncmp( (const char*)argv[i], "-?", len) )
