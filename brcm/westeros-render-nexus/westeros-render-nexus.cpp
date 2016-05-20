@@ -281,6 +281,8 @@ void wstRendererNXDestroySurface( WstRendererNX *renderer, WstRenderSurface *sur
          surface->eventCreated= false;
          BKNI_DestroyEvent(surface->displayedEvent);
       }
+
+      NxClient_Free(&surface->allocResults);
       
       free( surface );
    }
@@ -824,8 +826,9 @@ static void wstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<W
 
       NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
 
-      rect.x= composition.position.x= (renderer->outputX+surface->x+(tx-renderer->outputX))*sx;
-      rect.y= composition.position.y= (renderer->outputY+surface->y+(ty-renderer->outputY))*sy;
+      composition.colorMatrixEnabled= (opacity < 1.0);
+      rect.x= composition.position.x= (renderer->outputX+surface->x)*sx+(tx-renderer->outputX);
+      rect.y= composition.position.y= (renderer->outputY+surface->y)*sy+(ty-renderer->outputY);
       rect.width= composition.position.width= surface->width*sx;
       rect.height= composition.position.height= surface->height*sy;
 
