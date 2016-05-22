@@ -1578,7 +1578,8 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
                       appCtx->eglSurface, 
                       appCtx->eglContext );
 
-      glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+      // Fill with opaque black to show that hole punch is working        
+      glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
       glClear( GL_COLOR_BUFFER_BIT );
 
       glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
@@ -1611,10 +1612,6 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
          bool wasEnabled= glIsEnabled(GL_SCISSOR_TEST);
          glGetIntegerv( GL_SCISSOR_BOX, priorBox );
          glGetIntegerv( GL_VIEWPORT, viewport );
-
-         // Fill with opaque black to show that hole punch is working        
-         glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
-         glClear( GL_COLOR_BUFFER_BIT );
 
          glEnable( GL_SCISSOR_TEST );
          glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
@@ -1690,10 +1687,8 @@ void compositorDispatch( WstCompositor *wctx, void *userData )
                appCtx->animationDuration= 2000;
                appCtx->targetScale= (appCtx->targetScale == 1.0 ? 0.5 : 1.0);
                appCtx->startScale= appCtx->scale;
-               //appCtx->targetTransX= (appCtx->targetTransX == 0 ? 320 : 0);
                appCtx->targetTransX= (appCtx->targetTransX == 0 ? 620 : 0);
                appCtx->startTransX= appCtx->transX;
-               //appCtx->targetTransY= (appCtx->targetTransY == 0 ? 180 : 0);
                appCtx->targetTransY= (appCtx->targetTransY == 0 ? 340 : 0);
                appCtx->startTransY= appCtx->transY;
                hints= WstHints_none;
@@ -1742,12 +1737,12 @@ void compositorDispatch( WstCompositor *wctx, void *userData )
                appCtx->matrix[13]= cy-appCtx->scale*cx*sina-appCtx->scale*cy*cosa;
             }
          }
-      }
 
-      if ( hints != appCtx->hints )
-      {
-         appCtx->hints= hints;
-         WstCompositorInvalidateScene(appCtx->wctx);
+         if ( hints != appCtx->hints )
+         {
+            appCtx->hints= hints;
+            WstCompositorInvalidateScene(appCtx->wctx);
+         }
       }
    }
    #endif

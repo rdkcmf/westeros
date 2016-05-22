@@ -160,11 +160,6 @@ static void wstSBCreateBuffer(struct wl_client *client, struct wl_resource *reso
    }
 
    sb->callbacks->reference_buffer(sb->userData, client, native_handle, buff);
-   if ( !buff->driverBuffer ) 
-   {
-      wl_resource_post_error(resource, WL_SB_ERROR_INVALID_NATIVE_HANDLE, "invalid native_handle");
-      return;
-   }
 
    buff->resource= wl_resource_create(client, &wl_buffer_interface, 1, id);
    if (!buff->resource) 

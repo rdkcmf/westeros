@@ -956,6 +956,22 @@ static void updateVideoPosition( GstWesterosSink *sink )
       composition.position.width= sink->soc.videoWidth;
       composition.position.height= sink->soc.videoHeight;
       NxClient_SetSurfaceClientComposition(sink->soc.surfaceClientId, &composition);
+
+      // Send a buffer to compositor to update hole punch geometry
+      if ( sink->soc.sb )
+      {
+         struct wl_buffer *buff;
+         
+         buff= wl_sb_create_buffer( sink->soc.sb, 
+                                    0,
+                                    sink->windowWidth, 
+                                    sink->windowHeight, 
+                                    sink->windowWidth*4, 
+                                    WL_SB_FORMAT_ARGB8888 );
+         wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
+         wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+         wl_surface_commit( sink->surface );
+      }
    }
 }
 

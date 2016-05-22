@@ -3874,29 +3874,27 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
             sbBuffer= WstSBBufferGet( surface->attachedBufferResource );
             if ( sbBuffer )
             {
+               struct wl_buffer *buffer;
+               int width, height, stride;
+               uint32_t format;
+
                deviceBuffer= WstSBBufferGetBuffer( sbBuffer );
-               if ( deviceBuffer )
-               {
-                  struct wl_buffer *buffer;
-                  int width, height, stride;
-                  uint32_t format;
-                  
-                  width= WstSBBufferGetWidth( sbBuffer );
-                  height= WstSBBufferGetHeight( sbBuffer );
-                  format= WstSBBufferGetFormat( sbBuffer );
-                  stride= WstSBBufferGetStride( sbBuffer );
-                  
-                  WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
-                                                      surface->surfaceNested,
-                                                      0,
-                                                      deviceBuffer,
-                                                      format,
-                                                      stride,
-                                                      0,
-                                                      0,
-                                                      width, 
-                                                      height );
-               }
+               
+               width= WstSBBufferGetWidth( sbBuffer );
+               height= WstSBBufferGetHeight( sbBuffer );
+               format= WstSBBufferGetFormat( sbBuffer );
+               stride= WstSBBufferGetStride( sbBuffer );
+               
+               WstNestedConnectionAttachAndCommitDevice( surface->compositor->nc,
+                                                   surface->surfaceNested,
+                                                   0,
+                                                   deviceBuffer,
+                                                   format,
+                                                   stride,
+                                                   0,
+                                                   0,
+                                                   width, 
+                                                   height );
             }
          }
          #endif
