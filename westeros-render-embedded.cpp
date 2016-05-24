@@ -115,7 +115,7 @@ static const char *fShaderTextYUV =
   "   vec4 y_vec = texture2D(s_texturey, v_texy);\n"
   "   vec4 c_vec = texture2D(s_textureuv, v_texuv);\n"
   "   vec4 temp_vec = vec4(y_vec.a, 1.0, c_vec.b, c_vec.a);\n"
-  "   gl_FragColor = vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), 1.0 ) * u_alpha;\n"
+  "   gl_FragColor = vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), u_alpha );\n"
   "}\n";
 
 static const char *vShaderTextYUV =
