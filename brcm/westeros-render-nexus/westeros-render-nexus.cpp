@@ -76,6 +76,11 @@ typedef struct _WstRendererNX
    int outputHeight;
    std::vector<WstRenderSurface*> surfaces;
 
+   EGLDisplay eglDisplay;
+   bool haveWaylandEGL;
+   PFNEGLBINDWAYLANDDISPLAYWL eglBindWaylandDisplayWL;
+   PFNEGLUNBINDWAYLANDDISPLAYWL eglUnbindWaylandDisplayWL;
+   PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL;
 } WstRendererNX;
 
 static const NEXUS_BlendEquation graphicsColorBlend = {
@@ -181,6 +186,54 @@ static WstRendererNX* wstRendererNXCreate( WstRenderer *renderer )
          free( rendererNX );
          rendererNX= 0;
       }
+
+      if ( renderer->display )
+      {
+         rendererNX->eglDisplay= eglGetDisplay(EGL_DEFAULT_DISPLAY);
+
+         const char *extensions= eglQueryString( rendererNX->eglDisplay, EGL_EXTENSIONS );
+         if ( extensions )
+         {
+            if ( !strstr( extensions, "EGL_WL_bind_wayland_display" ) )
+            {
+               printf("wayland-egl support expected, but not advertised by eglQueryString(eglDisplay,EGL_EXTENSIONS): not attempting to use\n" );
+            }
+            else
+            {
+               printf("wayland-egl support expected, and is advertised by eglQueryString(eglDisplay,EGL_EXTENSIONS): proceeding to use \n" );
+            
+               rendererNX->eglBindWaylandDisplayWL= (PFNEGLBINDWAYLANDDISPLAYWL)eglGetProcAddress("eglBindWaylandDisplayWL");
+               printf( "eglBindWaylandDisplayWL %p\n", rendererNX->eglBindWaylandDisplayWL );
+
+               rendererNX->eglUnbindWaylandDisplayWL= (PFNEGLUNBINDWAYLANDDISPLAYWL)eglGetProcAddress("eglUnbindWaylandDisplayWL");
+               printf( "eglUnbindWaylandDisplayWL %p\n", rendererNX->eglUnbindWaylandDisplayWL );
+
+               rendererNX->eglQueryWaylandBufferWL= (PFNEGLQUERYWAYLANDBUFFERWL)eglGetProcAddress("eglQueryWaylandBufferWL");
+               printf( "eglQueryWaylandBufferWL %p\n", rendererNX->eglQueryWaylandBufferWL );
+               
+               if ( rendererNX->eglBindWaylandDisplayWL &&
+                    rendererNX->eglUnbindWaylandDisplayWL &&
+                    rendererNX->eglQueryWaylandBufferWL )
+               {               
+                  printf("calling eglBindWaylandDisplayWL with eglDisplay %p and wayland display %p\n", rendererNX->eglDisplay, renderer->display );
+                  EGLBoolean rc= rendererNX->eglBindWaylandDisplayWL( rendererNX->eglDisplay, renderer->display );
+                  if ( rc )
+                  {
+                     rendererNX->haveWaylandEGL= true;
+                  }
+                  else
+                  {
+                     printf("eglBindWaylandDisplayWL failed: %x\n", eglGetError() );
+                  }
+               }
+               else
+               {
+                  printf("wayland-egl support expected, and advertised, but methods are missing: no wayland-egl\n" );
+               }
+            }
+         }
+         printf("have wayland-egl: %d\n", rendererNX->haveWaylandEGL );
+      }
    }
 
    return rendererNX;
@@ -190,6 +243,12 @@ static void wstRendererNXDestroy( WstRendererNX *renderer )
 {
    if ( renderer )
    {
+      if ( renderer->haveWaylandEGL )
+      {
+         renderer->eglUnbindWaylandDisplayWL( renderer->eglDisplay, renderer->renderer->display );
+         renderer->haveWaylandEGL= false;
+      }
+
       free( renderer );
       
       NxClient_Uninit();
