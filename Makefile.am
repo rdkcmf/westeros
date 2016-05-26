@@ -124,6 +124,7 @@ libwesteros_compositor_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_SERVER_LIBS) \
    $(WAYLAND_CLIENT_LIBS) \
+   $(WAYLAND_EGL_LIBS) \
    $(XKBCOMMON_LIBS) \
    $(WESTEROS_COMPOSITOR_EXTRA_LIBS) \
    -lxkbcommon \
