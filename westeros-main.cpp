@@ -1634,10 +1634,8 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
             glDisable( GL_SCISSOR_TEST );
          }
       }
-      else
-      {
-         drawFBO( appCtx );
-      }
+
+      drawFBO( appCtx );
 
       glClearColor( priorColor[0], priorColor[1], priorColor[2], priorColor[3] );
       

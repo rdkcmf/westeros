@@ -631,7 +631,7 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
                                   uint32_t id, struct wl_resource *surfaceResource);
 static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource);
 static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface );
-static void wstUpdateVPCSurfaces( WstCompositor *ctx );
+static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects );
 static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
 static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_t keyState, uint32_t modifiers );
@@ -1673,13 +1673,20 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
          
          if ( ctx->vpcSurfaces.size() )
          {
-            wstUpdateVPCSurfaces( ctx );
+            wstUpdateVPCSurfaces( ctx, rects );
          }
          
          WstRendererUpdateScene( ctx->renderer );
          
-         *needHolePunch= ctx->renderer->needHolePunch;
-         rects= ctx->renderer->rects;
+         if ( ctx->renderer->rects.size() )
+         {
+            *needHolePunch= ctx->renderer->needHolePunch;
+            rects= ctx->renderer->rects;
+         }
+         else if ( rects.size() )
+         {
+            *needHolePunch= true;
+         }
       }
       
       pthread_mutex_unlock( &ctx->mutex );
@@ -5806,7 +5813,7 @@ static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
    free( vpcSurface );
 }
 
-static void wstUpdateVPCSurfaces( WstCompositor *ctx )
+static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects )
 {
    bool useHWPath= ctx->renderer->fastHint;
    int scaleXNum= ctx->renderer->matrix[0]*1000000;
@@ -5821,6 +5828,7 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx )
          ++it )
    {
       WstVpcSurface *vpcSurface= (*it);
+      WstRect rect;
 
       if ( (transX != vpcSurface->xTrans) ||
            (transY != vpcSurface->yTrans) ||
@@ -5852,6 +5860,15 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx )
          wl_vpc_surface_send_video_path_change( vpcSurface->resource, 
                                                 useHWPath ? WL_VPC_SURFACE_PATHWAY_HARDWARE
                                                           : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
+      }
+
+      if ( vpcSurface->useHWPath )
+      {      
+         rect.x= (ctx->output->x+vpcSurface->surface->x)*ctx->renderer->matrix[0]+(transX-ctx->output->x);
+         rect.y= (ctx->output->y+vpcSurface->surface->y)*ctx->renderer->matrix[5]+(transY-ctx->output->y);
+         rect.width= vpcSurface->surface->width*ctx->renderer->matrix[0];
+         rect.height= vpcSurface->surface->height*ctx->renderer->matrix[5];
+         rects.push_back(rect);
       }
    }
 }
