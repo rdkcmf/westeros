@@ -845,7 +845,10 @@ static void processFrame( GstWesterosSink *sink )
             {
                sink->firstPTS= sink->currentPTS;
             }
-            sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+            if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
+            {
+               sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+            }
             UNLOCK( sink );
             sink->soc.frameCount++;
             sink->soc.noFrameCount= 0;
@@ -913,7 +916,10 @@ static void updateVideoStatus( GstWesterosSink *sink )
          {
             sink->firstPTS= sink->currentPTS;
          }
-         sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+         if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
+         {
+            sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+         }
          sink->soc.frameCount++;
          sink->soc.noFrameCount= 0;
       }
