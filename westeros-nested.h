@@ -143,6 +143,8 @@ void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
                                                int width,
                                                int height );
 
+void WstNestedConnectionReleaseRemoteBuffers( WstNestedConnection *nc );
+
 void WstNestedConnectionPointerSetCursor( WstNestedConnection *nc, 
                                           struct wl_surface *surface, 
                                           int hotspotX, 

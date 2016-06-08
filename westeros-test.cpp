@@ -153,6 +153,7 @@ typedef struct _AppCtx
 	} gl;
 	long long startTime;
 	long long currTime;
+	bool needRedraw;
 } AppCtx;
 
 
@@ -607,10 +608,8 @@ static void redraw( void *data, struct wl_callback *callback, uint32_t time )
 
    if ( g_log ) printf("redraw: time %d\n", time);
    wl_callback_destroy( callback );
-      
-   drawFrame( ctx );
-   
-   wl_display_flush( ctx->display );   
+
+   ctx->needRedraw= true;
 }
 
 static struct wl_callback_listener frameListener=
@@ -782,6 +781,11 @@ int main( int argc, char** argv)
       {
          renderGL(&ctx);
          eglSwapBuffers(ctx.eglDisplay, ctx.eglSurfaceWindow);
+      }
+      else if ( ctx.needRedraw )
+      {
+         ctx.needRedraw= false;
+         drawFrame(&ctx);
       }
 
       if ( ctx.getShell )

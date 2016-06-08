@@ -680,6 +680,7 @@ WstCompositor* WstCompositorCreate()
       ctx->surfaceMap= std::map<int32_t, WstSurface*>();
       ctx->clientInfoMap= std::map<struct wl_client*, WstClientInfo*>();
       ctx->surfaceInfoMap= std::map<struct wl_resource*, WstSurfaceInfo*>();
+      ctx->vpcSurfaces= std::vector<WstVpcSurface*>();
       
       ctx->xkbNames.rules= strdup("evdev");
       ctx->xkbNames.model= strdup("pc105");
@@ -2714,6 +2715,12 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
    int i;
    
    pthread_mutex_lock( &ctx->mutex );
+   
+   if ( ctx->nc )
+   {
+      WstNestedConnectionReleaseRemoteBuffers( ctx->nc );
+   }
+   
    for( i= 0; i < ctx->eventIndex; ++i )
    {
       switch( ctx->eventQueue[i].type )
@@ -3509,7 +3516,7 @@ static void wstSurfaceDestroy( WstSurface *surface )
 
    // Release any attached buffer
    if ( surface->attachedBufferResource )
-   {      
+   {
       wl_buffer_send_release( surface->attachedBufferResource );
       surface->attachedBufferResource= 0;
    }
