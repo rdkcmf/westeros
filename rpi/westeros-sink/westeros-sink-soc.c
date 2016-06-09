@@ -32,6 +32,9 @@
 #define EOS_DETECT_DELAY (500000)
 #define EOS_DETECT_DELAY_AT_START (10000000)
 
+GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
+#define GST_CAT_DEFAULT gst_westeros_sink_debug
+
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
    WESTEROS_UNUSED(wl_sb);
@@ -44,6 +47,10 @@ static const struct wl_sb_listener sbListener = {
 	sbFormat
 };
 
+void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
+{
+   WESTEROS_UNUSED(klass);   
+}
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 {
@@ -63,6 +70,22 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
    }
 
    //TBD
+}
+
+void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
+{
+   WESTEROS_UNUSED(object);
+   WESTEROS_UNUSED(prop_id);
+   WESTEROS_UNUSED(value);
+   WESTEROS_UNUSED(pspec);
+}
+
+void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
+{
+   WESTEROS_UNUSED(object);
+   WESTEROS_UNUSED(prop_id);
+   WESTEROS_UNUSED(value);
+   WESTEROS_UNUSED(pspec);
 }
 
 void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink, 

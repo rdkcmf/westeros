@@ -40,7 +40,7 @@ GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS(WESTEROS_SINK_CAPS));
 
-GST_DEBUG_CATEGORY_STATIC (gst_westeros_sink_debug);
+GST_DEBUG_CATEGORY (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
 enum
@@ -292,6 +292,8 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
       "Writes buffers to the westeros wayland compositor",
       "Comcast");
 #endif
+
+   gst_westeros_sink_soc_class_init(klass);
 }
 
 static void 
@@ -534,6 +536,10 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
          }
          break;
       }
+      
+      default:
+         gst_westeros_sink_soc_set_property(object, prop_id, value, pspec);
+         break;
    }
 }
 
@@ -546,7 +552,10 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
    WESTEROS_UNUSED(sink);
     
    switch (prop_id) 
-   {
+   {      
+      default:
+         gst_westeros_sink_soc_get_property(object, prop_id, value, pspec);
+         break;
    }
 }
 

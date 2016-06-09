@@ -34,6 +34,9 @@
 #define EOS_DETECT_DELAY (500000)
 #define EOS_DETECT_DELAY_AT_START (10000000)
 
+GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
+#define GST_CAT_DEFAULT gst_westeros_sink_debug
+
 static void freeCaptureSurfaces( GstWesterosSink *sink );
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink );
 static gboolean queryPeerHandles(GstWesterosSink *sink);
@@ -101,6 +104,11 @@ static const struct wl_vpc_surface_listener vpcListener= {
    vpcVideoPathChange,
    vpcVideoXformChange
 };
+
+void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
+{
+   WESTEROS_UNUSED(klass);   
+}
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 {
@@ -187,6 +195,22 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
    NEXUS_SurfaceClient_Release(sink->soc.surfaceClient);
    NxClient_Free(&sink->soc.allocSurface);
    NxClient_Uninit(); 
+}
+
+void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
+{
+   WESTEROS_UNUSED(object);
+   WESTEROS_UNUSED(prop_id);
+   WESTEROS_UNUSED(value);
+   WESTEROS_UNUSED(pspec);
+}
+
+void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
+{
+   WESTEROS_UNUSED(object);
+   WESTEROS_UNUSED(prop_id);
+   WESTEROS_UNUSED(value);
+   WESTEROS_UNUSED(pspec);
 }
 
 void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink, 

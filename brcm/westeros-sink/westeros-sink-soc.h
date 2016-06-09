@@ -82,8 +82,11 @@ struct _GstWesterosSinkSoc
    int activeBuffers;
 };
 
+void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass);
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink );
 void gst_westeros_sink_soc_term( GstWesterosSink *sink );
+void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
+void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
 gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *passToDefault );
 gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault );
 gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolean *passToDefault );

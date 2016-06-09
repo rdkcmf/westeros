@@ -42,6 +42,8 @@ G_BEGIN_DECLS
 typedef struct _GstWesterosSink GstWesterosSink;
 typedef struct _GstWesterosSinkClass GstWesterosSinkClass;
 
+#define PROP_SOC_BASE (100)
+
 #include "westeros-sink-soc.h"
 
 struct _GstWesterosSink
