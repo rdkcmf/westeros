@@ -131,6 +131,8 @@ typedef struct _WstVpcSurface
    WstCompositor *compositor;
    struct wl_vpc_surface *vpcSurfaceNested;
    bool useHWPath;
+   bool useHWPathNext;
+   bool pathTransitionPending;
    int xTrans;
    int yTrans;
    int xScaleNum;
@@ -3853,9 +3855,11 @@ static void wstISurfaceSetInputRegion(struct wl_client *client,
 static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *resource)
 {
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
+   struct wl_resource *committedBufferResource;
 
    pthread_mutex_lock( &surface->compositor->mutex );
 
+   committedBufferResource= surface->attachedBufferResource;
    if ( surface->attachedBufferResource )
    {      
       if ( surface->compositor->isRepeater )
@@ -4018,6 +4022,16 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
       else
       {
          WstRendererSurfaceCommit( surface->renderer, surface->surface, 0 );
+      }
+   }
+
+   if ( surface->vpcSurface && surface->vpcSurface->pathTransitionPending )
+   {
+      if ( (committedBufferResource && !surface->vpcSurface->useHWPathNext) ||
+           (!committedBufferResource && surface->vpcSurface->useHWPathNext) )
+      {
+         surface->vpcSurface->useHWPath= surface->vpcSurface->useHWPathNext;
+         surface->vpcSurface->pathTransitionPending= false;
       }
    }
 
@@ -5761,6 +5775,9 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
                                   vpcSurface, wstDestroyVpcSurfaceCallback );
    
    vpcSurface->surface= surface;
+   vpcSurface->useHWPath= true;
+   vpcSurface->useHWPathNext= true;
+   vpcSurface->pathTransitionPending= false;
    vpcSurface->xScaleNum= 1;
    vpcSurface->xScaleDenom= 1;
    vpcSurface->yScaleNum= 1;
@@ -5775,6 +5792,7 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
       vpcSurface->vpcSurfaceNested= WstNestedConnectionGetVpcSurface( surface->compositor->nc,
                                                                       surface->surfaceNested );
    }
+   wstCompositorScheduleRepaint( surface->compositor );
 }
 
 static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource)
@@ -5863,7 +5881,8 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
       if ( useHWPath != vpcSurface->useHWPath )
       {
          DEBUG("vpcSurface %p useHWPath %d\n", vpcSurface, useHWPath );
-         vpcSurface->useHWPath= useHWPath;
+         vpcSurface->useHWPathNext= useHWPath;
+         vpcSurface->pathTransitionPending= true;
          wl_vpc_surface_send_video_path_change( vpcSurface->resource, 
                                                 useHWPath ? WL_VPC_SURFACE_PATHWAY_HARDWARE
                                                           : WL_VPC_SURFACE_PATHWAY_GRAPHICS );

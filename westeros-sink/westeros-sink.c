@@ -155,6 +155,7 @@ static void shellSurfaceStatus(void *data,
    sink->windowY= y;
    sink->windowWidth= width;
    sink->windowHeight= height;
+   sink->windowChange= true;
    sink->opacity= opacity;
    sink->zorder= zorder;
 }
