@@ -499,15 +499,6 @@ static void drawFBO ( AppCtx *appCtx )
       { x+w, y+h }
    };
  
-   #if defined (WESTEROS_INVERTED_Y)
-   const float uv[4][2] = 
-   {
-      { 0,  0 },
-      { 1,  0 },
-      { 0,  1 },
-      { 1,  1 }
-   };
-   #else
    const float uv[4][2] = 
    {
       { 0,  1 },
@@ -515,7 +506,6 @@ static void drawFBO ( AppCtx *appCtx )
       { 0,  0 },
       { 1,  0 }
    };
-   #endif
    
    glUseProgram(appCtx->fboProgram);
    glUniform2f(appCtx->fboResLoc, appCtx->width, appCtx->height);
@@ -1233,6 +1223,27 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
       
       if ( appCtx->isEmbedded )
       {
+         EGLDisplay eglDisplay;
+         EGLint major, minor;
+         EGLBoolean b;
+         eglDisplay= eglGetDisplay( EGL_DEFAULT_DISPLAY );
+         if ( eglDisplay != EGL_NO_DISPLAY )
+         {
+            b= eglInitialize( eglDisplay, &major, &minor );
+            if ( b )
+            {
+               printf("eglInitiialize: major: %d minor: %d\n", major, minor );
+            }
+            else
+            {
+               printf("unable to initialize EGL display\n" );
+            }
+         }
+         else
+         {
+            printf("unable to open default EGL display\n");
+         }
+
          appCtx->matrix[0]= 1.0f;
          appCtx->matrix[5]= 1.0f;
          appCtx->matrix[10]= 1.0f;
@@ -1578,7 +1589,7 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
                       appCtx->eglSurface, 
                       appCtx->eglContext );
 
-      // Fill with opaque black to show that hole punch is working        
+      // Fill with opaque color to show that hole punch is working
       glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
       glClear( GL_COLOR_BUFFER_BIT );
 
