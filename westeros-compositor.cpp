@@ -1797,11 +1797,35 @@ bool WstCompositorStart( WstCompositor *ctx )
          goto exit;      
       }
 
+      pthread_mutex_unlock( &ctx->mutex );
+      
+      for( int i= 0; i < 500; ++i )
+      {
+         bool ready;
+         
+         pthread_mutex_lock( &ctx->mutex );
+         ready= ctx->compositorReady;
+         pthread_mutex_unlock( &ctx->mutex );
+         
+         if ( ready )
+         {
+            break;
+         }
+         
+         usleep( 10000 );
+      }
+
+      if ( !ctx->compositorReady )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Compositor thread failed to create display" );
+         goto exit;      
+      }
+
       ctx->running= true;
 
       result= true;      
 
-      pthread_mutex_unlock( &ctx->mutex );
    }
 
 exit:
