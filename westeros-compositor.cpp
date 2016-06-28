@@ -2170,6 +2170,12 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
       {
          int pidChild, status;
 
+         if(ctx->clientStatusCB)
+         {
+             INFO("clientStatus: status %d pid %d", WstClient_started, pid);
+             ctx->clientStatusCB( ctx, WstClient_started, pid, 0, ctx->clientStatusUserData );
+         }
+
          pidChild= waitpid( pid, &status, 0 );
          if ( pidChild != 0 )
          {
