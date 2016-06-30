@@ -21,7 +21,7 @@
 # Process this file with autoconf to produce a configure script.
 
 dnl AC_PREREQ([2.65])
-AC_INIT(westeros-soc, version-1.0, jeff_wannamaker@cable.comcast.com,westeros-soc)
+AC_INIT(westeros-render-dispmanx, version-1.0, jeff_wannamaker@cable.comcast.com,westeros-render-dispmanx)
 AC_CONFIG_SRCDIR([])
 AC_CONFIG_HEADERS([cfg/config.h])
 AC_CONFIG_MACRO_DIR([cfg])
@@ -42,6 +42,8 @@ AC_CHECK_HEADERS([stdlib.h string.h unistd.h])
 AC_TYPE_SIZE_T
 AC_HEADER_STDBOOL
 
+WAYLAND_EGL_DETECTED=" "
+
 IARM_CFLAGS=" "
 
 # Checks for library functions.
@@ -55,14 +57,11 @@ AC_SUBST(AM_DEFAULT_VERBOSITY)])
 PKG_CHECK_MODULES([GLIB],[glib-2.0 >= 2.22.5])
 PKG_CHECK_MODULES([GTHREAD],[gthread-2.0 >= 2.38.2])
 PKG_CHECK_MODULES([WAYLAND_CLIENT],[wayland-client >= 1.6.0])
-PKG_CHECK_MODULES([WAYLAND_SERVER],[wayland-server >= 1.6.0])
+PKG_CHECK_MODULES([WAYLAND_EGL],[wayland-egl >= 0.0],[WAYLAND_EGL_DETECTED=true],[WAYLAND_EGL_DETECTED=false])
 
-WAYLANDLIB="-lwayland-client"
-AC_SUBST(WAYLANDLIB)
+AM_CONDITIONAL([HAVE_WAYLAND_EGL], [test x$WAYLAND_EGL_DETECTED = xtrue])              
 
 AC_CONFIG_FILES([Makefile])
-AC_SUBST(WAYLAND_CFLAGS)
 AC_SUBST(GUPNP_VERSION)
-AC_SUBST(plugindir)
 AC_OUTPUT
 

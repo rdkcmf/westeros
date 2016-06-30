@@ -17,34 +17,32 @@
 # limitations under the License.
 #
 
-AUTOMAKE_OPTIONS = subdir-objects
-
 SUBDIRS = 
+
+AM_CXXFLAGS = -DENABLE_SBPROTOCOL -DBUILD_WAYLAND -I=/usr/include/interface/vmcs_host/linux
 
 AM_CFLAGS = 
 
 AM_LDFLAGS = 
 
-lib_LTLIBRARIES = libwesteros_gl.la
 
-libwesteros_gl_la_SOURCES = westeros-gl/westeros-gl.cpp
+lib_LTLIBRARIES = libwesteros_render_dispmanx.la
 
-libwesteros_gl_la_include_HEADERS = westeros-gl/westeros-gl.h
-libwesteros_gl_la_includedir = $(includedir)
-libwesteros_gl_la_CXXFLAGS= $(AM_CFLAGS) -I=/usr/include/interface/vmcs_host/linux
+libwesteros_render_dispmanx_la_SOURCES = westeros-render-dispmanx.cpp
+libwesteros_render_dispmanx_la_includedir = $(includedir)
+libwesteros_render_dispmanx_la_LDFLAGS= -lbcm_host
+if HAVE_WAYLAND_EGL
+AM_CXXFLAGS += -DWESTEROS_HAVE_WAYLAND_EGL
+libwesteros_render_dispmanx_la_LDFLAGS += -lwayland-egl
+endif
 
-libwesteros_gl_la_LDFLAGS= \
-   $(AM_LDFLAGS)
-
-pkgconfigdir = $(libdir)/pkgconfig
-   
 distcleancheck_listfiles = *-libtool
 
 ## IPK Generation Support
 IPK_GEN_PATH = $(abs_top_builddir)/ipk
 IPK_GEN_STAGING_DIR=$(abs_top_builddir)/staging_dir
 IPK_GEN_INPUT  = debian-binary control.tar.gz data.tar.gz
-IPK_GEN_OUTPUT = westeros-soc.ipk
+IPK_GEN_OUTPUT = westeros-render-dispmanx.ipk
 
 package_ipk:
 	@echo "Generating IPK Package"
