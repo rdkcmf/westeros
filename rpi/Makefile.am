@@ -40,7 +40,7 @@ libwesteros_gl_la_LDFLAGS= \
 
 libwesteros_render_dispmanx_la_SOURCES = westeros-render-dispmanx/westeros-render-dispmanx.cpp
 libwesteros_render_dispmanx_la_includedir = $(includedir)
-libwesteros_render_dispmanx_la_CXXFLAGS= $(AM_CFLAGS) -I${srcdir}/westeros-gl \
+libwesteros_render_dispmanx_la_CXXFLAGS= $(AM_CFLAGS) -I$(top_srcdir)/westeros-gl \
                                         -DENABLE_SBPROTOCOL -DBUILD_WAYLAND -I=/usr/include/interface/vmcs_host/linux
 libwesteros_render_dispmanx_la_LDFLAGS= -lbcm_host
 if HAVE_WAYLAND_EGL
