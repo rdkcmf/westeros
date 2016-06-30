@@ -667,6 +667,7 @@ static void wstRendererEMBFlushSurface( WstRendererEMB *renderer, WstRenderSurfa
         if ( surface->mem )
         {
            free( surface->mem );
+           surface->mem= 0;
         }
     }
 }
@@ -1775,6 +1776,9 @@ static bool wstRendererActivateFastPath( WstRendererEMB *renderer )
             renderer->rendererFast->surfaceSetOpacity( renderer->rendererFast,
                                                        surface->surfaceFast,
                                                        surface->opacity );
+            renderer->rendererFast->surfaceSetZOrder( renderer->rendererFast,
+                                                      surface->surfaceFast,
+                                                      surface->zorder );
          }
       }
       
