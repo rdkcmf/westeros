@@ -44,6 +44,8 @@ AC_HEADER_STDBOOL
 
 IARM_CFLAGS=" "
 
+WAYLAND_EGL_DETECTED=" "
+
 # Checks for library functions.
 #Add the subdirectories to be considered for building.
 SUBDIRS=" "
@@ -56,6 +58,9 @@ PKG_CHECK_MODULES([GLIB],[glib-2.0 >= 2.22.5])
 PKG_CHECK_MODULES([GTHREAD],[gthread-2.0 >= 2.38.2])
 PKG_CHECK_MODULES([WAYLAND_CLIENT],[wayland-client >= 1.6.0])
 PKG_CHECK_MODULES([WAYLAND_SERVER],[wayland-server >= 1.6.0])
+PKG_CHECK_MODULES([WAYLAND_EGL],[wayland-egl >= 0.0],[WAYLAND_EGL_DETECTED=true],[WAYLAND_EGL_DETECTED=false])
+
+AM_CONDITIONAL([HAVE_WAYLAND_EGL], [test x$WAYLAND_EGL_DETECTED = xtrue])              
 
 WAYLANDLIB="-lwayland-client"
 AC_SUBST(WAYLANDLIB)

@@ -21,11 +21,13 @@ AUTOMAKE_OPTIONS = subdir-objects
 
 SUBDIRS = 
 
+AM_CXXFLAGS = 
+
 AM_CFLAGS = 
 
 AM_LDFLAGS = 
 
-lib_LTLIBRARIES = libwesteros_gl.la
+lib_LTLIBRARIES = libwesteros_gl.la libwesteros_render_dispmanx.la
 
 libwesteros_gl_la_SOURCES = westeros-gl/westeros-gl.cpp
 
@@ -35,6 +37,16 @@ libwesteros_gl_la_CXXFLAGS= $(AM_CFLAGS) -I=/usr/include/interface/vmcs_host/lin
 
 libwesteros_gl_la_LDFLAGS= \
    $(AM_LDFLAGS)
+
+libwesteros_render_dispmanx_la_SOURCES = westeros-render-dispmanx/westeros-render-dispmanx.cpp
+libwesteros_render_dispmanx_la_includedir = $(includedir)
+libwesteros_render_dispmanx_la_CXXFLAGS= $(AM_CFLAGS) -I${srcdir}/westeros-gl \
+                                        -DENABLE_SBPROTOCOL -DBUILD_WAYLAND -I=/usr/include/interface/vmcs_host/linux
+libwesteros_render_dispmanx_la_LDFLAGS= -lbcm_host
+if HAVE_WAYLAND_EGL
+libwesteros_render_dispmanx_la_CXXFLAGS += -DWESTEROS_HAVE_WAYLAND_EGL
+libwesteros_render_dispmanx_la_LDFLAGS += -lwayland-egl
+endif
 
 pkgconfigdir = $(libdir)/pkgconfig
    
