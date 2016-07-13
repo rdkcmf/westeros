@@ -524,6 +524,11 @@ exit:
    return result;   
 }
 
+void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
+{
+   WESTEROS_UNUSED(sink);
+}
+
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
 {
    gboolean result= TRUE;

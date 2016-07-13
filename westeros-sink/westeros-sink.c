@@ -436,7 +436,7 @@ static void gst_westeros_sink_term(GstWesterosSink *sink)
    }
    if ( sink->display )
    {
-      printf("gst_westeros_sink_finalize: wl_display_disconnect: display=%p\n", (void*)sink->display);
+      printf("gst_westeros_sink_term: wl_display_disconnect: display=%p\n", (void*)sink->display);
       wl_display_disconnect(sink->display);
       sink->display= 0;
    }
@@ -637,11 +637,11 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          if ( sink->initialized )
          {
-            gst_westeros_sink_term( sink );
             if ( !gst_westeros_sink_soc_ready_to_null( sink, &passToDefault ) )
             {
                result= GST_STATE_CHANGE_FAILURE;
             }
+            gst_westeros_sink_term( sink );
          }
          break;
       }
@@ -756,8 +756,8 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          sink->position= 0;
          sink->flushStarted= TRUE;
          sink->currentPTS= 0;
-         gst_westeros_sink_soc_flush( sink );
          UNLOCK( sink );
+         gst_westeros_sink_soc_flush( sink );
          passToDefault= TRUE;
          break;
           
@@ -770,6 +770,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             if (eosDetected) {
                gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
             }
+            gst_westeros_sink_soc_eos_event( sink );
          }
          break;
          

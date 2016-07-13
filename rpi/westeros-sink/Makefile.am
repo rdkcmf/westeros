@@ -25,9 +25,9 @@ GST_BASE_CFLAGS ?=
 GST_BASE_LIBS ?=
 LIB_SUB_DIR= gstreamer-0.10
 
-AM_CFLAGS = $(GST_CFLAGS)
+AM_CFLAGS = $(GST_CFLAGS) -DSTANDALONE -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS -DTARGET_POSIX -D_LINUX -fPIC -DPIC -D_REENTRANT -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64 -U_FORTIFY_SOURCE -Wall -g -DHAVE_LIBOPENMAX=2 -DOMX -DOMX_SKIP64BIT -ftree-vectorize -pipe -DUSE_EXTERNAL_OMX -DHAVE_LIBBCM_HOST -DUSE_EXTERNAL_LIBBCM_HOST -DUSE_VCHIQ_ARM -Wno-psabi
 
-AM_LDFLAGS = $(GST_LIBS)  $(GSTBASE_LIBS) $(WAYLANDLIB) -avoid-version
+AM_LDFLAGS = $(GST_LIBS) $(GSTBASE_LIBS) $(WAYLANDLIB) -avoid-version
 
 plugin_LTLIBRARIES = libwesteros_sink.la
 
@@ -41,7 +41,8 @@ libwesteros_sink_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(GST_LIBS)  $(GSTBASE_LIBS) $(WAYLANDLIB) -avoid-version \
    -lwesteros_simplebuffer_client \
-   -lwesteros_simpleshell_client
+   -lwesteros_simpleshell_client \
+   -ldl
    
 distcleancheck_listfiles = *-libtool
 
