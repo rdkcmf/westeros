@@ -574,26 +574,38 @@ int openDevice( std::vector<pollfd> &deviceFds, const char *devPathName )
       pfd.fd= fd;
       deviceFds.push_back( pfd );
    }
+   return fd;
 }
 
 char *getDevice( const char *path, char *devName )
 {
-   int len, lenDev;
-   char *devPathName= 0;
+   int len;
+   char *devicePathName= 0;
+   struct stat buffer;
+   
    if ( !devName )
-      return devPathName; 
+      return devicePathName; 
+      
    len= strlen( devName );
    
-   devPathName= (char *)malloc( strlen(path)+len+1);
-   if ( devPathName )
+   devicePathName= (char *)malloc( strlen(path)+len+1);
+   if ( devicePathName )
    {
-      strcpy( devPathName, path );
-      strcat( devPathName, devName );
-     
-      printf( "found %s\n", devPathName );           
+      strcpy( devicePathName, path );
+      strcat( devicePathName, devName );     
    }
    
-   return devPathName;
+   if ( !stat(devicePathName, &buffer) )
+   {
+      printf( "found %s\n", devicePathName );           
+   }
+   else
+   {
+      free( devicePathName );
+      devicePathName= 0;
+   }
+   
+   return devicePathName;
 }
 
 void getDevices( std::vector<pollfd> &deviceFds )
@@ -601,24 +613,20 @@ void getDevices( std::vector<pollfd> &deviceFds )
    DIR * dir;
    struct dirent *result;
    char *devPathName;
-   int devNum;
    if ( NULL != (dir = opendir( inputPath )) )
    {
       while( NULL != (result = readdir( dir )) )
       {
-         int len= strlen( result->d_name );
-         if ( (len >= 5) && !strncmp(result->d_name, "event", 5) )
+         if ( (result->d_type != DT_DIR) &&
+             !strncmp(result->d_name, "event", 5) )
          {
-            if ( sscanf( result->d_name, "event%d", &devNum ) == 1 )
+            devPathName= getDevice( inputPath, result->d_name );
+            if ( devPathName )
             {
-               printf(" [%s] ", result->d_name);
-               devPathName= getDevice( inputPath, result->d_name );
-
-               if ( devPathName )
-               {
-                  openDevice( deviceFds, devPathName );
+               if (openDevice( deviceFds, devPathName ) >= 0 )
                   free( devPathName );
-               }
+               else
+                  printf("Could not open device %s\n", devPathName);
             }
          }
       }
