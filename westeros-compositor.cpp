@@ -103,6 +103,12 @@ typedef enum _WstEventType
    WstEventType_pointerButton,
 } WstEventType;
 
+typedef enum
+{
+   WstPipeDescriptor_ParentRead = 0,
+   WstPipeDescriptor_ChildWrite = 1
+} WstPipeDescriptor;
+
 typedef struct _WstEvent
 {
    WstEventType type;
@@ -652,6 +658,9 @@ static bool wstInitializeDefaultCursor( WstCompositor *compositor,
                                         unsigned char *imgData, int width, int height,
                                         int hotspotX, int hotspotY  );
 static void wstTerminateDefaultCursor( WstCompositor *compositor );
+static void wstForwardChildProcessStdout( int descriptors[2] );
+static void wstMonitorChildProcessStdout( int descriptors[2] );
+
 
 extern char **environ;
 static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
@@ -2143,14 +2152,31 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
          pClientLog= fopen( clientLogName, "w" );
          printf("capturing stdout for client %s to file %s\n", args[0], clientLogName );
       }
-      
+
+      int filedes[2];
+      bool forwardStdout = getenv( "WESTEROS_CLIENT_FORWARD_STDOUT" );
+
+      if ( forwardStdout && pipe(filedes) == -1 )
+      {
+         if ( pipe(filedes) == -1 )
+         {
+            perror("pipe failed");
+            forwardStdout = false;
+         }
+      }
+
       // Launch client
       int pid= fork();
       if ( pid == 0 )
       {
+         // CHILD PROCESS
          if ( pClientLog )
          {
             dup2( fileno(pClientLog), STDOUT_FILENO );
+         }
+         else if ( forwardStdout )
+         {
+            wstForwardChildProcessStdout( filedes );
          }
 
          rc= execvpe( args[0], args, env );
@@ -2168,12 +2194,18 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
       }
       else
       {
+         // PARENT PROCESS
          int pidChild, status;
 
          if(ctx->clientStatusCB)
          {
              INFO("clientStatus: status %d pid %d", WstClient_started, pid);
              ctx->clientStatusCB( ctx, WstClient_started, pid, 0, ctx->clientStatusUserData );
+         }
+
+         if ( forwardStdout )
+         {
+            wstMonitorChildProcessStdout( filedes );
          }
 
          pidChild= waitpid( pid, &status, 0 );
@@ -6812,5 +6844,46 @@ static void wstTerminateDefaultCursor( WstCompositor *compositor )
       wl_display_disconnect( compositor->dcDisplay );
       compositor->dcDisplay= 0;
    }
+}
+
+static void wstForwardChildProcessStdout( int descriptors[2] )
+{
+   setbuf( stdout, 0 ); // disable buffering to ensure timely logging
+   close( descriptors[WstPipeDescriptor_ParentRead] );
+   while ( (dup2(descriptors[WstPipeDescriptor_ChildWrite], STDOUT_FILENO) == -1) && (errno == EINTR) ) {}
+   close( descriptors[WstPipeDescriptor_ChildWrite] );
+}
+
+static void wstMonitorChildProcessStdout( int descriptors[2] )
+{
+   close( descriptors[WstPipeDescriptor_ChildWrite] );
+
+   char tmp[4096];
+   while ( 1 ) {
+      ssize_t bytes = read( descriptors[WstPipeDescriptor_ParentRead], tmp, sizeof(tmp) );
+      if ( bytes == -1 )
+      {
+         if ( errno == EINTR )
+         {
+            continue;
+         }
+         else
+         {
+            const char kErrorMsg[] = "read failed!";
+            write( STDERR_FILENO, kErrorMsg, sizeof(kErrorMsg) );
+            break;
+         }
+      }
+      else if ( bytes == 0 )
+      {
+         break;
+      }
+      else
+      {
+         write( STDOUT_FILENO, tmp, bytes );
+         fflush(stdout);
+      }
+   }
+   close( descriptors[WstPipeDescriptor_ParentRead] );
 }
 
