@@ -635,6 +635,7 @@ void getDevices( std::vector<pollfd> &deviceFds )
    }
 }
 
+
 void releaseDevices( std::vector<pollfd> &deviceFds )
 {
    while( deviceFds.size() > 0 )
@@ -859,6 +860,8 @@ void* inputThread( void *data )
             }
          }
       }
+      
+      usleep(400000);
    }
    
    if ( notifyFd )
