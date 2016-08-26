@@ -924,7 +924,7 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
       {
          if ( surface->nativePixmap )
          {
-            eglPixmap= WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap);
+            eglPixmap = (EGLNativePixmapType) WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap);
          }
          if ( WstGLGetNativePixmap( rendererGL->glCtx, deviceBuffer, &surface->nativePixmap ) )
          {
@@ -937,7 +937,7 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
                resize= true;
             }
             
-            if ( resize || (eglPixmap != WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap)) )
+            if ( resize || (eglPixmap != (EGLNativePixmapType) WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap)) )
             {
                /*
                 * If the eglPixmap contained by the surface WstGLNativePixmap changed
@@ -950,14 +950,14 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
                                                   surface->eglImage[0] );
                   surface->eglImage[0]= 0;
                }
-               eglPixmap= WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap);
+               eglPixmap = (EGLNativePixmapType) WstGLGetEGLNativePixmap(rendererGL->glCtx, surface->nativePixmap);
             }
             if ( !surface->eglImage[0] )
             {
                eglImage= rendererGL->eglCreateImageKHR( rendererGL->eglDisplay,
                                                         EGL_NO_CONTEXT,
                                                         EGL_NATIVE_PIXMAP_KHR,
-                                                        eglPixmap,
+                                                        (EGLClientBuffer) eglPixmap,
                                                         NULL // EGLInt attrList[]
                                                        );
                if ( eglImage )
