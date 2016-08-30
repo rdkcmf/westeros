@@ -608,7 +608,8 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
                      dy= 0;
                   }
                   sw= dw;
-                  if ( dy+dh > rendererDMX->outputHeight )
+                  if ( surface->resource[surface->front].invertY &&
+                       (dy+dh > rendererDMX->outputHeight) )
                   {
                      dh -= ((dy+dh)-rendererDMX->outputHeight);
                      if ( dh < 0 ) dh= 0;
