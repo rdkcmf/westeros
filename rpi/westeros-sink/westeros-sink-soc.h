@@ -110,6 +110,12 @@ struct _GstWesterosSinkSoc
    OMX_BUFFERHEADERTYPE** inputBuffers;
    
    OMX_BUFFERHEADERTYPE *buffCurrent;
+
+   #ifdef GLIB_VERSION_2_32 
+   GMutex mutex;
+   #else
+   GMutex *mutex;
+   #endif
 };
 
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass);

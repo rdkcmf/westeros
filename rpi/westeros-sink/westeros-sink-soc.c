@@ -31,9 +31,7 @@
 
 #define WESTEROS_UNUSED(x) ((void)(x))
 
-#define FRAME_POLL_TIME (8000)
-#define EOS_DETECT_DELAY (500000)
-#define EOS_DETECT_DELAY_AT_START (10000000)
+#define PREROLL_OFFSET (0LL)
 
 #define MODULE_BCMHOST "libbcm_host.so"
 #define METHOD_BCM_HOST_INIT "bcm_host_init"
@@ -46,10 +44,20 @@
 #define METHOD_OMX_FREEHANDLE "OMX_FreeHandle"
 #define METHOD_OMX_SETUPTUNNEL "OMX_SetupTunnel"
 
+#ifdef GLIB_VERSION_2_32
+  #define LOCK_SOC( sink ) g_mutex_lock( &((sink)->soc.mutex) );
+  #define UNLOCK_SOC( sink ) g_mutex_unlock( &((sink)->soc.mutex) );
+#else
+  #define LOCK_SOC( sink ) g_mutex_lock( (sink)->soc.mutex );
+  #define UNLOCK_SOC( sink ) g_mutex_unlock( (sink)->soc.mutex );
+#endif
+
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
+static void flushComponents( GstWesterosSink *sink );
 static void updateVideoPosition( GstWesterosSink *sink );
+static void processFrame( GstWesterosSink *sink, GstBuffer *buffer );
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -76,6 +84,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    void *module= 0;
    bool error= false;
    OMX_ERRORTYPE omxerr;
+   
+   #ifdef GLIB_VERSION_2_32 
+   g_mutex_init( &sink->soc.mutex );
+   #else
+   sink->soc.mutex= g_mutex_new();
+   #endif
 
    sink->soc.bcmHostIsInit= false;
    sink->soc.omxIsInit= false;
@@ -260,6 +274,12 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
       dlclose( sink->soc.moduleBcmHost );
       sink->soc.moduleBcmHost= 0;
    }
+
+   #ifdef GLIB_VERSION_2_32 
+   g_mutex_clear( &sink->soc.mutex );
+   #else
+   g_mutex_free( sink->soc.mutex );
+   #endif  
 }
 
 void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec)
@@ -380,7 +400,7 @@ static OMX_ERRORTYPE omxEventHandler( OMX_IN OMX_HANDLETYPE hComponent,
 
    GST_LOG("omxEventHandler: pAppData %p eEvent %d nData1 %x nData2 %d pEventData %p",
            pAppData, eEvent, nData1, nData2, pEventData );
-   LOCK(sink);
+   LOCK_SOC(sink);
    switch( eEvent )
    {
       case OMX_EventCmdComplete:
@@ -410,7 +430,7 @@ static OMX_ERRORTYPE omxEventHandler( OMX_IN OMX_HANDLETYPE hComponent,
    {
       sink->soc.schedReady= true;
    }
-   UNLOCK(sink);
+   UNLOCK_SOC(sink);
 
    if ( eosDetected )
    {
@@ -426,11 +446,11 @@ static OMX_ERRORTYPE omxEmptyBufferDone( OMX_IN OMX_HANDLETYPE hComponent,
 {
    GstWesterosSink *sink= (GstWesterosSink*)pAppData;
 
-   LOCK( sink );
+   LOCK_SOC( sink );
    sink->soc.inputBuffers[sink->soc.countInputBuffers]= pBuffer;
    ++sink->soc.countInputBuffers;
    sem_post( &sink->soc.semInputBuffers );
-   UNLOCK( sink );
+   UNLOCK_SOC( sink );
    GST_LOG("omxEmptyBufferDone: buff %p buffers avail: %d of %d", pBuffer, sink->soc.countInputBuffers, sink->soc.capacityInputBuffers );
 
    return OMX_ErrorNone;
@@ -461,7 +481,7 @@ static OMX_ERRORTYPE omxWaitCommandComplete( GstWesterosSink *sink, OMX_COMMANDT
    {
       for( ; ; )
       {         
-         LOCK(sink);
+         LOCK_SOC(sink);
          done= pAsync->done;
          error= sink->soc.asyncError.done;
          if ( error )
@@ -469,7 +489,7 @@ static OMX_ERRORTYPE omxWaitCommandComplete( GstWesterosSink *sink, OMX_COMMANDT
             asyncError= sink->soc.asyncError;
             sink->soc.asyncError.done= false;
          }
-         UNLOCK(sink);
+         UNLOCK_SOC(sink);
          if ( done ) break;
          if ( error )
          {
@@ -816,7 +836,7 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
    clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
    clockState.nVersion.nVersion= OMX_VERSION;
    clockState.eState= OMX_TIME_ClockStateWaitingForStartTime;
-   clockState.nWaitMask= 1;   
+   clockState.nWaitMask= OMX_CLOCKPORT0;
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_null_to_ready: calling OMX_SetConifg for clock state");
    omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
    if ( omxerr != OMX_ErrorNone )
@@ -997,6 +1017,14 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
    WESTEROS_UNUSED(passToDefault);
 
+   LOCK( sink );
+   gst_westeros_sink_soc_start_video( sink );
+   UNLOCK( sink );
+
+   LOCK_SOC(sink);
+   sink->soc.playingVideo= true;
+   UNLOCK_SOC(sink);
+
    memset( &clockScale, 0, sizeof(OMX_TIME_CONFIG_SCALETYPE) );
    clockScale.nSize= sizeof(OMX_TIME_CONFIG_SCALETYPE);
    clockScale.nVersion.nVersion= OMX_VERSION;
@@ -1041,11 +1069,14 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    OMX_ERRORTYPE omxerr;
    OMX_BUFFERHEADERTYPE *buff;
 
+   LOCK_SOC(sink);
    sink->soc.playingVideo= false;
    sink->soc.decoderReady= false;
    sink->soc.schedReady= false;
-   
-   gst_westeros_sink_soc_flush( sink );
+   sem_post( &sink->soc.semInputBuffers );
+   UNLOCK_SOC(sink);
+
+   flushComponents( sink );
 
    if ( sink->soc.tunnelActiveVidDec )
    {
@@ -1105,10 +1136,10 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    nochange= 0;
    do
    {
-      LOCK(sink);
+      LOCK_SOC(sink);
       count= sink->soc.countInputBuffers;
       capacity= sink->soc.capacityInputBuffers;
-      UNLOCK(sink);
+      UNLOCK_SOC(sink);
       
       if ( i < count )
       {
@@ -1351,9 +1382,25 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
    memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
    clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
    clockState.nVersion.nVersion= OMX_VERSION;
-   clockState.eState= OMX_TIME_ClockStateRunning;
-   clockState.nStartTime.nLowPart=(((pts*100)/9)&0xFFFFFFFF);
-   clockState.nStartTime.nHighPart=((((pts*100)/9)>>32)&0xFFFFFFFF);
+   clockState.eState= OMX_TIME_ClockStateStopped;
+   clockState.nOffset.nLowPart=(PREROLL_OFFSET&0xFFFFFFFF);
+   clockState.nOffset.nHighPart=((PREROLL_OFFSET>>32)&0xFFFFFFFF);
+   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_set_startPTS: calling OMX_SetConifg for clock state");
+   omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
+   if ( omxerr != OMX_ErrorNone )
+   {
+      GST_ERROR("gst_westeros_sink_soc_set_startPTS: OMX_SetConfig for clock state: omxerr %x", omxerr );
+   }
+
+   flushComponents( sink );
+
+   memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
+   clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
+   clockState.nVersion.nVersion= OMX_VERSION;
+   clockState.eState= OMX_TIME_ClockStateWaitingForStartTime;
+   clockState.nWaitMask= OMX_CLOCKPORT0;
+   clockState.nOffset.nLowPart=(PREROLL_OFFSET&0xFFFFFFFF);
+   clockState.nOffset.nHighPart=((PREROLL_OFFSET>>32)&0xFFFFFFFF);
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_set_startPTS: calling OMX_SetConifg for clock state");
    omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
    if ( omxerr != OMX_ErrorNone )
@@ -1364,32 +1411,11 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {  
-   int rc; 
    OMX_ERRORTYPE omxerr;
-   OMX_BUFFERHEADERTYPE *buff= 0;
-   #ifdef USE_GST1
-   GstMapInfo map;
-   #endif
    int retryCount;
-   int inSize, avail, copylen, filledlen;
-   unsigned char *inData;
-   bool windowChange;
-   gint64 nanoTime;
-   OMX_TIME_CONFIG_TIMESTAMPTYPE timeStamp;
 
    if ( sink->soc.playingVideo && !sink->flushStarted )
    {
-      #ifdef USE_GST1
-      gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ);
-      inSize= map.size;
-      inData= map.data;
-      #else
-      inSize= (int)GST_BUFFER_SIZE(buffer);
-      inData= GST_BUFFER_DATA(buffer);
-      #endif
-
-      GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d", buffer, inSize );
-      
       if ( sink->soc.decoderReady && !sink->soc.tunnelActiveVidSched )
       {
          if ( !gst_westeros_sink_soc_setup_tunnel( sink, 
@@ -1444,176 +1470,20 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          }         
       }
 
-      memset( &timeStamp, 0, sizeof(OMX_TIME_CONFIG_TIMESTAMPTYPE) );
-      timeStamp.nSize= sizeof(OMX_TIME_CONFIG_TIMESTAMPTYPE);
-      timeStamp.nVersion.nVersion= OMX_VERSION;
-      timeStamp.nPortIndex= sink->soc.clock.otherInPort;
-      omxerr= OMX_GetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeCurrentMediaTime, &timeStamp );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_render: OMX_SetConfig for clock state: omxerr %x", omxerr );
-      }
-      nanoTime= ((((gint64)timeStamp.nTimestamp.nHighPart)<<32)+timeStamp.nTimestamp.nLowPart)*1000LL;
-
-      LOCK(sink);
-      sink->position= nanoTime;
-      windowChange= sink->windowChange;
-      UNLOCK(sink);
-      if ( windowChange )
-      {
-         updateVideoPosition( sink );
-      }
-    
-      while ( inSize )
-      {
-         buff= sink->soc.buffCurrent;
-         
-         while ( !buff )
-         {
-            if ( sink->soc.semInputActive )
-            {
-               rc= sem_wait( &sink->soc.semInputBuffers );
-
-               if ( !sink->soc.playingVideo )
-               {
-                  goto exit;
-               }
-
-               if ( rc == 0 )
-               {
-                  LOCK( sink );
-                  if ( sink->soc.countInputBuffers )
-                  {
-                     --sink->soc.countInputBuffers;
-                     buff= sink->soc.inputBuffers[sink->soc.countInputBuffers];
-                  }
-                  UNLOCK( sink );
-               }
-            }
-            else
-            {
-               goto exit;
-            }            
-         }
-         
-         if ( buff )
-         {
-            avail= buff->nAllocLen-buff->nFilledLen;
-            copylen= inSize;
-            if ( copylen > avail )
-            {
-               copylen= avail;
-            }
-            GST_LOG("gst_westeros_sink_soc_render: copy %d bytes into buff %p (%d of %d)", 
-                    copylen, buff, sink->soc.countInputBuffers, sink->soc.capacityInputBuffers );
-            memcpy( buff->pBuffer+buff->nFilledLen, inData, copylen );
-            buff->nFilledLen += copylen;
-            inSize -= copylen;
-            avail -= copylen;
-            inData += copylen;
-            
-            if ( avail == 0 )
-            {
-               if ( sink->soc.firstBuffer )
-               {
-                  sink->soc.firstBuffer= false;
-                  buff->nFlags= OMX_BUFFERFLAG_STARTTIME;
-               }
-               else
-               {
-                  buff->nFlags= OMX_BUFFERFLAG_TIME_UNKNOWN;
-               }
-               buff->nOffset= 0;
-               filledlen= buff->nFilledLen;
-               omxerr= OMX_EmptyThisBuffer( sink->soc.vidDec.hComp, buff );
-               GST_LOG("gst_westeros_sink_soc_render: pass buffer %p to vidDec with %d bytes", buff, filledlen );
-               if ( omxerr != OMX_ErrorNone )
-               {
-                  GST_ERROR( "gst_westeros_sink_soc_render: error from OMX_EmptyThisBuffer: %x", omxerr );
-                  goto exit;
-               }
-               buff= 0;
-               sink->soc.buffCurrent= 0;
-            }
-         }
-      }
-      
-      sink->soc.buffCurrent= buff;
+      processFrame( sink, buffer );
    }
 
 exit:
-   return;     
+   return;   
 }
 
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 {
-   OMX_ERRORTYPE omxerr;
-
-   if ( sink->soc.tunnelActiveVidDec )
-   {
-      omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.vidInPort, NULL );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_flush: flush vidSched port %d: omxerr %x", sink->soc.vidSched.vidInPort, omxerr );
-      }
-
-      omxerr= omxSendCommandAsync( sink, sink->soc.vidDec.hComp, OMX_CommandFlush, sink->soc.vidDec.vidOutPort, NULL );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_flush: flush vidDec port %d: omxerr %x", sink->soc.vidDec.vidOutPort, omxerr );
-      }
-      
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: waiting for vidDec port %d flush", sink->soc.vidDec.vidOutPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidDec.vidOutPort );
-
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: waiting for vidSched port %d flush", sink->soc.vidSched.vidInPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.vidInPort );
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: done waiting for flushes" );
-   }
-
-   if ( sink->soc.tunnelActiveVidSched )
-   {
-      omxerr= omxSendCommandAsync( sink, sink->soc.vidRend.hComp, OMX_CommandFlush, sink->soc.vidRend.vidInPort, NULL );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_flush: flush vidRend port %d: omxerr %x", sink->soc.vidRend.vidInPort, omxerr );
-      }
-      
-      omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.vidOutPort, NULL );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_flush: flush vidSched port %d: omxerr %x", sink->soc.vidSched.vidOutPort, omxerr );
-      }
-
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: waiting for vidSched port %d flush", sink->soc.vidSched.vidOutPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.vidOutPort );
-
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: waiting for vidRend port %d flush", sink->soc.vidRend.vidInPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidRend.vidInPort );
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: done waiting for flushes" );
-   }
-
-   if ( sink->soc.tunnelActiveClock )
-   {
-      omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.otherInPort, NULL );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_flush: flush vidSched port %d: omxerr %x", sink->soc.vidSched.otherInPort, omxerr );
-      }
-
-      omxerr= omxSendCommandAsync( sink, sink->soc.clock.hComp, OMX_CommandFlush, sink->soc.clock.otherOutPort, NULL );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc_flush: flush clock port %d: omxerr %x", sink->soc.clock.otherOutPort, omxerr );
-      }
-
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: waiting for clock port %d flush", sink->soc.clock.otherOutPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.clock.otherOutPort );
-
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: waiting for vidSched port %d flush", sink->soc.vidSched.otherInPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.otherInPort );
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc_flush: done waiting for flushes" );
-   }
+   LOCK_SOC(sink);
+   sink->soc.playingVideo= false;
+   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_flush: post sem to wake up render");
+   sem_post( &sink->soc.semInputBuffers );
+   UNLOCK_SOC(sink);
 }
 
 gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
@@ -1622,9 +1492,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_start_video" );
 
-   LOCK( sink );
    sink->videoStarted= TRUE;
-   UNLOCK( sink );
    
    result= TRUE;
  
@@ -1645,36 +1513,151 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
          {
             buff= sink->soc.buffCurrent;
             buff->nOffset= 0;
-            buff->nFlags= OMX_BUFFERFLAG_TIME_UNKNOWN;
-            GST_LOG("gst_westeros_sink_soc_eos_evemt: pass buffer %p to vidDec with %d bytes", buff, buff->nFilledLen );
+            buff->nFlags= 0;
+            GST_LOG("gst_westeros_sink_soc_eos_event: pass buffer %p to vidDec with %d bytes", buff, buff->nFilledLen );
             omxerr= OMX_EmptyThisBuffer( sink->soc.vidDec.hComp, buff );
-            GST_ERROR( "gst_westeros_sink_soc_eos_event: error from OMX_EmptyThisBuffer: %x", omxerr );
-            buff= sink->soc.buffCurrent= 0;
-         }
-      
-         rc= sem_wait( &sink->soc.semInputBuffers );
-         if ( rc == 0 )
-         {
-            LOCK( sink );
-            if ( sink->soc.countInputBuffers )
-            {
-               --sink->soc.countInputBuffers;
-               buff= sink->soc.inputBuffers[sink->soc.countInputBuffers];
-            }
-            UNLOCK( sink );
-            
-            buff->nFilledLen= 0;
-            buff->nFlags= OMX_BUFFERFLAG_EOS;
-
-            omxerr= OMX_EmptyThisBuffer( sink->soc.vidDec.hComp, buff );
-            GST_LOG("gst_westeros_sink_soc_eos_event: pass buffer %p to vidDec with EOS flag", buff );
             if ( omxerr != OMX_ErrorNone )
             {
                GST_ERROR( "gst_westeros_sink_soc_eos_event: error from OMX_EmptyThisBuffer: %x", omxerr );
             }
+            buff= sink->soc.buffCurrent= 0;
+         }
+      
+         buff= 0;
+         while( !buff )
+         {
+            rc= sem_trywait( &sink->soc.semInputBuffers );
+
+            if ( !sink->soc.playingVideo )
+            {
+               break;;
+            }
+
+            if ( rc != 0 )
+            {
+               usleep( 1000 );
+            }
+
+            if ( rc == 0 )
+            {
+               LOCK_SOC( sink );
+               if ( sink->soc.countInputBuffers )
+               {
+                  --sink->soc.countInputBuffers;
+                  buff= sink->soc.inputBuffers[sink->soc.countInputBuffers];
+               }
+               UNLOCK_SOC( sink );
+               
+               buff->nFilledLen= 0;
+               buff->nFlags= OMX_BUFFERFLAG_EOS;
+
+               omxerr= OMX_EmptyThisBuffer( sink->soc.vidDec.hComp, buff );
+               GST_LOG("gst_westeros_sink_soc_eos_event: pass buffer %p to vidDec with EOS flag", buff );
+               if ( omxerr != OMX_ErrorNone )
+               {
+                  GST_ERROR( "gst_westeros_sink_soc_eos_event: error from OMX_EmptyThisBuffer: %x", omxerr );
+               }
+            }
          }
       }
    }
+}
+
+static void flushComponents( GstWesterosSink *sink )
+{
+   OMX_ERRORTYPE omxerr;
+   OMX_STATETYPE vidDecState;
+
+   omxerr= OMX_GetState( sink->soc.vidDec.hComp, &vidDecState );
+   assert( omxerr == OMX_ErrorNone );
+   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc: flushComponents: vidDec in state %s", omxStateName(vidDecState) );   
+   if ( vidDecState == OMX_StateExecuting )
+   {
+      GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc: flushComponents: calling OMX_SendCommand for vidDec setState OMX_StateIdle" );
+      omxerr= omxSendCommandSync( sink, sink->soc.vidDec.hComp, OMX_CommandStateSet, OMX_StateIdle, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: OMX_SendCommand for vidDec setState OMX_StateIdle: omxerr %x", omxerr );
+      }
+   }
+
+   if ( sink->soc.tunnelActiveVidDec )
+   {
+      omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.vidInPort, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush vidSched port %d: omxerr %x", sink->soc.vidSched.vidInPort, omxerr );
+      }
+
+      omxerr= omxSendCommandAsync( sink, sink->soc.vidDec.hComp, OMX_CommandFlush, sink->soc.vidDec.vidOutPort, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush vidDec port %d: omxerr %x", sink->soc.vidDec.vidOutPort, omxerr );
+      }
+      
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidDec port %d flush", sink->soc.vidDec.vidOutPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidDec.vidOutPort );
+
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidSched port %d flush", sink->soc.vidSched.vidInPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.vidInPort );
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: done waiting for flushes" );
+   }
+
+   if ( sink->soc.tunnelActiveVidSched )
+   {
+      omxerr= omxSendCommandAsync( sink, sink->soc.vidRend.hComp, OMX_CommandFlush, sink->soc.vidRend.vidInPort, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush vidRend port %d: omxerr %x", sink->soc.vidRend.vidInPort, omxerr );
+      }
+      
+      omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.vidOutPort, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush vidSched port %d: omxerr %x", sink->soc.vidSched.vidOutPort, omxerr );
+      }
+
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidSched port %d flush", sink->soc.vidSched.vidOutPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.vidOutPort );
+
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidRend port %d flush", sink->soc.vidRend.vidInPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidRend.vidInPort );
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: done waiting for flushes" );
+   }
+
+   if ( sink->soc.tunnelActiveClock )
+   {
+      omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.otherInPort, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush vidSched port %d: omxerr %x", sink->soc.vidSched.otherInPort, omxerr );
+      }
+
+      omxerr= omxSendCommandAsync( sink, sink->soc.clock.hComp, OMX_CommandFlush, sink->soc.clock.otherOutPort, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush clock port %d: omxerr %x", sink->soc.clock.otherOutPort, omxerr );
+      }
+
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for clock port %d flush", sink->soc.clock.otherOutPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.clock.otherOutPort );
+
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidSched port %d flush", sink->soc.vidSched.otherInPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.otherInPort );
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: done waiting for flushes" );
+   }
+
+   if ( vidDecState == OMX_StateExecuting )
+   {
+      GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc: flushComponents: calling OMX_SendCommand for vidDec setState OMX_StateExecuting" );
+      omxerr= omxSendCommandSync( sink, sink->soc.vidDec.hComp, OMX_CommandStateSet, OMX_StateExecuting, NULL );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: OMX_SendCommand for vidDec setState OMX_StateExecuting: omxerr %x", omxerr );
+      }
+   }
+
+   sink->soc.firstBuffer= true;
 }
 
 static void updateVideoPosition( GstWesterosSink *sink )
@@ -1705,7 +1688,139 @@ static void updateVideoPosition( GstWesterosSink *sink )
    omxerr= OMX_SetConfig( sink->soc.vidRend.hComp, OMX_IndexConfigDisplayRegion, &displayRegion );
    if ( omxerr != OMX_ErrorNone )
    {
-      GST_ERROR("gst_westeros_sink_soc_render: OMX_SetConfig for display region: error: %x", omxerr );
+      GST_ERROR("gst_westeros_sink_soc updateVideoPosition: OMX_SetConfig for display region: error: %x", omxerr );
    }
+}
+
+static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
+{  
+   int rc; 
+   OMX_ERRORTYPE omxerr;
+   OMX_BUFFERHEADERTYPE *buff= 0;
+   #ifdef USE_GST1
+   GstMapInfo map;
+   #endif
+   int inSize, avail, copylen, filledlen;
+   unsigned char *inData;
+   bool windowChange;
+   gint64 nanoTime;
+   OMX_TIME_CONFIG_TIMESTAMPTYPE timeStamp;
+
+   if ( sink->soc.playingVideo && !sink->flushStarted )
+   {
+      #ifdef USE_GST1
+      gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ);
+      inSize= map.size;
+      inData= map.data;
+      #else
+      inSize= (int)GST_BUFFER_SIZE(buffer);
+      inData= GST_BUFFER_DATA(buffer);
+      #endif
+
+      GST_LOG("processFrame: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
+      
+      nanoTime= GST_BUFFER_PTS(buffer);
+
+      LOCK(sink);
+      sink->position= nanoTime;
+      windowChange= sink->windowChange;
+      UNLOCK(sink);
+      if ( windowChange )
+      {
+         updateVideoPosition( sink );
+      }
+    
+      while ( inSize )
+      {
+         buff= sink->soc.buffCurrent;
+         
+         while ( !buff )
+         {
+            if ( sink->soc.semInputActive )
+            {
+               rc= sem_trywait( &sink->soc.semInputBuffers );
+
+               if ( !sink->soc.playingVideo )
+               {
+                  goto exit;
+               }
+
+               if ( rc != 0 )
+               {
+                  usleep( 1000 );
+               }
+
+               if ( rc == 0 )
+               {
+                  LOCK_SOC( sink );
+                  if ( sink->soc.countInputBuffers )
+                  {
+                     --sink->soc.countInputBuffers;
+                     buff= sink->soc.inputBuffers[sink->soc.countInputBuffers];
+                     buff->nTimeStamp.nLowPart= ((nanoTime/1000LL)&0xFFFFFFFFLL);
+                     buff->nTimeStamp.nHighPart= (((nanoTime/1000LL)>>32)&0xFFFFFFFFLL);
+                  }
+                  UNLOCK_SOC( sink );
+               }
+            }
+            else
+            {
+               goto exit;
+            }            
+         }
+         
+         if ( buff )
+         {
+            avail= buff->nAllocLen-buff->nFilledLen;
+            copylen= inSize;
+            if ( copylen > avail )
+            {
+               copylen= avail;
+            }
+            GST_LOG("processFrame: copy %d bytes into buff %p (%d of %d)", 
+                    copylen, buff, sink->soc.countInputBuffers, sink->soc.capacityInputBuffers );
+            memcpy( buff->pBuffer+buff->nFilledLen, inData, copylen );
+            buff->nFilledLen += copylen;
+            inSize -= copylen;
+            avail -= copylen;
+            inData += copylen;
+            
+            {
+               if ( sink->soc.firstBuffer )
+               {
+                  if ( nanoTime >= sink->positionSegmentStart )
+                  {
+                     sink->soc.firstBuffer= false;
+                     buff->nFlags= OMX_BUFFERFLAG_STARTTIME;
+                  }
+                  else
+                  {
+                     buff->nFlags= OMX_BUFFERFLAG_DECODEONLY;
+                  }
+               }
+               else
+               {
+                  buff->nFlags= 0;
+               }
+               buff->nOffset= 0;
+               filledlen= buff->nFilledLen;
+               omxerr= OMX_EmptyThisBuffer( sink->soc.vidDec.hComp, buff );
+               GST_LOG("processFrame: pass buffer %p to vidDec with %d bytes", buff, filledlen );
+               if ( omxerr != OMX_ErrorNone )
+               {
+                  GST_ERROR( "processFrame: error from OMX_EmptyThisBuffer: %x", omxerr );
+                  goto exit;
+               }
+               buff= 0;
+               sink->soc.buffCurrent= 0;
+            }
+         }
+      }
+      
+      sink->soc.buffCurrent= buff;
+   }
+
+exit:
+   return;     
 }
 
