@@ -60,17 +60,19 @@ if ENABLE_WESTEROS_RENDERERGL
 BUILT_SOURCES += libwesteros_render_gl.la
 endif               
 
-if ENABLE_WESTEROS_APP 
-if ENABLE_WESTEROS_TEST
-bin_PROGRAMS = westeros westeros_test
-else
-bin_PROGRAMS = westeros
+bin_PROGRAMS =
+
+if ENABLE_WESTEROS_APP
+bin_PROGRAMS += westeros
 endif
-else
+
 if ENABLE_WESTEROS_TEST
-bin_PROGRAMS = westeros_test
+bin_PROGRAMS += westeros_test
 endif
-endif 
+
+if ENABLE_WESTEROS_PLAYER
+bin_PROGRAMS += westeros_player
+endif
 
 ## --- Sample compositor app -------
 westeros_SOURCES = westeros-main.cpp
@@ -100,6 +102,16 @@ westeros_test_LDFLAGS= \
 if HAVE_GLEW
 westeros_test_LDFLAGS += -lGL -lGLEW
 endif   
+
+## --- Sample player -------
+westeros_player_SOURCES = westeros-player.cpp
+westeros_player_CXXFLAGS = $(AM_CXXFLAGS) $(GST_CFLAGS)
+westeros_player_LDFLAGS= \
+   $(AM_LDFLAGS) \
+   $(GST_LIBS) \
+   $(WAYLAND_CLIENT_LIBS) \
+   $(WSTEGL_LIBS) \
+   -lEGL
 
 ## --- Compositor -------
 lib_LTLIBRARIES = libwesteros_compositor.la \

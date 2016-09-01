@@ -45,6 +45,7 @@ AC_HEADER_STDBOOL
 IARM_CFLAGS=" "
 ENABLE_WESTEROS_APP=" "
 ENABLE_WESTEROS_TEST=" "
+ENABLE_WESTEROS_PLAYER=" "
 EGL_DETECTED=" "
 GLESV2_DETECTED=" "
 GLEW_DETECTED=" "
@@ -99,6 +100,18 @@ AC_ARG_ENABLE([test],
               [echo "westeros_test is disabled"])
 AM_CONDITIONAL([ENABLE_WESTEROS_TEST], [test x$ENABLE_WESTEROS_TEST = xtrue])              
 
+AC_ARG_ENABLE([player],
+              AS_HELP_STRING([--enable-player],[enable westeros_player (default is no)]),
+              [
+                case "${enableval}" in
+                 yes) ENABLE_WESTEROS_PLAYER=true ;;
+                  no) AC_MSG_ERROR([westeros_player is disabled]) ;;
+                   *) AC_MSG_ERROR([bad value ${enableval} for --enable-player]) ;;
+                esac
+              ],
+              [echo "westeros_player is disabled"])
+AM_CONDITIONAL([ENABLE_WESTEROS_PLAYER], [test x$ENABLE_WESTEROS_PLAYER = xtrue])              
+
 AC_ARG_ENABLE([rendergl],
               AS_HELP_STRING([--enable-rendergl],[enable westeros opengl renderer (default is no)]),
               [
@@ -147,6 +160,19 @@ AC_ARG_ENABLE([xdgv5],
               [echo "xdg_shell protocol v5 is disabled"])
 AM_CONDITIONAL([ENABLE_XDG_V5], [test x$ENABLE_XDG_V5 = xtrue])              
 
+GST_MAJORMINOR=1.0
+PKG_CHECK_MODULES([GST], [gstreamer-1.0 >= 1.0], have_gst1="yes", have_gst1="no")
+
+AS_IF([test "x$have_gst1" = "xyes"], [
+  PKG_CHECK_MODULES([GSTBASE], [gstreamer-base-1.0 >= 1.0])
+  AC_DEFINE(USE_GST1, 1, [Build with GStreamer 1.x])
+], [])
+
+AS_IF([test "x$enable_gstreamer0" != "xyes" -a "x$have_gst1" != "xyes"], [
+   AC_MSG_ERROR([Could not find GStreamer 1.x dependencies:
+
+$GST_PKG_ERRORS])], [])
+
 WAYLANDLIB="-lwayland-server"
 AC_SUBST(WAYLANDLIB)
 
@@ -155,5 +181,6 @@ AC_SUBST(WAYLAND_CFLAGS)
 AC_SUBST(GUPNP_VERSION)
 AC_SUBST(ENABLE_WESTEROS_APP)
 AC_SUBST(ENABLE_WESTEROS_TEST)
+AC_SUBST(ENABLE_WESTEROS_PLAYER)
 AC_OUTPUT
 
