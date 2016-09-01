@@ -23,6 +23,7 @@
 #include <semaphore.h>
 
 #include "simplebuffer-client-protocol.h"
+#include "vpc-client-protocol.h"
 
 #include "IL/OMX_Core.h"
 #include "IL/OMX_Broadcom.h"
@@ -71,6 +72,8 @@ typedef struct _WstOmxComponent
 struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
+   struct wl_vpc *vpc;
+   struct wl_vpc_surface *vpcSurface;
    int activeBuffers;
    
    void *moduleBcmHost;
@@ -93,6 +96,8 @@ struct _GstWesterosSinkSoc
    WstOmxComponent vidSched;
    WstOmxComponent clock;
    WstOmxComponent vidRend;
+   WstOmxComponent eglRend;
+   WstOmxComponent *rend;
    
    bool tunnelActiveClock;
    bool tunnelActiveVidDec;
@@ -102,6 +107,14 @@ struct _GstWesterosSinkSoc
    bool decoderReady;
    bool schedReady;
    bool playingVideo;
+   bool useGfxPath;
+   
+   int transX;
+   int transY;
+   int scaleXNum;
+   int scaleXDenom;
+   int scaleYNum;
+   int scaleYDenom;
 
    bool semInputActive;
    sem_t semInputBuffers;
@@ -116,6 +129,8 @@ struct _GstWesterosSinkSoc
    #else
    GMutex *mutex;
    #endif
+   gboolean quitCaptureThread;
+   GThread *captureThread;
 };
 
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass);

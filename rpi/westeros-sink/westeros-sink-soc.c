@@ -57,7 +57,9 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 
 static void flushComponents( GstWesterosSink *sink );
 static void updateVideoPosition( GstWesterosSink *sink );
+static void setVideoPath( GstWesterosSink *sink, bool useGfxPath );
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer );
+static gpointer captureThread(gpointer data);
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -69,6 +71,49 @@ static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
   
 static const struct wl_sb_listener sbListener = {
 	sbFormat
+};
+
+static void vpcVideoPathChange(void *data,
+                               struct wl_vpc_surface *wl_vpc_surface,
+                               uint32_t new_pathway )
+{
+   WESTEROS_UNUSED(wl_vpc_surface);
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+   printf("westeros-sink-soc: new pathway: %d\n", new_pathway);
+   setVideoPath( sink, (new_pathway == WL_VPC_SURFACE_PATHWAY_GRAPHICS) );
+}                               
+
+static void vpcVideoXformChange(void *data,
+                                struct wl_vpc_surface *wl_vpc_surface,
+                                int32_t x_translation,
+                                int32_t y_translation,
+                                uint32_t x_scale_num,
+                                uint32_t x_scale_denom,
+                                uint32_t y_scale_num,
+                                uint32_t y_scale_denom)
+{                                
+   WESTEROS_UNUSED(wl_vpc_surface);
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+
+   sink->soc.transX= x_translation;
+   sink->soc.transY= y_translation;
+   if ( x_scale_denom )
+   {
+      sink->soc.scaleXNum= x_scale_num;
+      sink->soc.scaleXDenom= x_scale_denom;
+   }
+   if ( y_scale_denom )
+   {
+      sink->soc.scaleYNum= y_scale_num;
+      sink->soc.scaleYDenom= y_scale_denom;
+   }
+
+   updateVideoPosition( sink );
+}
+
+static const struct wl_vpc_surface_listener vpcListener= {
+   vpcVideoPathChange,
+   vpcVideoXformChange
 };
 
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
@@ -96,6 +141,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    memset( &sink->soc.vidDec, 0, sizeof(WstOmxComponent) );
    memset( &sink->soc.vidSched, 0, sizeof(WstOmxComponent) );
    memset( &sink->soc.vidRend, 0, sizeof(WstOmxComponent) );
+   memset( &sink->soc.eglRend, 0, sizeof(WstOmxComponent) );
    memset( &sink->soc.clock, 0, sizeof(WstOmxComponent) );
    sink->soc.asyncStateSet.done= false;
    sink->soc.asyncError.done= false;
@@ -110,6 +156,19 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.decoderReady= false;
    sink->soc.schedReady= false;
    sink->soc.playingVideo= false;
+   sink->soc.useGfxPath= false;
+   sink->soc.rend= &sink->soc.vidRend;
+   sink->soc.transX= 0;
+   sink->soc.transY= 0;
+   sink->soc.scaleXNum= 1;
+   sink->soc.scaleXDenom= 1;
+   sink->soc.scaleYNum= 1;
+   sink->soc.scaleYDenom= 1;
+   sink->soc.sb= 0;
+   sink->soc.vpc= 0;
+   sink->soc.vpcSurface= 0;
+   sink->soc.quitCaptureThread= TRUE;
+   sink->soc.captureThread= NULL;
    sink->soc.buffCurrent= 0;
 
    moduleName= MODULE_BCMHOST;
@@ -315,6 +374,13 @@ void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink,
 		wl_sb_add_listener(sink->soc.sb, &sbListener, sink);
 		GST_DEBUG_OBJECT(sink, "westeros-sink-soc: registry: done add sb listener");
    }
+   else
+   if ((len==6) && (strncmp(interface, "wl_vpc", len) ==0))
+   {
+      sink->soc.vpc= (struct wl_vpc*)wl_registry_bind(registry, id, &wl_vpc_interface, 1);
+      printf("westeros-sink-soc: registry: vpc %p\n", (void*)sink->soc.vpc);
+      wl_proxy_set_queue((struct wl_proxy*)sink->soc.vpc, sink->queue);
+   }
 }
 
 void gst_westeros_sink_soc_registryHandleGlobalRemove( GstWesterosSink *sink,
@@ -376,6 +442,14 @@ static OMX_AsyncResult *omxGetAsyncResult( GstWesterosSink *sink, OMX_U32 cmd, O
          else if ( nData1 == sink->soc.vidRend.vidInPort )
          {
             pAsync= &sink->soc.vidRend.asyncVidIn;
+         }
+         else if ( nData1 == sink->soc.eglRend.vidInPort )
+         {
+            pAsync= &sink->soc.eglRend.asyncVidIn;
+         }
+         else if ( nData1 == sink->soc.eglRend.vidOutPort )
+         {
+            pAsync= &sink->soc.eglRend.asyncVidOut;
          }
          else if ( nData1 == sink->soc.clock.otherOutPort )
          {
@@ -810,10 +884,25 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       GST_ERROR("gst_westeros_sink_soc_null_to_ready: failed to get component OMX.broadcom.video_render" );
       goto exit;
    }
-   if ( !sink->soc.vidDec.vidInPort )
+   if ( !sink->soc.vidRend.vidInPort )
    {
       GST_ERROR("gst_westeros_sink_soc_null_to_ready: insufficient ports for vidRend: vidInPort %d",
                 sink->soc.vidRend.vidInPort );
+      goto exit;
+   }
+
+   result= gst_westeros_sink_soc_get_component( sink, 
+                                                "OMX.broadcom.egl_render", 
+                                                &sink->soc.eglRend );
+   if ( !result )
+   {
+      GST_ERROR("gst_westeros_sink_soc_null_to_ready: failed to get component OMX.broadcom.egl_render" );
+      goto exit;
+   }
+   if ( !sink->soc.eglRend.vidInPort || !sink->soc.eglRend.vidOutPort )
+   {
+      GST_ERROR("gst_westeros_sink_soc_null_to_ready: insufficient ports for eglRend: vidInPort %d vidOutPort %d",
+                sink->soc.eglRend.vidInPort, sink->soc.eglRend.vidOutPort );
       goto exit;
    }
 
@@ -857,6 +946,27 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       GST_ERROR("gst_westeros_sink_soc_null_to_ready: insufficient ports for vidSched: vidInPort %d vidOutPort %d otherInPort %d",
                 sink->soc.vidSched.vidInPort, sink->soc.vidSched.vidOutPort, sink->soc.vidSched.otherInPort );
       goto exit;
+   }
+   
+   if ( sink->soc.vpc && sink->surface )
+   {
+      sink->soc.vpcSurface= wl_vpc_get_vpc_surface( sink->soc.vpc, sink->surface );
+      if ( sink->soc.vpcSurface )
+      {
+         wl_vpc_surface_add_listener( sink->soc.vpcSurface, &vpcListener, sink );
+         wl_proxy_set_queue((struct wl_proxy*)sink->soc.vpcSurface, sink->queue);
+         wl_display_flush( sink->display );
+         printf("westeros-sink-soc: null_to_ready: done add vpcSurface listener\n");
+      }
+      else
+      {
+         GST_ERROR("gst_westeros_sink_soc_null_to_ready: failed to create vpcSurface\n");
+      }
+   }
+   else
+   {
+      GST_ERROR("gst_westeros_sink_soc_null_to_ready: can't create vpc surface: vpc %p surface %p\n",
+                sink->soc.vpc, sink->surface);
    }
 
    result= TRUE;
@@ -1101,10 +1211,11 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
          GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable vidSched port %d: omxerr %x", sink->soc.vidSched.vidOutPort, omxerr );
       }
 
-      omxerr= OMX_SendCommand( sink->soc.vidRend.hComp, OMX_CommandPortDisable, sink->soc.vidRend.vidInPort, NULL );
+      omxerr= OMX_SendCommand( sink->soc.rend->hComp, OMX_CommandPortDisable, sink->soc.rend->vidInPort, NULL );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable vidRend port %d: omxerr %x", sink->soc.vidRend.vidInPort, omxerr );
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable %s port %d: omxerr %x", 
+                    sink->soc.rend->name, sink->soc.rend->vidInPort, omxerr );
       }
    }
 
@@ -1203,10 +1314,11 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
          GST_ERROR("gst_westeros_sink_soc_paused_to_ready: tear down tunnel vidSched port %d: omxerr %x", sink->soc.vidSched.vidOutPort, omxerr );
       }
 
-      omxerr= sink->soc.OMX_SetupTunnel( sink->soc.vidRend.hComp, sink->soc.vidRend.vidInPort, NULL, 0 );
+      omxerr= sink->soc.OMX_SetupTunnel( sink->soc.rend->hComp, sink->soc.rend->vidInPort, NULL, 0 );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: tear down tunnel vidRend port %d: omxerr %x", sink->soc.vidRend.vidInPort, omxerr );
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: tear down tunnel %s port %d: omxerr %x", 
+                    sink->soc.rend->name, sink->soc.rend->vidInPort, omxerr );
       }
       
       sink->soc.tunnelActiveVidSched= false;
@@ -1229,12 +1341,21 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
       sink->soc.tunnelActiveClock= false;
    }
 
+   if ( sink->soc.eglRend.isOpen )
+   {
+      omxerr= omxComponentSetState( sink, sink->soc.eglRend.hComp, OMX_StateIdle );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: OMX_SendCommand for eglRend setState OMX_StateIdle: omxerr %x", omxerr );
+      }
+   }
+
    if ( sink->soc.vidRend.isOpen )
    {
       omxerr= omxComponentSetState( sink, sink->soc.vidRend.hComp, OMX_StateIdle );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc_ready_to_paused: OMX_SendCommand for vidRend setState OMX_StateIdle: omxerr %x", omxerr );
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: OMX_SendCommand for vidRend setState OMX_StateIdle: omxerr %x", omxerr );
       }
    }
 
@@ -1243,7 +1364,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
       omxerr= omxComponentSetState( sink, sink->soc.vidSched.hComp, OMX_StateIdle );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc_ready_to_paused: OMX_SendCommand for vidSched setState OMX_StateIdle: omxerr %x", omxerr );
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: OMX_SendCommand for vidSched setState OMX_StateIdle: omxerr %x", omxerr );
       }
    }
 
@@ -1252,7 +1373,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
       omxerr= omxComponentSetState( sink, sink->soc.vidDec.hComp, OMX_StateIdle );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc_ready_to_paused: OMX_SendCommand for vidDec setState OMX_StateIdle: omxerr %x", omxerr );
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: OMX_SendCommand for vidDec setState OMX_StateIdle: omxerr %x", omxerr );
       }
    }
 
@@ -1261,7 +1382,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
       omxerr= omxComponentSetState( sink, sink->soc.clock.hComp, OMX_StateIdle );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc_ready_to_paused: OMX_SendCommand for clock setState OMX_StateIdle: omxerr %x", omxerr );
+         GST_ERROR("gst_westeros_sink_soc_paused_to_ready: OMX_SendCommand for clock setState OMX_StateIdle: omxerr %x", omxerr );
       }
    }
 
@@ -1280,7 +1401,21 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_ready_to_null: enter");
 
    sink->soc.playingVideo= false;
-   
+
+   if ( sink->soc.vpcSurface )
+   {
+      wl_vpc_surface_destroy( sink->soc.vpcSurface );
+   }
+
+   if ( sink->soc.eglRend.isOpen )
+   {
+      omxerr= omxComponentSetState( sink, sink->soc.eglRend.hComp, OMX_StateLoaded );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc_ready_to_null: OMX_SendCommand for eglRend setState OMX_StateLoaded: omxerr %x", omxerr );
+      }
+   }
+
    if ( sink->soc.vidRend.isOpen )
    {
       omxerr= omxComponentSetState( sink, sink->soc.vidRend.hComp, OMX_StateLoaded );
@@ -1315,6 +1450,12 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
       {
          GST_ERROR("gst_westeros_sink_soc_ready_to_null: OMX_SendCommand for clock setState OMX_StateLoaded: omxerr %x", omxerr );
       }
+   }
+
+   if ( sink->soc.eglRend.isOpen )
+   {
+      omxerr= sink->soc.OMX_FreeHandle( sink->soc.eglRend.hComp );
+      sink->soc.eglRend.isOpen= false;
    }
 
    if ( sink->soc.vidRend.isOpen )
@@ -1413,6 +1554,11 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {  
    OMX_ERRORTYPE omxerr;
    int retryCount;
+   gboolean eosDetected;
+   
+   LOCK(sink);
+   eosDetected= sink->eosDetected;
+   UNLOCK(sink);
 
    if ( sink->soc.playingVideo && !sink->flushStarted )
    {
@@ -1455,22 +1601,33 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
          if ( !gst_westeros_sink_soc_setup_tunnel( sink, 
                                                    &sink->soc.vidSched, sink->soc.vidSched.vidOutPort, 
-                                                   &sink->soc.vidRend, sink->soc.vidRend.vidInPort ) )
+                                                   sink->soc.rend, sink->soc.rend->vidInPort ) )
          {
-            GST_ERROR( "gst_westeros_sink_soc_render: failed to setup tunnel from vidSched to vidRend" );
+            GST_ERROR( "gst_westeros_sink_soc_render: failed to setup tunnel from vidSched to %s", sink->soc.rend->name );
             goto exit;
          }
          sink->soc.tunnelActiveVidSched= true;
          
-         GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_render: calling OMX_SendCommand for vidRend setState OMX_StateExecuting" );
-         omxerr= omxSendCommandSync( sink, sink->soc.vidRend.hComp, OMX_CommandStateSet, OMX_StateExecuting, NULL );
+         GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_render: calling OMX_SendCommand for %s setState OMX_StateExecuting",
+                          sink->soc.rend->name );
+         omxerr= omxSendCommandSync( sink, sink->soc.rend->hComp, OMX_CommandStateSet, OMX_StateExecuting, NULL );
          if ( omxerr != OMX_ErrorNone )
          {
-            GST_ERROR("gst_westeros_sink_soc_render: OMX_SendCommand for vidRend setState OMX_StateExecuting: omxerr %x", omxerr );
-         }         
+            GST_ERROR("gst_westeros_sink_soc_render: OMX_SendCommand for %s setState OMX_StateExecuting: omxerr %x", 
+                      sink->soc.rend->name, omxerr );
+         }
       }
 
       processFrame( sink, buffer );
+
+      if ( wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
+      {
+         wl_display_flush(sink->display);
+         if ( !eosDetected )
+         {
+            wl_display_roundtrip_queue(sink->display,sink->queue);
+         }
+      }
    }
 
 exit:
@@ -1605,10 +1762,11 @@ static void flushComponents( GstWesterosSink *sink )
 
    if ( sink->soc.tunnelActiveVidSched )
    {
-      omxerr= omxSendCommandAsync( sink, sink->soc.vidRend.hComp, OMX_CommandFlush, sink->soc.vidRend.vidInPort, NULL );
+      omxerr= omxSendCommandAsync( sink, sink->soc.rend->hComp, OMX_CommandFlush, sink->soc.rend->vidInPort, NULL );
       if ( omxerr != OMX_ErrorNone )
       {
-         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush vidRend port %d: omxerr %x", sink->soc.vidRend.vidInPort, omxerr );
+         GST_ERROR("gst_westeros_sink_soc: flushComponents: flush %s port %d: omxerr %x", 
+                    sink->soc.rend->name, sink->soc.rend->vidInPort, omxerr );
       }
       
       omxerr= omxSendCommandAsync( sink, sink->soc.vidSched.hComp, OMX_CommandFlush, sink->soc.vidSched.vidOutPort, NULL );
@@ -1620,8 +1778,9 @@ static void flushComponents( GstWesterosSink *sink )
       GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidSched port %d flush", sink->soc.vidSched.vidOutPort );
       omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidSched.vidOutPort );
 
-      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for vidRend port %d flush", sink->soc.vidRend.vidInPort );
-      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.vidRend.vidInPort );
+      GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: waiting for %s port %d flush", 
+                        sink->soc.rend->name, sink->soc.rend->vidInPort );
+      omxWaitCommandComplete( sink, OMX_CommandFlush, sink->soc.rend->vidInPort );
       GST_DEBUG_OBJECT( sink, "gst_westeros_sink_soc: flushComponents: done waiting for flushes" );
    }
 
@@ -1665,6 +1824,7 @@ static void updateVideoPosition( GstWesterosSink *sink )
    OMX_ERRORTYPE omxerr;
    OMX_CONFIG_DISPLAYREGIONTYPE displayRegion;
    int wx, wy, ww, wh;
+   int vx, vy, vw, vh;
 
    LOCK(sink);
    wx= sink->windowX;
@@ -1673,23 +1833,77 @@ static void updateVideoPosition( GstWesterosSink *sink )
    wh= sink->windowHeight;
    sink->windowChange= false;
    UNLOCK(sink);
-   
-   memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
-   displayRegion.nSize= sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);
-   displayRegion.nVersion.nVersion= OMX_VERSION;
-   displayRegion.nPortIndex= sink->soc.vidRend.vidInPort;
-   displayRegion.set= (OMX_DISPLAYSETTYPE)(OMX_DISPLAY_SET_FULLSCREEN|OMX_DISPLAY_SET_NOASPECT|OMX_DISPLAY_SET_DEST_RECT);
-   displayRegion.fullscreen= OMX_FALSE;
-   displayRegion.noaspect= OMX_FALSE;
-   displayRegion.dest_rect.x_offset= wx;
-   displayRegion.dest_rect.y_offset= wy;
-   displayRegion.dest_rect.width= ww;
-   displayRegion.dest_rect.height= wh;
-   omxerr= OMX_SetConfig( sink->soc.vidRend.hComp, OMX_IndexConfigDisplayRegion, &displayRegion );
-   if ( omxerr != OMX_ErrorNone )
+      
+   if ( sink->soc.useGfxPath )
    {
-      GST_ERROR("gst_westeros_sink_soc updateVideoPosition: OMX_SetConfig for display region: error: %x", omxerr );
+      // TBD
    }
+   else
+   {
+      vx= ((wx*sink->soc.scaleXNum)/sink->soc.scaleXDenom) + sink->soc.transX;
+      vy= ((wy*sink->soc.scaleYNum)/sink->soc.scaleYDenom) + sink->soc.transY;
+      vw= ((ww)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
+      vh= ((wh)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
+      
+      memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
+      displayRegion.nSize= sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);
+      displayRegion.nVersion.nVersion= OMX_VERSION;
+      displayRegion.nPortIndex= sink->soc.rend->vidInPort;
+      displayRegion.set= (OMX_DISPLAYSETTYPE)(OMX_DISPLAY_SET_FULLSCREEN|
+                                              OMX_DISPLAY_SET_NOASPECT|
+                                              OMX_DISPLAY_SET_DEST_RECT|
+                                              OMX_DISPLAY_SET_LAYER);
+      displayRegion.fullscreen= OMX_FALSE;
+      displayRegion.noaspect= OMX_FALSE;
+      displayRegion.dest_rect.x_offset= vx;
+      displayRegion.dest_rect.y_offset= vy;
+      displayRegion.dest_rect.width= vw;
+      displayRegion.dest_rect.height= vh;
+      displayRegion.layer= -1;
+      omxerr= OMX_SetConfig( sink->soc.rend->hComp, OMX_IndexConfigDisplayRegion, &displayRegion );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc updateVideoPosition: OMX_SetConfig for display region: error: %x", omxerr );
+      }
+   }
+}
+
+static void setVideoPath( GstWesterosSink *sink, bool useGfxPath )
+{
+   WESTEROS_UNUSED(sink);
+   WESTEROS_UNUSED(useGfxPath);
+   bool oldUseGfxPath;
+   
+   oldUseGfxPath= sink->soc.useGfxPath;
+
+   sink->soc.useGfxPath= useGfxPath;
+
+   if ( useGfxPath && !oldUseGfxPath )
+   {
+      struct wl_buffer *buff;
+      
+      buff= wl_sb_create_buffer( sink->soc.sb, 
+                                 0,
+                                 sink->windowWidth, 
+                                 sink->windowHeight, 
+                                 sink->windowWidth*4, 
+                                 WL_SB_FORMAT_ARGB8888 );
+      wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
+      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+      wl_surface_commit( sink->surface );
+      wl_display_flush(sink->display);
+      wl_display_dispatch_queue_pending(sink->display, sink->queue);
+   }
+   else if ( !useGfxPath && oldUseGfxPath )
+   {
+      updateVideoPosition( sink );
+      
+      wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
+      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+      wl_surface_commit( sink->surface );
+      wl_display_flush(sink->display);
+      wl_display_dispatch_queue_pending(sink->display, sink->queue);
+   }   
 }
 
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
@@ -1704,7 +1918,6 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
    unsigned char *inData;
    bool windowChange;
    gint64 nanoTime;
-   OMX_TIME_CONFIG_TIMESTAMPTYPE timeStamp;
 
    if ( sink->soc.playingVideo && !sink->flushStarted )
    {
@@ -1822,5 +2035,14 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
 
 exit:
    return;     
+}
+
+static gpointer captureThread(gpointer data) 
+{
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+
+   //TBD
+   
+   return NULL;
 }
 
