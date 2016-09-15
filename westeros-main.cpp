@@ -562,18 +562,36 @@ static const char *inputPath= "/dev/input/";
 
 int openDevice( std::vector<pollfd> &deviceFds, const char *devPathName )
 {
-   int fd= open( devPathName, O_RDONLY | O_CLOEXEC );
-   if ( fd < 0 )
+   int fd= -1;   
+   struct stat buf;
+   
+   if ( stat( devPathName, &buf ) == 0 )
    {
-      printf( "error opening device: %s\n", devPathName );
+      if ( S_ISCHR(buf.st_mode) )
+      {
+         fd= open( devPathName, O_RDONLY | O_CLOEXEC );
+         if ( fd < 0 )
+         {
+            printf( "error opening device: %s\n", devPathName );
+         }
+         else
+         {
+            pollfd pfd;
+            printf( "opened device %s : fd %d\n", devPathName, fd );
+            pfd.fd= fd;
+            deviceFds.push_back( pfd );
+         }
+      }
+      else
+      {
+         printf("ignoring non character device %s\n", devPathName );
+      }
    }
    else
    {
-      pollfd pfd;
-      printf( "opened device %s : fd %d\n", devPathName, fd );
-      pfd.fd= fd;
-      deviceFds.push_back( pfd );
+      printf( "error performing stat on device: %s\n", devPathName );
    }
+   
    return fd;
 }
 
@@ -704,7 +722,7 @@ void* inputThread( void *data )
                         printf("inotify: mask %x (%s) wd %d (%d)\n", iev->mask, iev->name, iev->wd, watchFd );
                         inCtx->deviceFds.pop_back();
                         releaseDevices( inCtx->deviceFds );
-                        usleep( 10000 );
+                        usleep( 100000 );
                         getDevices( inCtx->deviceFds );
                         inCtx->deviceFds.push_back( pfd );
                         deviceCount= inCtx->deviceFds.size();
@@ -860,8 +878,6 @@ void* inputThread( void *data )
             }
          }
       }
-      
-      usleep(400000);
    }
    
    if ( notifyFd )
