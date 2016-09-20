@@ -246,7 +246,6 @@ bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixma
             #else
             pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
             #endif
-            pixmapInfo.openvg= 0;
             if ( !NXPL_CreateCompatiblePixmap(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
             {
                printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmap failed\n");
