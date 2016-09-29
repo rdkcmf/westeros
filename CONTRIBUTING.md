@@ -1,20 +1,10 @@
-If you would like to make code contributions to this project, you must follow
-the steps in this page:
+Contributing
+============
 
-https://wiki.rdkcentral.com/signup.action
+If you wish to make code contributions to this project, the master source is hosted at [code.rdkcentral.com](https://code.rdkcentral.com/r/#/admin/projects/components/opensource/westeros). You can submit your changes for review via that site.
 
-Once those steps are completed, changes to this project repository should be
-submitted for review to the following Gerrit project:
+Please follow the [workflow](https://wiki.rdkcentral.com/display/CMF/Gerrit+Development+Workflow) when making a contribution.
 
-components/opensource/westeros
+In order to contribute code, first-time users are requested to agree to the [license](https://wiki.rdkcentral.com/signup.action).
 
-via the Gerrit tool at:
-
-https://code.rdkcentral.com/r/
-
-and following the workflow documented at:
-
-https://wiki.rdkcentral.com/display/CMF/Gerrit+Development+Workflow
-
-Pull requests submitted through GitHub will be ignored.
-
+There is a GitHub [mirror](https://github.com/rdkcmf/westeros) of this project. Pull requests to the mirror will be ignored.
