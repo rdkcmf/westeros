@@ -252,7 +252,7 @@ static void setupEGL( AppCtx *appCtx )
            (greenSize == GREEN_SIZE) &&
            (blueSize == BLUE_SIZE) &&
            (alphaSize == ALPHA_SIZE) &&
-           (depthSize == DEPTH_SIZE) )
+           (depthSize >= DEPTH_SIZE) )
       {
          printf( "choosing config %d\n", i);
          break;
