@@ -2154,9 +2154,9 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
       }
 
       int filedes[2];
-      bool forwardStdout = getenv( "WESTEROS_CLIENT_FORWARD_STDOUT" );
+      bool forwardStdout = getenv( "WESTEROS_FORWARD_CLIENT_STDOUT" );
 
-      if ( forwardStdout && pipe(filedes) == -1 )
+      if ( forwardStdout )
       {
          if ( pipe(filedes) == -1 )
          {
