@@ -425,6 +425,7 @@ typedef struct _WstRendererEMB
    textureShaderYUVProgram *textureShaderYUV;
    
    std::vector<WstRenderSurface*> surfaces;
+   std::vector<GLuint> deadTextures;
 
    bool fastPathActive;   
    WstRenderer *rendererFast;
@@ -455,6 +456,8 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
 static void wstRendererInitFastPath( WstRendererEMB *renderer );
 static bool wstRendererActivateFastPath( WstRendererEMB *renderer );
 static void wstRendererDeactivateFastPath( WstRendererEMB *renderer );
+static void wstRendererDeleteTexture( WstRendererEMB *renderer, GLuint textureId );
+static void wstRendererProcessDeadTextures( WstRendererEMB *renderer );
 
 #define RED_SIZE (8)
 #define GREEN_SIZE (8)
@@ -473,6 +476,8 @@ static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer )
       rendererEMB->outputHeight= renderer->outputHeight;
       
       rendererEMB->renderer= renderer;
+      rendererEMB->surfaces= std::vector<WstRenderSurface*>();
+      rendererEMB->deadTextures= std::vector<GLuint>();
       
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       rendererEMB->glCtx= WstGLInit();
@@ -552,6 +557,8 @@ static void wstRendererEMBDestroy( WstRendererEMB *renderer )
 {
    if ( renderer )
    {
+      wstRendererProcessDeadTextures( renderer );
+      
       #if defined (WESTEROS_HAVE_WAYLAND_EGL)
       if ( renderer->haveWaylandEGL )
       {
@@ -645,7 +652,7 @@ static void wstRendererEMBFlushSurface( WstRendererEMB *renderer, WstRenderSurfa
         {
            if ( surface->textureId[i] )
            {
-              glDeleteTextures( 1, &surface->textureId[i] );
+              wstRendererDeleteTexture( renderer, surface->textureId[i] );
               surface->textureId[i]= GL_NONE;
            }
            #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
@@ -971,7 +978,7 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
             surface->eglImage[0]= eglImage;
             if ( surface->textureId[0] != GL_NONE )
             {
-               glDeleteTextures( 1, &surface->textureId[0] );
+               wstRendererDeleteTexture( renderer, surface->textureId[0] );
             }
             surface->textureId[0]= GL_NONE;
             surface->textureCount= 1;
@@ -1000,7 +1007,7 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
                surface->eglImage[i]= eglImage;
                if ( surface->textureId[i] != GL_NONE )
                {
-                  glDeleteTextures( 1, &surface->textureId[i] );
+                  wstRendererDeleteTexture( renderer, surface->textureId[i] );
                }
                surface->textureId[i]= GL_NONE;
             }
@@ -1116,7 +1123,7 @@ static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *
                   surface->eglImage[0]= eglImage;
                   if ( surface->textureId[0] != GL_NONE )
                   {
-                     glDeleteTextures( 1, &surface->textureId[0] );
+                     wstRendererDeleteTexture( renderer, surface->textureId[0] );
                   }
                   surface->textureId[0]= GL_NONE;
                }
@@ -1335,6 +1342,8 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
 {
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
 
+   wstRendererProcessDeadTextures( rendererEMB );
+   
    if ( rendererEMB->fastPathActive )
    {
       rendererEMB->rendererFast->outputX= renderer->outputX;
@@ -1813,6 +1822,22 @@ static void wstRendererDeactivateFastPath( WstRendererEMB *renderer )
          }
       }
    }
+}
+
+static void wstRendererDeleteTexture( WstRendererEMB *renderer, GLuint textureId )
+{
+   renderer->deadTextures.push_back( textureId );
+}
+
+static void wstRendererProcessDeadTextures( WstRendererEMB *renderer )
+{
+   GLuint textureId;
+   for( int i= renderer->deadTextures.size()-1; i >= 0; --i )
+   {
+      textureId= renderer->deadTextures[i];
+      glDeleteTextures( 1, &textureId );
+      renderer->deadTextures.pop_back();
+   }   
 }
 
 extern "C"
