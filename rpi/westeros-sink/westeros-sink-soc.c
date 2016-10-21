@@ -1843,7 +1843,7 @@ static void updateVideoPosition( GstWesterosSink *sink )
       vx= ((wx*sink->soc.scaleXNum)/sink->soc.scaleXDenom) + sink->soc.transX;
       vy= ((wy*sink->soc.scaleYNum)/sink->soc.scaleYDenom) + sink->soc.transY;
       vw= ((ww)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
-      vh= ((wh)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
+      vh= ((wh)*sink->soc.scaleYNum)/sink->soc.scaleYDenom;
       
       memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
       displayRegion.nSize= sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);

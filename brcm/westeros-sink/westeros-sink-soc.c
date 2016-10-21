@@ -981,7 +981,7 @@ static void updateVideoPosition( GstWesterosSink *sink )
    sink->soc.videoX= ((sink->windowX*sink->soc.scaleXNum)/sink->soc.scaleXDenom) + sink->soc.transX;
    sink->soc.videoY= ((sink->windowY*sink->soc.scaleYNum)/sink->soc.scaleYDenom) + sink->soc.transY;
    sink->soc.videoWidth= ((sink->windowWidth)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
-   sink->soc.videoHeight= ((sink->windowHeight)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
+   sink->soc.videoHeight= ((sink->windowHeight)*sink->soc.scaleYNum)/sink->soc.scaleYDenom;
 
    if ( !sink->soc.captureEnabled )
    {
