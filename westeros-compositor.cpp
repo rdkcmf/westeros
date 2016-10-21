@@ -5903,9 +5903,13 @@ static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
 static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects )
 {
    bool useHWPath= ctx->renderer->fastHint;
-   int scaleXNum= ctx->renderer->matrix[0]*1000000;
+   
+   double scaleX= ctx->renderer->matrix[0]*((double)ctx->output->width)/((double)DEFAULT_OUTPUT_WIDTH);
+   double scaleY= ctx->renderer->matrix[5]*((double)ctx->output->height)/((double)DEFAULT_OUTPUT_HEIGHT);
+   
+   int scaleXNum= scaleX*1000000;
    int scaleXDenom= 1000000; 
-   int scaleYNum= ctx->renderer->matrix[5]*1000000;
+   int scaleYNum= scaleY*1000000;
    int scaleYDenom= 1000000;
    int transX= (int)ctx->renderer->matrix[12];
    int transY= (int)ctx->renderer->matrix[13];
@@ -5952,10 +5956,10 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
 
       if ( vpcSurface->useHWPath )
       {      
-         rect.x= (ctx->output->x+vpcSurface->surface->x)*ctx->renderer->matrix[0]+(transX-ctx->output->x);
-         rect.y= (ctx->output->y+vpcSurface->surface->y)*ctx->renderer->matrix[5]+(transY-ctx->output->y);
-         rect.width= vpcSurface->surface->width*ctx->renderer->matrix[0];
-         rect.height= vpcSurface->surface->height*ctx->renderer->matrix[5];
+         rect.x= (ctx->output->x+vpcSurface->surface->x)*scaleX+(transX-ctx->output->x);
+         rect.y= (ctx->output->y+vpcSurface->surface->y)*scaleY+(transY-ctx->output->y);
+         rect.width= vpcSurface->surface->width*scaleX;
+         rect.height= vpcSurface->surface->height*scaleY;
          rects.push_back(rect);
       }
    }
