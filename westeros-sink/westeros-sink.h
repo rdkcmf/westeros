@@ -21,9 +21,12 @@
 
 #include "wayland-client.h"
 #include "simpleshell-client-protocol.h"
+#include "vpc-client-protocol.h"
 
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
+
+#define WESTEROS_UNUSED(x) ((void)(x))
 
 G_BEGIN_DECLS
 
@@ -73,6 +76,13 @@ struct _GstWesterosSink
    bool visible;
    float opacity;
    float zorder;
+   
+   int transX;
+   int transY;
+   int scaleXNum;
+   int scaleXDenom;
+   int scaleYNum;
+   int scaleYDenom;
 
    gboolean videoStarted;
    gboolean startAfterLink;
@@ -95,6 +105,8 @@ struct _GstWesterosSink
    struct wl_event_queue *queue;
    struct wl_surface *surface;
    uint32_t surfaceId;
+   struct wl_vpc *vpc;
+   struct wl_vpc_surface *vpcSurface;
    
    struct _GstWesterosSinkSoc soc;
 };

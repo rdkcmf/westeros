@@ -55,6 +55,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer );
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink );
 gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink );
 void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink );
+void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath );
+void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink );
 
 #endif
 

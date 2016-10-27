@@ -28,8 +28,6 @@
 
 #include "bmedia_types.h"
 
-#define WESTEROS_UNUSED(x) ((void)(x))
-
 #define FRAME_POLL_TIME (8000)
 #define EOS_DETECT_DELAY (500000)
 #define EOS_DETECT_DELAY_AT_START (10000000)
@@ -41,10 +39,8 @@ static void freeCaptureSurfaces( GstWesterosSink *sink );
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink );
 static gboolean queryPeerHandles(GstWesterosSink *sink);
 static gpointer captureThread(gpointer data);
-static void setVideoPath( GstWesterosSink *sink, bool useGfxPath );
 static void processFrame( GstWesterosSink *sink );
 static void updateVideoStatus( GstWesterosSink *sink );
-static void updateVideoPosition( GstWesterosSink *sink );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
 
@@ -58,51 +54,6 @@ static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
   
 static const struct wl_sb_listener sbListener = {
 	sbFormat
-};
-
-static void vpcVideoPathChange(void *data,
-                               struct wl_vpc_surface *wl_vpc_surface,
-                               uint32_t new_pathway )
-{
-   WESTEROS_UNUSED(wl_vpc_surface);
-   GstWesterosSink *sink= (GstWesterosSink*)data;
-   printf("westeros-sink-soc: new pathway: %d\n", new_pathway);
-   setVideoPath( sink, (new_pathway == WL_VPC_SURFACE_PATHWAY_GRAPHICS) );
-}                               
-
-static void vpcVideoXformChange(void *data,
-                                struct wl_vpc_surface *wl_vpc_surface,
-                                int32_t x_translation,
-                                int32_t y_translation,
-                                uint32_t x_scale_num,
-                                uint32_t x_scale_denom,
-                                uint32_t y_scale_num,
-                                uint32_t y_scale_denom)
-{                                
-   WESTEROS_UNUSED(wl_vpc_surface);
-   GstWesterosSink *sink= (GstWesterosSink*)data;
-      
-   sink->soc.transX= x_translation;
-   sink->soc.transY= y_translation;
-   if ( x_scale_denom )
-   {
-      sink->soc.scaleXNum= x_scale_num;
-      sink->soc.scaleXDenom= x_scale_denom;
-   }
-   if ( y_scale_denom )
-   {
-      sink->soc.scaleYNum= y_scale_num;
-      sink->soc.scaleYDenom= y_scale_denom;
-   }
-   
-   LOCK( sink );
-   updateVideoPosition( sink );
-   UNLOCK( sink );
-}
-
-static const struct wl_vpc_surface_listener vpcListener= {
-   vpcVideoPathChange,
-   vpcVideoXformChange
 };
 
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
@@ -122,12 +73,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    {
       sink->soc.captureSurface[i]= NULL;
    }
-   sink->soc.transX= 0;
-   sink->soc.transY= 0;
-   sink->soc.scaleXNum= 1;
-   sink->soc.scaleXDenom= 1;
-   sink->soc.scaleYNum= 1;
-   sink->soc.scaleYDenom= 1;
    sink->soc.quitCaptureThread= TRUE;
    sink->soc.captureThread= NULL;
    sink->soc.captureCount= 0;
@@ -135,8 +80,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.noFrameCount= 0;
    sink->soc.sb= 0;
    sink->soc.activeBuffers= 0;
-   sink->soc.vpc= 0;
-   sink->soc.vpcSurface= 0;
    sink->soc.captureEnabled= FALSE;
    
    rc= NxClient_Join(NULL);
@@ -175,12 +118,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_term( GstWesterosSink *sink )
 {
-   if ( sink->soc.vpc )
-   {
-      wl_vpc_destroy( sink->soc.vpc );
-      sink->soc.vpc= 0;
-   }
-   
    if ( sink->soc.sb )
    {
       wl_sb_destroy( sink->soc.sb );
@@ -230,13 +167,6 @@ void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink,
 		wl_sb_add_listener(sink->soc.sb, &sbListener, sink);
 		printf("westeros-sink-soc: registry: done add sb listener\n");
    }
-   else
-   if ((len==6) && (strncmp(interface, "wl_vpc", len) ==0))
-   {
-      sink->soc.vpc= (struct wl_vpc*)wl_registry_bind(registry, id, &wl_vpc_interface, 1);
-      printf("westeros-sink-soc: registry: vpc %p\n", (void*)sink->soc.vpc);
-      wl_proxy_set_queue((struct wl_proxy*)sink->soc.vpc, sink->queue);
-   }
 }
 
 void gst_westeros_sink_soc_registryHandleGlobalRemove( GstWesterosSink *sink,
@@ -271,29 +201,8 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
    NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
    NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
-   
-   if ( sink->soc.vpc && sink->surface )
-   {
-      sink->soc.vpcSurface= wl_vpc_get_vpc_surface( sink->soc.vpc, sink->surface );
-      if ( sink->soc.vpcSurface )
-      {
-         wl_vpc_surface_add_listener( sink->soc.vpcSurface, &vpcListener, sink );
-         wl_proxy_set_queue((struct wl_proxy*)sink->soc.vpcSurface, sink->queue);
-         wl_display_flush( sink->display );
-         printf("westeros-sink-soc: null_to_ready: done add vpcSurface listener\n");
-         
-         result= TRUE;
-      }
-      else
-      {
-         GST_ERROR("gst_westeros_sink_soc_null_to_ready: failed to create vpcSurface\n");
-      }
-   }
-   else
-   {
-      GST_ERROR("gst_westeros_sink_soc_null_to_ready: can't create vpc surface: vpc %p surface %p\n",
-                sink->soc.vpc, sink->surface);
-   }
+
+   result= TRUE;   
    
    return result;
 }
@@ -377,11 +286,6 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
 gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *passToDefault )
 {
    WESTEROS_UNUSED(sink);
-
-   if ( sink->soc.vpcSurface )
-   {
-      wl_vpc_surface_destroy( sink->soc.vpcSurface );
-   }
 
    *passToDefault= false;
    
@@ -689,7 +593,7 @@ static gpointer captureThread(gpointer data)
    if ( getenv("WESTEROS_SINK_USE_GFX") )
    {
       GST_INFO_OBJECT(sink, "WESTEROS_SINK_USE_GFX defined - enabling capture\n");
-      setVideoPath( sink, true );
+      gst_westeros_sink_soc_set_video_path( sink, true );
    }
 
    /*
@@ -704,7 +608,7 @@ static gpointer captureThread(gpointer data)
       if ( sink->windowChange )
       {
          sink->windowChange= false;
-         updateVideoPosition( sink );
+         gst_westeros_sink_soc_update_video_position( sink );
       }
       UNLOCK( sink );
       
@@ -749,7 +653,7 @@ static gpointer captureThread(gpointer data)
    return NULL;
 }
 
-static void setVideoPath( GstWesterosSink *sink, bool useGfxPath )
+void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
 {
    if ( useGfxPath && !sink->soc.captureEnabled )
    {
@@ -974,14 +878,14 @@ static void updateVideoStatus( GstWesterosSink *sink )
    }
 }
 
-static void updateVideoPosition( GstWesterosSink *sink )
+void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 {
    NEXUS_SurfaceComposition composition;
    
-   sink->soc.videoX= ((sink->windowX*sink->soc.scaleXNum)/sink->soc.scaleXDenom) + sink->soc.transX;
-   sink->soc.videoY= ((sink->windowY*sink->soc.scaleYNum)/sink->soc.scaleYDenom) + sink->soc.transY;
-   sink->soc.videoWidth= ((sink->windowWidth)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
-   sink->soc.videoHeight= ((sink->windowHeight)*sink->soc.scaleYNum)/sink->soc.scaleYDenom;
+   sink->soc.videoX= ((sink->windowX*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
+   sink->soc.videoY= ((sink->windowY*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
+   sink->soc.videoWidth= ((sink->windowWidth)*sink->scaleXNum)/sink->scaleXDenom;
+   sink->soc.videoHeight= ((sink->windowHeight)*sink->scaleYNum)/sink->scaleYDenom;
 
    if ( !sink->soc.captureEnabled )
    {

@@ -27,8 +27,6 @@
 
 #include "westeros-sink.h"
 
-#define WESTEROS_UNUSED(x) ((void)(x))
-
 #define FRAME_POLL_TIME (8000)
 #define EOS_DETECT_DELAY (500000)
 #define EOS_DETECT_DELAY_AT_START (10000000)
@@ -214,6 +212,17 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
 }
 
 void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
+{
+   WESTEROS_UNUSED(sink);
+}
+
+void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
+{
+   WESTEROS_UNUSED(sink);
+   WESTEROS_UNUSED(useGfxPath);
+}
+
+void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 {
    WESTEROS_UNUSED(sink);
 }

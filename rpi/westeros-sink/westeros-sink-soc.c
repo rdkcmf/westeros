@@ -29,8 +29,6 @@
 
 #include "westeros-sink.h"
 
-#define WESTEROS_UNUSED(x) ((void)(x))
-
 #define PREROLL_OFFSET (0LL)
 
 #define MODULE_BCMHOST "libbcm_host.so"
@@ -56,8 +54,6 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
 static void flushComponents( GstWesterosSink *sink );
-static void updateVideoPosition( GstWesterosSink *sink );
-static void setVideoPath( GstWesterosSink *sink, bool useGfxPath );
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer );
 static gpointer captureThread(gpointer data);
 
@@ -71,49 +67,6 @@ static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
   
 static const struct wl_sb_listener sbListener = {
 	sbFormat
-};
-
-static void vpcVideoPathChange(void *data,
-                               struct wl_vpc_surface *wl_vpc_surface,
-                               uint32_t new_pathway )
-{
-   WESTEROS_UNUSED(wl_vpc_surface);
-   GstWesterosSink *sink= (GstWesterosSink*)data;
-   printf("westeros-sink-soc: new pathway: %d\n", new_pathway);
-   setVideoPath( sink, (new_pathway == WL_VPC_SURFACE_PATHWAY_GRAPHICS) );
-}                               
-
-static void vpcVideoXformChange(void *data,
-                                struct wl_vpc_surface *wl_vpc_surface,
-                                int32_t x_translation,
-                                int32_t y_translation,
-                                uint32_t x_scale_num,
-                                uint32_t x_scale_denom,
-                                uint32_t y_scale_num,
-                                uint32_t y_scale_denom)
-{                                
-   WESTEROS_UNUSED(wl_vpc_surface);
-   GstWesterosSink *sink= (GstWesterosSink*)data;
-
-   sink->soc.transX= x_translation;
-   sink->soc.transY= y_translation;
-   if ( x_scale_denom )
-   {
-      sink->soc.scaleXNum= x_scale_num;
-      sink->soc.scaleXDenom= x_scale_denom;
-   }
-   if ( y_scale_denom )
-   {
-      sink->soc.scaleYNum= y_scale_num;
-      sink->soc.scaleYDenom= y_scale_denom;
-   }
-
-   updateVideoPosition( sink );
-}
-
-static const struct wl_vpc_surface_listener vpcListener= {
-   vpcVideoPathChange,
-   vpcVideoXformChange
 };
 
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
@@ -158,15 +111,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.playingVideo= false;
    sink->soc.useGfxPath= false;
    sink->soc.rend= &sink->soc.vidRend;
-   sink->soc.transX= 0;
-   sink->soc.transY= 0;
-   sink->soc.scaleXNum= 1;
-   sink->soc.scaleXDenom= 1;
-   sink->soc.scaleYNum= 1;
-   sink->soc.scaleYDenom= 1;
    sink->soc.sb= 0;
-   sink->soc.vpc= 0;
-   sink->soc.vpcSurface= 0;
    sink->soc.quitCaptureThread= TRUE;
    sink->soc.captureThread= NULL;
    sink->soc.buffCurrent= 0;
@@ -373,13 +318,6 @@ void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink,
       wl_proxy_set_queue((struct wl_proxy*)sink->soc.sb, sink->queue);
 		wl_sb_add_listener(sink->soc.sb, &sbListener, sink);
 		GST_DEBUG_OBJECT(sink, "westeros-sink-soc: registry: done add sb listener");
-   }
-   else
-   if ((len==6) && (strncmp(interface, "wl_vpc", len) ==0))
-   {
-      sink->soc.vpc= (struct wl_vpc*)wl_registry_bind(registry, id, &wl_vpc_interface, 1);
-      printf("westeros-sink-soc: registry: vpc %p\n", (void*)sink->soc.vpc);
-      wl_proxy_set_queue((struct wl_proxy*)sink->soc.vpc, sink->queue);
    }
 }
 
@@ -948,27 +886,6 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       goto exit;
    }
    
-   if ( sink->soc.vpc && sink->surface )
-   {
-      sink->soc.vpcSurface= wl_vpc_get_vpc_surface( sink->soc.vpc, sink->surface );
-      if ( sink->soc.vpcSurface )
-      {
-         wl_vpc_surface_add_listener( sink->soc.vpcSurface, &vpcListener, sink );
-         wl_proxy_set_queue((struct wl_proxy*)sink->soc.vpcSurface, sink->queue);
-         wl_display_flush( sink->display );
-         printf("westeros-sink-soc: null_to_ready: done add vpcSurface listener\n");
-      }
-      else
-      {
-         GST_ERROR("gst_westeros_sink_soc_null_to_ready: failed to create vpcSurface\n");
-      }
-   }
-   else
-   {
-      GST_ERROR("gst_westeros_sink_soc_null_to_ready: can't create vpc surface: vpc %p surface %p\n",
-                sink->soc.vpc, sink->surface);
-   }
-
    result= TRUE;
 
 exit:
@@ -1402,11 +1319,6 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
 
    sink->soc.playingVideo= false;
 
-   if ( sink->soc.vpcSurface )
-   {
-      wl_vpc_surface_destroy( sink->soc.vpcSurface );
-   }
-
    if ( sink->soc.eglRend.isOpen )
    {
       omxerr= omxComponentSetState( sink, sink->soc.eglRend.hComp, OMX_StateLoaded );
@@ -1819,56 +1731,7 @@ static void flushComponents( GstWesterosSink *sink )
    sink->soc.firstBuffer= true;
 }
 
-static void updateVideoPosition( GstWesterosSink *sink )
-{
-   OMX_ERRORTYPE omxerr;
-   OMX_CONFIG_DISPLAYREGIONTYPE displayRegion;
-   int wx, wy, ww, wh;
-   int vx, vy, vw, vh;
-
-   LOCK(sink);
-   wx= sink->windowX;
-   wy= sink->windowY;
-   ww= sink->windowWidth;
-   wh= sink->windowHeight;
-   sink->windowChange= false;
-   UNLOCK(sink);
-      
-   if ( sink->soc.useGfxPath )
-   {
-      // TBD
-   }
-   else
-   {
-      vx= ((wx*sink->soc.scaleXNum)/sink->soc.scaleXDenom) + sink->soc.transX;
-      vy= ((wy*sink->soc.scaleYNum)/sink->soc.scaleYDenom) + sink->soc.transY;
-      vw= ((ww)*sink->soc.scaleXNum)/sink->soc.scaleXDenom;
-      vh= ((wh)*sink->soc.scaleYNum)/sink->soc.scaleYDenom;
-      
-      memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
-      displayRegion.nSize= sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);
-      displayRegion.nVersion.nVersion= OMX_VERSION;
-      displayRegion.nPortIndex= sink->soc.rend->vidInPort;
-      displayRegion.set= (OMX_DISPLAYSETTYPE)(OMX_DISPLAY_SET_FULLSCREEN|
-                                              OMX_DISPLAY_SET_NOASPECT|
-                                              OMX_DISPLAY_SET_DEST_RECT|
-                                              OMX_DISPLAY_SET_LAYER);
-      displayRegion.fullscreen= OMX_FALSE;
-      displayRegion.noaspect= OMX_FALSE;
-      displayRegion.dest_rect.x_offset= vx;
-      displayRegion.dest_rect.y_offset= vy;
-      displayRegion.dest_rect.width= vw;
-      displayRegion.dest_rect.height= vh;
-      displayRegion.layer= -1;
-      omxerr= OMX_SetConfig( sink->soc.rend->hComp, OMX_IndexConfigDisplayRegion, &displayRegion );
-      if ( omxerr != OMX_ErrorNone )
-      {
-         GST_ERROR("gst_westeros_sink_soc updateVideoPosition: OMX_SetConfig for display region: error: %x", omxerr );
-      }
-   }
-}
-
-static void setVideoPath( GstWesterosSink *sink, bool useGfxPath )
+void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
 {
    WESTEROS_UNUSED(sink);
    WESTEROS_UNUSED(useGfxPath);
@@ -1896,7 +1759,7 @@ static void setVideoPath( GstWesterosSink *sink, bool useGfxPath )
    }
    else if ( !useGfxPath && oldUseGfxPath )
    {
-      updateVideoPosition( sink );
+      gst_westeros_sink_soc_update_video_position( sink );
       
       wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
       wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
@@ -1904,6 +1767,73 @@ static void setVideoPath( GstWesterosSink *sink, bool useGfxPath )
       wl_display_flush(sink->display);
       wl_display_dispatch_queue_pending(sink->display, sink->queue);
    }   
+      
+   // Next:  need to determine egl_render output buffer size, use OMX_AllocateBuffer to allocate buffers,
+   // then, when buffer is filled, create dispmanx resource and copy the buffer data into it, then send 
+   // resource to the compositor using wl_simplebuffer
+}
+
+void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
+{
+   OMX_ERRORTYPE omxerr;
+   OMX_CONFIG_DISPLAYREGIONTYPE displayRegion;
+   int wx, wy, ww, wh;
+   int vx, vy, vw, vh;
+
+   wx= sink->windowX;
+   wy= sink->windowY;
+   ww= sink->windowWidth;
+   wh= sink->windowHeight;
+   sink->windowChange= false;
+      
+   if ( sink->soc.useGfxPath )
+   {
+      // TBD
+   }
+   else
+   {
+      vx= ((wx*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
+      vy= ((wy*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
+      vw= ((ww)*sink->scaleXNum)/sink->scaleXDenom;
+      vh= ((wh)*sink->scaleYNum)/sink->scaleYDenom;
+      
+      memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
+      displayRegion.nSize= sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);
+      displayRegion.nVersion.nVersion= OMX_VERSION;
+      displayRegion.nPortIndex= sink->soc.rend->vidInPort;
+      displayRegion.set= (OMX_DISPLAYSETTYPE)(OMX_DISPLAY_SET_FULLSCREEN|
+                                              OMX_DISPLAY_SET_NOASPECT|
+                                              OMX_DISPLAY_SET_DEST_RECT|
+                                              OMX_DISPLAY_SET_LAYER);
+      displayRegion.fullscreen= OMX_FALSE;
+      displayRegion.noaspect= OMX_FALSE;
+      displayRegion.dest_rect.x_offset= vx;
+      displayRegion.dest_rect.y_offset= vy;
+      displayRegion.dest_rect.width= vw;
+      displayRegion.dest_rect.height= vh;
+      displayRegion.layer= -1;
+      omxerr= OMX_SetConfig( sink->soc.rend->hComp, OMX_IndexConfigDisplayRegion, &displayRegion );
+      if ( omxerr != OMX_ErrorNone )
+      {
+         GST_ERROR("gst_westeros_sink_soc update_video_position: OMX_SetConfig for display region: error: %x", omxerr );
+      }
+
+      // Send a buffer to compositor to update hole punch geometry
+      if ( sink->soc.sb )
+      {
+         struct wl_buffer *buff;
+         
+         buff= wl_sb_create_buffer( sink->soc.sb, 
+                                    0,
+                                    sink->windowWidth, 
+                                    sink->windowHeight, 
+                                    sink->windowWidth*4, 
+                                    WL_SB_FORMAT_ARGB8888 );
+         wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
+         wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+         wl_surface_commit( sink->surface );
+      }
+   }
 }
 
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
@@ -1937,11 +1867,11 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
       LOCK(sink);
       sink->position= nanoTime;
       windowChange= sink->windowChange;
-      UNLOCK(sink);
       if ( windowChange )
       {
-         updateVideoPosition( sink );
+         gst_westeros_sink_soc_update_video_position( sink );
       }
+      UNLOCK(sink);
     
       while ( inSize )
       {

@@ -32,8 +32,6 @@
 
 #define GST_PACKAGE_ORIGIN "http://gstreamer.net/"
 
-#define WESTEROS_UNUSED(x) ((void)(x))
-
 static GstStaticPadTemplate gst_westeros_sink_pad_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -150,11 +148,11 @@ static void shellSurfaceStatus(void *data,
    WESTEROS_UNUSED(wl_simple_shell);
    WESTEROS_UNUSED(surfaceId);
    WESTEROS_UNUSED(name);
+   WESTEROS_UNUSED(x);
+   WESTEROS_UNUSED(y);
+   WESTEROS_UNUSED(width);
+   WESTEROS_UNUSED(height);
    sink->visible= visible;
-   sink->windowX= x;
-   sink->windowY= y;
-   sink->windowWidth= width;
-   sink->windowHeight= height;
    sink->windowChange= true;
    sink->opacity= opacity;
    sink->zorder= zorder;
@@ -173,6 +171,51 @@ static const struct wl_simple_shell_listener shellListener =
    shellSurfaceDestroyed,
    shellSurfaceStatus,
    shellGetSurfacesDone
+};
+
+static void vpcVideoPathChange(void *data,
+                               struct wl_vpc_surface *wl_vpc_surface,
+                               uint32_t new_pathway )
+{
+   WESTEROS_UNUSED(wl_vpc_surface);
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+   printf("westeros-sink: new pathway: %d\n", new_pathway);
+   gst_westeros_sink_soc_set_video_path( sink, (new_pathway == WL_VPC_SURFACE_PATHWAY_GRAPHICS) );
+}                               
+
+static void vpcVideoXformChange(void *data,
+                                struct wl_vpc_surface *wl_vpc_surface,
+                                int32_t x_translation,
+                                int32_t y_translation,
+                                uint32_t x_scale_num,
+                                uint32_t x_scale_denom,
+                                uint32_t y_scale_num,
+                                uint32_t y_scale_denom)
+{                                
+   WESTEROS_UNUSED(wl_vpc_surface);
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+      
+   sink->transX= x_translation;
+   sink->transY= y_translation;
+   if ( x_scale_denom )
+   {
+      sink->scaleXNum= x_scale_num;
+      sink->scaleXDenom= x_scale_denom;
+   }
+   if ( y_scale_denom )
+   {
+      sink->scaleYNum= y_scale_num;
+      sink->scaleYDenom= y_scale_denom;
+   }
+   
+   LOCK( sink );
+   gst_westeros_sink_soc_update_video_position( sink );
+   UNLOCK( sink );
+}
+
+static const struct wl_vpc_surface_listener vpcListener= {
+   vpcVideoPathChange,
+   vpcVideoXformChange
 };
 
 static void registryHandleGlobal(void *data, 
@@ -210,6 +253,12 @@ static void registryHandleGlobal(void *data,
       printf("westeros-sink: shell %p\n", (void*)sink->shell);
       wl_proxy_set_queue((struct wl_proxy*)sink->shell, sink->queue);
       wl_simple_shell_add_listener(sink->shell, &shellListener, sink);
+   }
+   else if ((len==6) && (strncmp(interface, "wl_vpc", len) ==0))
+   {
+      sink->vpc= (struct wl_vpc*)wl_registry_bind(registry, id, &wl_vpc_interface, 1);
+      printf("westeros-sink: registry: vpc %p\n", (void*)sink->vpc);
+      wl_proxy_set_queue((struct wl_proxy*)sink->vpc, sink->queue);
    }
    
    gst_westeros_sink_soc_registryHandleGlobal( sink, registry, id, interface, version );
@@ -344,6 +393,13 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    
    sink->opacity= 1.0;
    sink->zorder= 0.0;
+
+   sink->transX= 0;
+   sink->transY= 0;
+   sink->scaleXNum= 1;
+   sink->scaleXDenom= 1;
+   sink->scaleYNum= 1;
+   sink->scaleYDenom= 1;
    
    sink->eosEventSeen= FALSE;
    sink->eosDetected= FALSE;
@@ -361,6 +417,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
       sink->shell= 0;
       sink->compositor= 0;
       sink->surfaceId= 0;
+      sink->vpc= 0;
+      sink->vpcSurface= 0;
 
       sink->display= wl_display_connect(NULL);
 
@@ -409,6 +467,11 @@ static void gst_westeros_sink_term(GstWesterosSink *sink)
    
    gst_westeros_sink_soc_term( sink );
    
+   if ( sink->vpc )
+   {
+      wl_vpc_destroy( sink->vpc );
+      sink->vpc= 0;
+   }   
    if ( sink->surface )
    {
       wl_surface_destroy( sink->surface );
@@ -584,6 +647,28 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          sink->position= 0;         
          sink->eosDetected= FALSE;
          sink->eosEventSeen= FALSE;
+
+         if ( sink->vpc && sink->surface )
+         {
+            sink->vpcSurface= wl_vpc_get_vpc_surface( sink->vpc, sink->surface );
+            if ( sink->vpcSurface )
+            {
+               wl_vpc_surface_add_listener( sink->vpcSurface, &vpcListener, sink );
+               wl_proxy_set_queue((struct wl_proxy*)sink->vpcSurface, sink->queue);
+               wl_display_flush( sink->display );
+               printf("westeros-sink: null_to_ready: done add vpcSurface listener\n");
+            }
+            else
+            {
+               GST_ERROR("gst_westeros_sink: null_to_ready: failed to create vpcSurface\n");
+            }
+         }
+         else
+         {
+            GST_ERROR("gst_westeros_sink: null_to_ready: can't create vpc surface: vpc %p surface %p\n",
+                      sink->vpc, sink->surface);
+         }
+
          if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
          {
             result= GST_STATE_CHANGE_FAILURE;
@@ -637,6 +722,12 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          if ( sink->initialized )
          {
+            if ( sink->vpcSurface )
+            {
+               wl_vpc_surface_destroy( sink->vpcSurface );
+               sink->vpcSurface= 0;
+            }
+
             if ( !gst_westeros_sink_soc_ready_to_null( sink, &passToDefault ) )
             {
                result= GST_STATE_CHANGE_FAILURE;

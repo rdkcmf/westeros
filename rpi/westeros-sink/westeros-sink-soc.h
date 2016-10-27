@@ -23,7 +23,6 @@
 #include <semaphore.h>
 
 #include "simplebuffer-client-protocol.h"
-#include "vpc-client-protocol.h"
 
 #include "IL/OMX_Core.h"
 #include "IL/OMX_Broadcom.h"
@@ -72,8 +71,6 @@ typedef struct _WstOmxComponent
 struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
-   struct wl_vpc *vpc;
-   struct wl_vpc_surface *vpcSurface;
    int activeBuffers;
    
    void *moduleBcmHost;
@@ -109,13 +106,6 @@ struct _GstWesterosSinkSoc
    bool playingVideo;
    bool useGfxPath;
    
-   int transX;
-   int transY;
-   int scaleXNum;
-   int scaleXDenom;
-   int scaleYNum;
-   int scaleYDenom;
-
    bool semInputActive;
    sem_t semInputBuffers;
    unsigned int capacityInputBuffers;
@@ -156,5 +146,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer );
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink );
 gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink );
 void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink );
+void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath );
+void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink );
 
 #endif
