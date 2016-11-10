@@ -1,0 +1,11 @@
+[Unit]
+Description=Westersos Compositor startup
+RequiresMountsFor=/run
+
+[Service]
+EnvironmentFile=-/etc/westeros-env
+WorkingDirectory=/usr/bin
+ExecStart=/bin/sh -c 'source /etc/westeros-env; /usr/bin/westeros --renderer $RENDERER --framerate 60 --display wayland-0'
+
+[Install]
+WantedBy=multi-user.target
