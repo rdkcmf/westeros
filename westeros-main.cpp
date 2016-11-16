@@ -73,6 +73,7 @@ typedef struct _AppCtx
    float matrix[16];
    float alpha;
    int x, y, width, height;
+   int outputWidth, outputHeight;
    std::vector<WstRect> rects;
    int hints;
    int tickCount;
@@ -81,6 +82,8 @@ typedef struct _AppCtx
    EGLConfig eglConfig;
    EGLContext eglContext;   
    EGLSurface eglSurface;
+   int fboWidth;
+   int fboHeight;
    GLuint fboId;
    GLuint fboTextureId;
    GLuint fboProgram;
@@ -92,6 +95,7 @@ typedef struct _AppCtx
    GLint fboMatrixLoc;
    GLint fboAlphaLoc;
    GLint fboTextureLoc;
+   int animationType;
    bool enableAnimation;
    bool animationRunning;
    float scale;
@@ -144,7 +148,8 @@ static void showUsage()
    printf("  --width <width> : width of nested composition surface\n" );
    printf("  --height <width> : height of nested composition surface\n" );
    #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
-   printf("  --animate : enable animation (use with --embedded)\n" );
+   printf("  --animate : enable animation (scale, rotate, translate) (use with --embedded)\n" );
+   printf("  --animate2 : enable animation (size, translate) (use with --embedded)\n");
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
    printf("  --enableCursor : display default pointer cursor\n" );
    #endif
@@ -390,6 +395,9 @@ static void createFBO( AppCtx *appCtx )
 	GLuint program;
 	GLint statusShader;
 
+   appCtx->fboWidth= appCtx->outputWidth;
+   appCtx->fboHeight= appCtx->outputHeight;
+   
    glGenFramebuffers( 1, &appCtx->fboId );
    glGenTextures( 1, &appCtx->fboTextureId );
    glActiveTexture(GL_TEXTURE0);
@@ -397,8 +405,8 @@ static void createFBO( AppCtx *appCtx )
    glTexImage2D( GL_TEXTURE_2D,
                  0, //level
                  GL_RGBA, //internalFormat
-                 appCtx->width,
-                 appCtx->height,
+                 appCtx->fboWidth,
+                 appCtx->fboHeight,
                  0, // border
                  GL_RGBA, //format
                  GL_UNSIGNED_BYTE,
@@ -480,16 +488,66 @@ static void destroyFBO( AppCtx *appCtx )
       glDeleteFramebuffers( 1, &appCtx->fboId );
       appCtx->fboId= 0;
    }
+   appCtx->fboWidth= 0;
+   appCtx->fboHeight= 0;
+}
+
+static void resizeFBO( AppCtx *appCtx, int width, int height )
+{
+   GLenum statusFBO;
+
+   if ( appCtx->fboId )
+   {
+      glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+      glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0 );
+      glBindFramebuffer( GL_FRAMEBUFFER, 0 );
+      if ( appCtx->fboTextureId )
+      {
+         glDeleteTextures( 1, &appCtx->fboTextureId );
+         appCtx->fboTextureId= 0;
+      }
+      glDeleteFramebuffers( 1, &appCtx->fboId );
+      appCtx->fboId= 0;
+   }
+
+   appCtx->fboWidth= width;
+   appCtx->fboHeight= height;
+   
+   glGenFramebuffers( 1, &appCtx->fboId );
+   glGenTextures( 1, &appCtx->fboTextureId );
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, appCtx->fboTextureId);
+   glTexImage2D( GL_TEXTURE_2D,
+                 0, //level
+                 GL_RGBA, //internalFormat
+                 appCtx->fboWidth,
+                 appCtx->fboHeight,
+                 0, // border
+                 GL_RGBA, //format
+                 GL_UNSIGNED_BYTE,
+                 NULL );
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+   glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+   glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, appCtx->fboTextureId, 0 );
+   statusFBO= glCheckFramebufferStatus( GL_FRAMEBUFFER );
+   if ( statusFBO != GL_FRAMEBUFFER_COMPLETE )
+   {
+      printf("Error: bad fbo status: %d\n", statusFBO );
+   }
+   glBindFramebuffer( GL_FRAMEBUFFER, 0 );
 }
 
 static void drawFBO ( AppCtx *appCtx )
 {
    int x, y, w, h;
-   
+
    x= appCtx->x;
    y= appCtx->y;
-   w= appCtx->width;
-   h= appCtx->height;
+   w= appCtx->fboWidth;
+   h= appCtx->fboHeight;
       
    const float verts[4][2] = 
    {
@@ -1279,6 +1337,8 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
          appCtx->y= 0;
          appCtx->width= 1280;
          appCtx->height= 720;
+         appCtx->outputWidth= appCtx->width;
+         appCtx->outputHeight= appCtx->height;
          
          appCtx->alpha= 1.0f;
          appCtx->hints= WstHints_noRotation;
@@ -1610,6 +1670,10 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
          setupEGL( appCtx );
          createFBO( appCtx );
       }
+      if ( (appCtx->fboWidth < appCtx->outputWidth) || (appCtx->fboHeight < appCtx->outputHeight) )
+      {
+         resizeFBO( appCtx, appCtx->outputWidth, appCtx->outputHeight );
+      }
 
       eglMakeCurrent( appCtx->eglDisplay, 
                       appCtx->eglSurface, 
@@ -1633,8 +1697,8 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
       WstCompositorComposeEmbedded( wctx, 
                                     appCtx->x,
                                     appCtx->y,
-                                    appCtx->width,
-                                    appCtx->height,
+                                    appCtx->fboWidth,
+                                    appCtx->fboHeight,
                                     appCtx->matrix,
                                     appCtx->alpha,
                                     appCtx->hints,
@@ -1693,6 +1757,122 @@ void compositorInvalidate( WstCompositor *wctx, void *userData )
    #endif
 }
 
+#if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+int animationStart( AppCtx *appCtx )
+{
+   int hints= WstHints_none;
+   
+   appCtx->animationRunning= true;
+   switch( appCtx->animationType )
+   {
+      default:
+      case 1:
+         appCtx->animationStartTime= getCurrentTimeMillis();
+         appCtx->animationDuration= 2000;
+         appCtx->targetScale= (appCtx->targetScale == 1.0 ? 0.5 : 1.0);
+         appCtx->startScale= appCtx->scale;
+         appCtx->targetTransX= (appCtx->targetTransX == 0 ? 620 : 0);
+         appCtx->startTransX= appCtx->transX;
+         appCtx->targetTransY= (appCtx->targetTransY == 0 ? 340 : 0);
+         appCtx->startTransY= appCtx->transY;
+         hints= WstHints_none;
+         break;
+      case 2:
+         appCtx->animationStartTime= getCurrentTimeMillis();
+         appCtx->animationDuration= 5000;
+         appCtx->targetScale= (appCtx->targetTransX == 0 ? 0.5 : 1.0);
+         appCtx->startScale= (appCtx->targetTransX == 0 ? 1.0 : 0.5);;
+         appCtx->targetTransX= (appCtx->targetTransX == 0 ? 320 : 0);
+         appCtx->startTransX= appCtx->transX;
+         appCtx->targetTransY= (appCtx->targetTransY == 0 ? 180 : 0);
+         appCtx->startTransY= appCtx->transY;
+         hints= WstHints_noRotation;
+         break;
+   }
+   
+   return hints;
+}
+
+int animationEnd( AppCtx *appCtx )
+{
+   int hints= WstHints_none;
+
+   appCtx->animationRunning= false;
+
+   switch( appCtx->animationType )
+   {
+      default:
+      case 1:
+         appCtx->scale= appCtx->targetScale;
+         appCtx->transX= appCtx->targetTransX;
+         appCtx->transY= appCtx->targetTransY;
+         break;
+      case 2:
+         appCtx->scale= 1.0f;
+         appCtx->transX= appCtx->targetTransX;
+         appCtx->transY= appCtx->targetTransY;
+         break;
+   }
+
+   appCtx->matrix[0]= appCtx->scale;
+   appCtx->matrix[1]= 0.0f;
+   appCtx->matrix[4]= 0.0f;
+   appCtx->matrix[5]= appCtx->scale;
+   appCtx->matrix[10]= appCtx->scale;
+   appCtx->matrix[12]= appCtx->transX;
+   appCtx->matrix[13]= appCtx->transY;
+
+   hints= WstHints_noRotation;
+   appCtx->tickCount= 0;
+   
+   return hints;
+}
+
+void animationStep( AppCtx *appCtx, long long timePos )
+{
+   float sina, cosa, angle;
+   float pos, cx, cy;
+   
+   switch( appCtx->animationType )
+   {
+      default:
+      case 1:
+         pos= (float)timePos/(float)appCtx->animationDuration;
+         angle= pos*360.0*M_PI/180.0;
+         sincosf(angle, &sina, &cosa);
+         cx= appCtx->width/2;
+         cy= appCtx->height/2;
+         appCtx->scale= appCtx->startScale + pos*(appCtx->targetScale-appCtx->startScale);
+         appCtx->transX= appCtx->startTransX + pos*(appCtx->targetTransX-appCtx->startTransX);
+         appCtx->transY= appCtx->startTransY + pos*(appCtx->targetTransY-appCtx->startTransY);
+         cx += appCtx->transX;
+         cy += appCtx->transY;
+         appCtx->matrix[0]= cosa*appCtx->scale;
+         appCtx->matrix[1]= sina*appCtx->scale;
+         appCtx->matrix[4]= -sina*appCtx->scale;
+         appCtx->matrix[5]= cosa*appCtx->scale;
+         appCtx->matrix[10]= appCtx->scale;
+         appCtx->matrix[12]= cx-appCtx->scale*cx*cosa+appCtx->scale*cy*sina;
+         appCtx->matrix[13]= cy-appCtx->scale*cx*sina-appCtx->scale*cy*cosa;
+         break;
+      case 2:
+         if ( (appCtx->tickCount % 4) == 0 )
+         {
+            pos= (float)timePos/(float)appCtx->animationDuration;
+            appCtx->scale= appCtx->startScale + pos*(appCtx->targetScale-appCtx->startScale);
+            appCtx->transX= appCtx->startTransX + pos*(appCtx->targetTransX-appCtx->startTransX);
+            appCtx->transY= appCtx->startTransY + pos*(appCtx->targetTransY-appCtx->startTransY);
+            appCtx->matrix[12]= appCtx->transX;
+            appCtx->matrix[13]= appCtx->transY;
+            appCtx->outputWidth= appCtx->width*appCtx->scale;
+            appCtx->outputHeight= appCtx->height*appCtx->scale;
+            WstCompositorSetOutputSize( appCtx->wctx, appCtx->outputWidth, appCtx->outputHeight );
+         }
+         break;
+   }
+}
+#endif
+
 void compositorDispatch( WstCompositor *wctx, void *userData )
 {
    AppCtx *appCtx= (AppCtx*)userData;
@@ -1709,68 +1889,32 @@ void compositorDispatch( WstCompositor *wctx, void *userData )
       
       if ( appCtx->enableAnimation )
       {
+         ++appCtx->tickCount;
+         
          if ( !appCtx->animationRunning )
          {
-            tick= ++appCtx->tickCount % 600;
+            tick= appCtx->tickCount % 600;
             if ( tick < 599 )
             {
                hints= WstHints_noRotation;
             }
             else
             {
-               appCtx->animationRunning= true;
-               appCtx->animationStartTime= getCurrentTimeMillis();
-               appCtx->animationDuration= 2000;
-               appCtx->targetScale= (appCtx->targetScale == 1.0 ? 0.5 : 1.0);
-               appCtx->startScale= appCtx->scale;
-               appCtx->targetTransX= (appCtx->targetTransX == 0 ? 620 : 0);
-               appCtx->startTransX= appCtx->transX;
-               appCtx->targetTransY= (appCtx->targetTransY == 0 ? 340 : 0);
-               appCtx->startTransY= appCtx->transY;
-               hints= WstHints_none;
+               hints= animationStart( appCtx );
             }
          }
          else
          {
             long long now= getCurrentTimeMillis();
             long long timePos= now - appCtx->animationStartTime;
-            hints= WstHints_none;
+            hints= appCtx->hints;
             if ( timePos >= appCtx->animationDuration )
-            {            
-               appCtx->animationRunning= false;
-               appCtx->scale= appCtx->targetScale;
-               appCtx->transX= appCtx->targetTransX;
-               appCtx->transY= appCtx->targetTransY;
-               appCtx->matrix[0]= appCtx->scale;
-               appCtx->matrix[1]= 0.0f;
-               appCtx->matrix[4]= 0.0f;
-               appCtx->matrix[5]= appCtx->scale;
-               appCtx->matrix[10]= appCtx->scale;
-               appCtx->matrix[12]= appCtx->transX;
-               appCtx->matrix[13]= appCtx->transY;
-               hints= WstHints_noRotation;
-               appCtx->tickCount= 0;
+            {
+               hints= animationEnd( appCtx );
             }
             else
             {
-               float sina, cosa;
-               float pos= (float)timePos/(float)appCtx->animationDuration;
-               float angle= pos*360.0*M_PI/180.0;
-               sincosf(angle, &sina, &cosa);
-               float cx= appCtx->width/2;
-               float cy= appCtx->height/2;
-               appCtx->scale= appCtx->startScale + pos*(appCtx->targetScale-appCtx->startScale);
-               appCtx->transX= appCtx->startTransX + pos*(appCtx->targetTransX-appCtx->startTransX);
-               appCtx->transY= appCtx->startTransY + pos*(appCtx->targetTransY-appCtx->startTransY);
-               cx += appCtx->transX;
-               cy += appCtx->transY;
-               appCtx->matrix[0]= cosa*appCtx->scale;
-               appCtx->matrix[1]= sina*appCtx->scale;
-               appCtx->matrix[4]= -sina*appCtx->scale;
-               appCtx->matrix[5]= cosa*appCtx->scale;
-               appCtx->matrix[10]= appCtx->scale;
-               appCtx->matrix[12]= cx-appCtx->scale*cx*cosa+appCtx->scale*cy*sina;
-               appCtx->matrix[13]= cy-appCtx->scale*cx*sina-appCtx->scale*cy*cosa;
+               animationStep( appCtx, timePos );
             }
          }
 
@@ -1791,6 +1935,7 @@ int main( int argc, char** argv)
    const char *rendererModule= 0;
    const char *displayName= 0;
    const char *nestedDisplayName= 0;
+   bool repeater= false;
    bool error= false;
    int len, value, width=-1, height=-1;
    AppCtx *appCtx= 0;
@@ -1899,6 +2044,7 @@ int main( int argc, char** argv)
             error= true;
             break;
          }
+         repeater= true;
       }
       else
       if ( (len == 8) && !strncmp( (const char*)argv[i], "--nested", len) )
@@ -1969,6 +2115,13 @@ int main( int argc, char** argv)
       if ( (len == 9) && !strncmp( argv[i], "--animate", len) )
       {
          appCtx->enableAnimation= true;
+         appCtx->animationType= 1;
+      }
+      else
+      if ( (len == 10) && !strncmp( argv[i], "--animate2", len) )
+      {
+         appCtx->enableAnimation= true;
+         appCtx->animationType= 2;
       }
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       else
@@ -2008,7 +2161,7 @@ int main( int argc, char** argv)
          }
       }
 
-      if ( !rendererModule )
+      if ( !rendererModule && !repeater )
       {
          printf("missing renderer module: use --renderer <module>\n");
          nRC= -1;
