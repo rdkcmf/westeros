@@ -1537,7 +1537,9 @@ static bool wstRenderGLSetupEGL( WstRendererGL *renderer )
    #endif
    printf("nativeWindow %p\n", renderer->nativeWindow );
 
+   #ifndef WESTEROS_PLATFORM_QEMUX86
    if ( renderer->nativeWindow )
+   #endif
    {
       // Create an EGL window surface
       renderer->eglSurface= eglCreateWindowSurface( renderer->eglDisplay, 
