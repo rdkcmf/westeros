@@ -57,7 +57,9 @@ typedef void (*WSTCallbackVpcVideoXformChange)( void *userData,
                                                 uint32_t x_scale_num,
                                                 uint32_t x_scale_denom,
                                                 uint32_t y_scale_num,
-                                                uint32_t y_scale_denom );
+                                                uint32_t y_scale_denom,
+                                                uint32_t output_width,
+                                                uint32_t output_height );
 
 typedef struct _WstNestedConnectionListener
 {

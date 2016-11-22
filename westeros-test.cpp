@@ -284,8 +284,6 @@ static void shellSurfaceId(void *data,
 	sprintf( name, "westeros-test-surface-%x", surfaceId );
    printf("shell: surface created: %p id %x\n", surface, surfaceId);
 	wl_simple_shell_set_name( ctx->shell, surfaceId, name );
-   wl_simple_shell_set_geometry( ctx->shell, surfaceId, ctx->surfaceX, ctx->surfaceY, ctx->surfaceWidth, ctx->surfaceHeight );
-
 }
                            
 static void shellSurfaceCreated(void *data,
@@ -740,8 +738,8 @@ int main( int argc, char** argv)
    
    setupEGL(&ctx);
 
-   ctx.surfaceWidth= 640;
-   ctx.surfaceHeight= 360;
+   ctx.surfaceWidth= 1280;
+   ctx.surfaceHeight= 720;
    ctx.surfaceX= 0;
    ctx.surfaceY= 0;
 

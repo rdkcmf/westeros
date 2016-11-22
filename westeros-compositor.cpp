@@ -53,6 +53,7 @@
 #endif
 #include "westeros-simpleshell.h"
 #include "xdg-shell-server-protocol.h"
+#include "vpc-client-protocol.h"
 #include "vpc-server-protocol.h"
 
 #define WST_MAX_ERROR_DETAIL (512)
@@ -139,12 +140,19 @@ typedef struct _WstVpcSurface
    bool useHWPath;
    bool useHWPathNext;
    bool pathTransitionPending;
+   bool sizeOverride;
    int xTrans;
    int yTrans;
    int xScaleNum;
    int xScaleDenom;
    int yScaleNum;
    int yScaleDenom;
+   int outputWidth;
+   int outputHeight;
+   int hwX;
+   int hwY;
+   int hwWidth;
+   int hwHeight;
 } WstVpcSurface;
 
 typedef struct _WstKeyboard
@@ -608,7 +616,9 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
                                                  uint32_t x_scale_num,
                                                  uint32_t x_scale_denom,
                                                  uint32_t y_scale_num,
-                                                 uint32_t y_scale_denom );
+                                                 uint32_t y_scale_denom,
+                                                 uint32_t output_width,
+                                                 uint32_t output_height );
 static void wstDefaultNestedSurfaceStatus( void *userData, struct wl_surface *surface,
                                            const char *name,
                                            uint32_t visible,
@@ -639,6 +649,8 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
                                   uint32_t id, struct wl_resource *surfaceResource);
 static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource);
 static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface );
+static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resource *resource,
+                                       int32_t x, int32_t y, int32_t width, int32_t height );
 static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects );
 static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
@@ -2384,17 +2396,51 @@ static void simpleShellSetGeometry( void* userData, uint32_t surfaceId, int x, i
    WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
    if ( surface )
    {
-      surface->x= x;
-      surface->y= y;
-      surface->width= width;
-      surface->height= height;
-      if ( surface->compositor->isRepeater )
+      if ( !surface->vpcSurface || (surface->vpcSurface && !surface->vpcSurface->sizeOverride) )
       {
-         WstNestedConnectionSurfaceSetGeometry( ctx->nc, surface->surfaceNested, x, y, width, height );
-      }
-      else
-      {
-         WstRendererSurfaceSetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+         surface->x= x;
+         surface->y= y;
+         surface->width= width;
+         surface->height= height;
+         if ( surface->compositor->isRepeater )
+         {
+            WstNestedConnectionSurfaceSetGeometry( ctx->nc, surface->surfaceNested, x, y, width, height );
+         }
+         else
+         {
+            WstRendererSurfaceSetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+         }
+         if ( surface->vpcSurface && !surface->vpcSurface->sizeOverride )
+         {
+            if ( !ctx->isEmbedded && !ctx->hasEmbeddedMaster )
+            {
+               WstVpcSurface *vpcSurface= surface->vpcSurface;
+
+               vpcSurface->hwX= x;
+               vpcSurface->hwY= y;
+               vpcSurface->hwWidth= width;
+               vpcSurface->hwHeight= height;
+               
+               vpcSurface->xTrans= x;
+               vpcSurface->yTrans= y;
+               vpcSurface->xScaleNum= width*1000000/DEFAULT_OUTPUT_WIDTH;
+               vpcSurface->xScaleDenom= 1000000;
+               vpcSurface->yScaleNum= height*1000000/DEFAULT_OUTPUT_HEIGHT;
+               vpcSurface->yScaleDenom= 1000000;
+               vpcSurface->outputWidth= ctx->outputWidth;
+               vpcSurface->outputHeight= ctx->outputHeight;
+               
+               wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
+                                                       vpcSurface->xTrans,
+                                                       vpcSurface->yTrans,
+                                                       vpcSurface->xScaleNum,
+                                                       vpcSurface->xScaleDenom,
+                                                       vpcSurface->yScaleNum,
+                                                       vpcSurface->yScaleDenom,
+                                                       vpcSurface->outputWidth,
+                                                       vpcSurface->outputHeight );
+            }
+         }
       }
    }
 }
@@ -2472,7 +2518,17 @@ static void simpleShellGetStatus( void* userData, uint32_t surfaceId, bool *visi
       else
       {
          WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
-         WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+         if ( !surface->vpcSurface || (surface->vpcSurface && surface->vpcSurface->sizeOverride) )
+         {
+            WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
+         }
+         else
+         {
+            *x= surface->vpcSurface->hwX;
+            *y= surface->vpcSurface->hwY;
+            *width= surface->vpcSurface->hwWidth;
+            *height= surface->vpcSurface->hwHeight;
+         }
          WstRendererSurfaceGetOpacity( ctx->renderer, surface->surface, opacity );
          WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, zorder );
       }
@@ -3129,6 +3185,11 @@ static const struct wl_pointer_interface pointer_interface=
 static const struct wl_vpc_interface vpc_interface_impl=
 {
    wstIVpcGetVpcSurface
+};
+
+static const struct wl_vpc_surface_interface vpc_surface_interface= 
+{
+   wstIVpcSurfaceSetGeometry
 };
 
 static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
@@ -5348,7 +5409,9 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
                                                  uint32_t x_scale_num,
                                                  uint32_t x_scale_denom,
                                                  uint32_t y_scale_num,
-                                                 uint32_t y_scale_denom )
+                                                 uint32_t y_scale_denom,
+                                                 uint32_t output_width,
+                                                 uint32_t output_height )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    WstSurface *surface= 0;
@@ -5367,7 +5430,9 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
                                                     x_scale_num,
                                                     x_scale_denom,
                                                     y_scale_num,
-                                                    y_scale_denom );                                                 
+                                                    y_scale_denom,
+                                                    output_width,
+                                                    output_height );
          }
          break;
       }
@@ -5833,9 +5898,10 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    }
    
    wl_resource_set_implementation(vpcSurface->resource,
-                                  NULL,
+                                  &vpc_surface_interface,
                                   vpcSurface, wstDestroyVpcSurfaceCallback );
    
+   WstCompositor *compositor= surface->compositor;
    vpcSurface->surface= surface;
    vpcSurface->useHWPath= true;
    vpcSurface->useHWPathNext= true;
@@ -5844,8 +5910,17 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    vpcSurface->xScaleDenom= 1;
    vpcSurface->yScaleNum= 1;
    vpcSurface->yScaleDenom= 1;
-   vpcSurface->compositor= surface->compositor;
+   vpcSurface->outputWidth= compositor->output->width;
+   vpcSurface->outputHeight= compositor->output->height;
+   vpcSurface->compositor= compositor;
+   vpcSurface->hwX= 0;
+   vpcSurface->hwY= 0;
+   vpcSurface->hwWidth= vpcSurface->outputWidth;
+   vpcSurface->hwHeight= vpcSurface->outputHeight;
    surface->compositor->vpcSurfaces.push_back( vpcSurface );
+   
+   surface->width= DEFAULT_OUTPUT_WIDTH;
+   surface->height= DEFAULT_OUTPUT_HEIGHT;
    
    surface->vpcSurface= vpcSurface;
    
@@ -5900,12 +5975,91 @@ static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
    free( vpcSurface );
 }
 
+static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resource *resource,
+                                       int32_t x, int32_t y, int32_t width, int32_t height )
+{
+   WstVpcSurface *vpcSurface= (WstVpcSurface*)wl_resource_get_user_data(resource);
+
+   if ( vpcSurface )
+   {
+      vpcSurface->sizeOverride= true;
+      vpcSurface->hwX= x;
+      vpcSurface->hwY= y;
+      vpcSurface->hwWidth= width;
+      vpcSurface->hwHeight= height;
+
+      WstSurface *surface= vpcSurface->surface;
+      if ( surface )
+      {
+         surface->x= x;
+         surface->y= y;
+         surface->width= width;
+         surface->height= height;
+         if ( vpcSurface->vpcSurfaceNested )
+         {
+            wl_vpc_surface_set_geometry( vpcSurface->vpcSurfaceNested, x, y, width, height );
+         }
+         else
+         {
+            WstRendererSurfaceSetGeometry( surface->compositor->renderer, surface->surface, x, y, width, height );
+         }
+      }
+   }
+}
+
 static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects )
 {
    bool useHWPath= ctx->renderer->fastHint;
-   
-   double scaleX= ctx->renderer->matrix[0]*((double)ctx->output->width)/((double)DEFAULT_OUTPUT_WIDTH);
-   double scaleY= ctx->renderer->matrix[5]*((double)ctx->output->height)/((double)DEFAULT_OUTPUT_HEIGHT);
+   bool isRotated= false;
+   float scaleX, scaleY;
+
+   float m12= ctx->renderer->matrix[1];
+   float m21= ctx->renderer->matrix[4];
+   float epsilon= 1.0e-2;
+   if ( (fabs(m12) > epsilon) &&
+        (fabs(m21) > epsilon) )
+   {
+      isRotated= true;
+   }
+
+   if ( isRotated )
+   {
+      // Calculate x and y scale by applying transfrom to x and y unit vectors
+      float x1, x2, y1, y2;
+      float x1t, x2t, y1t, y2t;
+      float xdiff, ydiff;
+
+      x1= 0;
+      y1= 0;
+      x2= 1;
+      y2= 0;
+
+      x1t= ctx->renderer->matrix[12];
+      y1t= ctx->renderer->matrix[13];
+      x2t= x2*ctx->renderer->matrix[0]+ctx->renderer->matrix[12];
+      y2t= x2*ctx->renderer->matrix[1]+ctx->renderer->matrix[13];
+
+      xdiff= x2t-x1t;
+      ydiff= y2t-y1t;
+      scaleX= sqrt( xdiff*xdiff+ydiff*ydiff );
+
+      x2= 0;
+      y2= 1;
+
+      x1t= ctx->renderer->matrix[12];
+      y1t= ctx->renderer->matrix[13];
+      x2t= y2*ctx->renderer->matrix[4]+ctx->renderer->matrix[12];
+      y2t= y2*ctx->renderer->matrix[5]+ctx->renderer->matrix[13];
+
+      xdiff= x2t-x1t;
+      ydiff= y2t-y1t;
+      scaleY= sqrt( xdiff*xdiff+ydiff*ydiff );
+   }
+   else
+   {
+      scaleX= ctx->renderer->matrix[0];
+      scaleY= ctx->renderer->matrix[5];
+   }
    
    int scaleXNum= scaleX*1000000;
    int scaleXDenom= 1000000; 
@@ -5913,6 +6067,8 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
    int scaleYDenom= 1000000;
    int transX= (int)ctx->renderer->matrix[12];
    int transY= (int)ctx->renderer->matrix[13];
+   int outputWidth= ctx->output->width;
+   int outputHeight= ctx->output->height;
    
    for ( std::vector<WstVpcSurface*>::iterator it= ctx->vpcSurfaces.begin(); 
          it != ctx->vpcSurfaces.end();
@@ -5926,7 +6082,9 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
            (scaleXNum != vpcSurface->xScaleNum) ||
            (scaleXDenom != vpcSurface->xScaleDenom) ||
            (scaleYNum != vpcSurface->yScaleNum) ||
-           (scaleYDenom != vpcSurface->yScaleDenom) )
+           (scaleYDenom != vpcSurface->yScaleDenom) ||
+           (outputWidth != vpcSurface->outputWidth) ||
+           (outputHeight != vpcSurface->outputHeight) )
       {
          vpcSurface->xTrans= transX;
          vpcSurface->yTrans= transY;
@@ -5934,6 +6092,8 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
          vpcSurface->xScaleDenom= scaleXDenom;
          vpcSurface->yScaleNum= scaleYNum;
          vpcSurface->yScaleDenom= scaleYDenom;
+         vpcSurface->outputWidth= outputWidth;
+         vpcSurface->outputHeight= outputHeight;
          
          wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
                                                  vpcSurface->xTrans,
@@ -5941,7 +6101,9 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
                                                  vpcSurface->xScaleNum,
                                                  vpcSurface->xScaleDenom,
                                                  vpcSurface->yScaleNum,
-                                                 vpcSurface->yScaleDenom );                                                 
+                                                 vpcSurface->yScaleDenom,
+                                                 vpcSurface->outputWidth,
+                                                 vpcSurface->outputHeight );
       }
       
       if ( useHWPath != vpcSurface->useHWPath )
@@ -5955,12 +6117,43 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
       }
 
       if ( vpcSurface->useHWPath )
-      {      
-         rect.x= (ctx->output->x+vpcSurface->surface->x)*scaleX+(transX-ctx->output->x);
-         rect.y= (ctx->output->y+vpcSurface->surface->y)*scaleY+(transY-ctx->output->y);
-         rect.width= vpcSurface->surface->width*scaleX;
-         rect.height= vpcSurface->surface->height*scaleY;
+      {
+         int vx, vy, vw, vh;
+         vx= vpcSurface->surface->x;
+         vy= vpcSurface->surface->y;
+         vw= vpcSurface->surface->width;
+         vh= vpcSurface->surface->height;
+         if ( vx+vw > outputWidth )
+         {
+            vw= outputWidth-vx;
+         }
+         if ( vy+vh > outputHeight )
+         {
+            vh= outputHeight-vy;
+         }
+         rect.x= transX+vx*scaleX;
+         rect.y= transY+vy*scaleY;
+         rect.width= vw*scaleX;
+         rect.height= vh*scaleY;
+         vpcSurface->hwX= rect.x;
+         vpcSurface->hwY= rect.y;
+         vpcSurface->hwWidth= rect.width;
+         vpcSurface->hwHeight= rect.height;
          rects.push_back(rect);
+      }
+      else if ( !vpcSurface->sizeOverride )
+      {
+         WstSurface *surface= vpcSurface->surface;
+         double sizeFactorX, sizeFactorY;
+
+         sizeFactorX= (((double)outputWidth)/DEFAULT_OUTPUT_WIDTH);
+         sizeFactorY= (((double)outputHeight)/DEFAULT_OUTPUT_HEIGHT);
+
+         WstRendererSurfaceSetGeometry( ctx->renderer, surface->surface,
+                                        surface->x,
+                                        surface->y,
+                                        surface->width*sizeFactorX,
+                                        surface->height*sizeFactorY );
       }
    }
 }

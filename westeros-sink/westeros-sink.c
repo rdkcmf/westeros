@@ -25,11 +25,6 @@
 
 #include "westeros-sink.h"
 
-#define DEFAULT_WINDOW_X (0)
-#define DEFAULT_WINDOW_Y (0)
-#define DEFAULT_WINDOW_WIDTH (1280)
-#define DEFAULT_WINDOW_HEIGHT (720)
-
 #define GST_PACKAGE_ORIGIN "http://gstreamer.net/"
 
 static GstStaticPadTemplate gst_westeros_sink_pad_template =
@@ -100,7 +95,6 @@ static void shellSurfaceId(void *data,
    }
    else
    {
-      wl_simple_shell_set_geometry( sink->shell, surfaceId, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
       z= wl_fixed_from_double(sink->zorder);
       wl_simple_shell_set_zorder( sink->shell, sink->surfaceId, z);
       op= wl_fixed_from_double(sink->opacity);
@@ -190,7 +184,9 @@ static void vpcVideoXformChange(void *data,
                                 uint32_t x_scale_num,
                                 uint32_t x_scale_denom,
                                 uint32_t y_scale_num,
-                                uint32_t y_scale_denom)
+                                uint32_t y_scale_denom,
+                                uint32_t output_width,
+                                uint32_t output_height)
 {                                
    WESTEROS_UNUSED(wl_vpc_surface);
    GstWesterosSink *sink= (GstWesterosSink*)data;
@@ -207,6 +203,8 @@ static void vpcVideoXformChange(void *data,
       sink->scaleYNum= y_scale_num;
       sink->scaleYDenom= y_scale_denom;
    }
+   sink->outputWidth= (int)output_width;
+   sink->outputHeight= (int)output_height;
    
    LOCK( sink );
    gst_westeros_sink_soc_update_video_position( sink );
@@ -387,7 +385,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->windowY= DEFAULT_WINDOW_Y;
    sink->windowWidth= DEFAULT_WINDOW_WIDTH;
    sink->windowHeight= DEFAULT_WINDOW_HEIGHT;
-   sink->windowChange= false;    
+   sink->windowChange= false;
+   sink->windowSizeOverride= false;
    
    sink->visible= false;
    
@@ -400,6 +399,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->scaleXDenom= 1;
    sink->scaleYNum= 1;
    sink->scaleYDenom= 1;
+   sink->outputWidth= DEFAULT_WINDOW_WIDTH;
+   sink->outputHeight= DEFAULT_WINDOW_HEIGHT;
    
    sink->eosEventSeen= FALSE;
    sink->eosDetected= FALSE;
@@ -545,18 +546,24 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
          else
          {
             LOCK( sink );
-            sink->windowChange= true;       
+            sink->windowChange= true;
             sink->windowX= atoi( parts[0] );
             sink->windowY= atoi( parts[1] );
             sink->windowWidth= atoi( parts[2] );
             sink->windowHeight= atoi( parts[3] );
+            if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) ||
+                 (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
+            {
+               sink->windowSizeOverride= true;
+            }    
             UNLOCK( sink );
             
             if ( sink->shell && sink->surfaceId )
             {
-               wl_simple_shell_set_geometry( sink->shell, sink->surfaceId, 
-                                             sink->windowX, sink->windowY, 
-                                             sink->windowWidth, sink->windowHeight );
+               if ( sink->vpcSurface )
+               {
+                  wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+               }
                                              
                printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n", 
                        sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
@@ -655,6 +662,10 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             {
                wl_vpc_surface_add_listener( sink->vpcSurface, &vpcListener, sink );
                wl_proxy_set_queue((struct wl_proxy*)sink->vpcSurface, sink->queue);
+               if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) || (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
+               {
+                  wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+               }
                wl_display_flush( sink->display );
                printf("westeros-sink: null_to_ready: done add vpcSurface listener\n");
             }

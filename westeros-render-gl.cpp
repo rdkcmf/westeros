@@ -162,6 +162,7 @@ struct _WstRenderSurface
    float zorder;
 
    int onScreen;
+   bool sizeOverride;
 
    int vertexLocation;
    int textureLocation[MAX_TEXTURES];
@@ -1150,8 +1151,11 @@ static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext
 
        if ( vcupdate || tcupdate || surf->vertexCoordsDirty )
        {
-           surf->width= surf->bufferWidth;
-           surf->height= surf->bufferHeight;
+           if ( !surf->sizeOverride )
+           {
+              surf->width= surf->bufferWidth;
+              surf->height= surf->bufferHeight;
+           }
                       
            itemShaderClass.bits.type= (surf->textureCount == 1) ? WstShaderType_texture : WstShaderType_textureYUV;
            itemShaderClass.bits.opacity= 0;
@@ -2412,6 +2416,10 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
    
    if ( surface )
    {
+      if ( (width != surface->width) || (height != surface->height) )
+      {
+         surface->sizeOverride= true;
+      }
       surface->x= x;
       surface->y= y;
       surface->width= width;

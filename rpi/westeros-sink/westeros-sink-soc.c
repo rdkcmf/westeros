@@ -1796,6 +1796,13 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       vy= ((wy*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
       vw= ((ww)*sink->scaleXNum)/sink->scaleXDenom;
       vh= ((wh)*sink->scaleYNum)/sink->scaleYDenom;
+      if ( !sink->windowSizeOverride )
+      {
+         double sizeXFactor= ((double)sink->outputWidth)/DEFAULT_WINDOW_WIDTH;
+         double sizeYFactor= ((double)sink->outputHeight)/DEFAULT_WINDOW_HEIGHT;
+         vw *= sizeXFactor;
+         vh *= sizeYFactor;
+      }
       
       memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
       displayRegion.nSize= sizeof(OMX_CONFIG_DISPLAYREGIONTYPE);

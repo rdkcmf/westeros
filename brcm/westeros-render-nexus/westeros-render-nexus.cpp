@@ -56,6 +56,7 @@ struct _WstRenderSurface
    float zorder;
    float opacity;
    bool visible;
+   bool sizeOverride;
    
    NxClient_AllocResults allocResults;
    bool eventCreated;
@@ -441,8 +442,11 @@ static void wstRendererNXCommitShm( WstRendererNX *renderer, WstRenderSurface *s
             }
             NEXUS_Surface_Flush( nexusSurface );
 
-            surface->width= surface->surfaceWidth;
-            surface->height= surface->surfaceHeight;
+            if ( !surface->sizeOverride )
+            {
+               surface->width= surface->surfaceWidth;
+               surface->height= surface->surfaceHeight;
+            }
 
             NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
             composition.position.width= surface->width;
@@ -502,8 +506,11 @@ static void wstRendererNXCommitSB( WstRendererNX *renderer, WstRenderSurface *su
          {
             NEXUS_SurfaceComposition composition;
             
-            surface->width= bufferWidth;
-            surface->height= bufferHeight;
+            if ( !surface->sizeOverride )
+            {
+               surface->width= bufferWidth;
+               surface->height= bufferHeight;
+            }
 
             NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
 
@@ -557,8 +564,11 @@ static void wstRendererNXCommitBNXS( WstRendererNX *renderer, WstRenderSurface *
       {
          NEXUS_SurfaceComposition composition;
          
-         surface->width= bufferWidth;
-         surface->height= bufferHeight;
+         if ( !surface->sizeOverride )
+         {
+            surface->width= bufferWidth;
+            surface->height= bufferHeight;
+         }
 
          NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
 
@@ -725,6 +735,10 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
    {
       NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
 
+      if ( (width != surface->width) || (height != surface->height) )
+      {
+         surface->sizeOverride= true;
+      }
       surface->x= x;
       surface->y= y;
       surface->width= width;

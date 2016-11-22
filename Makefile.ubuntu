@@ -35,11 +35,13 @@ initall: init
 	rm -rf external
    
 init:
+	cd protocol && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo
 	cd protocol/version4 && rm -f *.h && rm -f *.c
 	cd protocol/version5 && rm -f *.h && rm -f *.c
 	cd simpleshell/protocol && rm -f *.h && rm -f *.c
 	cd simpleshell && rm -f *.o && rm -f *.lo && rm -rf .libs/*
 	rm -f *.o && rm -f *.lo && rm -f .libs/*
+	rm -f external/install/include/vpc*.h
 	
 externals: external \
            external/.proto \

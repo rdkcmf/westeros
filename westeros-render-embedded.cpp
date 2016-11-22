@@ -386,6 +386,7 @@ struct _WstRenderSurface
    bool visible;
    float opacity;
    float zorder;
+   bool sizeOverride;
    
    bool dirty;
    bool invertedY;
@@ -1266,8 +1267,11 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
       }
    }
 
-   surface->width= surface->bufferWidth;
-   surface->height= surface->bufferHeight;
+   if ( !surface->sizeOverride )
+   {
+      surface->width= surface->bufferWidth;
+      surface->height= surface->bufferHeight;
+   }
    
    const float verts[4][2] = 
    {
@@ -1533,6 +1537,10 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
    
    if ( surface )
    {
+      if ( (width != surface->width) || (height != surface->height) )
+      {
+         surface->sizeOverride= true;
+      }
       surface->x= x;
       surface->y= y;
       surface->width= width;

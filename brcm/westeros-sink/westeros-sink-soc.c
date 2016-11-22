@@ -796,7 +796,7 @@ static void processFrame( GstWesterosSink *sink )
             if ( sink->soc.sb )
             {
                struct wl_buffer *buff;
-               
+
                buff= wl_sb_create_buffer( sink->soc.sb, 
                                           (uint32_t)captureSurface, 
                                           sink->windowWidth, 
@@ -884,8 +884,15 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
    
    sink->soc.videoX= ((sink->windowX*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
    sink->soc.videoY= ((sink->windowY*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
-   sink->soc.videoWidth= ((sink->windowWidth)*sink->scaleXNum)/sink->scaleXDenom;
-   sink->soc.videoHeight= ((sink->windowHeight)*sink->scaleYNum)/sink->scaleYDenom;
+   sink->soc.videoWidth= (sink->windowWidth*sink->scaleXNum)/sink->scaleXDenom;
+   sink->soc.videoHeight= (sink->windowHeight*sink->scaleYNum)/sink->scaleYDenom;
+   if ( !sink->windowSizeOverride )
+   {
+      double sizeXFactor= ((double)sink->outputWidth)/DEFAULT_WINDOW_WIDTH;
+      double sizeYFactor= ((double)sink->outputHeight)/DEFAULT_WINDOW_HEIGHT;
+      sink->soc.videoWidth *= sizeXFactor;
+      sink->soc.videoHeight *= sizeYFactor;
+   }
 
    if ( !sink->soc.captureEnabled )
    {

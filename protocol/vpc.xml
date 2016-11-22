@@ -83,7 +83,16 @@
       <arg name="x_scale_denom" type="uint"  summary="x scale factor denominator"/>
       <arg name="y_scale_num" type="uint"  summary="y scale factor numerator"/>
       <arg name="y_scale_denom" type="uint"  summary="y scale factor denominator"/>
+      <arg name="output_width" type="uint" summary="width of associated output"/>
+      <arg name="output_height" type="uint" summary="height of associated output"/>
     </event>
+
+    <request name="set_geometry">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
 
   </interface>
 

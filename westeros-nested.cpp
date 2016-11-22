@@ -393,7 +393,9 @@ static void vpcVideoXformChange(void *data,
                                 uint32_t x_scale_num,
                                 uint32_t x_scale_denom,
                                 uint32_t y_scale_num,
-                                uint32_t y_scale_denom)
+                                uint32_t y_scale_denom,
+                                uint32_t output_width,
+                                uint32_t output_height )
 {                                
    WST_UNUSED(vpcSurface);
 	WstNestedConnection *nc = (WstNestedConnection*)data;
@@ -411,7 +413,9 @@ static void vpcVideoXformChange(void *data,
                                                   x_scale_num,
                                                   x_scale_denom,
                                                   y_scale_num,
-                                                  y_scale_denom );
+                                                  y_scale_denom,
+                                                  output_width,
+                                                  output_height );
       }
    }
 }

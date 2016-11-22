@@ -69,6 +69,7 @@ struct _WstRenderSurface
 
    bool flip;
    bool dirty;
+   bool sizeOverride;
    int front;
    WstRenderResource resource[NUM_BUFFERS];
    DISPMANX_ELEMENT_HANDLE_T element;
@@ -549,8 +550,11 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
             {
                surface->flip= false;
                surface->front= ((surface->front+1)%NUM_BUFFERS);
-               surface->width= surface->bufferWidth;
-               surface->height= surface->bufferHeight;
+               if ( !surface->sizeOverride )
+               {
+                  surface->width= surface->bufferWidth;
+                  surface->height= surface->bufferHeight;
+               }
             }
  
             if ( 
@@ -803,6 +807,10 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
    
    if ( surface )
    {
+      if ( (width != surface->width) || (height != surface->height) )
+      {
+         surface->sizeOverride= true;
+      }
       surface->x= x;
       surface->y= y;
       surface->width= width;

@@ -26,6 +26,11 @@
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
 
+#define DEFAULT_WINDOW_X (0)
+#define DEFAULT_WINDOW_Y (0)
+#define DEFAULT_WINDOW_WIDTH (1280)
+#define DEFAULT_WINDOW_HEIGHT (720)
+
 #define WESTEROS_UNUSED(x) ((void)(x))
 
 G_BEGIN_DECLS
@@ -72,6 +77,7 @@ struct _GstWesterosSink
    int windowWidth;
    int windowHeight;
    bool windowChange;
+   bool windowSizeOverride;
    
    bool visible;
    float opacity;
@@ -83,6 +89,8 @@ struct _GstWesterosSink
    int scaleXDenom;
    int scaleYNum;
    int scaleYDenom;
+   int outputWidth;
+   int outputHeight;
 
    gboolean videoStarted;
    gboolean startAfterLink;
