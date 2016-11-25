@@ -571,6 +571,11 @@ static void swapDRMBuffers(void* nativeBuffer)
             }
             #endif
          }
+	 /* release the used buffer to gbm surface if no free buffer is available */
+         if(!gbm_surface_has_free_buffers(surface))
+         {
+                gbm_surface_release_buffer(surface, bo);
+         }
       }
    }
 }
