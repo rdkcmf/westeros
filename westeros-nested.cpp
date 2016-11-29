@@ -1066,6 +1066,39 @@ void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
    }
 }                                               
 
+void WstNestedConnectionAttachAndCommitClone( WstNestedConnection *nc,
+                                              struct wl_surface *surface,
+                                              struct wl_resource *bufferRemote,
+                                              struct wl_buffer *bufferClone,
+                                              int x,
+                                              int y,
+                                              int width,
+                                              int height )
+{
+   if ( nc && bufferRemote && bufferClone )
+   {
+      bufferInfo *binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+      if ( binfo )
+      {
+         binfo->nc= nc;
+         binfo->surface= surface;
+         binfo->bufferRemote= bufferRemote;
+         wl_buffer_add_listener( bufferClone, &wl_buffer_listener, binfo );
+
+         std::map<struct wl_surface*,WstNestedSurfaceInfo*>::iterator it= nc->surfaceInfoMap.find( surface );
+         if ( it != nc->surfaceInfoMap.end() )
+         {
+            WstNestedSurfaceInfo *surfaceInfo= it->second;
+            surfaceInfo->buffer= bufferClone;
+         }
+      }
+      wl_surface_attach( surface, bufferClone, 0, 0 );
+      wl_surface_damage( surface, x, y, width, height);
+      wl_surface_commit( surface );
+      wl_display_flush( nc->display );
+   }
+}
+
 void WstNestedConnectionReleaseRemoteBuffers( WstNestedConnection *nc )
 {
    while( nc->buffersToRelease.size() )

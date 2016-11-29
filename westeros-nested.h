@@ -145,6 +145,15 @@ void WstNestedConnectionAttachAndCommitDevice( WstNestedConnection *nc,
                                                int width,
                                                int height );
 
+void WstNestedConnectionAttachAndCommitClone( WstNestedConnection *nc,
+                                              struct wl_surface *surface,
+                                              struct wl_resource *bufferRemote,
+                                              struct wl_buffer *bufferClone,
+                                              int x,
+                                              int y,
+                                              int width,
+                                              int height );
+
 void WstNestedConnectionReleaseRemoteBuffers( WstNestedConnection *nc );
 
 void WstNestedConnectionPointerSetCursor( WstNestedConnection *nc, 

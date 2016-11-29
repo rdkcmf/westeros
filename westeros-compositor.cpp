@@ -96,6 +96,13 @@
 #define WST_EVENT_QUEUE_SIZE (64)
 
 typedef void* (*PFNGETDEVICEBUFFERFROMRESOURCE)( struct wl_resource *resource );
+typedef bool (*PFNREMOTEBEGIN)( struct wl_display *dspsrc, struct wl_display *dspdst );
+typedef void (*PFNREMOTEEND)( struct wl_display *dspsrc, struct wl_display *dspdst );
+typedef struct wl_buffer* (*PFNREMOTECLONEBUFFERFROMRESOURCE)( struct wl_display *dspsrc,
+                                                               struct wl_resource *resource,
+                                                               struct wl_display *dspdst,
+                                                               int *width,
+                                                               int *height );
 
 typedef enum _WstEventType
 {
@@ -361,6 +368,7 @@ typedef struct _WstCompositor
 
    WstShm *shm;   
    WstNestedConnection *nc;
+   struct wl_display *ncDisplay;
    void *nestedListenerUserData;
    WstNestedConnectionListener nestedListener;
    bool hasEmbeddedMaster;
@@ -385,6 +393,10 @@ typedef struct _WstCompositor
    PFNEGLUNBINDWAYLANDDISPLAYWL eglUnbindWaylandDisplayWL;
    PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL;
    PFNGETDEVICEBUFFERFROMRESOURCE getDeviceBufferFromResource;
+   bool canRemoteClone;
+   PFNREMOTEBEGIN remoteBegin;
+   PFNREMOTEEND remoteEnd;
+   PFNREMOTECLONEBUFFERFROMRESOURCE remoteCloneBufferFromResource;
    #endif
 
    int nextSurfaceId;
@@ -949,6 +961,8 @@ bool WstCompositorSetIsNested( WstCompositor *ctx, bool isNested )
                      
       pthread_mutex_lock( &ctx->mutex );
       
+      wstCompositorCheckForRepeaterSupport( ctx );
+
       ctx->isNested= isNested;
                
       pthread_mutex_unlock( &ctx->mutex );
@@ -2685,6 +2699,8 @@ static void* wstCompositorThread( void *arg )
          goto exit;
       }
       
+      ctx->ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
+
       argc= 4;
       strcpy( arg0, "--width" );
       sprintf( arg1, "%u", ctx->outputWidth );
@@ -2725,6 +2741,15 @@ static void* wstCompositorThread( void *arg )
       if ( !ctx->renderer )
       {
          ERROR("unable to initialize renderer module");
+         goto exit;
+      }
+   }
+
+   if ( ctx->remoteBegin && ctx->ncDisplay )
+   {
+      if ( !ctx->remoteBegin( ctx->display, ctx->ncDisplay ) )
+      {
+         ERROR("remoteBegin failure");
          goto exit;
       }
    }
@@ -2783,6 +2808,11 @@ exit:
       ctx->sb= 0;
    }
    #endif
+
+   if ( ctx->canRemoteClone && ctx->ncDisplay )
+   {
+      ctx->remoteEnd( ctx->display, ctx->ncDisplay );
+   }
 
    if ( ctx->nc )
    {
@@ -2859,40 +2889,46 @@ static bool wstCompositorCheckForRepeaterSupport( WstCompositor *ctx )
    bool supportsRepeater= false;
 
    #if defined (WESTEROS_HAVE_WAYLAND_EGL)
-   if ( !ctx->eglBindWaylandDisplayWL )
-   {
-      ctx->eglBindWaylandDisplayWL= (PFNEGLBINDWAYLANDDISPLAYWL)eglGetProcAddress("eglBindWaylandDisplayWL");
-   }
-   if ( !ctx->eglUnbindWaylandDisplayWL )
-   {
-      ctx->eglUnbindWaylandDisplayWL= (PFNEGLUNBINDWAYLANDDISPLAYWL)eglGetProcAddress("eglUnbindWaylandDisplayWL");
-   }
-   if ( !ctx->eglQueryWaylandBufferWL )
-   {
-      ctx->eglQueryWaylandBufferWL= (PFNEGLQUERYWAYLANDBUFFERWL)eglGetProcAddress("eglQueryWaylandBufferWL");
-   }
-   if ( !ctx->getDeviceBufferFromResource )
-   {
-      #if defined (WESTEROS_PLATFORM_RPI)
-      ctx->mustInitRendererModule= true;
-      ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
-      ctx->getDeviceBufferFromResource= (PFNGETDEVICEBUFFERFROMRESOURCE)vc_dispmanx_get_handle_from_wl_buffer;
-      #else
-      void *module;
+   ctx->eglBindWaylandDisplayWL= (PFNEGLBINDWAYLANDDISPLAYWL)eglGetProcAddress("eglBindWaylandDisplayWL");
+   ctx->eglUnbindWaylandDisplayWL= (PFNEGLUNBINDWAYLANDDISPLAYWL)eglGetProcAddress("eglUnbindWaylandDisplayWL");
+   ctx->eglQueryWaylandBufferWL= (PFNEGLQUERYWAYLANDBUFFERWL)eglGetProcAddress("eglQueryWaylandBufferWL");
 
-      module= dlopen( "libwayland-egl.so.0", RTLD_NOW );
-      if ( module )
+   #if defined (WESTEROS_PLATFORM_RPI)
+   ctx->mustInitRendererModule= true;
+   ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
+   ctx->getDeviceBufferFromResource= (PFNGETDEVICEBUFFERFROMRESOURCE)vc_dispmanx_get_handle_from_wl_buffer;
+   #else
+   void *module;
+
+   module= dlopen( "libwayland-egl.so.0", RTLD_NOW );
+   if ( module )
+   {
+      ctx->getDeviceBufferFromResource= (PFNGETDEVICEBUFFERFROMRESOURCE)dlsym( module, "wl_egl_get_device_buffer" );
+      ctx->remoteBegin= (PFNREMOTEBEGIN)dlsym( module, "wl_egl_remote_begin" );
+      ctx->remoteEnd= (PFNREMOTEEND)dlsym( module, "wl_egl_remote_end" );
+      ctx->remoteCloneBufferFromResource= (PFNREMOTECLONEBUFFERFROMRESOURCE)dlsym( module, "wl_egl_remote_buffer_clone" );
+
+      if ( (ctx->remoteBegin != 0) &&
+           (ctx->remoteEnd != 0) &&
+           (ctx->remoteCloneBufferFromResource != 0) )
       {
-         ctx->getDeviceBufferFromResource= (PFNGETDEVICEBUFFERFROMRESOURCE)dlsym( module, "wl_egl_get_device_buffer" );
-         dlclose( module );
+         ctx->canRemoteClone= true;
       }
-      #endif
+      dlclose( module );
+   }
+   #endif
+
+   if ( ctx->mustInitRendererModule )
+   {
+      ctx->canRemoteClone= false;
    }
 
-   if ( (ctx->eglBindWaylandDisplayWL != 0 ) &&
-        (ctx->eglUnbindWaylandDisplayWL != 0 ) &&
-        (ctx->eglQueryWaylandBufferWL != 0 ) &&
-        (ctx->getDeviceBufferFromResource != 0 ) )
+   if ( (ctx->eglBindWaylandDisplayWL != 0) &&
+        (ctx->eglUnbindWaylandDisplayWL != 0) &&
+        (ctx->eglQueryWaylandBufferWL != 0) &&
+        ( (ctx->getDeviceBufferFromResource != 0) ||
+          (ctx->canRemoteClone == true) )
+      )
    {
       supportsRepeater= true;
    }
@@ -4125,7 +4161,35 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
             }
          }
          #endif
-         #if defined (WESTEROS_HAVE_WAYLAND_EGL) && defined (ENABLE_SBPROTOCOL)
+         #if defined (WESTEROS_HAVE_WAYLAND_EGL)
+         if ( surface->compositor->canRemoteClone )
+         {
+            struct wl_display *nestedDisplay;
+            struct wl_buffer *clone;
+
+            if ( surface->compositor->ncDisplay )
+            {
+               clone= surface->compositor->remoteCloneBufferFromResource( surface->compositor->display,
+                                                                          surface->attachedBufferResource,
+                                                                          surface->compositor->ncDisplay,
+                                                                          &bufferWidth,
+                                                                          &bufferHeight );
+               if ( clone )
+               {
+                  WstNestedConnectionAttachAndCommitClone( surface->compositor->nc,
+                                                           surface->surfaceNested,
+                                                           surface->attachedBufferResource,
+                                                           clone,
+                                                           0,
+                                                           0,
+                                                           bufferWidth,
+                                                           bufferHeight );
+                  surface->attachedBufferResource= 0;
+               }
+            }
+         }
+         #if defined (ENABLE_SBPROTOCOL)
+         else
          if ( surface->compositor->getDeviceBufferFromResource &&
               surface->compositor->getDeviceBufferFromResource( surface->attachedBufferResource ) )
          {
@@ -4200,6 +4264,7 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                }
             }
          }
+         #endif
          #endif
 
          if ( (surface->width == 0) && (surface->height == 0) )
