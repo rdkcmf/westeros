@@ -63,6 +63,12 @@ struct _GstWesterosSinkSoc
    int noFrameCount;
    gboolean captureEnabled;
    
+   gboolean presentationStarted;
+   unsigned int ptsOffset;
+   NEXUS_VideoWindowContentMode zoomMode;
+   gboolean enableCCPassthru;
+   NEXUS_VideoFormat outputFormat;
+
    int videoX;
    int videoY;
    int videoWidth;
