@@ -1,0 +1,5 @@
+copy during install
+
+westeros-env     -> /etc/default
+westeros-init    -> /usr/bin
+westeros.service -> /lib/systemd/system

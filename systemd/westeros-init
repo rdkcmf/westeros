@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# Copyright 2016 RDK Management
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+if test -z "$XDG_RUNTIME_DIR"; then
+    export XDG_RUNTIME_DIR="/run"
+fi
+if ! test -d "$XDG_RUNTIME_DIR"; then
+    mkdir --parents $XDG_RUNTIME_DIR
+    chmod 0700 $XDG_RUNTIME_DIR
+fi
+
+if test -z "$WAYLAND_DISPLAY"; then
+    export WAYLAND_DISPLAY=wayland-0
+fi
+
+#Dispmanx renderer support in RPI
+
+if [ -f /usr/lib/libwesteros_render_dispmanx.so.0 ]; then
+    RENDERER="/usr/lib/libwesteros_render_dispmanx.so.0 --enableCursor"
+else
+    RENDERER="/usr/lib/libwesteros_render_gl.so.0"
+fi
+
+if [ -f "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+    echo "ERROR: A Wayland compositor $WAYLAND_DISPLAY is already running"
+    exit 1
+fi
+exec /usr/bin/westeros --renderer $RENDERER --framerate 60 --display $WAYLAND_DISPLAY
+
