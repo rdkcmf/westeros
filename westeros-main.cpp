@@ -314,10 +314,19 @@ exit:
 
 static void termEGL( AppCtx *appCtx )
 {
+   if ( appCtx->eglDisplay )
+   {
+      eglMakeCurrent( appCtx->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT );
+   }
    if ( appCtx->eglSurface )
    {
       eglDestroySurface( appCtx->eglDisplay, appCtx->eglSurface );
       appCtx->eglSurface= 0;
+   }
+   if ( appCtx->eglContext )
+   {
+      eglDestroyContext( appCtx->eglDisplay, appCtx->eglContext );
+      appCtx->eglContext= 0;
    }
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
    if ( appCtx->nativeWindow )

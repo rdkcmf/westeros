@@ -2783,6 +2783,19 @@ static void* wstCompositorThread( void *arg )
 
 exit:
 
+   while( ctx->clientInfoMap.size() >  0 )
+   {
+      std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin();
+      wl_client *client= it->first;
+      WstClientInfo *clientInfo= it->second;
+      ctx->clientInfoMap.erase( it );
+      if ( client )
+      {
+         wl_client_destroy( client );
+      }
+      free( clientInfo );
+   }
+
    ctx->compositorReady= false;
      
    DEBUG("display: %s terminating...", ctx->displayName );
@@ -2872,14 +2885,6 @@ exit:
       ctx->surfaceInfoMap.erase( it );
       free( surfaceInfo );
    }   
-   
-   while( ctx->clientInfoMap.size() >  0 )
-   {
-      std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin();
-      WstClientInfo *clientInfo= it->second;
-      ctx->clientInfoMap.erase( it );
-      free( clientInfo );
-   }
    
    return NULL;
 }
@@ -3584,6 +3589,8 @@ static void wstCompositorBind( struct wl_client *client, void *data, uint32_t ve
    }
 
    wl_resource_set_implementation(resource, &compositor_interface, ctx, wstDestroyCompositorCallback);
+
+   wstUpdateClientInfo( ctx, client, 0 );
    
    int pid= 0;
    wl_client_get_credentials( client, &pid, NULL, NULL );
@@ -3605,6 +3612,17 @@ static void wstDestroyCompositorCallback(struct wl_resource *resource)
    if ( ctx->clientStatusCB )
    {
       ctx->clientStatusCB( ctx, WstClient_disconnected, pid, 0, ctx->clientStatusUserData );
+   }
+
+   for( std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin(); it != ctx->clientInfoMap.end(); ++it )
+   {
+      if ( it->first == client )
+      {
+          WstClientInfo *clientInfo= (WstClientInfo*)it->second;
+          ctx->clientInfoMap.erase( it );
+          free( clientInfo );
+          break;
+      }
    }
 }
 
