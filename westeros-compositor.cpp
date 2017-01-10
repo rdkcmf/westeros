@@ -6234,8 +6234,8 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
    int scaleYDenom= 1000000;
    int transX= (int)ctx->renderer->matrix[12];
    int transY= (int)ctx->renderer->matrix[13];
-   int outputWidth= ctx->output->width;
-   int outputHeight= ctx->output->height;
+   int outputWidth= ctx->outputWidth;
+   int outputHeight= ctx->outputHeight;
    
    for ( std::vector<WstVpcSurface*>::iterator it= ctx->vpcSurfaces.begin(); 
          it != ctx->vpcSurfaces.end();
