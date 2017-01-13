@@ -770,13 +770,12 @@ int main( int argc, char** argv)
          break;
       }
 
-      if ( delay > 0 )
-      {
-         usleep(delay);
-      }
-      
       if ( !paceRendering )
       {
+         if ( delay > 0 )
+         {
+            usleep(delay);
+         }
          renderGL(&ctx);
          eglSwapBuffers(ctx.eglDisplay, ctx.eglSurfaceWindow);
       }
