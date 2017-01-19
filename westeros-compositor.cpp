@@ -407,6 +407,7 @@ typedef struct _WstCompositor
    std::map<struct wl_resource*, WstSurfaceInfo*> surfaceInfoMap;
 
    bool needRepaint;
+   bool allowImmediateRepaint;
    bool outputSizeChanged;
    
    struct wl_display *dcDisplay;
@@ -3163,12 +3164,18 @@ static int wstCompositorDisplayTimeOut( void *data )
    
    if ( ctx->needRepaint )
    {
+      ctx->allowImmediateRepaint= false;
+
       wstCompositorComposeFrame( ctx, (uint32_t)frameTime );
       
       if ( ctx->invalidateCB )
       {
          ctx->invalidateCB( ctx, ctx->invalidateUserData );
       }
+   }
+   else
+   {
+      ctx->allowImmediateRepaint= true;
    }
 
    now= wstGetCurrentTimeMillis();
@@ -3187,6 +3194,10 @@ static void wstCompositorScheduleRepaint( WstCompositor *ctx )
    if ( !ctx->needRepaint )
    {
       ctx->needRepaint= true;
+      if ( ctx->allowImmediateRepaint )
+      {
+         wl_event_source_timer_update( ctx->displayTimer, 1 );
+      }
    }
 }
 

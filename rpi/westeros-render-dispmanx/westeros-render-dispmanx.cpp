@@ -22,6 +22,7 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <sys/time.h>
 
 #include "westeros-render.h"
 #include "wayland-server.h"
@@ -106,6 +107,8 @@ static void wstRendererDMXCommitWaylandEGL( WstRendererDMX *rendererDMX, WstRend
                                            struct wl_resource *resource, EGLint format );
 #endif
 
+static bool emitFPS= false;
+
 static WstRendererDMX* wstRendererDMXCreate( WstRenderer *renderer )
 {
    WstRendererDMX *rendererDMX= 0;
@@ -119,6 +122,11 @@ static WstRendererDMX* wstRendererDMXCreate( WstRenderer *renderer )
       rendererDMX->outputWidth= renderer->outputWidth;
       rendererDMX->outputHeight= renderer->outputHeight;
       rendererDMX->surfaces= std::vector<WstRenderSurface*>();
+
+      if ( getenv("WESTEROS_RENDER_DISPMANX_FPS" ) )
+      {
+         emitFPS= true;
+      }
 
       bcm_host_init();
 
@@ -696,6 +704,24 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
 
 static void wstRendererUpdateScene( WstRenderer *renderer )
 {
+   if ( emitFPS )
+   {
+      static int frameCount= 0;
+      static long long lastReportTime= -1LL;
+      struct timeval tv;
+      long long now;
+      gettimeofday(&tv,0);
+      now= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+      ++frameCount;
+      if ( lastReportTime == -1LL ) lastReportTime= now;
+      if ( now-lastReportTime > 5000 )
+      {
+         double fps= ((double)frameCount*1000)/((double)(now-lastReportTime));
+         printf("westeros-render-dispmanx: fps %f\n", fps);
+         lastReportTime= now;
+         frameCount= 0;
+      }
+   }
    wstRendererUpdateSceneXform( renderer, 0, 0 );
 }
 

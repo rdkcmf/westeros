@@ -604,7 +604,7 @@ static void redraw( void *data, struct wl_callback *callback, uint32_t time )
 {
    AppCtx *ctx= (AppCtx*)data;
 
-   if ( g_log ) printf("redraw: time %d\n", time);
+   if ( g_log ) printf("redraw: time %u\n", time);
    wl_callback_destroy( callback );
 
    ctx->needRedraw= true;
