@@ -43,7 +43,8 @@ enum
   PROP_ENABLE_CC_PASSTHRU,
   PROP_DISPLAY_RESOLUTION,
   PROP_WINDOW_SHOW,
-  PROP_ZOOM_MODE
+  PROP_ZOOM_MODE,
+  PROP_SERVER_PLAY_SPEED
 };
 
 enum
@@ -123,6 +124,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                        "Zoom mode (0: full, 1: boxed)",
                        0, 1, 1, G_PARAM_READWRITE ));
 
+   g_object_class_install_property(gobject_class, PROP_SERVER_PLAY_SPEED,
+      g_param_spec_float("server-play-speed", "server play speed",
+          "Server side applied play speed",
+          -G_MAXFLOAT, G_MAXFLOAT, 1.0, G_PARAM_READWRITE));
+
    gstelement_class= GST_ELEMENT_CLASS(klass);
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(gstelement_class),
@@ -186,6 +192,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.ptsOffset= 0;
    sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
+   sink->soc.serverPlaySpeed= 1.0;
+   sink->soc.stoppedForServerPlaySpeed= FALSE;
    
    rc= NxClient_Join(NULL);
    if ( rc == NEXUS_SUCCESS )
@@ -205,8 +213,27 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
          sink->soc.stcChannel= NULL;
          sink->soc.videoPidChannel= NULL;
          sink->soc.codec= bvideo_codec_unknown;
-         
-         result= TRUE;
+
+         /* Connect to the decoder */
+         NxClient_ConnectSettings connectSettings;
+         NxClient_GetDefaultConnectSettings(&connectSettings);
+         connectSettings.simpleVideoDecoder[0].id= sink->soc.videoDecoderId;
+         connectSettings.simpleVideoDecoder[0].surfaceClientId= sink->soc.surfaceClientId;
+         connectSettings.simpleVideoDecoder[0].windowId= 0;
+         connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
+         connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
+         connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 0;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 0;
+         rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
+         if ( rc == NEXUS_SUCCESS )
+         {
+            result= TRUE;
+         }
+         else
+         {
+            GST_ERROR("gst_westeros_sink_soc_init: NxClient_Connect failed: %d", rc);
+         }
       }
       else
       {
@@ -371,6 +398,48 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
          }
          break;
+      case PROP_SERVER_PLAY_SPEED:
+         {
+            gfloat serverPlaySpeed;
+
+            serverPlaySpeed= g_value_get_float(value);
+            if ( sink->videoStarted )
+            {
+               NEXUS_VideoDecoderSettings settings;
+               NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
+               settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eHoldUntilTsmLock;
+               NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+
+               NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
+
+               sink->videoStarted= FALSE;
+               sink->soc.presentationStarted= FALSE;
+               sink->soc.frameCount= 0;
+               sink->soc.stoppedForServerPlaySpeed= TRUE;
+               sink->soc.serverPlaySpeed= serverPlaySpeed;
+
+               NEXUS_VideoDecoderTrickState trickState;
+               NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+               if ( (sink->soc.serverPlaySpeed >= -1.0) && (sink->soc.serverPlaySpeed <= 1.0) )
+               {
+                  trickState.topFieldOnly= false;
+                  trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+               }
+               else
+               if ( (sink->soc.serverPlaySpeed > 1.0) && (sink->soc.serverPlaySpeed <= 4.0) )
+               {
+                  trickState.topFieldOnly= true;
+                  trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+               }
+               else
+               {
+                  trickState.topFieldOnly= true;
+                  trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
+               }
+               NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+            }
+         }
+         break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -428,6 +497,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
             }
             g_value_set_int( value, intValue );
          }
+         break;
+      case PROP_SERVER_PLAY_SPEED:
+         g_value_set_float(value, sink->soc.serverPlaySpeed);
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -508,6 +580,9 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    
    queryPeerHandles(sink);
 
+   sink->soc.serverPlaySpeed= 1.0;
+   sink->soc.stoppedForServerPlaySpeed= FALSE;
+
    if ( sink->soc.stcChannel )
    {
       rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
@@ -525,9 +600,21 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
    if( (sink->soc.stcChannel != NULL) && (sink->soc.codec != bvideo_codec_unknown) )
    {
       LOCK( sink );
-      if ( !sink->soc.captureThread )
+      if ( !sink->videoStarted )
       {
-         gst_westeros_sink_soc_start_video( sink );
+         if ( !gst_westeros_sink_soc_start_video( sink ) )
+         {
+            GST_ERROR("gst_westeros_sink_soc_paused_to_playing: gst_westeros_sink_soc_start_video failed");
+         }
+
+         if ( sink->soc.stoppedForServerPlaySpeed )
+         {
+            NEXUS_VideoDecoderSettings settings;
+            NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
+            settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
+            NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+            sink->soc.stoppedForServerPlaySpeed= FALSE;
+         }
       }
       else
       {
@@ -545,9 +632,15 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
 gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
 {
-   LOCK( sink );
-   sink->videoStarted= FALSE;
-   UNLOCK( sink );
+   if ( sink->soc.stcChannel )
+   {
+      NEXUS_Error rc;
+      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_ERROR("gst_westeros_sink_soc_playing_to_paused: NEXUS_SimpleStcChannel_Freeze TRUE failed: %d", (int)rc);
+      }
+   }
    
    *passToDefault= false;
    
@@ -573,6 +666,8 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    
    sink->videoStarted= FALSE;
    sink->soc.presentationStarted= FALSE;
+   sink->soc.serverPlaySpeed= 1.0;
+   sink->soc.stoppedForServerPlaySpeed= FALSE;
    UNLOCK( sink );
    
    return TRUE;
@@ -650,29 +745,11 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
 {
    gboolean result= FALSE;
    NEXUS_Error rc;
-   NxClient_ConnectSettings connectSettings;
    NEXUS_SimpleVideoDecoderStartSettings startSettings;
      
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_start_video: enter");
    
    queryPeerHandles( sink );
-   
-   /* Connect to the decoder */
-   NxClient_GetDefaultConnectSettings(&connectSettings);
-   connectSettings.simpleVideoDecoder[0].id= sink->soc.videoDecoderId;
-   connectSettings.simpleVideoDecoder[0].surfaceClientId= sink->soc.surfaceClientId;
-   connectSettings.simpleVideoDecoder[0].windowId= 0;
-   connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
-   connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
-   connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
-   connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 0;
-   connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 0;
-   rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
-   if ( rc != NEXUS_SUCCESS )
-   {
-      GST_ERROR("gst_westeros_sink_soc_start_video: NxClient_Connect failed: %d", rc);
-      goto exit;
-   }
 
    /* Start video decoder */
    NEXUS_SimpleVideoDecoder_GetDefaultStartSettings(&startSettings);

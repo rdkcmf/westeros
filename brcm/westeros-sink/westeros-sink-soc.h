@@ -68,6 +68,8 @@ struct _GstWesterosSinkSoc
    NEXUS_VideoWindowContentMode zoomMode;
    gboolean enableCCPassthru;
    NEXUS_VideoFormat outputFormat;
+   gfloat serverPlaySpeed;
+   gboolean stoppedForServerPlaySpeed;
 
    int videoX;
    int videoY;
