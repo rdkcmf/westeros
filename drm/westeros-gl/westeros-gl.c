@@ -587,7 +587,7 @@ static bool setupDRM( WstGLCtx *ctx )
    drmModeRes *res= 0;
    drmModeConnector *conn= 0;
    drmModeCrtc *crtc= 0;
-   int i, mi;
+   int i, mi= 0;
    
    card= DEFAULT_CARD;
    
