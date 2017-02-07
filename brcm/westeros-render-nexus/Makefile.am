@@ -30,7 +30,7 @@ lib_LTLIBRARIES = libwesteros_render_nexus.la
 
 libwesteros_render_nexus_la_SOURCES = westeros-render-nexus.cpp
 libwesteros_render_nexus_la_includedir = $(includedir)
-libwesteros_render_nexus_la_LDFLAGS= -lnxclient
+libwesteros_render_nexus_la_LDFLAGS= -lnxclient -lwesteros_simplebuffer_server
 if HAVE_WAYLAND_EGL
 AM_CXXFLAGS += -DWESTEROS_HAVE_WAYLAND_EGL
 libwesteros_render_nexus_la_LDFLAGS += -lwayland-egl
