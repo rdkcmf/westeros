@@ -21,6 +21,7 @@
 #include <memory.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/socket.h>
 
 #include <map>
 #include <vector>
@@ -685,8 +686,11 @@ void WstNestedConnectionDisconnect( WstNestedConnection *nc )
       if ( nc->started )
       {
          nc->stopRequested= true;
-         wl_display_flush( nc->display );
-         wl_display_roundtrip( nc->display );
+         int fd= wl_display_get_fd( nc->display );
+         if ( fd >= 0 )
+         {
+            shutdown( fd, SHUT_RDWR );
+         }
          pthread_join( nc->nestedThreadId, NULL );
       }
    }
@@ -700,8 +704,11 @@ void WstNestedConnectionDestroy( WstNestedConnection *nc )
       if ( threadStarted )
       {
          nc->stopRequested= true;
-         wl_display_flush( nc->display );
-         wl_display_roundtrip( nc->display );
+         int fd= wl_display_get_fd( nc->display );
+         if ( fd >= 0 )
+         {
+            shutdown( fd, SHUT_RDWR );
+         }
          pthread_join( nc->nestedThreadId, NULL );
       }
       if ( nc->touch )
