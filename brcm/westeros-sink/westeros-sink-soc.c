@@ -223,8 +223,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
          connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
          connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
          connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 0;
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 0;
          rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
          if ( rc == NEXUS_SUCCESS )
          {
