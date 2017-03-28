@@ -3644,10 +3644,13 @@ static void wstICompositorCreateSurface( struct wl_client *client, struct wl_res
    WstSurfaceInfo *surfaceInfo;
    int clientId;
    
+   pthread_mutex_lock( &ctx->mutex );
+
    surface= wstSurfaceCreate(ctx);
    if (!surface) 
    {
       wl_resource_post_no_memory(resource);
+      pthread_mutex_unlock( &ctx->mutex );
       return;
    }
 
@@ -3657,6 +3660,7 @@ static void wstICompositorCreateSurface( struct wl_client *client, struct wl_res
    {
       wstSurfaceDestroy(surface);
       wl_resource_post_no_memory(resource);
+      pthread_mutex_unlock( &ctx->mutex );
       return;
    }
    surfaceInfo= wstGetSurfaceInfo( ctx, surface->resource );
@@ -3664,6 +3668,7 @@ static void wstICompositorCreateSurface( struct wl_client *client, struct wl_res
    {
       wstSurfaceDestroy(surface);
       wl_resource_post_no_memory(resource);
+      pthread_mutex_unlock( &ctx->mutex );
       return;
    }
    wl_resource_set_implementation(surface->resource, &surface_interface, surface, wstDestroySurfaceCallback);
@@ -3675,6 +3680,8 @@ static void wstICompositorCreateSurface( struct wl_client *client, struct wl_res
       
    DEBUG("wstICompositorCreateSurface: client %p resource %p id %d : surface resource %p", client, resource, id, surface->resource );
    
+   pthread_mutex_unlock( &ctx->mutex );
+
    if ( ctx->simpleShell )
    {
       WstSimpleShellNotifySurfaceCreated( ctx->simpleShell, client, surface->resource, surface->surfaceId );
@@ -3720,6 +3727,8 @@ static void wstDestroySurfaceCallback(struct wl_resource *resource)
       WstSimpleShellNotifySurfaceDestroyed( ctx->simpleShell, wl_resource_get_client(resource), surface->surfaceId );
    }
 
+   pthread_mutex_lock( &ctx->mutex );
+
    std::map<struct wl_resource*,WstSurfaceInfo*>::iterator it= ctx->surfaceInfoMap.find( resource );
    if ( it != ctx->surfaceInfoMap.end() )
    {
@@ -3731,6 +3740,8 @@ static void wstDestroySurfaceCallback(struct wl_resource *resource)
 
    surface->resource= NULL;
    wstSurfaceDestroy(surface);
+
+   pthread_mutex_unlock( &ctx->mutex );
 }
 
 static WstSurface* wstSurfaceCreate( WstCompositor *ctx)
