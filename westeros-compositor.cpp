@@ -2797,6 +2797,21 @@ exit:
       free( clientInfo );
    }
 
+   while( !ctx->surfaces.empty() )
+   {
+      WstSurface* surface= ctx->surfaces.back();
+      ctx->surfaces.pop_back();
+      if ( !surface || !surface->resource )
+      {
+         continue;
+      }
+      struct wl_client *client= wl_resource_get_client( surface->resource );
+      if ( client )
+      {
+         wl_client_destroy( client );
+      }
+   }
+
    ctx->compositorReady= false;
      
    DEBUG("display: %s terminating...", ctx->displayName );
@@ -6106,7 +6121,9 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    vpcSurface->hwY= 0;
    vpcSurface->hwWidth= vpcSurface->outputWidth;
    vpcSurface->hwHeight= vpcSurface->outputHeight;
+   pthread_mutex_lock( &surface->compositor->mutex );
    surface->compositor->vpcSurfaces.push_back( vpcSurface );
+   pthread_mutex_unlock( &surface->compositor->mutex );
    
    surface->width= DEFAULT_OUTPUT_WIDTH;
    surface->height= DEFAULT_OUTPUT_HEIGHT;
@@ -6134,6 +6151,10 @@ static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
    if ( vpcSurface->compositor )
    {
       WstCompositor *ctx= vpcSurface->compositor;
+      // We should lock when client directly requests a vpc surface destruction
+      // otherwise the parent surface is destroying us (i.e. vpcSurface->surface == 0)
+      // and it already holds the lock in wstDestroySurfaceCallback()
+      bool needLock= (vpcSurface->surface != 0);
 
       if ( vpcSurface->vpcSurfaceNested )
       {
@@ -6141,6 +6162,11 @@ static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
          vpcSurface->vpcSurfaceNested= 0;
       }
       
+      if ( needLock )
+      {
+         pthread_mutex_lock(&ctx->mutex);
+      }
+
       // Remove from vpc surface list
       for ( std::vector<WstVpcSurface*>::iterator it= ctx->vpcSurfaces.begin(); 
             it != ctx->vpcSurfaces.end();
@@ -6151,6 +6177,11 @@ static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface )
             ctx->vpcSurfaces.erase(it);
             break;
          }
+      }
+
+      if ( needLock )
+      {
+         pthread_mutex_unlock(&ctx->mutex);
       }
    }
 
