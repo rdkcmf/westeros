@@ -847,14 +847,12 @@ void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surfa
       }
       {
          for ( std::vector<WstNestedBufferInfo>::iterator it= nc->buffersToRelease.begin(); 
-               it != nc->buffersToRelease.end();
-               ++it )
+               it != nc->buffersToRelease.end(); )
          {
             if ( surface == (*it).surface )
-            {
-               it= nc->buffersToRelease.erase(it);
-               if ( it == nc->buffersToRelease.end() ) break;
-            }
+               it = nc->buffersToRelease.erase(it);
+            else
+                ++it;
          }         
       }
       wl_surface_destroy( surface );
