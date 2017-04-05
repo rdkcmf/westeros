@@ -62,7 +62,8 @@ struct _GstWesterosSinkSoc
    int frameCount;
    int noFrameCount;
    gboolean captureEnabled;
-   
+   gboolean videoPlaying;
+
    gboolean presentationStarted;
    unsigned int ptsOffset;
    NEXUS_VideoWindowContentMode zoomMode;
