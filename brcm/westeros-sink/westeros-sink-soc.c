@@ -194,6 +194,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.stoppedForServerPlaySpeed= FALSE;
+   sink->soc.videoPlaying= FALSE;
    
    rc= NxClient_Join(NULL);
    if ( rc == NEXUS_SUCCESS )
@@ -595,6 +596,10 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
    WESTEROS_UNUSED(passToDefault);
    queryPeerHandles(sink);	
 
+   LOCK(sink);
+   sink->soc.videoPlaying = TRUE;
+   UNLOCK(sink);
+
    if( (sink->soc.stcChannel != NULL) && (sink->soc.codec != bvideo_codec_unknown) )
    {
       LOCK( sink );
@@ -630,6 +635,11 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
 gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
 {
+
+   LOCK(sink);
+   sink->soc.videoPlaying = FALSE;
+   UNLOCK(sink);
+
    if ( sink->soc.stcChannel )
    {
       NEXUS_Error rc;
@@ -639,9 +649,25 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
          GST_ERROR("gst_westeros_sink_soc_playing_to_paused: NEXUS_SimpleStcChannel_Freeze TRUE failed: %d", (int)rc);
       }
    }
-   
-   *passToDefault= false;
-   
+
+   if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
+   {
+      // as the pipeline is operating without syncronizing by the clock, all the buffers might have been already consumed by the sink.
+      // But to complete transition to paused state in async_enabled mode, we need a preroll buffer pushed to the pad;
+      // This is a workaround to avoid the need for preroll buffer.
+      GstBaseSink *basesink;
+      basesink = GST_BASE_SINK(sink);
+      GST_BASE_SINK_PREROLL_LOCK (basesink);
+      basesink->have_preroll = 1;
+      GST_BASE_SINK_PREROLL_UNLOCK (basesink);
+
+      *passToDefault= true;
+   }
+   else
+   {
+      *passToDefault = false;
+   }
+
    return TRUE;
 }
 
@@ -976,7 +1002,7 @@ static gpointer captureThread(gpointer data)
    while( !sink->soc.quitCaptureThread )
    {
       LOCK( sink );
-      gboolean videoStarted= sink->videoStarted;
+      gboolean videoPlaying= sink->soc.videoPlaying;
       gboolean eosDetected= sink->eosDetected;
       if ( sink->windowChange )
       {
@@ -987,7 +1013,7 @@ static gpointer captureThread(gpointer data)
       
       if ( sink->soc.captureEnabled )
       {
-         if ( videoStarted && sink->visible && !eosDetected )
+         if ( videoPlaying && sink->visible && !eosDetected )
          {
             processFrame( sink );
          }
@@ -1112,6 +1138,7 @@ static void processFrame( GstWesterosSink *sink )
    unsigned numReturned= 0;
    unsigned segmentNumber= 0;
    gboolean eosDetected= FALSE;
+   gboolean videoPlaying= FALSE;
    
    GST_DEBUG_OBJECT(sink, "processFrame: enter");
    
@@ -1123,6 +1150,7 @@ static void processFrame( GstWesterosSink *sink )
    LOCK( sink );
    segmentNumber= sink->segmentNumber;
    eosDetected= sink->eosDetected;
+   videoPlaying= sink->soc.videoPlaying;
    UNLOCK( sink );
 
    for( ; ; )
@@ -1185,7 +1213,7 @@ static void processFrame( GstWesterosSink *sink )
             }
          }
       }
-      else if ( !eosDetected )
+      else if ( !eosDetected && videoPlaying )
       {
          int limit= (sink->currentPTS > sink->firstPTS) 
                     ? EOS_DETECT_DELAY
@@ -1208,9 +1236,11 @@ static void updateVideoStatus( GstWesterosSink *sink )
    NEXUS_VideoDecoderStatus videoStatus;
    gboolean noFrame= FALSE;
    gboolean eosDetected= FALSE;
+   gboolean videoPlaying= FALSE;
 
    LOCK( sink );
    eosDetected= sink->eosDetected;
+   videoPlaying= sink->soc.videoPlaying;
    UNLOCK( sink );
    
    if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
@@ -1238,7 +1268,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
       UNLOCK( sink );
    }
 
-   if ( noFrame && !eosDetected )
+   if ( noFrame && !eosDetected && videoPlaying )
    {
       int limit= (sink->currentPTS > sink->firstPTS) 
                  ? EOS_DETECT_DELAY
