@@ -295,6 +295,7 @@ static WstRenderSurface* wstRenderNXCreateSurface( WstRendererNX *renderer )
       composition.zorder= (unsigned)(surface->zorder*MAX_ZORDER);;
       composition.colorBlend= graphicsColorBlend;
       composition.alphaBlend= graphicsAlphaBlend;
+      composition.visible= false;
       rc= NxClient_SetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
       
       renderer->renderer->surfaceSetOpacity( renderer->renderer, surface, surface->opacity );
@@ -610,9 +611,20 @@ static void wstRendererTerm( WstRenderer *renderer )
 
 static void wstRendererUpdateScene( WstRenderer *renderer )
 {
-   WstRendererNX *rendererNX= (WstRendererNX*)renderer->renderer;   
+   WstRendererNX *rendererNX= (WstRendererNX*)renderer->renderer;
+   WstRenderSurface *surface;
+   NEXUS_SurfaceComposition composition;
 
-   // Nothing to do.   
+   for ( std::vector<WstRenderSurface*>::iterator it= rendererNX->surfaces.begin();
+         it != rendererNX->surfaces.end();
+         ++it )
+   {
+      surface= (*it);
+
+      NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
+      composition.visible= surface->visible;
+      NxClient_SetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
+   }
 }
 
 static WstRenderSurface* wstRendererSurfaceCreate( WstRenderer *renderer )
@@ -908,6 +920,7 @@ static void wstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<W
       rects.push_back( rect );
 
       composition.colorMatrixEnabled= (opacity < 1.0);
+      composition.visible= surface->visible;
 
       NEXUS_Graphics2DColorMatrix *pMatrix= &composition.colorMatrix;
       BKNI_Memset(pMatrix, 0, sizeof(*pMatrix));
