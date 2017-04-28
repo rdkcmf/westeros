@@ -267,7 +267,7 @@ int main( int argc, char **argv )
    const char *uri= 0;
    AppCtx *ctx= 0;
    
-   printf("westeros_test: v1.0\n\n" );
+   printf("westeros_player: v1.0\n\n" );
    
    if ( argc < 2 )
    {

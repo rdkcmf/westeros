@@ -53,12 +53,6 @@ typedef enum _WstClient_status
    WstClient_disconnected
 } WstClient_status;
 
-typedef enum _WstHints
-{
-   WstHints_none= 0,
-   WstHints_noRotation= (1<<0)
-} WstHints;
-
 typedef void (*WstTerminatedCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstDispatchCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstInvalidateSceneCallback)( WstCompositor *ctx, void *userData );

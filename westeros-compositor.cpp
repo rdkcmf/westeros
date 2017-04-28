@@ -1720,7 +1720,7 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
       }
    
       if ( ctx->compositorReady )
-      {   
+      {
          ctx->renderer->outputWidth= width;
          ctx->renderer->outputHeight= height;
          ctx->renderer->outputX= x;
@@ -1728,6 +1728,7 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
          ctx->renderer->matrix= matrix;
          ctx->renderer->alpha= alpha;
          ctx->renderer->fastHint= (hints & WstHints_noRotation);
+         ctx->renderer->hints= hints;
          ctx->renderer->needHolePunch= false;
          ctx->renderer->rects.clear();
          
@@ -1737,16 +1738,22 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
          }
          
          WstRendererUpdateScene( ctx->renderer );
-         
-         if ( ctx->renderer->rects.size() )
+
+         if ( !(hints & WstHints_holePunch) )
          {
-            *needHolePunch= ctx->renderer->needHolePunch;
-            rects= ctx->renderer->rects;
+            if ( ctx->renderer->rects.size() )
+            {
+               for( int i= 0; i < ctx->renderer->rects.size(); ++i )
+               {
+                  if ( ctx->renderer->rects[i].width && ctx->renderer->rects[i].height )
+                  {
+                     rects.push_back( ctx->renderer->rects[i] );
+                  }
+               }
+            }
          }
-         else if ( rects.size() )
-         {
-            *needHolePunch= true;
-         }
+
+         *needHolePunch= ( rects.size() > 0 );
       }
       
       pthread_mutex_unlock( &ctx->mutex );
@@ -2548,7 +2555,18 @@ static void simpleShellGetStatus( void* userData, uint32_t surfaceId, bool *visi
       }
       else
       {
-         WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
+         if ( surface->vpcSurface )
+         {
+            /* Visibility of surface with a vpcSurface is controlled by whether the vpcSurface is using the
+             * HW or graphics path.  We return true for visibility in shell status so that the sink will not
+             * shut off video.
+             */
+            *visible= true;
+         }
+         else
+         {
+            WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, visible );
+         }
          if ( !surface->vpcSurface || (surface->vpcSurface && surface->vpcSurface->sizeOverride) )
          {
             WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, x, y, width, height );
@@ -4359,6 +4377,10 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
       {
          surface->vpcSurface->useHWPath= surface->vpcSurface->useHWPathNext;
          surface->vpcSurface->pathTransitionPending= false;
+         if ( surface->renderer )
+         {
+            WstRendererSurfaceSetVisible( surface->renderer, surface->surface, !surface->vpcSurface->useHWPath );
+         }
       }
    }
 
@@ -6124,6 +6146,10 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    pthread_mutex_lock( &surface->compositor->mutex );
    surface->compositor->vpcSurfaces.push_back( vpcSurface );
    pthread_mutex_unlock( &surface->compositor->mutex );
+   if ( compositor->renderer && vpcSurface->useHWPath )
+   {
+      WstRendererSurfaceSetVisible( compositor->renderer, surface->surface, false );
+   }
    
    surface->width= DEFAULT_OUTPUT_WIDTH;
    surface->height= DEFAULT_OUTPUT_HEIGHT;
@@ -6229,7 +6255,7 @@ static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resou
 
 static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects )
 {
-   bool useHWPath= ctx->renderer->fastHint;
+   bool useHWPath= (ctx->renderer->hints & WstHints_noRotation) && !(ctx->renderer->hints & WstHints_animating);
    bool isRotated= false;
    float scaleX, scaleY;
 
@@ -6359,7 +6385,14 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
          vpcSurface->hwY= rect.y;
          vpcSurface->hwWidth= rect.width;
          vpcSurface->hwHeight= rect.height;
-         rects.push_back(rect);
+         if ( ctx->renderer->hints & WstHints_holePunch )
+         {
+            ctx->renderer->holePunch( ctx->renderer, rect.x, rect.y, rect.width, rect.height );
+         }
+         else
+         {
+            rects.push_back(rect);
+         }
       }
       else if ( !vpcSurface->sizeOverride )
       {

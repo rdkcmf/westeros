@@ -454,6 +454,7 @@ static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSur
                                          EGLint format, int bufferWidth, int bufferHeight );
 #endif                                         
 static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface );
+static void wstRendererHolePunch( WstRenderer *renderer, int x, int y, int width, int height );
 static void wstRendererInitFastPath( WstRendererEMB *renderer );
 static bool wstRendererActivateFastPath( WstRendererEMB *renderer );
 static void wstRendererDeactivateFastPath( WstRendererEMB *renderer );
@@ -1297,7 +1298,7 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
       { 1,  0 }
    };
    
-   const float matrix[4][4] =
+   const float identityMatrix[4][4] =
    {
       {1, 0, 0, 0},
       {0, 1, 0, 0},
@@ -1306,11 +1307,29 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
    };
 
    const float *uv= surface->invertedY ? (const float*)uvYInverted : (const float*)uvNormal;   
-   
+
+   float *matrix= (renderer->renderer->hints & WstHints_applyTransform
+                  ? renderer->renderer->matrix : (float*)identityMatrix);
+
+   int resW, resH;
+   GLint viewport[4];
+
+   if ( renderer->renderer->hints & WstHints_fboTarget )
+   {
+      resW= renderer->renderer->outputWidth;
+      resH= renderer->renderer->outputHeight;
+   }
+   else
+   {
+      glGetIntegerv( GL_VIEWPORT, viewport );
+      resW= viewport[2];
+      resH= viewport[3];
+   }
+
    if ( surface->textureCount == 1 )
    {
-      renderer->textureShader->draw( renderer->renderer->outputWidth,
-                                     renderer->renderer->outputHeight,
+      renderer->textureShader->draw( resW,
+                                     resH,
                                      (float*)matrix,
                                      surface->opacity,
                                      surface->textureId[0],
@@ -1345,9 +1364,21 @@ static void wstRendererTerm( WstRenderer *renderer )
 static void wstRendererUpdateScene( WstRenderer *renderer )
 {
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
+   GLuint program;
 
    wstRendererProcessDeadTextures( rendererEMB );
    
+   if ( renderer->fastHint && rendererEMB->rendererFast && !rendererEMB->fastPathActive )
+   {
+      rendererEMB->fastPathActive= wstRendererActivateFastPath( rendererEMB );
+   }
+
+   if ( !renderer->fastHint && rendererEMB->fastPathActive )
+   {
+      wstRendererDeactivateFastPath( rendererEMB );
+      rendererEMB->fastPathActive= false;
+   }
+
    if ( rendererEMB->fastPathActive )
    {
       rendererEMB->rendererFast->outputX= renderer->outputX;
@@ -1357,11 +1388,48 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
       rendererEMB->rendererFast->matrix= renderer->matrix;
       rendererEMB->rendererFast->alpha= renderer->alpha;
 
+      if ( renderer->hints & WstHints_holePunch )
+      {
+         int imax= rendererEMB->surfaces.size();
+         for( int i= 0; i < imax; ++i )
+         {
+            WstRenderSurface *surface= rendererEMB->surfaces[i];
+
+            if ( surface->visible )
+            {
+               int sx, sy, sw, sh;
+
+               if ( surface->surfaceFast )
+               {
+                  rendererEMB->rendererFast->surfaceGetGeometry( rendererEMB->rendererFast, surface->surfaceFast, &sx, &sy, &sw, &sh );
+
+                  if ( sw && sw )
+                  {
+                     WstRect r;
+
+                     r.x= renderer->matrix[0]*sx+renderer->matrix[12];
+                     r.y= renderer->matrix[5]*sy+renderer->matrix[13];
+                     r.width= renderer->matrix[0]*sw;
+                     r.height= renderer->matrix[5]*sh;
+
+                     wstRendererHolePunch( renderer, r.x, r.y, r.width, r.height );
+                  }
+               }
+            }
+         }
+         renderer->needHolePunch= false;
+      }
+      else
+      {
+         renderer->needHolePunch= true;
+      }
+
       rendererEMB->rendererFast->delegateUpdateScene( rendererEMB->rendererFast, renderer->rects );
 
-      renderer->needHolePunch= true;
       return;
    }
+
+   glGetIntegerv( GL_CURRENT_PROGRAM, (GLint*)&program );
 
    if ( !rendererEMB->textureShader )
    {
@@ -1379,7 +1447,7 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
    for( int i= 0; i < imax; ++i )
    {
       WstRenderSurface *surface= rendererEMB->surfaces[i];
-      
+
       if ( surface->visible && 
           (
             #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
@@ -1393,6 +1461,8 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
          wstRendererEMBRenderSurface( rendererEMB, surface );
       }
    }
+
+   glUseProgram( program );
    
    glFlush();
    glFinish();
@@ -1681,6 +1751,41 @@ static float wstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurfac
    return zLevel;
 }
 
+static void wstRendererHolePunch( WstRenderer *renderer, int x, int y, int width, int height )
+{
+   GLfloat priorColor[4];
+   GLint priorBox[4];
+   GLint viewport[4];
+   WstRect r;
+
+   bool wasEnabled= glIsEnabled(GL_SCISSOR_TEST);
+   glGetIntegerv( GL_SCISSOR_BOX, priorBox );
+   glGetFloatv( GL_COLOR_CLEAR_VALUE, priorColor );
+   glGetIntegerv( GL_VIEWPORT, viewport );
+
+   glEnable( GL_SCISSOR_TEST );
+   glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+
+   r.x= x;
+   r.y= y;
+   r.width= width;
+   r.height= height;
+
+   glScissor( r.x, viewport[3]-(r.y+r.height), r.width, r.height );
+   glClear( GL_COLOR_BUFFER_BIT );
+
+   glClearColor( priorColor[0], priorColor[1], priorColor[2], priorColor[3] );
+
+   if ( wasEnabled )
+   {
+      glScissor( priorBox[0], priorBox[1], priorBox[2], priorBox[3] );
+   }
+   else
+   {
+      glDisable( GL_SCISSOR_TEST );
+   }
+}
+
 static void wstRendererInitFastPath( WstRendererEMB *renderer )
 {
    bool error= false;
@@ -1765,7 +1870,7 @@ exit:
 static bool wstRendererActivateFastPath( WstRendererEMB *renderer )
 {
    bool result= false;
-   
+
    if ( renderer->rendererFast )
    {
       result= true;
@@ -1798,7 +1903,7 @@ static bool wstRendererActivateFastPath( WstRendererEMB *renderer )
                                                       surface->zorder );
          }
       }
-      
+
       if ( result )
       {
          // Discard texture info for all surfaces
@@ -1825,6 +1930,8 @@ static void wstRendererDeactivateFastPath( WstRendererEMB *renderer )
          WstRenderSurface *surface= renderer->surfaces[i];
          if ( surface->surfaceFast && (surface->zorder != 1000000.0) )
          {
+            renderer->rendererFast->surfaceGetGeometry( renderer->rendererFast, surface->surfaceFast,
+                                                        &surface->x, &surface->y, &surface->width, &surface->height );
             renderer->rendererFast->surfaceDestroy( renderer->rendererFast, surface->surfaceFast );
             surface->surfaceFast= 0;
          }
@@ -1873,6 +1980,7 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceGetOpacity= wstRendererSurfaceGetOpacity;
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
+      renderer->holePunch= wstRendererHolePunch;
       
       wstRendererInitFastPath( rendererEMB );
    }

@@ -54,6 +54,16 @@ typedef struct _WstRect
    int height;
 } WstRect;
 
+typedef enum _WstHints
+{
+   WstHints_none= 0,
+   WstHints_noRotation= (1<<0),
+   WstHints_holePunch= (1<<1),
+   WstHints_fboTarget= (1<<2),
+   WstHints_applyTransform= (1<<3),
+   WstHints_animating= (1<<4),
+} WstHints;
+
 typedef struct _WstRenderer WstRenderer;
 typedef struct _WstRenderSurface WstRenderSurface;
 typedef struct _WstNestedConnection WstNestedConnection;
@@ -73,6 +83,7 @@ typedef float (*WSTMethodSurfaceGetOpacity)( WstRenderer *renderer, WstRenderSur
 typedef void (*WSTMethodSurfaceSetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float z );
 typedef float (*WSTMethodSurfaceGetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float *z );
 typedef void (*WSTMethodDelegateUpdateScene)( WstRenderer *renderer, std::vector<WstRect> &rects );
+typedef void (*WSTMethodHolePunch)( WstRenderer *renderr, int x, int y, int width, int height );
 
 typedef struct _WstRenderer
 {
@@ -96,6 +107,7 @@ typedef struct _WstRenderer
    WSTMethodSurfaceSetZOrder surfaceSetZOrder;
    WSTMethodSurfaceGetZOrder surfaceGetZOrder;
    WSTMethodDelegateUpdateScene delegateUpdateScene;
+   WSTMethodHolePunch holePunch;
 
    // For nested composition
    WstNestedConnection *nc;
@@ -108,6 +120,7 @@ typedef struct _WstRenderer
    float *matrix;
    float alpha;
    bool fastHint;
+   int hints;
    bool needHolePunch;
    std::vector<WstRect> rects;
 } WstRenderer;

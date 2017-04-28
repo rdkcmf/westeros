@@ -557,17 +557,20 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
                sink->windowSizeOverride= true;
             }    
             UNLOCK( sink );
-            
-            if ( sink->shell && sink->surfaceId )
+
+            printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n",
+                    sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+
+            if ( sink->vpcSurface )
             {
                if ( sink->vpcSurface )
                {
                   wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
                }
-                                             
-               printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n", 
-                       sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
-                       
+            }
+
+            if ( sink->shell && sink->surfaceId )
+            {
                if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
                {
                   wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
