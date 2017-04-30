@@ -67,294 +67,287 @@
 #define DEFAULT_SURFACE_WIDTH (0)
 #define DEFAULT_SURFACE_HEIGHT (0)
 
-// assume premultiplied
 static const char *fShaderText =
   "#ifdef GL_ES\n"
   "precision mediump float;\n"
   "#endif\n"
-  "uniform sampler2D s_texture;\n"
-  "uniform float u_alpha;\n"
-  "varying vec2 v_uv;\n"
+  "uniform sampler2D texture;\n"
+  "uniform float alpha;\n"
+  "varying vec2 txv;\n"
   "void main()\n"
   "{\n"
-  "  gl_FragColor = texture2D(s_texture, v_uv) * u_alpha;\n"
+  "  gl_FragColor= texture2D(texture, txv) * alpha;\n"
   "}\n";
 
 static const char *vShaderText =
-  "uniform vec2 u_resolution;\n"
-  "uniform mat4 amymatrix;\n"
+  "uniform vec2 resolution;\n"
+  "uniform mat4 matrix;\n"
   "attribute vec2 pos;\n"
-  "attribute vec2 uv;\n"
-  "varying vec2 v_uv;\n"
+  "attribute vec2 texcoord;\n"
+  "varying vec2 txv;\n"
   "void main()\n"
   "{\n"
-  // map from "pixel coordinates"
-  "  vec4 p = amymatrix * vec4(pos, 0, 1);\n"
-  "  vec4 zeroToOne = p / vec4(u_resolution, u_resolution.x, 1);\n"
-  "  vec4 zeroToTwo = zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
-  "  vec4 clipSpace = zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
-  "  clipSpace.w = 1.0+clipSpace.z;\n"
-  "  gl_Position =  clipSpace * vec4(1, -1, 1, 1);\n"
-  "  v_uv = uv;\n"
+  "  vec4 p= matrix * vec4(pos, 0, 1);\n"
+  "  vec4 zeroToOne= p / vec4(resolution, resolution.x, 1);\n"
+  "  vec4 zeroToTwo= zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
+  "  vec4 clipSpace= zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
+  "  clipSpace.w= 1.0+clipSpace.z;\n"
+  "  gl_Position=  clipSpace * vec4(1, -1, 1, 1);\n"
+  "  txv= texcoord;\n"
   "}\n";
 
 static const char *fShaderTextYUV =
   "#ifdef GL_ES\n"
   "precision mediump float;\n"
   "#endif\n"
-  "uniform sampler2D s_texturey;\n"
-  "uniform sampler2D s_textureuv;\n"
+  "uniform sampler2D texture;\n"
+  "uniform sampler2D textureuv;\n"
   "const vec3 cc_r = vec3(1.0, -0.8604, 1.59580);\n"
   "const vec4 cc_g = vec4(1.0, 0.539815, -0.39173, -0.81290);\n"
   "const vec3 cc_b = vec3(1.0, -1.071, 2.01700);\n"
-  "uniform float u_alpha;\n"
-  "varying vec2 v_texy;\n"
-  "varying vec2 v_texuv;\n"
+  "uniform float alpha;\n"
+  "varying vec2 txv;\n"
+  "varying vec2 txvuv;\n"
   "void main()\n"
   "{\n"
-  "   vec4 y_vec = texture2D(s_texturey, v_texy);\n"
-  "   vec4 c_vec = texture2D(s_textureuv, v_texuv);\n"
-  "   vec4 temp_vec = vec4(y_vec.a, 1.0, c_vec.b, c_vec.a);\n"
-  "   gl_FragColor = vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), u_alpha );\n"
+  "   vec4 y_vec= texture2D(texture, txv);\n"
+  "   vec4 c_vec= texture2D(textureuv, txvuv);\n"
+  "   vec4 temp_vec= vec4(y_vec.a, 1.0, c_vec.b, c_vec.a);\n"
+  "   gl_FragColor= vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), alpha );\n"
   "}\n";
 
 static const char *vShaderTextYUV =
-  "uniform vec2 u_resolution;\n"
-  "uniform mat4 amymatrix;\n"
+  "uniform vec2 resolution;\n"
+  "uniform mat4 matrix;\n"
   "attribute vec2 pos;\n"
-  "attribute vec2 texcoordy;\n"
+  "attribute vec2 texcoord;\n"
   "attribute vec2 texcoorduv;\n"
-  "varying vec2 v_texy;\n"
-  "varying vec2 v_texuv;\n"
+  "varying vec2 txv;\n"
+  "varying vec2 txvuv;\n"
   "void main()\n"
   "{\n"
-  // map from "pixel coordinates"
-  "  vec4 p = amymatrix * vec4(pos, 0, 1);\n"
-  "  vec4 zeroToOne = p / vec4(u_resolution, u_resolution.x, 1);\n"
-  "  vec4 zeroToTwo = zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
-  "  vec4 clipSpace = zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
-  "  clipSpace.w = 1.0+clipSpace.z;\n"
-  "  gl_Position =  clipSpace * vec4(1, -1, 1, 1);\n"
-  "  v_texy = texcoordy;\n"
-  "  v_texuv = texcoorduv;\n"
+  "  vec4 p= matrix * vec4(pos, 0, 1);\n"
+  "  vec4 zeroToOne= p / vec4(resolution, resolution.x, 1);\n"
+  "  vec4 zeroToTwo= zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
+  "  vec4 clipSpace= zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
+  "  clipSpace.w= 1.0+clipSpace.z;\n"
+  "  gl_Position=  clipSpace * vec4(1, -1, 1, 1);\n"
+  "  txv= texcoord;\n"
+  "  txvuv= texcoorduv;\n"
   "}\n";
-  
-static GLuint createShaderProgram(const char* vShaderTxt, const char* fShaderTxt)
+
+typedef struct _WstShader
 {
-  GLuint fragShader, vertShader, program = 0;
-  GLint stat;
-  
-  fragShader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragShader, 1, (const char **) &fShaderTxt, NULL);
-  glCompileShader(fragShader);
-  glGetShaderiv(fragShader, GL_COMPILE_STATUS, &stat);
+   bool isYUV;
+   GLuint fragShader;
+   GLuint vertShader;
+   GLuint program;
+   GLuint attrPos;
+   GLuint attrTexcoord;
+   GLuint attrTexcoorduv;
+   GLint uniRes;
+   GLint uniMatrix;
+   GLint uniAlpha;
+   GLint uniTexture;
+   GLint uniTextureuv;
+} WstShader;
 
-  if (!stat)
-  {
-    WST_TRACE("Error: fragment shader did not compile: %d\nSource:\n%s", glGetError(), fShaderTxt);
-    
-    GLint maxLength = 0;
-    glGetShaderiv(fragShader, GL_INFO_LOG_LENGTH, &maxLength);
-    
-    //The maxLength includes the NULL character
-    std::vector<char> errorLog(maxLength);
-    glGetShaderInfoLog(fragShader, maxLength, &maxLength, &errorLog[0]);    
-    WST_TRACE("%s", &errorLog[0]);
-    
-    glDeleteShader(fragShader);
+static char message[1024];
 
-    return GL_NONE;
-  }
-  
-  vertShader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertShader, 1, (const char **) &vShaderTxt, NULL);
-  glCompileShader(vertShader);
-  glGetShaderiv(vertShader, GL_COMPILE_STATUS, &stat);
+static WstShader* wstRendererEMBCreateShader( bool yuv )
+{
+   WstShader *shaderNew= 0;
+   GLuint type;
+   const char *typeName= 0, *src= 0;
+   GLint shader, status, len;
 
-  if (!stat)
-  {
-    WST_TRACE("vertex shader did not compile: %d\nSource:\n%s", glGetError(), vShaderTxt);
+   shaderNew= (WstShader*)calloc( 1, sizeof(WstShader));
+   if ( !shaderNew )
+   {
+      printf("wstRendererEMBCreateShader: failed to allocate WstShader\n");
+      goto exit;
+   }
 
-    glDeleteShader(fragShader);
-    glDeleteShader(vertShader);
+   shaderNew->isYUV= yuv;
+   shaderNew->program= GL_NONE;
+   shaderNew->fragShader= GL_NONE;
+   shaderNew->vertShader= GL_NONE;
+   shaderNew->uniRes= -1;
+   shaderNew->uniMatrix= -1;
+   shaderNew->uniAlpha= -1;
+   shaderNew->uniTexture= -1;
+   shaderNew->uniTextureuv= -1;
 
-    return GL_NONE;
-  }
-  
-  program = glCreateProgram();
-  glAttachShader(program, fragShader);
-  glAttachShader(program, vertShader);
-  
-  return program;
+   for( int i= 0; i < 2; ++i )
+   {
+      if ( i == 0 )
+      {
+         type= GL_FRAGMENT_SHADER;
+         typeName= "fragment";
+         src= ( yuv ? fShaderTextYUV : fShaderText );
+      }
+      else
+      {
+         type= GL_VERTEX_SHADER;
+         typeName= "vertex";
+         src= ( yuv ? vShaderTextYUV : vShaderText );
+      }
+      shader= glCreateShader(type);
+      if ( !shader )
+      {
+         printf("wstRendererEMBCreateShader: glCreateShader (%s) error: %d\n", typeName, glGetError());
+         goto exit;
+      }
+      glShaderSource(shader, 1, &src, NULL );
+      glCompileShader(shader);
+      glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+      if ( !status )
+      {
+         glGetShaderInfoLog(shader, sizeof(message), &len, message);
+         printf("wstRendererEMBCreateShader: %s shader compile error: (%s)\n", typeName, message);
+         goto exit;
+      }
+      if ( i == 0 )
+         shaderNew->fragShader= shader;
+      else
+         shaderNew->vertShader= shader;
+   }
+
+   shaderNew->program= glCreateProgram();
+   if ( shaderNew->program == GL_NONE )
+   {
+      printf("wstRendererEMBCreateShader: glCreateProgram error %d\n", glGetError());
+      goto exit;
+   }
+
+   glAttachShader(shaderNew->program, shaderNew->fragShader);
+   glAttachShader(shaderNew->program, shaderNew->vertShader);
+
+   shaderNew->attrPos= 0;
+   glBindAttribLocation(shaderNew->program, shaderNew->attrPos, "pos");
+   shaderNew->attrTexcoord= 1;
+   glBindAttribLocation(shaderNew->program, shaderNew->attrTexcoord, "texcoord");
+   if ( yuv )
+   {
+      shaderNew->attrTexcoorduv= 2;
+      glBindAttribLocation(shaderNew->program, shaderNew->attrTexcoorduv, "texcoorduv");
+   }
+
+   glLinkProgram(shaderNew->program);
+   glGetProgramiv(shaderNew->program, GL_LINK_STATUS, &status);
+   if ( !status )
+   {
+      glGetProgramInfoLog(shaderNew->program, sizeof(message), &len, message);
+      printf("wstRendererEMBCreateShader: %s shader link error: (%s)\n", typeName, message);
+      goto exit;
+   }
+
+   shaderNew->uniRes= glGetUniformLocation(shaderNew->program, "resolution");
+   if ( shaderNew->uniRes == -1 )
+   {
+      printf("wstRendererEMBCreateShader: uniformn 'resolution' location error\n");
+      goto exit;
+   }
+
+   shaderNew->uniMatrix= glGetUniformLocation(shaderNew->program, "matrix");
+   if ( shaderNew->uniMatrix == -1 )
+   {
+      printf("wstRendererEMBCreateShader: uniformn 'matrix' location error\n");
+      goto exit;
+   }
+
+   shaderNew->uniAlpha= glGetUniformLocation(shaderNew->program, "alpha");
+   if ( shaderNew->uniAlpha == -1 )
+   {
+      printf("wstRendererEMBCreateShader: uniformn 'alpha' location error\n");
+      goto exit;
+   }
+
+   shaderNew->uniTexture= glGetUniformLocation(shaderNew->program, "texture");
+   if ( shaderNew->uniTexture == -1 )
+   {
+      printf("wstRendererEMBCreateShader: uniformn 'texture' location error\n");
+      goto exit;
+   }
+
+   if ( yuv )
+   {
+      shaderNew->uniTextureuv= glGetUniformLocation(shaderNew->program, "textureuv");
+      if ( shaderNew->uniTextureuv == -1 )
+      {
+         printf("wstRendererEMBCreateShader: uniformn 'textureuv' location error\n");
+         goto exit;
+      }
+   }
+
+exit:
+
+   return shaderNew;
 }
 
-void linkShaderProgram(GLuint program)
+static void wstRendererEMBDestroyShader( WstShader *shader )
 {
-  GLint stat;
-
-  glLinkProgram(program);  /* needed to put attribs into effect */
-  glGetProgramiv(program, GL_LINK_STATUS, &stat);
-  if (!stat)
-  {
-    char log[1000];
-    GLsizei len;
-    glGetProgramInfoLog(program, 1000, &len, log);
-    WST_TRACE("failed to link:%s", log);
-    assert(false);
-  }
+   if ( shader )
+   {
+      if ( shader->program != GL_NONE )
+      {
+         if ( shader->fragShader != GL_NONE )
+         {
+            glDetachShader( shader->program, shader->fragShader );
+            glDeleteShader( shader->fragShader );
+            shader->fragShader= GL_NONE;
+         }
+         if ( shader->vertShader != GL_NONE )
+         {
+            glDetachShader( shader->program, shader->vertShader );
+            glDeleteShader( shader->vertShader );
+            shader->vertShader= GL_NONE;
+         }
+         glDeleteProgram( shader->program );
+         shader->program= GL_NONE;
+      }
+      free( shader );
+   }
 }
 
-class shaderProgram
+static void wstRendererEMBShaderDraw( WstShader *shader,
+                                      int width, int height, float* matrix, float alpha,
+                                      GLuint textureId, GLuint textureUVId,
+                                      int count, const float* vc, const float* txc )
 {
-public:
-  virtual void init(const char* v, const char* f)
-  {
-    mProgram = createShaderProgram(v, f);
-
-    prelink();
-    linkShaderProgram(mProgram);
-    postlink();
-  }
-
-  int getUniformLocation(const char* name)
-  {
-    int l = glGetUniformLocation(mProgram, name);
-    if (l == -1)
+    glUseProgram( shader->program );
+    glUniformMatrix4fv( shader->uniMatrix, 1, GL_FALSE, matrix );
+    glUniform2f( shader->uniRes, width, height );
+    glUniform1f( shader->uniAlpha, alpha );
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture( GL_TEXTURE_2D, textureId );
+    glUniform1i( shader->uniTexture, 1 );
+    if ( shader->isYUV )
     {
-      WST_TRACE("Shader does not define uniform %s.\n", name);
+       glActiveTexture(GL_TEXTURE2);
+       glBindTexture( GL_TEXTURE_2D, textureUVId );
+       glUniform1i( shader->uniTextureuv, 2 );
     }
-    return l;
-  }
-    
-  void use()
-  {
-    glUseProgram(mProgram);
-  }
-
-protected:
-  // Override to do uniform lookups
-  virtual void prelink() {}
-  virtual void postlink() {}
-
-  GLuint mProgram;
-};
-
-class textureShaderProgram: public shaderProgram
-{
-protected:
-  virtual void prelink()
-  {
-    mPosLoc = 0;
-    mUVLoc = 1;
-    glBindAttribLocation(mProgram, mPosLoc, "pos");
-    glBindAttribLocation(mProgram, mUVLoc, "uv");
-  }
-
-  virtual void postlink()
-  {
-    mResolutionLoc = getUniformLocation("u_resolution");
-    mMatrixLoc = getUniformLocation("amymatrix");
-    mAlphaLoc = getUniformLocation("u_alpha");
-    mTextureLoc = getUniformLocation("s_texture");
-  }
-
-public:
-  void draw(int resW, int resH, float* matrix, float alpha, 
-            GLuint textureId, int count,            
-            const float* pos, const float* uv )
-  {
-    use();
-    glUniform2f(mResolutionLoc, resW, resH);
-    glUniformMatrix4fv(mMatrixLoc, 1, GL_FALSE, matrix);
-    glUniform1f(mAlphaLoc, alpha);
-
-    glActiveTexture(GL_TEXTURE1); 
-    glBindTexture(GL_TEXTURE_2D, textureId);
-    glUniform1i(mTextureLoc, 1);
-    glVertexAttribPointer(mPosLoc, 2, GL_FLOAT, GL_FALSE, 0, pos);
-    glVertexAttribPointer(mUVLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
-    glEnableVertexAttribArray(mPosLoc);
-    glEnableVertexAttribArray(mUVLoc);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, count);
-    glDisableVertexAttribArray(mPosLoc);
-    glDisableVertexAttribArray(mUVLoc);
-  }
-
-private:
-  GLint mResolutionLoc;
-  GLint mMatrixLoc;
-
-  GLint mPosLoc;
-  GLint mUVLoc;
-
-  GLint mAlphaLoc;
-
-  GLint mTextureLoc;
-};
-
-class textureShaderYUVProgram: public shaderProgram
-{
-protected:
-  virtual void prelink()
-  {
-    mPosLoc = 0;
-    mTexYLoc = 1;
-    mTexUVLoc = 2;
-    glBindAttribLocation(mProgram, mPosLoc, "pos");
-    glBindAttribLocation(mProgram, mTexYLoc, "texcoordy");
-    glBindAttribLocation(mProgram, mTexUVLoc, "texcoorduv");
-  }
-
-  virtual void postlink()
-  {
-    mResolutionLoc = getUniformLocation("u_resolution");
-    mMatrixLoc = getUniformLocation("amymatrix");
-    mAlphaLoc = getUniformLocation("u_alpha");
-    mTextureYLoc = getUniformLocation("s_texturey");
-    mTextureUVLoc = getUniformLocation("s_textureuv");
-  }
-
-public:
-  void draw(int resW, int resH, float* matrix, float alpha, 
-            GLuint textureYId, GLuint textureUVId, int count,            
-            const float* pos, const float* uv )
-  {
-    use();
-    glUniform2f(mResolutionLoc, resW, resH);
-    glUniformMatrix4fv(mMatrixLoc, 1, GL_FALSE, matrix);
-    glUniform1f(mAlphaLoc, alpha);
-
-    glActiveTexture(GL_TEXTURE1); 
-    glBindTexture(GL_TEXTURE_2D, textureYId);
-    glUniform1i(mTextureYLoc, 1);
-    glActiveTexture(GL_TEXTURE2); 
-    glBindTexture(GL_TEXTURE_2D, textureUVId);
-    glUniform1i(mTextureUVLoc, 2);
-    glVertexAttribPointer(mPosLoc, 2, GL_FLOAT, GL_FALSE, 0, pos);
-    glVertexAttribPointer(mTexYLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
-    glVertexAttribPointer(mTexUVLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
-    glEnableVertexAttribArray(mPosLoc);
-    glEnableVertexAttribArray(mTexYLoc);
-    glEnableVertexAttribArray(mTexUVLoc);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, count);
-    glDisableVertexAttribArray(mPosLoc);
-    glDisableVertexAttribArray(mTexYLoc);
-    glDisableVertexAttribArray(mTexUVLoc);
-  }
-
-private:
-  GLint mResolutionLoc;
-  GLint mMatrixLoc;
-
-  GLint mPosLoc;
-  GLint mTexYLoc;
-  GLint mTexUVLoc;
-
-  GLint mAlphaLoc;
-
-  GLint mTextureYLoc;
-  GLint mTextureUVLoc;
-};
+    glVertexAttribPointer( shader->attrPos, 2, GL_FLOAT, GL_FALSE, 0, vc );
+    glVertexAttribPointer( shader->attrTexcoord, 2, GL_FLOAT, GL_FALSE, 0, txc );
+    if ( shader->isYUV )
+    {
+       glVertexAttribPointer( shader->attrTexcoorduv, 2, GL_FLOAT, GL_FALSE, 0, txc );
+    }
+    glEnableVertexAttribArray( shader->attrPos );
+    glEnableVertexAttribArray( shader->attrTexcoord );
+    if ( shader->isYUV )
+    {
+       glEnableVertexAttribArray( shader->attrTexcoorduv );
+    }
+    glDrawArrays( GL_TRIANGLE_STRIP, 0, count );
+    glDisableVertexAttribArray( shader->attrPos );
+    glDisableVertexAttribArray( shader->attrTexcoord );
+    if ( shader->isYUV )
+    {
+       glDisableVertexAttribArray( shader->attrTexcoorduv );
+    }
+}
 
 #define MAX_TEXTURES (2)
 
@@ -422,8 +415,8 @@ typedef struct _WstRendererEMB
    PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL;
    #endif
 
-   textureShaderProgram *textureShader;
-   textureShaderYUVProgram *textureShaderYUV;
+   WstShader *textureShader;
+   WstShader *textureShaderYUV;
    
    std::vector<WstRenderSurface*> surfaces;
    std::vector<GLuint> deadTextures;
@@ -568,15 +561,15 @@ static void wstRendererEMBDestroy( WstRendererEMB *renderer )
          renderer->haveWaylandEGL= false;
       }
       #endif
-      
+
       if ( renderer->textureShader )
       {
-         delete renderer->textureShader;
+         wstRendererEMBDestroyShader( renderer->textureShader );
          renderer->textureShader= 0;
       }
       if ( renderer->textureShaderYUV )
       {
-         delete renderer->textureShaderYUV;
+         wstRendererEMBDestroyShader( renderer->textureShaderYUV );;
          renderer->textureShaderYUV= 0;
       }
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
@@ -1328,26 +1321,29 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
 
    if ( surface->textureCount == 1 )
    {
-      renderer->textureShader->draw( resW,
-                                     resH,
-                                     (float*)matrix,
-                                     surface->opacity,
-                                     surface->textureId[0],
-                                     4,
-                                     (const float*)verts, 
-                                     (const float*)uv );
+      wstRendererEMBShaderDraw( renderer->textureShader,
+                                resW,
+                                resH,
+                                (float*)matrix,
+                                surface->opacity,
+                                surface->textureId[0],
+                                GL_NONE,
+                                4,
+                                (const float*)verts,
+                                (const float*)uv );
    }
    else
    {
-      renderer->textureShaderYUV->draw( renderer->renderer->outputWidth,
-                                        renderer->renderer->outputHeight,
-                                        (float*)matrix,
-                                        surface->opacity,
-                                        surface->textureId[0],
-                                        surface->textureId[1],
-                                        4,
-                                        (const float*)verts, 
-                                        (const float*)uv );
+      wstRendererEMBShaderDraw( renderer->textureShaderYUV,
+                                resW,
+                                resH,
+                                (float*)matrix,
+                                surface->opacity,
+                                surface->textureId[0],
+                                surface->textureId[1],
+                                4,
+                                (const float*)verts,
+                                (const float*)uv );
    }
 }
 
@@ -1433,10 +1429,8 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
 
    if ( !rendererEMB->textureShader )
    {
-      rendererEMB->textureShader= new textureShaderProgram();
-      rendererEMB->textureShader->init(vShaderText,fShaderText);
-      rendererEMB->textureShaderYUV= new textureShaderYUVProgram();
-      rendererEMB->textureShaderYUV->init(vShaderTextYUV,fShaderTextYUV);
+      rendererEMB->textureShader= wstRendererEMBCreateShader( false );
+      rendererEMB->textureShaderYUV= wstRendererEMBCreateShader( true );
       rendererEMB->eglContext= eglGetCurrentContext();
    }
 
