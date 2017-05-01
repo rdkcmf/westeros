@@ -63,77 +63,97 @@
 
 #define WST_UNUSED( n ) ((void)n)
 
-#define ZNEAR        (0.0f)
-#define ZFAR         (1000000.0f)
-#define ZSTART       (0.1f)
-#define ZINC         (0.1f)
-#define MAX_LOG_SIZE (1024)
-
-#define TCM11 (0)
-#define TCM12 (1)
-#define TCM21 (2)
-#define TCM22 (3)
-#define TCMDX (4)
-#define TCMDY (5)
-
-#define TCM_MAPX( x, y, t ) ((x)*(t)[TCM11]+(y)*(t)[TCM21]+(t)[TCMDX])
-#define TCM_MAPY( x, y, t ) ((x)*(t)[TCM12]+(y)*(t)[TCM22]+(t)[TCMDY])
-
 #define DEFAULT_SURFACE_WIDTH (0)
 #define DEFAULT_SURFACE_HEIGHT (0)
 
+static const char *fShaderText =
+  "#ifdef GL_ES\n"
+  "precision mediump float;\n"
+  "#endif\n"
+  "uniform sampler2D texture;\n"
+  "uniform float alpha;\n"
+  "varying vec2 txv;\n"
+  "void main()\n"
+  "{\n"
+  "  gl_FragColor= texture2D(texture, txv) * alpha;\n"
+  "}\n";
 
-typedef enum _WstShaderType
-{
-   WstShaderType_texture,
-   WstShaderType_textureYUV,
-   WstShaderType_fill,
-   WstShaderType_alphaText,
-} WstShaderType;
+static const char *vShaderText =
+  "uniform vec2 resolution;\n"
+  "uniform mat4 matrix;\n"
+  "attribute vec2 pos;\n"
+  "attribute vec2 texcoord;\n"
+  "varying vec2 txv;\n"
+  "void main()\n"
+  "{\n"
+  "  vec4 p= matrix * vec4(pos, 0, 1);\n"
+  "  vec4 zeroToOne= p / vec4(resolution, resolution.x, 1);\n"
+  "  vec4 zeroToTwo= zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
+  "  vec4 clipSpace= zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
+  "  clipSpace.w= 1.0+clipSpace.z;\n"
+  "  gl_Position=  clipSpace * vec4(1, -1, 1, 1);\n"
+  "  txv= texcoord;\n"
+  "}\n";
 
-typedef struct _WstShaderClassBits
-{
-   unsigned int type:4;
-   unsigned int opacity:1;
-   unsigned int unused:3;
-   int maskCount:24;
-} WstShaderClassBits;
+static const char *fShaderTextYUV =
+  "#ifdef GL_ES\n"
+  "precision mediump float;\n"
+  "#endif\n"
+  "uniform sampler2D texture;\n"
+  "uniform sampler2D textureuv;\n"
+  "const vec3 cc_r = vec3(1.0, -0.8604, 1.59580);\n"
+  "const vec4 cc_g = vec4(1.0, 0.539815, -0.39173, -0.81290);\n"
+  "const vec3 cc_b = vec3(1.0, -1.071, 2.01700);\n"
+  "uniform float alpha;\n"
+  "varying vec2 txv;\n"
+  "varying vec2 txvuv;\n"
+  "void main()\n"
+  "{\n"
+  "   vec4 y_vec= texture2D(texture, txv);\n"
+  "   vec4 c_vec= texture2D(textureuv, txvuv);\n"
+  "   vec4 temp_vec= vec4(y_vec.a, 1.0, c_vec.b, c_vec.a);\n"
+  "   gl_FragColor= vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), alpha );\n"
+  "}\n";
 
-typedef union _WstShaderClass
-{
-   WstShaderClassBits bits;
-   int id;
-} WstShaderClass;
+static const char *vShaderTextYUV =
+  "uniform vec2 resolution;\n"
+  "uniform mat4 matrix;\n"
+  "attribute vec2 pos;\n"
+  "attribute vec2 texcoord;\n"
+  "attribute vec2 texcoorduv;\n"
+  "varying vec2 txv;\n"
+  "varying vec2 txvuv;\n"
+  "void main()\n"
+  "{\n"
+  "  vec4 p= matrix * vec4(pos, 0, 1);\n"
+  "  vec4 zeroToOne= p / vec4(resolution, resolution.x, 1);\n"
+  "  vec4 zeroToTwo= zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
+  "  vec4 clipSpace= zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
+  "  clipSpace.w= 1.0+clipSpace.z;\n"
+  "  gl_Position=  clipSpace * vec4(1, -1, 1, 1);\n"
+  "  txv= texcoord;\n"
+  "  txvuv= texcoorduv;\n"
+  "}\n";
 
-#define MAX_TEXTURES (2)
-
-#define WST_MAX_MASK 16
 typedef struct _WstShader
 {
-   WstShaderClass shaderClass;
-   GLuint programId;
-   GLuint vertexShaderId;
-   GLuint fragmentShaderId;
-   GLuint mvpLocation;
-   GLuint vertexLocation;
-   GLuint textureLocation[MAX_TEXTURES];
-   GLuint fillColorLocation;
-   GLuint opacityLocation;
-   GLuint textureUnit0;
-   GLuint textureUnit1;
-   GLuint alphaTextColorLocation;
-   GLuint maskAttribLocation[WST_MAX_MASK];   
-   GLuint maskUniformLocation[WST_MAX_MASK];   
+   bool isYUV;
+   GLuint fragShader;
+   GLuint vertShader;
+   GLuint program;
+   GLuint attrPos;
+   GLuint attrTexcoord;
+   GLuint attrTexcoorduv;
+   GLint uniRes;
+   GLint uniMatrix;
+   GLint uniAlpha;
+   GLint uniTexture;
+   GLint uniTextureuv;
 } WstShader;
 
-typedef struct _WstRenderContext
-{
-    float opacity;
-    float z;
-    const float *transform;
-    int cpuClip;
-    GLint clip[4];
-} WstRenderContext;
+static char message[1024];
+
+#define MAX_TEXTURES (2)
 
 struct _WstRenderSurface
 {
@@ -161,23 +181,8 @@ struct _WstRenderSurface
    float opacity;
    float zorder;
 
-   int onScreen;
    bool sizeOverride;
-
-   int vertexLocation;
-   int textureLocation[MAX_TEXTURES];
-
-   float transform[6];
-
-   int clip[4];
-
-   int vertexCoordsDirty;
-   int texCoordsDirty;
    bool invertedY;
-
-   GLfloat vertexCoords[4*2];
-   GLfloat textureCoords[4*2];
-     
 };
 
 typedef struct _WstRendererGL
@@ -185,18 +190,8 @@ typedef struct _WstRendererGL
    WstRenderer *renderer;
    int outputWidth;
    int outputHeight;
-   int noScreenClip;
-   GLfloat projection[16];
-   GLfloat modelview[16];
-   GLfloat mvp[16];
-   WstShader nullShader;
-   int currentShaderClass;
-   WstShader *currentShader;
-   int shaderCacheSize;
-   GLint maxTextureUnits;
-   GLuint *activeTextureId;
-   WstShader **shaderCache;
-   WstRenderContext renderCtx;
+   WstShader *textureShader;
+   WstShader *textureShaderYUV;
 
    void *nativeWindow;
 
@@ -227,8 +222,8 @@ typedef struct _WstRendererGL
 
 static WstRendererGL* wstRendererGLCreate( int width, int height );
 static void wstRendererGLDestroy( WstRendererGL *renderer );
-static WstRenderSurface *wstRenderGLCreateSurface(WstRendererGL *renderer);
-static void wstRenderGLDestroySurface( WstRendererGL *renderer, WstRenderSurface *surface );
+static WstRenderSurface *wstRendererGLCreateSurface(WstRendererGL *renderer);
+static void wstRendererGLDestroySurface( WstRendererGL *renderer, WstRenderSurface *surface );
 static void wstRendererGLFlushSurface( WstRendererGL *renderer, WstRenderSurface *surface );
 static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface *surface, struct wl_resource *resource );
 #if defined (WESTEROS_HAVE_WAYLAND_EGL)
@@ -243,19 +238,15 @@ static void wstRendererGLCommitDispmanx( WstRendererGL *rendererGL, WstRenderSur
                                          DISPMANX_RESOURCE_HANDLE_T dispResource,
                                          EGLint format, int bufferWidth, int bufferHeight );
 #endif                                         
-static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext *rctx, WstRenderSurface *surf );
-static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext *rctx, WstRenderSurface *surf );
+static void wstRendererGLRenderSurface( WstRendererGL *renderer, WstRenderSurface *surface );
 
-static bool wstRenderGLSetupEGL( WstRendererGL *renderer );
-static void wstMatrixIdentity(float matrix[16]);
-static void wstMatrixMultMatrix(float matrix[16], float in1[16], float in2[16]);
-static void wstMatrixTranslate(float matrix[16], float tx, float ty, float tz);
-static void wstMatrixOrtho(float matrix[16], float left, float right, float bottom, float top, float near, float far);
-static void wstSetCurrentShader( WstRendererGL *renderer, int shaderClassId );
-static WstShader* wstGetShaderForClass( WstRendererGL *renderer, int shaderClassId );
-static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass );
-static void wstDestroyShader( WstRendererGL *renderer, WstShader *shader );
-static unsigned int wstCreateGLShader(const char *pShaderSource, bool isVertexShader );
+static bool wstRendererGLSetupEGL( WstRendererGL *renderer );
+static void wstRendererGLDestroyShader( WstShader *shader );
+static WstShader* wstRendererGLCreateShader( bool yuv );
+static void wstRendererGLShaderDraw( WstShader *shader,
+                                      int width, int height, float* matrix, float alpha,
+                                      GLuint textureId, GLuint textureUVId,
+                                      int count, const float* vc, const float* txc );
 
 static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
 {
@@ -266,15 +257,13 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
    {
       rendererGL->outputWidth= renderer->outputWidth;
       rendererGL->outputHeight= renderer->outputHeight;
-      
-      rendererGL->currentShaderClass= -1;
 
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       rendererGL->glCtx= WstGLInit();
       #endif
       
       rendererGL->renderer= renderer;
-      wstRenderGLSetupEGL( rendererGL );
+      wstRendererGLSetupEGL( rendererGL );
 
       rendererGL->eglCreateImageKHR= (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
       printf( "eglCreateImageKHR %p\n", rendererGL->eglCreateImageKHR);
@@ -331,54 +320,6 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
       }
       printf("have wayland-egl: %d\n", rendererGL->haveWaylandEGL );
       #endif
-    
-      // Get the number of texture units
-      glGetIntegerv( GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &rendererGL->maxTextureUnits );
-      WST_TRACE( "WstRendererGL: WstRendererGLCreate: maxTextureUnits=%d\n", rendererGL->maxTextureUnits );
-
-      rendererGL->shaderCacheSize= 4 *                // texture + textureYUV + fill + alphaText
-                                   2 *                // opacity on/off                        
-                                   rendererGL->maxTextureUnits;
-      rendererGL->shaderCache= (WstShader**)calloc( 1, rendererGL->shaderCacheSize*sizeof(WstShader*) );
-      WST_TRACE( "WstRendererGL: WstRendererGLCreate: allocate cache for %d shader classes\n", rendererGL->shaderCacheSize );
-    
-      // Initialize null shader
-      rendererGL->nullShader.shaderClass.id= -1;
-      rendererGL->nullShader.programId= GL_NONE;
-      rendererGL->nullShader.vertexShaderId= GL_NONE;
-      rendererGL->nullShader.fragmentShaderId= GL_NONE;
-      rendererGL->nullShader.mvpLocation= -1;
-      rendererGL->nullShader.vertexLocation= -1;
-      rendererGL->nullShader.textureLocation[0]= -1;
-      rendererGL->nullShader.textureLocation[1]= -1;
-      rendererGL->nullShader.fillColorLocation= -1;
-      rendererGL->nullShader.opacityLocation= -1;
-      for( int i= 0; i < WST_MAX_MASK; ++i )
-      {
-         rendererGL->nullShader.maskAttribLocation[i]= -1;
-         rendererGL->nullShader.maskUniformLocation[i]= -1;
-      }
-
-      rendererGL->activeTextureId= (GLuint*)malloc( rendererGL->maxTextureUnits*sizeof(GLuint) );
-      for( int i= 0; i < rendererGL->maxTextureUnits; ++i )
-      {
-         rendererGL->activeTextureId[i]= GL_NONE;
-      }
-
-      rendererGL->currentShader= &rendererGL->nullShader;
-
-      wstMatrixIdentity(rendererGL->modelview);
-      wstMatrixTranslate(rendererGL->modelview, -rendererGL->outputWidth, -rendererGL->outputHeight, 0);
-      wstMatrixIdentity(rendererGL->projection);
-      wstMatrixOrtho( rendererGL->projection, 
-                      0,                          //left
-                      rendererGL->outputWidth,    //right
-                      rendererGL->outputHeight,   //bottom
-                      0,                          //top
-                      ZNEAR,                      //near
-                      ZFAR );                     //far
-
-      wstMatrixMultMatrix(rendererGL->mvp, rendererGL->projection, rendererGL->modelview);
    }
    
    return rendererGL;
@@ -395,28 +336,16 @@ static void wstRendererGLDestroy( WstRendererGL *renderer )
          renderer->haveWaylandEGL= false;
       }
       #endif
-      
-      if ( renderer->shaderCache )
-      {
-         WstShader *shader;
 
-         for( int i= 0; i < renderer->shaderCacheSize; ++i )
-         {
-            shader= renderer->shaderCache[i];
-            if ( shader )
-            {
-               wstDestroyShader( renderer, shader );
-               renderer->shaderCache[i]= 0;
-            }
-       
-         }
-         free( renderer->shaderCache );
-         renderer->shaderCache= 0;
-      }
-      if (renderer->activeTextureId)
+      if ( renderer->textureShader )
       {
-         free(renderer->activeTextureId);
-         renderer->activeTextureId = 0;
+         wstRendererGLDestroyShader( renderer->textureShader );
+         renderer->textureShader= 0;
+      }
+      if ( renderer->textureShaderYUV )
+      {
+         wstRendererGLDestroyShader( renderer->textureShaderYUV );
+         renderer->textureShaderYUV= 0;
       }
       
       if ( renderer->eglSurface )
@@ -453,7 +382,7 @@ static void wstRendererGLDestroy( WstRendererGL *renderer )
    }
 }
 
-static WstRenderSurface *wstRenderGLCreateSurface(WstRendererGL *renderer)
+static WstRenderSurface *wstRendererGLCreateSurface(WstRendererGL *renderer)
 {
     WstRenderSurface *surface= 0;
 
@@ -471,17 +400,12 @@ static WstRenderSurface *wstRenderGLCreateSurface(WstRendererGL *renderer)
         surface->visible= true;
         surface->opacity= 1.0;
         surface->zorder= 0.5;
-        
-        wstMatrixIdentity(surface->transform);
-      
-        surface->vertexCoordsDirty= 1;
-        surface->texCoordsDirty= 1;
     }
    
     return surface;
 }
 
-static void wstRenderGLDestroySurface( WstRendererGL *renderer, WstRenderSurface *surface )
+static void wstRendererGLDestroySurface( WstRendererGL *renderer, WstRenderSurface *surface )
 {
     WST_UNUSED(renderer);    
     if ( surface )
@@ -675,7 +599,6 @@ static void wstRendererGLCommitShm( WstRendererGL *rendererGL, WstRenderSurface 
          {
             free( surface->mem );
             surface->mem= 0;
-            surface->vertexCoordsDirty= 1;
          }
          if ( !surface->mem )
          {
@@ -777,7 +700,6 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
    {
       surface->bufferWidth= bufferWidth;
       surface->bufferHeight= bufferHeight;
-      surface->vertexCoordsDirty= 1;
    }
 
    for( int i= 0; i < MAX_TEXTURES; ++i )
@@ -934,7 +856,6 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
             {
                surface->bufferWidth= bufferWidth;
                surface->bufferHeight= bufferHeight;
-               surface->vertexCoordsDirty= 1;
                resize= true;
             }
             
@@ -1016,7 +937,6 @@ static void wstRendererGLCommitDispmanx( WstRendererGL *rendererGL, WstRenderSur
                {
                   free( surface->mem );
                   surface->mem= 0;
-                  surface->vertexCoordsDirty= 1;
                }
                if ( !surface->mem )
                {
@@ -1070,343 +990,125 @@ static void wstRendererGLCommitDispmanx( WstRendererGL *rendererGL, WstRenderSur
 }
 #endif
 
-static void wstRenderGLPrepareSurface( WstRendererGL *renderer, WstRenderContext *rctx, WstRenderSurface *surf )
+static void wstRendererGLRenderSurface( WstRendererGL *renderer, WstRenderSurface *surface )
 {
-    GLfloat *vertexCoords;
-    const float *transform= rctx->transform;
-    float *zlevel= &rctx->z;
-    float clipLeft, clipRight, clipTop, clipBottom;
-    float txmin, txmax, tymin, tymax;
-    int vcupdate= 0;
-    int tcupdate= 0;
-    float z= *zlevel;
-    WstShaderClass itemShaderClass;
-
-    if ( surf->visible )
-    {
-       *zlevel= z + ZINC;
-
-       clipLeft=  rctx->clip[0];
-       clipRight= clipLeft+rctx->clip[2];
-       clipTop= rctx->clip[1];
-       clipBottom= clipTop+rctx->clip[3];
-
-       if ( (surf->clip[0] != rctx->clip[0]) ||
-            (surf->clip[1] != rctx->clip[1]) ||
-            (surf->clip[2] != rctx->clip[2]) ||
-            (surf->clip[3] != rctx->clip[3]) )
-       {
-          surf->clip[0]= rctx->clip[0];
-          surf->clip[1]= rctx->clip[1];
-          surf->clip[2]= rctx->clip[2];
-          surf->clip[3]= rctx->clip[3];
-          
-          vcupdate= 1;
-          tcupdate= 1;
-       }
+   if ( (surface->textureId[0] == GL_NONE) || surface->memDirty )
+   {
+      for ( int i= 0; i < surface->textureCount; ++i )
+      {
+         if ( surface->textureId[i] == GL_NONE )
+         {
+            glGenTextures(1, &surface->textureId[i] );
+         }
        
-       if ( (surf->textureId[0] == GL_NONE) || surf->memDirty )
-       {
-           for ( int i= 0; i < surf->textureCount; ++i )
-           {
-              if ( surf->textureId[i] == GL_NONE )
-              {
-                 glGenTextures(1, &surf->textureId[i] );
-                 WST_TRACE("WstPrepareSurface: surf %p surface textureId=%d\n", surf, surf->textureId[i] );
-              }
-             
-              /* Bind the egl image as a texture */
-              glActiveTexture(GL_TEXTURE0+i);
-              glBindTexture(GL_TEXTURE_2D, surf->textureId[i] );
-              #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
-              if ( surf->eglImage[i] )
-              {
-                 renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, surf->eglImage[i]);
-              }
-              else
-              #endif
-              if ( i == 0 )
-              {
-                 if ( surf->mem )
-                 {
-                    glTexImage2D( GL_TEXTURE_2D,
-                                  0, //level
-                                  surf->memFormatGL, //internalFormat
-                                  surf->memWidth,
-                                  surf->memHeight,
-                                  0, // border
-                                  surf->memFormatGL, //format
-                                  surf->memType,
-                                  surf->mem );
-                    surf->memDirty= false;
-                 }
-              }
-              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-              glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-              glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-              WST_TRACE("WstPrepareSurface: after binding texture: glGetError=%X\n", glGetError() );
-           }
-       }
+         /* Bind the egl image as a texture */
+         glActiveTexture(GL_TEXTURE1+i);
+         glBindTexture(GL_TEXTURE_2D, surface->textureId[i] );
+         #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
+         if ( surface->eglImage[i] && renderer->eglContext )
+         {
+            renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, surface->eglImage[i]);
+         }
+         else
+         #endif
+         if ( i == 0 )
+         {
+            if ( surface->mem )
+            {
+               glTexImage2D( GL_TEXTURE_2D,
+                             0, //level
+                             surface->memFormatGL, //internalFormat
+                             surface->memWidth,
+                             surface->memHeight,
+                             0, // border
+                             surface->memFormatGL, //format
+                             surface->memType,
+                             surface->mem );
+               surface->memDirty= false;
+            }
+         }
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      }
+   }
 
-       if ( vcupdate || tcupdate || surf->vertexCoordsDirty )
-       {
-           if ( !surf->sizeOverride )
-           {
-              surf->width= surf->bufferWidth;
-              surf->height= surf->bufferHeight;
-           }
-                      
-           itemShaderClass.bits.type= (surf->textureCount == 1) ? WstShaderType_texture : WstShaderType_textureYUV;
-           itemShaderClass.bits.opacity= 0;
-           itemShaderClass.bits.unused= 0;
-           itemShaderClass.bits.maskCount= 0;
+   if ( !surface->sizeOverride )
+   {
+      surface->width= surface->bufferWidth;
+      surface->height= surface->bufferHeight;
+   }
 
-           if ( renderer->currentShaderClass != itemShaderClass.id )
-           {
-               wstSetCurrentShader( renderer, itemShaderClass.id );
-           }
-           
-           surf->vertexLocation= renderer->currentShader->vertexLocation;
-           WST_TRACE("surface vertexLocation %d\n", surf->vertexLocation);
-       }
-       
-       vertexCoords= surf->vertexCoords;
+   const float verts[4][2] =
+   {
+      { surface->x, surface->y },
+      { surface->x+surface->width, surface->y },
+      { surface->x,  surface->y+surface->height },
+      { surface->x+surface->width, surface->y+surface->height }
+   };
 
-       if ( surf->vertexCoordsDirty ) 
-       {
-           vcupdate= 1;
-           tcupdate= 1;
-       }
+   const float uvNormal[4][2] =
+   {
+      { 0,  0 },
+      { 1,  0 },
+      { 0,  1 },
+      { 1,  1 }
+   };
 
-       txmin= tymin= 0.0f;
-       txmax= tymax= 1.0f;            
+   const float uvYInverted[4][2] =
+   {
+      { 0,  1 },
+      { 1,  1 },
+      { 0,  0 },
+      { 1,  0 }
+   };
 
-       if ( vcupdate )
-       {
-           float x1, x2, x3, x4, y1, y2, y3, y4, x5, y5;
+   const float identityMatrix[4][4] =
+   {
+      {1, 0, 0, 0},
+      {0, 1, 0, 0},
+      {0, 0, 1, 0},
+      {0, 0, 0, 1}
+   };
 
-           x1= TCM_MAPX(surf->x,surf->y,transform);
-           y1= TCM_MAPY(surf->x,surf->y,transform);
-           x2= TCM_MAPX(surf->x+surf->width,surf->y,transform);
-           y2= TCM_MAPY(surf->x+surf->width,surf->y,transform);
-           x3= TCM_MAPX(surf->x+surf->width,surf->y+surf->height,transform);
-           y3= TCM_MAPY(surf->x+surf->width,surf->y+surf->height,transform);
-           x4= TCM_MAPX(surf->x,surf->y+surf->height,transform);
-           y4= TCM_MAPY(surf->x,surf->y+surf->height,transform);
+   const float *uv= surface->invertedY ? (const float*)uvYInverted : (const float*)uvNormal;
 
-           x5 = TCM_MAPX(surf->x + surf->width / 2,surf->y+surf->height / 2,transform);
-           y5 = TCM_MAPY(surf->x + surf->width / 2,surf->y+surf->height / 2,transform);
+   float *matrix= (float*)identityMatrix;
 
-           bool isOnScreen = false;
+   int resW, resH;
+   GLint viewport[4];
 
-           if ( rctx->cpuClip )
-           {
-               if ( rctx->clip[0] > clipLeft ) clipLeft= rctx->clip[0];
-               if ( rctx->clip[1] > clipTop ) clipTop= rctx->clip[1];
-               if ( rctx->clip[0]+rctx->clip[2] < clipRight ) clipRight= rctx->clip[0]+rctx->clip[2];
-               if ( rctx->clip[1]+rctx->clip[3] < clipBottom ) clipBottom= rctx->clip[1]+rctx->clip[3];
-           }
+   resW= renderer->renderer->outputWidth;
+   resH= renderer->renderer->outputHeight;
 
-           if (renderer->noScreenClip)
-           {
-               isOnScreen = true;
-           }
-           else
-           {                                    
-               if ((int)x1 == (int)x4 && (int)x2 == (int)x3)//rectangle
-               {
-                   float left = x1;
-                   float right = x3;
-                   float top = y1;
-                   float bottom = y3;
-
-                   if(right < clipLeft || left > clipRight || bottom < clipTop || top > clipBottom)
-                       isOnScreen = false;
-                   else 
-                       isOnScreen = true;
-               }	
-               else 
-               {
-                   isOnScreen = (
-                          (((x1 >= clipLeft) && (y1 >= clipTop)) && ((x1 < clipRight) && (y1 < clipBottom))) ||
-                          (((x2 >= clipLeft) && (y2 >= clipTop)) && ((x2 < clipRight) && (y2 < clipBottom))) ||
-                          (((x3 >= clipLeft) && (y3 >= clipTop)) && ((x3 < clipRight) && (y3 < clipBottom))) ||
-                          (((x4 >= clipLeft) && (y4 >= clipTop)) && ((x4 < clipRight) && (y4 < clipBottom))) ||
-                          (((x5 >= clipLeft) && (y5 >= clipTop)) && ((x5 < clipRight) && (y5 < clipBottom)))
-                          );
-               }
-           }
-
-           if (isOnScreen)
-           {
-               surf->onScreen= 1;
-                     
-               if ( rctx->cpuClip )
-               {
-                   float ox1= x1;
-                   float oy1= y1;
-                   float ow= x3-x1;
-                   float oh= y3-y1;
-
-                   if ( x1 < clipLeft )
-                   {
-                       if ( ow ) txmin= (clipLeft-ox1)/ow;
-                       x1= clipLeft;
-                   }
-                   if ( x2 > clipRight ) x2= clipRight;                      
-                   if ( x3 > clipRight )
-                   {
-                       if ( ow ) txmax= (clipRight-ox1)/ow;
-                       x3= clipRight;
-                   }
-                   if ( x4 < clipLeft ) x4= clipLeft;                      
-                   if ( y1 < clipTop )
-                   {
-                       if ( oh ) tymin= (clipTop-oy1)/oh;
-                       y1= clipTop;
-                   }
-                   if ( y2 < clipTop ) y2= clipTop;                      
-                   if ( y3 > clipBottom )
-                   {
-                       if ( oh ) tymax= (clipBottom-oy1)/oh;
-                       y3= clipBottom;
-                   }
-                   if ( y4 > clipBottom ) y4= clipBottom;
-               }
-
-               vertexCoords[0]= x1;
-               vertexCoords[1]= y1;
-               vertexCoords[2]= x2;
-               vertexCoords[3]= y2;
-               vertexCoords[4]= x3;
-               vertexCoords[5]= y3;
-               vertexCoords[6]= x4;
-               vertexCoords[7]= y4;
-
-               surf->vertexCoordsDirty= 0;
-           }
-           else
-           {
-               surf->onScreen= 0;
-           }
-       }
-       
-       if ( tcupdate )
-       {
-           GLfloat *textureCoords;
-
-           for ( int i= 0; i < surf->textureCount; ++i )
-           {
-              surf->textureLocation[i]= renderer->currentShader->textureLocation[i];
-              WST_TRACE("surf textureLocation[%d] %d\n", i, surf->textureLocation[i]);
-           }
-
-           textureCoords= surf->textureCoords;
-
-           if ( surf->invertedY )
-           {
-              tymin= 1.0f-tymin;
-              tymax= 1.0f-tymax;
-           }
-           
-           textureCoords[0]= txmin;
-           textureCoords[1]= tymin;
-           textureCoords[2]= txmax;
-           textureCoords[3]= tymin;
-           textureCoords[4]= txmax;
-           textureCoords[5]= tymax;
-           textureCoords[6]= txmin;	
-           textureCoords[7]= tymax;
-       }
-    }
+   if ( surface->textureCount == 1 )
+   {
+      wstRendererGLShaderDraw( renderer->textureShader,
+                               resW,
+                               resH,
+                               (float*)matrix,
+                               surface->opacity,
+                               surface->textureId[0],
+                               GL_NONE,
+                               4,
+                               (const float*)verts,
+                               (const float*)uv );
+   }
+   else
+   {
+      wstRendererGLShaderDraw( renderer->textureShaderYUV,
+                               resW,
+                               resH,
+                               (float*)matrix,
+                               surface->opacity,
+                               surface->textureId[0],
+                               surface->textureId[1],
+                               4,
+                               (const float*)verts,
+                               (const float*)uv );
+   }
 }
-
-static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext *rctx, WstRenderSurface *surf )
-{
-    WstShaderClass itemShaderClass;
-    float opacity= rctx->opacity * surf->opacity;
-    const float *transform= rctx->transform;
-    int enableBlend= 1;
-
-    if ( surf->visible )
-    {
-       WST_TRACE( "WstRenderSurface: surface %p onScreen %d", surf, surf->onScreen );
-       if ( surf->onScreen || renderer->noScreenClip )
-       {
-           itemShaderClass.bits.type= (surf->textureCount == 1) ? WstShaderType_texture : WstShaderType_textureYUV;
-           itemShaderClass.bits.opacity= (opacity < 0.99f) ? 1 : 0;
-           itemShaderClass.bits.unused= 0;
-           itemShaderClass.bits.maskCount= 0;
-
-           if ( renderer->currentShaderClass != itemShaderClass.id )
-           {
-              WST_TRACE("WstRenderSurface: set current shader to class %d", itemShaderClass.id);
-              wstSetCurrentShader( renderer, itemShaderClass.id );
-           }
-           if ( itemShaderClass.bits.opacity )
-           {
-              enableBlend= 1;
-              WST_TRACE("WstRenderSurface: setting shader opacity to %f", opacity);
-              glUniform1f( renderer->currentShader->opacityLocation, opacity );
-           }
-           WST_TRACE("WstRenderSurface: vertices: (%f,%f), (%f,%f), (%f,%f), (%f,%f)",
-                      surf->vertexCoords[0], surf->vertexCoords[1], 
-                      surf->vertexCoords[2], surf->vertexCoords[3], 
-                      surf->vertexCoords[4], surf->vertexCoords[5], 
-                      surf->vertexCoords[6], surf->vertexCoords[7] );
-           glVertexAttribPointer(surf->vertexLocation, 2, GL_FLOAT, GL_FALSE, 0, surf->vertexCoords);
-           WST_TRACE("WstRenderSurface: enable vertex attrib array %d", surf->vertexLocation);
-           glEnableVertexAttribArray(surf->vertexLocation);
-           WST_TRACE("WstRenderSurface: texcoords: (%f,%f), (%f,%f), (%f,%f), (%f,%f)",
-                      surf->textureCoords[0], surf->textureCoords[1], 
-                      surf->textureCoords[2], surf->textureCoords[3], 
-                      surf->textureCoords[4], surf->textureCoords[5], 
-                      surf->textureCoords[6], surf->textureCoords[7] );
-           glVertexAttribPointer(surf->textureLocation[0], 2, GL_FLOAT, GL_FALSE, 0, surf->textureCoords);
-           WST_TRACE("WstRenderSurface: enable texture attrib array %d", surf->textureLocation[0]);
-           glEnableVertexAttribArray(surf->textureLocation[0]);
-
-           glActiveTexture(GL_TEXTURE0);
-           glUniform1i( renderer->currentShader->textureUnit0, 0 );
-           if ( renderer->activeTextureId[0] != surf->textureId[0] )
-           {
-              renderer->activeTextureId[0]= surf->textureId[0];
-              WST_TRACE("WstRenderSurface: calling glBindTexture textureId %d", surf->textureId[0]);
-              glBindTexture(GL_TEXTURE_2D, surf->textureId[0]);
-           }
-           if ( surf->textureCount > 1 )
-           {
-              glVertexAttribPointer(surf->textureLocation[1], 2, GL_FLOAT, GL_FALSE, 0, surf->textureCoords);
-              WST_TRACE("WstRenderSurface: enable texture attrib array %d", surf->textureLocation[1]);
-              glEnableVertexAttribArray(surf->textureLocation[1]);
-
-              glActiveTexture(GL_TEXTURE1);
-              glUniform1i( renderer->currentShader->textureUnit1, 1 );
-              if ( renderer->activeTextureId[1] != surf->textureId[1] )
-              {
-                 renderer->activeTextureId[1]= surf->textureId[1];
-                 WST_TRACE("WstRenderSurface: calling glBindTexture textureId %d", surf->textureId[1]);
-                 glBindTexture(GL_TEXTURE_2D, surf->textureId[1]);
-              }
-           }
-           if ( enableBlend )
-           {
-              glEnable(GL_BLEND);
-           }
-           WST_TRACE("WstRenderSurface: calling glDrawArrays");
-           glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-           if ( enableBlend )
-           {
-              glDisable(GL_BLEND);
-           }
-           glBindTexture(GL_TEXTURE_2D, GL_NONE);
-           renderer->activeTextureId[0]= GL_NONE;
-           renderer->activeTextureId[1]= GL_NONE;
-       }
-    }
-}
-
 
 #define RED_SIZE (8)
 #define GREEN_SIZE (8)
@@ -1414,7 +1116,7 @@ static void wstRenderGLRenderSurface( WstRendererGL *renderer, WstRenderContext 
 #define ALPHA_SIZE (8)
 #define DEPTH_SIZE (0)
 
-static bool wstRenderGLSetupEGL( WstRendererGL *renderer )
+static bool wstRendererGLSetupEGL( WstRendererGL *renderer )
 {
    bool result= false;
    EGLint major, minor;
@@ -1436,10 +1138,10 @@ static bool wstRenderGLSetupEGL( WstRendererGL *renderer )
       // Get default EGL display
       renderer->eglDisplay= eglGetDisplay(EGL_DEFAULT_DISPLAY);
    }
-   printf("wstRenderGLSetupEGL: eglDisplay=%p\n", renderer->eglDisplay );
+   printf("wstRendererGLSetupEGL: eglDisplay=%p\n", renderer->eglDisplay );
    if ( renderer->eglDisplay == EGL_NO_DISPLAY )
    {
-      printf("wstRenderGLSetupEGL: EGL not available\n" );
+      printf("wstRendererGLSetupEGL: EGL not available\n" );
       goto exit;
    }
 
@@ -1447,10 +1149,10 @@ static bool wstRenderGLSetupEGL( WstRendererGL *renderer )
    b= eglInitialize( renderer->eglDisplay, &major, &minor );
    if ( !b )
    {
-      printf("wstRenderGLSetupEGL: unable to initialize EGL display\n" );
+      printf("wstRendererGLSetupEGL: unable to initialize EGL display\n" );
       goto exit;
    }
-   printf("wstRenderGLSetupEGL: eglInitiialize: major: %d minor: %d\n", major, minor );
+   printf("wstRendererGLSetupEGL: eglInitiialize: major: %d minor: %d\n", major, minor );
 
    // Get number of available configurations
    b= eglGetConfigs( renderer->eglDisplay, NULL, 0, &configCount );
@@ -1464,7 +1166,7 @@ static bool wstRenderGLSetupEGL( WstRendererGL *renderer )
    eglConfigs= (EGLConfig*)malloc( configCount*sizeof(EGLConfig) );
    if ( !eglConfigs )
    {
-      printf("wstRenderGLSetupEGL: unable to alloc memory for EGL configurations\n");
+      printf("wstRendererGLSetupEGL: unable to alloc memory for EGL configurations\n");
       goto exit;
    }
 
@@ -1550,7 +1252,7 @@ static bool wstRenderGLSetupEGL( WstRendererGL *renderer )
                                                     renderer->eglConfig, 
                                                     (EGLNativeWindowType)renderer->nativeWindow,
                                                     NULL );
-      printf("wstRenderGLSetupEGL: eglSurface %p\n", renderer->eglSurface );
+      printf("wstRendererGLSetupEGL: eglSurface %p\n", renderer->eglSurface );
    }
 
    ctxAttrib[0]= EGL_CONTEXT_CLIENT_VERSION;
@@ -1584,616 +1286,199 @@ exit:
    return result;
 }
 
-
-// ----------------------------------------------------------------------------
-// Initialize the 4x4 matrix m[16] to the identity matrix
-// ----------------------------------------------------------------------------
-static void wstMatrixIdentity(float matrix[16])
+static WstShader* wstRendererGLCreateShader( bool yuv )
 {
-    if (matrix)
-    {
-        memset( matrix, 0, 16*sizeof(float) );
-    
-        matrix[0]= 1.0f;
-        matrix[5]= 1.0f; 
-        matrix[10]= 1.0f;
-        matrix[15]= 1.0f;
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Multiply two 4 x 4 matrices
-// ----------------------------------------------------------------------------
-static void wstMatrixMultMatrix(float matrix[16], float in1[16], float in2[16])
-{
-    int i= 0;
-
-    /* in1 or in2 also could be the result matrix so a, 
-       working matrix temp[16] is used to store the result */
-    float temp[16];
-
-    if ( matrix && in1 && in2 )
-    {
-        temp[0]= in1[0] * in2[0] + in1[4] * in2[1] + in1[8] * in2[2] + in1[12] * in2[3];
-        temp[1]= in1[1] * in2[0] + in1[5] * in2[1] + in1[9] * in2[2] + in1[13] * in2[3];
-        temp[2]= in1[2] * in2[0] + in1[6] * in2[1] + in1[10] * in2[2] + in1[14] * in2[3];
-        temp[3]= in1[3] * in2[0] + in1[7] * in2[1] + in1[11] * in2[2] + in1[15] * in2[3];
-        temp[4]= in1[0] * in2[4] + in1[4] * in2[5] + in1[8] * in2[6] + in1[12] * in2[7];
-        temp[5]= in1[1] * in2[4] + in1[5] * in2[5] + in1[9] * in2[6] + in1[13] * in2[7];
-        temp[6]= in1[2] * in2[4] + in1[6] * in2[5] + in1[10] * in2[6] + in1[14] * in2[7];
-        temp[7]= in1[3] * in2[4] + in1[7] * in2[5] + in1[11] * in2[6] + in1[15] * in2[7];
-        temp[8]= in1[0] * in2[8] + in1[4] * in2[9] + in1[8] * in2[10] + in1[12] * in2[11];
-        temp[9]= in1[1] * in2[8] + in1[5] * in2[9] + in1[9] * in2[10] + in1[13] * in2[11];
-        temp[10]= in1[2] * in2[8] + in1[6] * in2[9] + in1[10] * in2[10] + in1[14] * in2[11];
-        temp[11]= in1[3] * in2[8] + in1[7] * in2[9] + in1[11] * in2[10] + in1[15] * in2[11];
-        temp[12]= in1[0] * in2[12] + in1[4] * in2[13] + in1[8] * in2[14] + in1[12] * in2[15];
-        temp[13]= in1[1] * in2[12] + in1[5] * in2[13] + in1[9] * in2[14] + in1[13] * in2[15];
-        temp[14]= in1[2] * in2[12] + in1[6] * in2[13] + in1[10] * in2[14] + in1[14] * in2[15];
-        temp[15]= in1[3] * in2[12] + in1[7] * in2[13] + in1[11] * in2[14] + in1[15] * in2[15];
-
-        for (i=0; i<16; i++)
-        {
-            matrix[i]= temp[i];
-        }
-    }
-}
-// ----------------------------------------------------------------------------
-// Apply translation to 4x4 matrix
-// ----------------------------------------------------------------------------
-static void wstMatrixTranslate(float matrix[16], float dx, float dy, float dz)
-{
-    if ( matrix )
-    {
-        matrix[12] += (dx * matrix[0] + dy * matrix[4] + dz * matrix[8]);
-        matrix[13] += (dx * matrix[1] + dy * matrix[5] + dz * matrix[9]);
-        matrix[14] += (dx * matrix[2] + dy * matrix[6] + dz * matrix[10]);
-        matrix[15] += (dx * matrix[3] + dy * matrix[7] + dz * matrix[11]);
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Establish an orthogonal projection matrix
-// ----------------------------------------------------------------------------
-static void wstMatrixOrtho(float matrix[16], float left, float right, float bottom, float top, float near, float far)
-{
-    // working 4x4 matrix for intermediate values
-    float temp[16] = { 1.0f, 0.0f, 0.0f, 0.0f,
-                       0.0f, 1.0f, 0.0f, 0.0f,
-                       0.0f, 0.0f, 1.0f, 0.0f,
-                       0.0f, 0.0f, 0.0f, 1.0f };                
-   
-    if (matrix)
-    { 
-        if ( (left != right) && 
-             (bottom != top) && 
-             (near != far) )
-        {
-            temp[12]= ((right + left) / (right - left));
-            temp[13]= ((top + bottom) / (top - bottom));
-            temp[14]= ((far + near) / (far - near));
-            temp[0]= (2.0f / (right - left));
-            temp[5]= (2.0f / (top - bottom));
-            temp[10]= (2.0f / (near - far));
-
-            wstMatrixMultMatrix(matrix, matrix, temp);
-        }
-    }
-}
-
-static void wstSetCurrentShader( WstRendererGL *renderer, int shaderClassId )
-{
-   WstShader *shader= wstGetShaderForClass(renderer, shaderClassId);
-
-   if ( shader )
-   {
-      if ( shader->shaderClass.id != renderer->currentShaderClass )
-      {
-         renderer->currentShaderClass= shader->shaderClass.id;
-         glUseProgram(shader->programId);
-         WST_TRACE("use program %d\n", shader->programId );
-
-         glUniformMatrix4fv(shader->mvpLocation, 1, GL_FALSE, renderer->mvp);
-         for( int i= 0; i < shader->shaderClass.bits.maskCount; ++i )
-         {
-            glUniform1i(shader->maskUniformLocation[i], i+1);
-         }
-      }
-   }
-
-   renderer->currentShader= (shader != 0) ? shader : &renderer->nullShader;
-}
-
-// ----------------------------------------------------------------------------
-// Get a shader program for the specified shader class
-// ----------------------------------------------------------------------------
-static WstShader *wstGetShaderForClass( WstRendererGL *renderer, int shaderClassId )
-{
-   WstShader *shader= 0;
-   WstShaderClass shaderClass;
-   int cacheIndex;
-
-   shaderClass.id= shaderClassId;
-   cacheIndex= shaderClass.bits.type + shaderClass.bits.opacity*4 + shaderClass.bits.maskCount*8;
-   WST_TRACE("shaderClass %X cacheIndex %d shaderCacheSize %d\n", shaderClass.id, cacheIndex, renderer->shaderCacheSize );
-   assert( cacheIndex < renderer->shaderCacheSize );
-   shader= renderer->shaderCache[cacheIndex];
-   if ( !shader )
-   {
-      shader= wstCreateShaderForClass( shaderClass );
-      renderer->shaderCache[cacheIndex]= shader;
-   }
-
-   return shader;   
-}
-
-#define WST_MAX_SHADER_SOURCE_SIZE 1024
-#define EMIT(s) \
-  assert( (strnlen(shaderSource, WST_MAX_SHADER_SOURCE_SIZE) + strnlen(s, WST_MAX_SHADER_SOURCE_SIZE)) \
-          < \
-          WST_MAX_SHADER_SOURCE_SIZE); \
-  strncat(shaderSource, s, strnlen(s, WST_MAX_SHADER_SOURCE_SIZE))
-
-#if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
-   #define WST_SHADER_PRECISION "mediump"
-#else
-   #define WST_SHADER_PRECISION " "
-#endif   
-
-// ----------------------------------------------------------------------------
-// Create a shader program for the specified shader class
-// ----------------------------------------------------------------------------
-static WstShader* wstCreateShaderForClass( WstShaderClass shaderClass )
-{
-   int error= 0;
-   int i;
-   char name[32];
    WstShader *shaderNew= 0;
-   char *shaderSource= 0;
-   GLuint vertexShaderId= GL_NONE, fragmentShaderId= GL_NONE;
-   GLuint programId= GL_NONE;
-   GLuint attribIndex;
-   int shaderStatus = GL_FALSE; 
-   int infoLen;
-   char infoLog[MAX_LOG_SIZE+1];
+   GLuint type;
+   const char *typeName= 0, *src= 0;
+   GLint shader, status, len;
 
-
-   shaderNew= (WstShader*)calloc( 1, sizeof(WstShader) );
+   shaderNew= (WstShader*)calloc( 1, sizeof(WstShader));
    if ( !shaderNew )
    {
-      WST_TRACE("Not enough memory to allocate shader for class %X\n", shaderClass.id );
-      return shaderNew;
-   } 
-
-   // Generate shader programs
-   shaderSource= (char*)malloc( WST_MAX_SHADER_SOURCE_SIZE );
-   if ( shaderSource )
-   {
-      // Generate vertex shader source
-      shaderSource[0]= '\0';
-      EMIT( "uniform mat4 mvp;\n" );
-      switch ( shaderClass.bits.type )
-      {
-         case WstShaderType_texture:
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord;\n" );
-            break;
-         case WstShaderType_textureYUV:
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord0;\n" );
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord1;\n" );
-            break;
-         case WstShaderType_fill:
-            EMIT( "varying " WST_SHADER_PRECISION " vec4 basecolor;\n" );
-            break;
-         case WstShaderType_alphaText:
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord;\n" );
-            break;
-         default:
-            assert(0);
-            break;
-      }
-
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         snprintf( name, sizeof(name)-1, "maskcoord%d", i );
-         EMIT( "varying " WST_SHADER_PRECISION " vec2 " );
-         EMIT( name );
-         EMIT( ";\n" );
-      }
-
-      EMIT( "attribute vec4 position;\n" );
-      EMIT( "attribute vec2 inputtexture0;\n" );
-      EMIT( "attribute vec2 inputtexture1;\n" );
-      EMIT( "attribute vec4 inputcolor;\n" );
-
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         snprintf( name, sizeof(name)-1, "inputmask%d", i );
-         EMIT( "attribute vec2 " );
-         EMIT( name );
-         EMIT( ";\n" );
-      }
-
-      EMIT( "void main(void) {\n" );
-      switch ( shaderClass.bits.type )
-      {
-         case WstShaderType_texture:
-            EMIT( "   texcoord = inputtexture0;\n" );
-            break;
-         case WstShaderType_textureYUV:
-            EMIT( "   texcoord0 = inputtexture0;\n" );
-            EMIT( "   texcoord1 = inputtexture1;\n" );
-            break;
-         case WstShaderType_fill:
-            EMIT( "   basecolor = inputcolor;\n" );
-            break;
-         case WstShaderType_alphaText:
-            EMIT( "   texcoord = inputtexture0;\n" );
-            break;
-         default:
-            assert(0);
-            break;
-      }
-
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         snprintf( name, sizeof(name)-1, "maskcoord%d", i );
-         EMIT( "   " );
-         EMIT( name );
-         EMIT( " = " );
-         snprintf( name, sizeof(name)-1, "inputmask%d", i );
-         EMIT( name );
-         EMIT( ";\n" );
-      }
-
-      EMIT( "   gl_Position = mvp * position;\n" );
-      EMIT( "}\n" );
-
-      WST_TRACE( "vertex source:\n(\n%s\n)\n", shaderSource );
-
-      // Create vertex shader from source
-      vertexShaderId = wstCreateGLShader(shaderSource, true);
-      WST_TRACE( "shader class %X vertexShaderId=%d\n", shaderClass.id, vertexShaderId );
-
-
-      // Generate fragment shader source
-      shaderSource[0]= '\0';
-      switch ( shaderClass.bits.type )
-      {
-         case WstShaderType_texture:
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord;\n" );
-            break;
-         case WstShaderType_textureYUV:
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord0;\n" );
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord1;\n" );
-            break;
-         case WstShaderType_fill:
-            EMIT( "varying " WST_SHADER_PRECISION " vec4 basecolor;\n" );
-            break;
-         case WstShaderType_alphaText:
-            EMIT( "varying " WST_SHADER_PRECISION " vec2 texcoord;\n" );
-            break;
-         default:
-            assert(0);
-            break;
-      }
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         EMIT( "varying " WST_SHADER_PRECISION " vec2 " );
-         snprintf( name, sizeof(name)-1, "maskcoord%d", i );
-         EMIT( name );
-         EMIT( ";\n" );
-      }
-
-      if ( (shaderClass.bits.type == WstShaderType_texture) || 
-           (shaderClass.bits.type == WstShaderType_alphaText) )
-      {
-         EMIT( "uniform sampler2D texture;\n" );
-      }
-      else if ( shaderClass.bits.type == WstShaderType_textureYUV )
-      {
-         EMIT( "uniform sampler2D textureY;\n" );
-         EMIT( "uniform sampler2D textureUV;\n" );
-         EMIT( "const " WST_SHADER_PRECISION " vec3 cc_r = vec3(1.0, -0.8604, 1.59580);\n" );
-         EMIT( "const " WST_SHADER_PRECISION " vec4 cc_g = vec4(1.0, 0.539815, -0.39173, -0.81290);\n" );
-         EMIT( "const " WST_SHADER_PRECISION " vec3 cc_b = vec3(1.0, -1.071, 2.01700);\n" );
-      }
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         snprintf( name, sizeof(name)-1, "mask%d", i );
-         EMIT( "uniform sampler2D " );
-         EMIT( name );
-         EMIT( ";\n" );
-      }
-      if ( shaderClass.bits.type == WstShaderType_alphaText )
-      {
-         EMIT( "uniform " WST_SHADER_PRECISION " vec4 alphaTextColor;\n" );
-      }
-      if ( shaderClass.bits.opacity )
-      {
-         EMIT( "uniform " WST_SHADER_PRECISION " float opacity;\n" );
-      }
-
-      EMIT( "void main(void) {\n" );
-
-      if ( (shaderClass.bits.type == WstShaderType_texture) || 
-           (shaderClass.bits.type == WstShaderType_alphaText) )
-      {
-         EMIT( "   " WST_SHADER_PRECISION " vec4 texcolor = texture2D(texture, texcoord);\n" );
-      }
-      else if ( shaderClass.bits.type == WstShaderType_textureYUV )
-      {
-         EMIT( "   " WST_SHADER_PRECISION " vec4 y_vec = texture2D(textureY, texcoord0);\n" );
-         EMIT( "   " WST_SHADER_PRECISION " vec4 c_vec = texture2D(textureUV, texcoord1);\n" );
-         EMIT( "   " WST_SHADER_PRECISION " vec4 temp_vec = vec4(y_vec.a, 1.0, c_vec.b, c_vec.a);\n" );
-      }
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         EMIT( "   " WST_SHADER_PRECISION " vec4 " );
-         snprintf( name, sizeof(name)-1, "maskcolor%d", i );
-         EMIT( name );
-         EMIT( " = texture2D(" );
-         snprintf( name, sizeof(name)-1, "mask%d", i );
-         EMIT( name );
-         EMIT( ", " );
-         snprintf( name, sizeof(name)-1, "maskcoord%d", i );
-         EMIT( name );
-         EMIT( ");\n" );
-      }
-
-      EMIT( "   gl_FragColor = " );
-      if ( shaderClass.bits.opacity )
-      {
-         EMIT( "opacity*" );
-      }
-      for( i= 0; i < shaderClass.bits.maskCount; ++i )
-      {
-         snprintf( name, sizeof(name)-1, "maskcolor%d", i );
-         EMIT( name );
-         EMIT( ".a*" );
-      }
-      switch ( shaderClass.bits.type )
-      {
-         case WstShaderType_texture:
-            EMIT( "texcolor;\n" );
-            break;
-         case WstShaderType_textureYUV:
-            EMIT( "vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), 1.0 );\n" );
-            break;
-         case WstShaderType_fill:
-            EMIT( "vec4( basecolor.a*basecolor.r, basecolor.a*basecolor.g, basecolor.a*basecolor.b, basecolor.a );\n" );
-            break;
-         case WstShaderType_alphaText:
-            EMIT( "texcolor.a*alphaTextColor;\n" );
-            break;
-         default:
-            assert(0);
-            break;
-      }
-      EMIT( "}\n" );
-
-      WST_TRACE( "fragment source:\n(\n%s\n)\n", shaderSource );
-
-      // Create fragment shader from source
-      fragmentShaderId = wstCreateGLShader(shaderSource, false);
-      WST_TRACE( "shader class %X fragmentShaderId=%d\n", shaderClass.id, fragmentShaderId );
-
-      free( shaderSource );
+      printf("wstRendererGLCreateShader: failed to allocate WstShader\n");
+      goto exit;
    }
 
-   if ( (vertexShaderId != GL_NONE) && (fragmentShaderId != GL_NONE) )
+   shaderNew->isYUV= yuv;
+   shaderNew->program= GL_NONE;
+   shaderNew->fragShader= GL_NONE;
+   shaderNew->vertShader= GL_NONE;
+   shaderNew->uniRes= -1;
+   shaderNew->uniMatrix= -1;
+   shaderNew->uniAlpha= -1;
+   shaderNew->uniTexture= -1;
+   shaderNew->uniTextureuv= -1;
+
+   for( int i= 0; i < 2; ++i )
    {
-       // Create Program
-       programId = glCreateProgram();
-       WST_TRACE("shader class %X programId=%d vertexShaderId=%d fragmentShaderId=%d\n", 
-                   shaderClass.id, programId, vertexShaderId, fragmentShaderId );
-
-       glAttachShader(programId, vertexShaderId);
-       glAttachShader(programId, fragmentShaderId);
-
-       attribIndex= 0;
-       glBindAttribLocation(programId, attribIndex++, "position");
-       glBindAttribLocation(programId, attribIndex++, "inputtexture0" );
-       glBindAttribLocation(programId, attribIndex++, "inputtexture1" );
-       glBindAttribLocation(programId, attribIndex++, "inputcolor" );
-       for( i= 0; i < shaderClass.bits.maskCount; ++i )
-       {
-          snprintf( name, sizeof(name)-1, "inputmask%d", i );
-          glBindAttribLocation(programId, attribIndex++, name );
-       }
-
-       glLinkProgram(programId);
-
-       glGetProgramiv(programId, GL_LINK_STATUS, &shaderStatus);
-       if (shaderStatus != GL_TRUE)
-       {
-           fprintf(stderr,"Error: Failed to link GLSL program\n");
-           glGetProgramInfoLog(programId, MAX_LOG_SIZE, &infoLen, infoLog);
-           if (infoLen > MAX_LOG_SIZE)
-           {
-               infoLog[MAX_LOG_SIZE] = '\0';
-           }
-           fprintf(stderr,"%s\n",infoLog);
-           error= 1;
-       }
-       else
-       {
-           glValidateProgram(programId); 
-           glGetProgramiv(programId, GL_VALIDATE_STATUS, &shaderStatus);
-           if (shaderStatus != GL_TRUE)
-           {
-               fprintf(stderr,"Error: Failed to validate GLSL program\n");
-               glGetProgramInfoLog(programId, MAX_LOG_SIZE, &infoLen, infoLog);
-               if (infoLen > MAX_LOG_SIZE)
-               {
-                   infoLog[MAX_LOG_SIZE] = '\0';
-               }
-               fprintf(stderr,"%s\n",infoLog);
-               error= 1;
-           }
-       }
-
-       if (shaderStatus == GL_TRUE)
-       {
-           shaderNew->shaderClass= shaderClass;
-           shaderNew->programId= programId;
-           shaderNew->vertexShaderId= vertexShaderId;
-           shaderNew->fragmentShaderId= fragmentShaderId;
-
-           // Get attribute locations
-           shaderNew->vertexLocation= glGetAttribLocation(programId, "position");
-           shaderNew->textureLocation[0]= glGetAttribLocation(programId, "inputtexture0");
-           shaderNew->textureLocation[1]= glGetAttribLocation(programId, "inputtexture1");
-           shaderNew->fillColorLocation= glGetAttribLocation(programId, "inputcolor");
-           for( i= 0; i < shaderClass.bits.maskCount; ++i )
-           {
-              snprintf( name, sizeof(name)-1, "inputmask%d", i );
-              shaderNew->maskAttribLocation[i]= glGetAttribLocation(programId, name );
-           }
-
-           // Get uniform locations
-           shaderNew->mvpLocation= glGetUniformLocation(programId, "mvp");
-           if ( shaderClass.bits.type == WstShaderType_alphaText )
-           {
-              shaderNew->alphaTextColorLocation= glGetUniformLocation(programId, "alphaTextColor");
-           }
-           if ( shaderClass.bits.opacity )
-           {
-              shaderNew->opacityLocation = glGetUniformLocation(programId, "opacity");
-           }
-           for( i= 0; i < shaderClass.bits.maskCount; ++i )
-           {
-              snprintf( name, sizeof(name)-1, "mask%d", i );
-              shaderNew->maskUniformLocation[i] = glGetUniformLocation(programId, name);
-           }
-           if ( shaderClass.bits.type == WstShaderType_texture )
-           {
-              shaderNew->textureUnit0= glGetUniformLocation(programId,"texture");
-           }
-           else if ( shaderClass.bits.type == WstShaderType_textureYUV )
-           {
-              shaderNew->textureUnit0= glGetUniformLocation(programId,"textureY");
-              shaderNew->textureUnit1= glGetUniformLocation(programId,"textureUV");
-           }
-
-           #ifdef WST_DEBUG
-           WST_TRACE("shader %p created for class %X:", shaderNew, shaderNew->shaderClass.id );
-           WST_TRACE("programId=%d vertexShaderId=%d fragmentShaderId=%d", 
-                     shaderNew->programId, shaderNew->vertexShaderId, shaderNew->fragmentShaderId );
-           WST_TRACE("vertexLocation= %d textureLocation[0]=%d textureLocation[1]=%d fillColorLocation=%d mvpLocation= %d", 
-                     shaderNew->vertexLocation, shaderNew->textureLocation[0], shaderNew->textureLocation[1],
-                     shaderNew->fillColorLocation, shaderNew->mvpLocation );
-           if ( shaderNew->shaderClass.bits.opacity )
-           {
-              WST_TRACE("opacityLocation= %d", shaderNew->opacityLocation );
-           }
-           if ( shaderClass.bits.type == WstShaderType_alphaText )
-           {
-              WST_TRACE("alphaTextColorLocation= %d", shaderNew->alphaTextColorLocation );
-           }
-           for( i= 0; i < shaderClass.bits.maskCount; ++i )
-           {
-              WST_TRACE("mask %d attribLocation %d uniformLocation %d", i, shaderNew->maskAttribLocation[i], shaderNew->maskUniformLocation[i] );
-           }
-           #endif
-       }
-   }
-   else
-   {
-       error= 1;
-   }
-
-   if ( error )
-   {
-      if (programId)
+      if ( i == 0 )
       {
-         if (vertexShaderId)
-         {
-            glDetachShader(programId, vertexShaderId);
-            glDeleteShader(vertexShaderId);
-         }
-         if (fragmentShaderId)
-         {
-            glDetachShader(programId, fragmentShaderId);
-            glDeleteShader(fragmentShaderId);
-         }
-         glDeleteProgram(programId);
+         type= GL_FRAGMENT_SHADER;
+         typeName= "fragment";
+         src= ( yuv ? fShaderTextYUV : fShaderText );
+      }
+      else
+      {
+         type= GL_VERTEX_SHADER;
+         typeName= "vertex";
+         src= ( yuv ? vShaderTextYUV : vShaderText );
+      }
+      shader= glCreateShader(type);
+      if ( !shader )
+      {
+         printf("wstRendererGLCreateShader: glCreateShader (%s) error: %d\n", typeName, glGetError());
+         goto exit;
+      }
+      glShaderSource(shader, 1, &src, NULL );
+      glCompileShader(shader);
+      glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+      if ( !status )
+      {
+         glGetShaderInfoLog(shader, sizeof(message), &len, message);
+         printf("wstRendererGLCreateShader: %s shader compile error: (%s)\n", typeName, message);
+         goto exit;
+      }
+      if ( i == 0 )
+         shaderNew->fragShader= shader;
+      else
+         shaderNew->vertShader= shader;
+   }
+
+   shaderNew->program= glCreateProgram();
+   if ( shaderNew->program == GL_NONE )
+   {
+      printf("wstRendererGLCreateShader: glCreateProgram error %d\n", glGetError());
+      goto exit;
+   }
+
+   glAttachShader(shaderNew->program, shaderNew->fragShader);
+   glAttachShader(shaderNew->program, shaderNew->vertShader);
+
+   shaderNew->attrPos= 0;
+   glBindAttribLocation(shaderNew->program, shaderNew->attrPos, "pos");
+   shaderNew->attrTexcoord= 1;
+   glBindAttribLocation(shaderNew->program, shaderNew->attrTexcoord, "texcoord");
+   if ( yuv )
+   {
+      shaderNew->attrTexcoorduv= 2;
+      glBindAttribLocation(shaderNew->program, shaderNew->attrTexcoorduv, "texcoorduv");
+   }
+
+   glLinkProgram(shaderNew->program);
+   glGetProgramiv(shaderNew->program, GL_LINK_STATUS, &status);
+   if ( !status )
+   {
+      glGetProgramInfoLog(shaderNew->program, sizeof(message), &len, message);
+      printf("wstRendererGLCreateShader: %s shader link error: (%s)\n", typeName, message);
+      goto exit;
+   }
+
+   shaderNew->uniRes= glGetUniformLocation(shaderNew->program, "resolution");
+   if ( shaderNew->uniRes == -1 )
+   {
+      printf("wstRendererGLCreateShader: uniformn 'resolution' location error\n");
+      goto exit;
+   }
+
+   shaderNew->uniMatrix= glGetUniformLocation(shaderNew->program, "matrix");
+   if ( shaderNew->uniMatrix == -1 )
+   {
+      printf("wstRendererGLCreateShader: uniformn 'matrix' location error\n");
+      goto exit;
+   }
+
+   shaderNew->uniAlpha= glGetUniformLocation(shaderNew->program, "alpha");
+   if ( shaderNew->uniAlpha == -1 )
+   {
+      printf("wstRendererGLCreateShader: uniformn 'alpha' location error\n");
+      goto exit;
+   }
+
+   shaderNew->uniTexture= glGetUniformLocation(shaderNew->program, "texture");
+   if ( shaderNew->uniTexture == -1 )
+   {
+      printf("wstRendererGLCreateShader: uniformn 'texture' location error\n");
+      goto exit;
+   }
+
+   if ( yuv )
+   {
+      shaderNew->uniTextureuv= glGetUniformLocation(shaderNew->program, "textureuv");
+      if ( shaderNew->uniTextureuv == -1 )
+      {
+         printf("wstRendererGLCreateShader: uniformn 'textureuv' location error\n");
+         goto exit;
       }
    }
+
+exit:
 
    return shaderNew;
 }
 
-// ----------------------------------------------------------------------------
-// Destroy a shader program created for a specified shader class
-// ----------------------------------------------------------------------------
-static void wstDestroyShader( WstRendererGL *renderer, WstShader *shader )
+static void wstRendererGLDestroyShader( WstShader *shader )
 {
    if ( shader )
    {
-      assert( shader != &renderer->nullShader );
-
-      if ( shader == renderer->currentShader )
+      if ( shader->program != GL_NONE )
       {
-         renderer->currentShader= &renderer->nullShader;
-      }
-
-      if (shader->programId)
-      {
-         if (shader->vertexShaderId)
+         if ( shader->fragShader != GL_NONE )
          {
-            glDetachShader(shader->programId, shader->vertexShaderId);
-            glDeleteShader(shader->vertexShaderId);
+            glDetachShader( shader->program, shader->fragShader );
+            glDeleteShader( shader->fragShader );
+            shader->fragShader= GL_NONE;
          }
-         if (shader->fragmentShaderId)
+         if ( shader->vertShader != GL_NONE )
          {
-            glDetachShader(shader->programId, shader->fragmentShaderId);
-            glDeleteShader(shader->fragmentShaderId);
+            glDetachShader( shader->program, shader->vertShader );
+            glDeleteShader( shader->vertShader );
+            shader->vertShader= GL_NONE;
          }
-         glDeleteProgram(shader->programId);
+         glDeleteProgram( shader->program );
+         shader->program= GL_NONE;
       }
-
       free( shader );
    }
 }
 
-// ----------------------------------------------------------------------------
-// Create a shader from source code
-// ----------------------------------------------------------------------------
-static unsigned int wstCreateGLShader(const char *pShaderSource, bool isVertexShader)
+static void wstRendererGLShaderDraw( WstShader *shader,
+                                      int width, int height, float* matrix, float alpha,
+                                      GLuint textureId, GLuint textureUVId,
+                                      int count, const float* vc, const float* txc )
 {
-    GLuint shaderId= 0;
-    int status, loglen, shaderSourceLen= -1;
-    char log[MAX_LOG_SIZE+1];
-
-    if ( pShaderSource )
+    glUseProgram( shader->program );
+    glUniformMatrix4fv( shader->uniMatrix, 1, GL_FALSE, matrix );
+    glUniform2f( shader->uniRes, width, height );
+    glUniform1f( shader->uniAlpha, alpha );
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture( GL_TEXTURE_2D, textureId );
+    glUniform1i( shader->uniTexture, 1 );
+    if ( shader->isYUV )
     {
-        shaderId= glCreateShader( isVertexShader ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER );
-        if ( !shaderId )
-        {
-            fprintf(stderr,"Error: Failed to create %s Shader\n", isVertexShader ? "vertex" : "fragment");
-            return 0;
-        }
-        
-        glShaderSource(shaderId, 1, (const char **)&pShaderSource, &shaderSourceLen);
-        glCompileShader(shaderId);
-
-        glGetShaderiv( shaderId, GL_COMPILE_STATUS, &status);
-        if (GL_TRUE != status )
-        {
-            fprintf(stderr,"Error: Failed to compile GL %s Shader\n", isVertexShader ? "vertex" : "fragment" );
-            glGetShaderInfoLog( shaderId, MAX_LOG_SIZE, &loglen, log);
-            if (loglen > MAX_LOG_SIZE)
-            {
-                 log[MAX_LOG_SIZE]= '\0';
-            }
-            else
-            {
-                log[loglen]= '\0';
-            }
-            fprintf(stderr, "%s\n",log);
-        }
+       glActiveTexture(GL_TEXTURE2);
+       glBindTexture( GL_TEXTURE_2D, textureUVId );
+       glUniform1i( shader->uniTextureuv, 2 );
     }
-    
-    return shaderId;
+    glVertexAttribPointer( shader->attrPos, 2, GL_FLOAT, GL_FALSE, 0, vc );
+    glVertexAttribPointer( shader->attrTexcoord, 2, GL_FLOAT, GL_FALSE, 0, txc );
+    if ( shader->isYUV )
+    {
+       glVertexAttribPointer( shader->attrTexcoorduv, 2, GL_FLOAT, GL_FALSE, 0, txc );
+    }
+    glEnableVertexAttribArray( shader->attrPos );
+    glEnableVertexAttribArray( shader->attrTexcoord );
+    if ( shader->isYUV )
+    {
+       glEnableVertexAttribArray( shader->attrTexcoorduv );
+    }
+    glDrawArrays( GL_TRIANGLE_STRIP, 0, count );
+    glDisableVertexAttribArray( shader->attrPos );
+    glDisableVertexAttribArray( shader->attrTexcoord );
+    if ( shader->isYUV )
+    {
+       glDisableVertexAttribArray( shader->attrTexcoorduv );
+    }
 }
 
 static void wstRendererTerm( WstRenderer *renderer )
@@ -2209,74 +1494,38 @@ static void wstRendererTerm( WstRenderer *renderer )
 static void wstRendererUpdateScene( WstRenderer *renderer )
 {
    WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
-   GLfloat *mvp;
-   WstRenderContext *rctx;
 
    if ( (renderer->outputWidth != rendererGL->outputWidth) ||
         (renderer->outputHeight != rendererGL->outputHeight) )
    {
       rendererGL->outputWidth= renderer->outputWidth;
       rendererGL->outputHeight= renderer->outputHeight;
-      
-      wstMatrixIdentity(rendererGL->modelview);
-      wstMatrixTranslate(rendererGL->modelview, -rendererGL->outputWidth, -rendererGL->outputHeight, 0);
-      wstMatrixIdentity(rendererGL->projection);
-      wstMatrixOrtho( rendererGL->projection, 
-                      0,                          //left
-                      rendererGL->outputWidth,    //right
-                      rendererGL->outputHeight,   //bottom
-                      0,                          //top
-                      ZNEAR,                      //near
-                      ZFAR );                     //far
-
-      wstMatrixMultMatrix(rendererGL->mvp, rendererGL->projection, rendererGL->modelview);
    }
 
    eglMakeCurrent( rendererGL->eglDisplay, 
                    rendererGL->eglSurface, 
                    rendererGL->eglSurface, 
                    rendererGL->eglContext );
-   
-   mvp= rendererGL->mvp;
-   
+
+   if ( !rendererGL->textureShader )
+   {
+      rendererGL->textureShader= wstRendererGLCreateShader( false );
+      rendererGL->textureShaderYUV= wstRendererGLCreateShader( true );
+      rendererGL->eglContext= eglGetCurrentContext();
+   }
+
    glViewport( 0, 0, renderer->outputWidth, renderer->outputHeight );
    glClearColor( 0.0, 0.0, 0.0, 0.0 );
    glClear( GL_COLOR_BUFFER_BIT );
    
-   glDisable(GL_BLEND);
+   glEnable(GL_BLEND);
    glBlendColor(0,0,0,0);
-   glActiveTexture(GL_TEXTURE0);
    glDisable(GL_STENCIL_TEST);
    glDisable(GL_DEPTH_TEST);
    glDisable(GL_CULL_FACE);
    glDisable(GL_SCISSOR_TEST);
    glBlendFuncSeparate( GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE );
-   
-   glUseProgram(rendererGL->currentShader->programId);
-   
-   glUniformMatrix4fv(rendererGL->currentShader->mvpLocation, 1, GL_FALSE, mvp);
-   
-   for( int i= 0; i < rendererGL->maxTextureUnits; ++i )
-   {
-      rendererGL->activeTextureId[i]= GL_NONE;
-   }
-   
-   rctx= &rendererGL->renderCtx;
-   
-   rctx->opacity= 1.0f;
-   rctx->z= ZSTART+ZINC;
-   rctx->clip[0]= 0;
-   rctx->clip[1]= 0;
-   rctx->clip[2]= renderer->outputWidth;
-   rctx->clip[3]= renderer->outputHeight;
-   float transform[6];
-   rctx->transform= transform;
-   transform[TCM11]= 1.0f;
-   transform[TCM22]= 1.0f;
-   transform[TCM12]= transform[TCM21]= transform[TCMDX]= transform[TCMDY]= 0.0;   
-   
-   rctx->cpuClip= ( (transform[TCM12] == 0.0) && (transform[TCM21] == 0.0) ) ? 1 : 0;
-   
+
    /*
     * Render surfaces from bottom to top
     */   
@@ -2295,8 +1544,7 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
           )
         )
       {
-         wstRenderGLPrepareSurface( rendererGL, rctx, surface );
-         wstRenderGLRenderSurface( rendererGL, rctx, surface );
+         wstRendererGLRenderSurface( rendererGL, surface );
       }
    }
  
@@ -2313,7 +1561,7 @@ static WstRenderSurface* wstRendererSurfaceCreate( WstRenderer *renderer )
    WstRenderSurface *surface;
    WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
 
-   surface= wstRenderGLCreateSurface(rendererGL);
+   surface= wstRendererGLCreateSurface(rendererGL);
    
    std::vector<WstRenderSurface*>::iterator it= rendererGL->surfaces.begin();
    while ( it != rendererGL->surfaces.end() )
@@ -2344,7 +1592,7 @@ static void wstRendererSurfaceDestroy( WstRenderer *renderer, WstRenderSurface *
       }
    }   
    
-   wstRenderGLDestroySurface( rendererGL, surface );
+   wstRendererGLDestroySurface( rendererGL, surface );
 }
 
 static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *surface, struct wl_resource *resource )
@@ -2424,7 +1672,6 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
       surface->y= y;
       surface->width= width;
       surface->height= height;
-      surface->vertexCoordsDirty= 1;
    }
 }
 
