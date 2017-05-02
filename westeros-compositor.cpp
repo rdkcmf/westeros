@@ -6354,7 +6354,7 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
       
       if ( useHWPath != vpcSurface->useHWPath )
       {
-         DEBUG("vpcSurface %p useHWPath %d\n", vpcSurface, useHWPath );
+         DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPath );
          vpcSurface->useHWPathNext= useHWPath;
          vpcSurface->pathTransitionPending= true;
          wl_vpc_surface_send_video_path_change( vpcSurface->resource, 
@@ -7228,7 +7228,7 @@ static bool wstInitializeDefaultCursor( WstCompositor *compositor,
    else
    {
       compositor->dcPid= pid;
-      DEBUG("default cursor client spawned: pid %d\n", pid );
+      DEBUG("default cursor client spawned: pid %d", pid );
       result= true;
    }
    

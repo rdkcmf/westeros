@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <termios.h>
+#include <sys/mman.h>
 #include <sys/time.h>
 
 #include <EGL/egl.h>
@@ -32,9 +33,17 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
+#include <xkbcommon/xkbcommon.h>
+
 #include "wayland-client.h"
 #include "wayland-egl.h"
 #include "simpleshell-client-protocol.h"
+
+#define UNUSED(x) ((void)x)
+
+#if !defined (XKB_KEYMAP_COMPILE_NO_FLAGS)
+#define XKB_KEYMAP_COMPILE_NO_FLAGS XKB_MAP_COMPILE_NO_FLAGS
+#endif
 
 static void registryHandleGlobal(void *data, 
                                  struct wl_registry *registry, uint32_t id,
@@ -111,8 +120,13 @@ typedef struct _AppCtx
    struct wl_pointer *pointer;
    struct wl_touch *touch;
    struct wl_surface *surface;
+   struct wl_output *output;
    struct wl_egl_window *native;
    struct wl_callback *frameCallback;
+
+   struct xkb_context *xkbCtx;
+   struct xkb_keymap *xkbKeymap;
+   struct xkb_state *xkbState;
 
    EGLDisplay eglDisplay;
    EGLConfig eglConfig;
@@ -154,9 +168,12 @@ typedef struct _AppCtx
 	long long startTime;
 	long long currTime;
 	bool needRedraw;
+	bool verboseLog;
+	int pointerX, pointerY;
 } AppCtx;
 
 
+static void processInput( AppCtx *ctx, uint32_t sym );
 static void drawFrame( AppCtx *ctx );
 static bool setupEGL( AppCtx *ctx );
 static void termEGL( AppCtx *ctx );
@@ -197,6 +214,204 @@ struct wl_shm_listener shmListener = {
 	shmFormat
 };
 
+static void keyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_t format, int32_t fd, uint32_t size )
+{
+   AppCtx *ctx= (AppCtx*)data;
+
+   if ( format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 )
+   {
+      void *map= mmap( 0, size, PROT_READ, MAP_SHARED, fd, 0 );
+      if ( map != MAP_FAILED )
+      {
+         if ( !ctx->xkbCtx )
+         {
+            ctx->xkbCtx= xkb_context_new( XKB_CONTEXT_NO_FLAGS );
+         }
+         else
+         {
+            printf("error: xkb_context_new failed\n");
+         }
+         if ( ctx->xkbCtx )
+         {
+            if ( ctx->xkbKeymap )
+            {
+               xkb_keymap_unref( ctx->xkbKeymap );
+               ctx->xkbKeymap= 0;
+            }
+            ctx->xkbKeymap= xkb_keymap_new_from_string( ctx->xkbCtx, (char*)map, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+            if ( !ctx->xkbKeymap )
+            {
+               printf("error: xkb_keymap_new_from_string failed\n");
+            }
+            if ( ctx->xkbState )
+            {
+               xkb_state_unref( ctx->xkbState );
+               ctx->xkbState= 0;
+            }
+            ctx->xkbState= xkb_state_new( ctx->xkbKeymap );
+            if ( !ctx->xkbState )
+            {
+               printf("error: xkb_state_new failed\n");
+            }
+            munmap( map, size );
+         }
+      }
+   }
+
+   close( fd );
+}
+
+static void keyboardEnter( void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                           struct wl_surface *surface, struct wl_array *keys )
+{
+   UNUSED(data);
+   UNUSED(keyboard);
+   UNUSED(serial);
+   UNUSED(keys);
+
+   printf("keyboard enter surface %p\n", surface );
+}
+
+static void keyboardLeave( void *data, struct wl_keyboard *keyboard, uint32_t serial, struct wl_surface *surface )
+{
+   UNUSED(data);
+   UNUSED(keyboard);
+   UNUSED(serial);
+
+   printf("keyboard leave surface %p\n", surface );
+}
+
+static void keyboardKey( void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                         uint32_t time, uint32_t key, uint32_t state )
+{
+   AppCtx *ctx= (AppCtx*)data;
+   UNUSED(keyboard);
+   UNUSED(serial);
+   xkb_keycode_t keyCode;
+   uint32_t sym;
+
+   if ( ctx->xkbState )
+   {
+      // As per wayland protocol for XKB_V1 map, we must add 8 to the key code
+      keyCode= key+8;
+
+      sym= xkb_state_key_get_one_sym( ctx->xkbState, keyCode );
+
+      if ( ctx->verboseLog )
+      {
+         printf("keyboardKey: sym %X state %s time %u\n", sym, (state == WL_KEYBOARD_KEY_STATE_PRESSED ? "Down" : "Up"), time);
+      }
+
+      if ( state == WL_KEYBOARD_KEY_STATE_PRESSED )
+      {
+         processInput( ctx, sym );
+      }
+   }
+}
+
+static void keyboardModifiers( void *data, struct wl_keyboard *keyboard, uint32_t serial,
+                               uint32_t mods_depressed, uint32_t mods_latched,
+                               uint32_t mods_locked, uint32_t group )
+{
+   AppCtx *ctx= (AppCtx*)data;
+   if ( ctx->xkbState )
+   {
+      xkb_state_update_mask( ctx->xkbState, mods_depressed, mods_latched, mods_locked, 0, 0, group );
+   }
+}
+
+static void keyboardRepeatInfo( void *data, struct wl_keyboard *keyboard, int32_t rate, int32_t delay )
+{
+   UNUSED(data);
+   UNUSED(keyboard);
+   UNUSED(rate);
+   UNUSED(delay);
+}
+
+static const struct wl_keyboard_listener keyboardListener= {
+   keyboardKeymap,
+   keyboardEnter,
+   keyboardLeave,
+   keyboardKey,
+   keyboardModifiers,
+   keyboardRepeatInfo
+};
+
+static void pointerEnter( void* data, struct wl_pointer *pointer, uint32_t serial,
+                          struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy )
+{
+   UNUSED(pointer);
+   UNUSED(serial);
+   AppCtx *ctx= (AppCtx*)data;
+   int x, y;
+
+   x= wl_fixed_to_int( sx );
+   y= wl_fixed_to_int( sy );
+
+   ctx->pointerX= x;
+   ctx->pointerY= y;
+
+   printf("pointer enter surface %p (%d,%d)\n", surface, x, y );
+}
+
+static void pointerLeave( void* data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface )
+{
+   UNUSED(data);
+   UNUSED(pointer);
+   UNUSED(serial);
+
+   printf("pointer leave surface %p\n", surface );
+}
+
+static void pointerMotion( void *data, struct wl_pointer *pointer, uint32_t time, wl_fixed_t sx, wl_fixed_t sy )
+{
+   UNUSED(pointer);
+   AppCtx *ctx= (AppCtx*)data;
+   int x, y;
+
+   x= wl_fixed_to_int( sx );
+   y= wl_fixed_to_int( sy );
+
+   ctx->pointerX= x;
+   ctx->pointerY= y;
+
+   if ( ctx->verboseLog )
+   {
+      printf("pointer motion surface (%d,%d) time %u\n", x, y, time );
+   }
+}
+
+static void pointerButton( void *data, struct wl_pointer *pointer, uint32_t serial,
+                           uint32_t time, uint32_t button, uint32_t state )
+{
+   UNUSED(pointer);
+   UNUSED(serial);
+   AppCtx *ctx= (AppCtx*)data;
+
+   printf("pointer button %u state %u (%d, %d)\n", button, state, ctx->pointerX, ctx->pointerY);
+   ctx->verboseLog= (state == WL_POINTER_BUTTON_STATE_PRESSED);
+}
+
+static void pointerAxis( void *data, struct wl_pointer *pointer, uint32_t time,
+                         uint32_t axis, wl_fixed_t value )
+{
+   UNUSED(data);
+   UNUSED(pointer);
+   UNUSED(time);
+   int v;
+
+   v= wl_fixed_to_int( value );
+   printf("pointer axis %u value %d\n", axis, v);
+}
+
+static const struct wl_pointer_listener pointerListener = {
+   pointerEnter,
+   pointerLeave,
+   pointerMotion,
+   pointerButton,
+   pointerAxis
+};
+
 static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
 {
 	AppCtx *ctx = (AppCtx*)data;
@@ -208,12 +423,14 @@ static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabil
       printf("  seat has keyboard\n");
       ctx->keyboard= wl_seat_get_keyboard( ctx->seat );
       printf("  keyboard %p\n", ctx->keyboard );
+      wl_keyboard_add_listener( ctx->keyboard, &keyboardListener, ctx );
    }
    if ( capabilities & WL_SEAT_CAPABILITY_POINTER )
    {
       printf("  seat has pointer\n");
       ctx->pointer= wl_seat_get_pointer( ctx->seat );
       printf("  pointer %p\n", ctx->pointer );
+      wl_pointer_add_listener( ctx->pointer, &pointerListener, ctx );
    }
    if ( capabilities & WL_SEAT_CAPABILITY_TOUCH )
    {
@@ -232,6 +449,62 @@ static void seatName( void *data, struct wl_seat *seat, const char *name )
 static const struct wl_seat_listener seatListener = {
    seatCapabilities,
    seatName 
+};
+
+static void outputGeometry( void *data, struct wl_output *output, int32_t x, int32_t y,
+                            int32_t physical_width, int32_t physical_height, int32_t subpixel,
+                            const char *make, const char *model, int32_t transform )
+{
+   UNUSED(data);
+   UNUSED(output);
+   UNUSED(x);
+   UNUSED(y);
+   UNUSED(physical_width);
+   UNUSED(physical_height);
+   UNUSED(subpixel);
+   UNUSED(make);
+   UNUSED(model);
+   UNUSED(transform);
+}
+
+static void outputMode( void *data, struct wl_output *output, uint32_t flags,
+                        int32_t width, int32_t height, int32_t refresh )
+{
+	AppCtx *ctx = (AppCtx*)data;
+
+   if ( flags & WL_OUTPUT_MODE_CURRENT )
+   {
+      if ( (width !=  ctx->planeWidth) || (height != ctx->planeHeight) )
+      {
+         ctx->planeWidth= width;
+         ctx->planeHeight= height;
+         if ( ctx->verboseLog )
+         {
+            printf("outputMode: resize egl window to (%d,%d)\n", ctx->planeWidth, ctx->planeHeight );
+         }
+         resizeSurface( ctx, 0, 0, ctx->planeWidth, ctx->planeHeight);
+      }
+   }
+}
+
+static void outputDone( void *data, struct wl_output *output )
+{
+   UNUSED(data);
+   UNUSED(output);
+}
+
+static void outputScale( void *data, struct wl_output *output, int32_t factor )
+{
+   UNUSED(data);
+   UNUSED(output);
+   UNUSED(factor);
+}
+
+static const struct wl_output_listener outputListener = {
+   outputGeometry,
+   outputMode,
+   outputDone,
+   outputScale
 };
 
 static void registryHandleGlobal(void *data, 
@@ -257,7 +530,12 @@ static void registryHandleGlobal(void *data,
       ctx->seat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
       printf("seat %p\n", ctx->seat);
 		wl_seat_add_listener(ctx->seat, &seatListener, ctx);
-   } 
+   }
+   else if ( (len==9) && !strncmp(interface, "wl_output", len) ) {
+      ctx->output= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
+      printf("output %p\n", ctx->output);
+      wl_output_add_listener(ctx->output, &outputListener, ctx);
+   }
    else if ( (len==15) && !strncmp(interface, "wl_simple_shell", len) ) {
       if ( ctx->getShell ) {
          ctx->shell= (struct wl_simple_shell*)wl_registry_bind(registry, id, &wl_simple_shell_interface, 1);      
@@ -381,73 +659,80 @@ static void setBlockingMode(int blockingState )
    tcsetattr(STDIN_FILENO, TCSANOW, &ttystate);   
 }
 
-static int kbhit()  
-{  
-   struct timeval tv;  
-   fd_set fds;  
-   tv.tv_sec = 0;  
-   tv.tv_usec = 0;  
-   FD_ZERO(&fds);  
-   FD_SET(STDIN_FILENO, &fds); //STDIN_FILENO is 0  
-   select(STDIN_FILENO+1, &fds, NULL, NULL, &tv);  
-   return FD_ISSET(STDIN_FILENO, &fds);  
+static bool isKeyHit()
+{
+   bool keyHit= false;
+   fd_set fdset;
+   struct timeval tval;
+
+   // do a non-blocking check to see if any keys
+   // are ready to read from stdin
+   tval.tv_sec= 0;
+   tval.tv_usec= 0;
+   FD_ZERO(&fdset);
+   FD_SET(STDIN_FILENO, &fdset);
+   select(STDIN_FILENO+1, &fdset, NULL, NULL, &tval);
+
+   keyHit= FD_ISSET(STDIN_FILENO, &fdset);
+
+   return keyHit;
 }
 
-static void adjustAttribute( AppCtx *ctx, int c )
+static void adjustAttribute( AppCtx *ctx, uint32_t sym )
 {
    switch( ctx->attribute )
    {
       case Attribute_position:
-         switch( c )
+         switch( sym )
          {
-            case 0x41: //UP
+            case XKB_KEY_Up:
                --ctx->surfaceDY;
                break;
-            case 0x42: //DOWN
+            case XKB_KEY_Down:
                ++ctx->surfaceDY;
                break;
-            case 0x43: //RIGHT
+            case XKB_KEY_Right:
                ++ctx->surfaceDX;
                break;
-            case 0x44: //LEFT
+            case XKB_KEY_Left:
                --ctx->surfaceDX;
                break;
          }
          break;
       case Attribute_size:
-         switch( c )
+         switch( sym )
          {
-            case 0x41: //UP
+            case XKB_KEY_Up:
                --ctx->surfaceDHeight;
                break;
-            case 0x42: //DOWN
+            case XKB_KEY_Down:
                ++ctx->surfaceDHeight;
                break;
-            case 0x43: //RIGHT
+            case XKB_KEY_Right:
                ++ctx->surfaceDWidth;
                break;
-            case 0x44: //LEFT
+            case XKB_KEY_Left:
                --ctx->surfaceDWidth;
                break;
          }
          break;
       case Attribute_visibility:
-         switch( c )
+         switch( sym )
          {
-            case 0x41: //UP
-            case 0x43: //RIGHT
-            case 0x42: //DOWN
-            case 0x44: //LEFT
+            case XKB_KEY_Up:
+            case XKB_KEY_Right:
+            case XKB_KEY_Down:
+            case XKB_KEY_Left:
                ctx->surfaceVisible= !ctx->surfaceVisible;
                wl_simple_shell_set_visible( ctx->shell, ctx->surfaceIdCurrent, (ctx->surfaceVisible ? 1 : 0) );
                break;
          }
          break;
       case Attribute_opacity:
-         switch( c )
+         switch( sym )
          {
-            case 0x41: //UP
-            case 0x43: //RIGHT
+            case XKB_KEY_Up:
+            case XKB_KEY_Right:
                ctx->surfaceOpacity += 0.1;
                if ( ctx->surfaceOpacity > 1.0 )
                {
@@ -455,8 +740,8 @@ static void adjustAttribute( AppCtx *ctx, int c )
                }
                wl_simple_shell_set_opacity( ctx->shell, ctx->surfaceIdCurrent, wl_fixed_from_double(ctx->surfaceOpacity) );
                break;
-            case 0x42: //DOWN
-            case 0x44: //LEFT
+            case XKB_KEY_Down:
+            case XKB_KEY_Left:
                ctx->surfaceOpacity -= 0.1;
                if ( ctx->surfaceOpacity < 0.0 )
                {
@@ -467,10 +752,10 @@ static void adjustAttribute( AppCtx *ctx, int c )
          }
          break;
       case Attribute_zorder:
-         switch( c )
+         switch( sym )
          {
-            case 0x41: //UP
-            case 0x43: //RIGHT
+            case XKB_KEY_Up:
+            case XKB_KEY_Right:
                ctx->surfaceZOrder += 0.1;
                if ( ctx->surfaceZOrder > 1.0 )
                {
@@ -478,8 +763,8 @@ static void adjustAttribute( AppCtx *ctx, int c )
                }
                wl_simple_shell_set_zorder( ctx->shell, ctx->surfaceIdCurrent, wl_fixed_from_double(ctx->surfaceZOrder) );
                break;
-            case 0x42: //DOWN
-            case 0x44: //LEFT
+            case XKB_KEY_Down:
+            case XKB_KEY_Left:
                ctx->surfaceZOrder -= 0.1;
                if ( ctx->surfaceZOrder < 0.0 )
                {
@@ -492,40 +777,30 @@ static void adjustAttribute( AppCtx *ctx, int c )
    }
 }
 
-static void processInputMain( AppCtx *ctx, int c )
+static void processInputMain( AppCtx *ctx, uint32_t sym )
 {
-   switch( c )
+   switch( sym )
    {
-      case 0x1B:
-         c= fgetc(stdin);
-         if ( c == 0x5B )
+      case XKB_KEY_Left:
+      case XKB_KEY_Up:
+      case XKB_KEY_Right:
+      case XKB_KEY_Down:
+         if ( ctx->surfaceIdCurrent )
          {
-            c= fgetc(stdin);
-            switch( c )
-            {
-               case 0x41: //UP
-               case 0x42: //DOWN
-               case 0x43: //RIGHT
-               case 0x44: // LEFT
-                  if ( ctx->surfaceIdCurrent )
-                  {
-                     adjustAttribute( ctx, c );
-                  }
-                  break;
-            }
+            adjustAttribute( ctx, sym );
          }
          break;
-      case 'a':
+      case XKB_KEY_a:
          ctx->inputState= InputState_attribute;
          printf("attribute: (p) osition, (s) ize, (v) isible, (o) pacity, (z) order (x) back to main\n");
          break;
-      case 's':
+      case XKB_KEY_s:
          if ( ctx->surfaceIdCurrent )
          {
             wl_simple_shell_get_status( ctx->shell, ctx->surfaceIdCurrent );
          }
          break;
-      case 'n':
+      case XKB_KEY_n:
          if ( ctx->surfaceIdOther )
          {
             uint32_t temp= ctx->surfaceIdCurrent;
@@ -535,11 +810,11 @@ static void processInputMain( AppCtx *ctx, int c )
             wl_simple_shell_get_status( ctx->shell, ctx->surfaceIdCurrent );
          }
          break;
-      case 'l':
+      case XKB_KEY_l:
          printf("get all surfaces:\n");
          wl_simple_shell_get_surfaces( ctx->shell );
          break;
-      case 'r':
+      case XKB_KEY_r:
          ctx->planeWidth= (ctx->planeWidth == 1280) ? 640 : 1280;
          ctx->planeHeight= (ctx->planeHeight == 720) ? 360 : 720;
          printf("resize egl window to (%d,%d)\n", ctx->planeWidth, ctx->planeHeight );
@@ -548,23 +823,23 @@ static void processInputMain( AppCtx *ctx, int c )
    }
 }
 
-static void processInputAttribute( AppCtx *ctx, int c )
+static void processInputAttribute( AppCtx *ctx, uint32_t sym )
 {
-   switch( c )
+   switch( sym )
    {
-      case 'p':
+      case XKB_KEY_p:
          ctx->attribute= Attribute_position;
          break;
-      case 's':
+      case XKB_KEY_s:
          ctx->attribute= Attribute_size;
          break;
-      case 'v':
+      case XKB_KEY_v:
          ctx->attribute= Attribute_visibility;
          break;
-      case 'o':
+      case XKB_KEY_o:
          ctx->attribute= Attribute_opacity;
          break;
-      case 'z':
+      case XKB_KEY_z:
          ctx->attribute= Attribute_zorder;
          break;
       default:
@@ -574,15 +849,15 @@ static void processInputAttribute( AppCtx *ctx, int c )
    ctx->inputState= InputState_main;
 }
 
-static void processInput( AppCtx *ctx, int c )
+static void processInput( AppCtx *ctx, uint32_t sym )
 {
    switch( ctx->inputState )
    {
       case InputState_main:
-         processInputMain( ctx, c );
+         processInputMain( ctx, sym );
          break;
       case InputState_attribute:
-         processInputAttribute( ctx, c );
+         processInputAttribute( ctx, sym );
          break;
    }
 }
@@ -787,10 +1062,39 @@ int main( int argc, char** argv)
 
       if ( ctx.getShell )
       {      
-         if ( kbhit() )
+         if ( isKeyHit() )
          {
+            uint32_t sym= XKB_KEY_NoSymbol;
             int c= fgetc(stdin);
-            processInput(&ctx, c);
+            switch( c )
+            {
+               case 0x1B:
+                  c= fgetc(stdin);
+                  if ( c == 0x5B )
+                  {
+                     c= fgetc(stdin);
+                     switch( c )
+                     {
+                        case 0x41: //UP
+                           sym= XKB_KEY_Up;
+                           break;
+                        case 0x42: //DOWN
+                           sym= XKB_KEY_Down;
+                           break;
+                        case 0x43: //RIGHT
+                           sym= XKB_KEY_Right;
+                           break;
+                        case 0x44: // LEFT
+                           sym= XKB_KEY_Left;
+                           break;
+                     }
+                  }
+                  break;
+               default:
+                  sym= c;
+                  break;
+            }
+            processInput(&ctx, sym);
             
             // Prevent keys from building up while held down
             tcflush(STDIN_FILENO,TCIFLUSH);
@@ -825,7 +1129,49 @@ exit:
    }
    
    termEGL(&ctx);
- 
+
+   if ( ctx.xkbState )
+   {
+      xkb_state_unref( ctx.xkbState );
+      ctx.xkbState= 0;
+   }
+
+   if ( ctx.xkbKeymap )
+   {
+      xkb_keymap_unref( ctx.xkbKeymap );
+      ctx.xkbKeymap= 0;
+   }
+
+   if ( ctx.xkbCtx )
+   {
+      xkb_context_unref( ctx.xkbCtx );
+      ctx.xkbCtx= 0;
+   }
+
+   if ( ctx.pointer )
+   {
+      wl_pointer_destroy(ctx.pointer);
+      ctx.pointer= 0;
+   }
+
+   if ( ctx.keyboard )
+   {
+     wl_keyboard_destroy(ctx.keyboard);
+     ctx.keyboard= 0;
+   }
+
+   if ( ctx.seat )
+   {
+      wl_seat_destroy(ctx.seat);
+      ctx.seat= 0;
+   }
+
+   if ( ctx.output )
+   {
+      wl_output_destroy(ctx.output);
+      ctx.output= 0;
+   }
+
    if ( registry )
    {
       wl_registry_destroy(registry);

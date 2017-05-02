@@ -569,7 +569,7 @@ static void wstRendererEMBDestroy( WstRendererEMB *renderer )
       }
       if ( renderer->textureShaderYUV )
       {
-         wstRendererEMBDestroyShader( renderer->textureShaderYUV );;
+         wstRendererEMBDestroyShader( renderer->textureShaderYUV );
          renderer->textureShaderYUV= 0;
       }
       #if defined (WESTEROS_PLATFORM_EMBEDDED)

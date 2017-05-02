@@ -96,6 +96,8 @@ westeros_test_SOURCES = westeros-test.cpp
 westeros_test_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_CLIENT_LIBS) \
+   $(XKBCOMMON_LIBS) \
+   -lxkbcommon \
    -lwesteros_simpleshell_client \
    $(WSTEGL_LIBS) \
    -lEGL
