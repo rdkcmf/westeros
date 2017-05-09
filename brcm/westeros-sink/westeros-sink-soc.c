@@ -170,10 +170,11 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    gboolean result= FALSE;
    NEXUS_Error rc;
    NxClient_AllocSettings allocSettings;
+   int i;
 
    sink->soc.captureWidth= -1;
    sink->soc.captureHeight= -1;
-   for( int i= 0; i < NUM_CAPTURE_SURFACES; ++i )
+   for( i= 0; i < NUM_CAPTURE_SURFACES; ++i )
    {
       sink->soc.captureSurface[i]= NULL;
    }
@@ -842,6 +843,8 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
    
    if ( (sink->soc.captureWidth != sink->srcWidth) || (sink->soc.captureHeight != sink->srcHeight) )
    {
+      int i;
+
       freeCaptureSurfaces(sink);
       
       sink->soc.captureWidth= sink->srcWidth;
@@ -852,7 +855,7 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
       videoSurfaceCreateSettings.width= sink->soc.captureWidth;
       videoSurfaceCreateSettings.height= sink->soc.captureHeight;
       videoSurfaceCreateSettings.pixelFormat= NEXUS_PixelFormat_eA8_R8_G8_B8;
-      for( int i= 0; i < NUM_CAPTURE_SURFACES; ++i )
+      for( i= 0; i < NUM_CAPTURE_SURFACES; ++i )
       {
          sink->soc.captureSurface[i]= NEXUS_Surface_Create(&videoSurfaceCreateSettings);
          GST_LOG("video capture surface %d: %p (%dx%d)\n", i, 
@@ -874,7 +877,8 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
 
 static void freeCaptureSurfaces( GstWesterosSink *sink )
 {
-   for( int i= 0; i < NUM_CAPTURE_SURFACES; ++i )
+   int i;
+   for( i= 0; i < NUM_CAPTURE_SURFACES; ++i )
    {
       if ( sink->soc.captureSurface[i] != NULL )
       {
