@@ -410,6 +410,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->position= 0;
    sink->positionSegmentStart= 0;
    sink->segmentNumber= 0;
+   sink->queryPositionFromPeer= FALSE;
 
    if ( gst_westeros_sink_soc_init( sink ) == TRUE )
    {
@@ -790,6 +791,14 @@ static gboolean gst_westeros_sink_query(GstElement *element, GstQuery *query)
             }
             else
             {
+               if (sink->queryPositionFromPeer && sink->peerPad)
+               {
+                   if (gst_pad_query(sink->peerPad, query))
+                   {
+                       GST_DEBUG_OBJECT(sink, "Queried position from peer");
+                       return TRUE;
+                   }
+               }
                LOCK( sink );
                gint64 position= sink->position;
                UNLOCK( sink );
@@ -887,6 +896,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          {
             gint64 segmentStart, segmentPosition;
             GstFormat segmentFormat;
+            gdouble appliedRate = 1.0;
 
             #ifdef USE_GST1
             const GstSegment *dataSegment;
@@ -894,6 +904,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             segmentFormat= dataSegment->format;
             segmentStart= dataSegment->start;
             segmentPosition= dataSegment->position;
+            appliedRate= dataSegment->applied_rate;
             #else
             gst_event_parse_new_segment(event, NULL, NULL, 
                                         &segmentFormat, &segmentStart, 
@@ -907,6 +918,11 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             
             LOCK( sink );
             sink->flushStarted= FALSE;
+            if (appliedRate != 1.0)
+            {
+                GST_DEBUG_OBJECT(sink, "rate change done upstream");
+                sink->queryPositionFromPeer= TRUE;
+            }
             UNLOCK( sink );
             
             if ( 
