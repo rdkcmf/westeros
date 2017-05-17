@@ -428,6 +428,7 @@ typedef struct _WstCompositor
 } WstCompositor;
 
 static const char* wstGetNextNestedDisplayName(void);
+static void wstCompositorReleaseResources( WstCompositor *ctx );
 static void* wstCompositorThread( void *arg );
 static long long wstGetCurrentTimeMillis(void);
 static bool wstCompositorCheckForRepeaterSupport( WstCompositor *ctx );
@@ -1913,6 +1914,8 @@ void WstCompositorStop( WstCompositor *ctx )
             pthread_mutex_unlock( &ctx->mutex );
             pthread_join( ctx->compositorThreadId, NULL );
             pthread_mutex_lock( &ctx->mutex );
+
+            wstCompositorReleaseResources( ctx );
          }
 
          if ( !ctx->isNested )
@@ -2847,7 +2850,12 @@ exit:
       WstSimpleShellUninit( ctx->simpleShell );
       ctx->simpleShell= 0;
    }
-   
+
+   return NULL;
+}
+
+static void wstCompositorReleaseResources( WstCompositor *ctx )
+{
    #ifdef ENABLE_SBPROTOCOL
    if ( ctx->sb )
    {
@@ -2874,7 +2882,7 @@ exit:
       ctx->eglUnbindWaylandDisplayWL( ctx->eglDisplay, ctx->display );
       #endif
    }
-   
+
    if ( ctx->renderer )
    {
       WstRendererDestroy( ctx->renderer );
@@ -2919,8 +2927,6 @@ exit:
       ctx->surfaceInfoMap.erase( it );
       free( surfaceInfo );
    }   
-   
-   return NULL;
 }
 
 static bool wstCompositorCheckForRepeaterSupport( WstCompositor *ctx )
