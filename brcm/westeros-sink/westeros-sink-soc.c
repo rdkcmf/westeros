@@ -743,10 +743,12 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 {
    NEXUS_SimpleVideoDecoder_Flush( sink->soc.videoDecoder );
+   LOCK(sink);
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
    sink->soc.noFrameCount= 0;
    sink->soc.presentationStarted= FALSE;
+   UNLOCK(sink);
 
 
    // Drop frames pending for display
@@ -1179,18 +1181,29 @@ static void processFrame( GstWesterosSink *sink )
             }
 
             sink->currentPTS= ((gint64)captureStatus.pts)*2LL;
-            if ( sink->soc.frameCount == 0 )
+            if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
-               sink->firstPTS= sink->currentPTS;
+               gint64 newPts =  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
+               GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", newPts);
+               sink->prevPositionSegmentStart = sink->positionSegmentStart;
+               sink->firstPTS = newPts;
                g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
             }
             if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
             {
+               gint64 calculatedPosition = GST_MSECOND * sink->currentPTS / 90LL;
+               gint64 calculatedFirstPtsPosition = GST_MSECOND * sink->firstPTS / 90LL;
+               if (calculatedPosition < sink->positionSegmentStart ||
+                   calculatedFirstPtsPosition < sink->positionSegmentStart) {
+                  GST_INFO("calculatedPosition %lld or calculatedFirstPtsPosition %lld is less than sink->positionSegmentStart %lld", calculatedPosition, calculatedFirstPtsPosition, sink->positionSegmentStart);
+                  UNLOCK(sink);
+                  return;
+               }
                sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
             }
-            UNLOCK( sink );
             sink->soc.frameCount++;
             sink->soc.noFrameCount= 0;
+            UNLOCK( sink );
             
             long long now= getCurrentTimeMillis();
             long long elapsed= now-sink->soc.startTime;
@@ -1253,13 +1266,24 @@ static void updateVideoStatus( GstWesterosSink *sink )
       if ( videoStatus.firstPtsPassed && (sink->currentPTS/2 != videoStatus.pts) )
       {
          sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
-         if ( sink->soc.frameCount == 0 )
+         if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
          {
-            sink->firstPTS= sink->currentPTS;
+            gint64 newPts =  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
+            GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", newPts);
+            sink->prevPositionSegmentStart = sink->positionSegmentStart;
+            sink->firstPTS = newPts;
             g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
          }
          if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
          {
+            gint64 calculatedPosition = GST_MSECOND * sink->currentPTS / 90LL;
+            gint64 calculatedFirstPtsPosition = GST_MSECOND * sink->firstPTS / 90LL;
+            if (calculatedPosition < sink->positionSegmentStart ||
+                calculatedFirstPtsPosition < sink->positionSegmentStart) {
+               GST_INFO("calculatedPosition %lld or calculatedFirstPtsPosition %lld is less than sink->positionSegmentStart %lld", calculatedPosition, calculatedFirstPtsPosition, sink->positionSegmentStart);
+               UNLOCK(sink);
+               return;
+            }
             sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
          }
          sink->soc.frameCount++;

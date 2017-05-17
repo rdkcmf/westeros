@@ -409,6 +409,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->currentPTS= 0;
    sink->position= 0;
    sink->positionSegmentStart= 0;
+   sink->prevPositionSegmentStart= 0;
    sink->segmentNumber= 0;
    sink->queryPositionFromPeer= FALSE;
 
@@ -923,14 +924,12 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                 GST_DEBUG_OBJECT(sink, "rate change done upstream");
                 sink->queryPositionFromPeer= TRUE;
             }
-            UNLOCK( sink );
             
             if ( 
                  (segmentFormat == GST_FORMAT_TIME) && 
                  ( (segmentStart != 0) || (sink->startPTS != 0) )
                ) 
             {
-               LOCK( sink );
                sink->segmentNumber++;
                sink->eosEventSeen= FALSE;
                sink->eosDetected= FALSE;
@@ -938,8 +937,9 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                sink->positionSegmentStart= GST_TIME_AS_NSECONDS(segmentStart);
                sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
                gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
-               UNLOCK( sink );
             }
+            UNLOCK( sink );
+
          }
          break;
        default:
