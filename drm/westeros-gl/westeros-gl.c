@@ -32,9 +32,10 @@
 #include <stdio.h>
 #include "westeros-gl.h"
 
-//#define VERBOSE_DEBUG
+#define VERBOSE_DEBUG
 //#define EMIT_FRAMERATE
-//#define USE_PAGEFLIP
+// Defaulting Page flip usage as pageflipping error is addressed
+#define USE_PAGEFLIP
 #define DEFAULT_CARD "/dev/dri/card0"
 #define DEFAULT_MODE_WIDTH (1280)
 #define DEFAULT_MODE_HEIGHT (720)
@@ -451,6 +452,23 @@ void* WstGLGetEGLNativePixmap( WstGLCtx *ctx, void *nativePixmap )
    return nativePixmap;
 }
 
+#ifdef USE_PAGEFLIP
+// Variable to track pending pageflip
+static int pageflip_pending = 0;
+
+// Page flip event handler
+static void page_flip_event_handler(int fd, unsigned int frame,
+				    unsigned int sec, unsigned int usec,
+				    void *data)
+{
+    if (pageflip_pending){
+        pageflip_pending--;
+    }
+    else
+	printf("pflip sync failure\n");
+}
+#endif
+
 static void swapDRMBuffers(void* nativeBuffer) 
 {
    struct gbm_surface* surface;
@@ -463,6 +481,10 @@ static void swapDRMBuffers(void* nativeBuffer)
    static long long startTime= -1LL;
    static int frameCount= 0;
    long long now;
+   #endif
+   #ifdef USE_PAGEFLIP
+   fd_set fds;
+   drmEventContext ev;
    #endif
    
    if ( g_wstCtx )
@@ -519,6 +541,9 @@ static void swapDRMBuffers(void* nativeBuffer)
             }
 
             #ifdef USE_PAGEFLIP
+            FD_ZERO(&fds);
+	    memset(&ev, 0, sizeof(ev));
+
             if ( !g_wstCtx->modeSet )
             {
                ret = drmModeSetCrtc(g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, 0, 0,
@@ -532,13 +557,32 @@ static void swapDRMBuffers(void* nativeBuffer)
             }
             else
             {
-               ret= drmModePageFlip( g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, DRM_MODE_PAGE_FLIP_EVENT, g_wstCtx );
+	       ret= drmModePageFlip( g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, DRM_MODE_PAGE_FLIP_EVENT, g_wstCtx );
                if ( ret )
                {
                   #ifdef VERBOSE_DEBUG
                   printf( "westeros_gl: WstGLSwapBuffers: drmModePageFlip error: %d errno %d\n", ret, errno );
                   #endif
                }
+
+               pageflip_pending++;
+	       ev.version = 2;
+	       ev.page_flip_handler = page_flip_event_handler;
+	       FD_SET(0, &fds);
+	       FD_SET(g_wstCtx->drmFd, &fds);
+
+               /* handling pageflip event */
+	       ret = select(g_wstCtx->drmFd + 1, &fds, NULL, NULL, NULL);
+	       if (ret < 0) {
+			fprintf(stderr, "select() failed with %d: %m\n", errno);
+	       }
+	       else if (FD_ISSET(g_wstCtx->drmFd, &fds)) {
+			drmHandleEvent(g_wstCtx->drmFd, &ev);
+	       }
+	       
+               /* release the buffer if pageflip done */
+               if (pageflip_pending==0)
+		  gbm_surface_release_buffer(surface, bo);
             }
             #else
             ret = drmModeSetCrtc(g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, 0, 0,
@@ -570,12 +614,16 @@ static void swapDRMBuffers(void* nativeBuffer)
                }
             }
             #endif
+
          }
+
+         #ifndef USE_PAGEFLIP
 	 /* release the used buffer to gbm surface if no free buffer is available */
          if(!gbm_surface_has_free_buffers(surface))
          {
                 gbm_surface_release_buffer(surface, bo);
          }
+         #endif
       }
    }
 }
@@ -741,6 +789,7 @@ exit:
 static void destroyGbmCtx( struct gbm_bo *bo, void *userData )
 {
    GbmCtx *gbmCtx= (GbmCtx*)userData;
+   drmModeRmFB(g_wstCtx->drmFd, gbmCtx->fb_id[gbmCtx->front]);
    printf("westeros-gl: destroyGbmCtx %p\n", gbmCtx );
    if ( gbmCtx )
    {
