@@ -167,6 +167,7 @@ typedef struct _AppCtx
 	} gl;
 	long long startTime;
 	long long currTime;
+	bool noAnimation;
 	bool needRedraw;
 	bool verboseLog;
 	int pointerX, pointerY;
@@ -871,6 +872,7 @@ static void showUsage()
    printf("  --shell : use wl_simple_shell protocol\n" );
    printf("  --display <name> : wayland display to connect to\n" );
    printf("  --noframe : don't pace rendering with frame requests\n" );
+   printf("  --noanimate : don't use animation\n" );
    printf("  -? : show usage\n" );
    printf("\n" );
 }
@@ -964,6 +966,10 @@ int main( int argc, char** argv)
       else if (!strcmp( (const char*)argv[i], "--log" ) )
       {
          g_log= true;
+      }
+      else if (!strcmp( (const char*)argv[i], "--noanimate" ) )
+      {
+         ctx.noAnimation= true;
       }
       else if ( !strcmp( (const char*)argv[i], "-?" ) )
       {
@@ -1537,7 +1543,7 @@ static bool renderGL( AppCtx *ctx )
 
    ctx->currTime= currentTimeMillis();
 
-   angle = ((ctx->currTime-ctx->startTime) / speed_div) % 360 * M_PI / 180.0;
+   angle = ctx->noAnimation ? 0.0 : ((ctx->currTime-ctx->startTime) / speed_div) % 360 * M_PI / 180.0;
    rotation[0][0] =  cos(angle);
    rotation[0][2] =  sin(angle);
    rotation[2][0] = -sin(angle);
