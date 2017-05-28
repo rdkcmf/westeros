@@ -30,7 +30,7 @@ lib_LTLIBRARIES = libwesteros_render_dispmanx.la
 
 libwesteros_render_dispmanx_la_SOURCES = westeros-render-dispmanx.cpp
 libwesteros_render_dispmanx_la_includedir = $(includedir)
-libwesteros_render_dispmanx_la_LDFLAGS= -lbcm_host
+libwesteros_render_dispmanx_la_LDFLAGS= -lbcm_host -lvchostif
 if HAVE_WAYLAND_EGL
 AM_CXXFLAGS += -DWESTEROS_HAVE_WAYLAND_EGL
 libwesteros_render_dispmanx_la_LDFLAGS += -lwayland-egl
