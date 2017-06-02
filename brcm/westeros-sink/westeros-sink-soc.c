@@ -31,6 +31,8 @@
 #define FRAME_POLL_TIME (8000)
 #define EOS_DETECT_DELAY (500000)
 #define EOS_DETECT_DELAY_AT_START (10000000)
+#define DEFAULT_CAPTURE_WIDTH (1280)
+#define DEFAULT_CAPTURE_HEIGHT (720)
 
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
@@ -44,7 +46,8 @@ enum
   PROP_DISPLAY_RESOLUTION,
   PROP_WINDOW_SHOW,
   PROP_ZOOM_MODE,
-  PROP_SERVER_PLAY_SPEED
+  PROP_SERVER_PLAY_SPEED,
+  PROP_CAPTURE_SIZE
 };
 
 enum
@@ -129,6 +132,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
           "Server side applied play speed",
           -G_MAXFLOAT, G_MAXFLOAT, 1.0, G_PARAM_READWRITE));
 
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_CAPTURE_SIZE,
+       g_param_spec_string ("capture_size", "capture size",
+           "Capture Size Format: width,height",
+           NULL, G_PARAM_WRITABLE));
+
    gstelement_class= GST_ELEMENT_CLASS(klass);
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(gstelement_class),
@@ -174,6 +182,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
    sink->soc.captureWidth= -1;
    sink->soc.captureHeight= -1;
+   sink->soc.captureWidthNext= DEFAULT_CAPTURE_WIDTH;
+   sink->soc.captureHeightNext= DEFAULT_CAPTURE_HEIGHT;;
    for( i= 0; i < NUM_CAPTURE_SURFACES; ++i )
    {
       sink->soc.captureSurface[i]= NULL;
@@ -440,6 +450,29 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
          }
          break;
+      case PROP_CAPTURE_SIZE:
+         {
+            const gchar *str= g_value_get_string(value);
+            gchar **parts= g_strsplit(str, ",", 2);
+
+            if ( !parts[0] || !parts[1] )
+            {
+               GST_ERROR( "Bad capture size properties string" );
+            }
+            else
+            {
+               LOCK( sink );
+               sink->soc.captureWidthNext= atoi( parts[0] );
+               sink->soc.captureHeightNext= atoi( parts[1] );
+               UNLOCK( sink );
+
+               printf("gst_westeros_sink_set_property set capture size (%d,%d)\n",
+                       sink->soc.captureWidthNext, sink->soc.captureHeightNext );
+            }
+
+            g_strfreev(parts);
+            break;
+         }
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -843,14 +876,14 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
    if ( sink->srcWidth < 16 ) sink->srcWidth= 16;
    if ( sink->srcHeight < 16 ) sink->srcHeight= 16;
    
-   if ( (sink->soc.captureWidth != sink->srcWidth) || (sink->soc.captureHeight != sink->srcHeight) )
+   if ( (sink->soc.captureWidth != sink->soc.captureWidthNext) || (sink->soc.captureHeight != sink->soc.captureHeightNext) )
    {
       int i;
 
       freeCaptureSurfaces(sink);
       
-      sink->soc.captureWidth= sink->srcWidth;
-      sink->soc.captureHeight= sink->srcHeight;
+      sink->soc.captureWidth= sink->soc.captureWidthNext;
+      sink->soc.captureHeight= sink->soc.captureHeightNext;
 
       /* Create a set of surfaces for decoded frame capture */
       NEXUS_Surface_GetDefaultCreateSettings(&videoSurfaceCreateSettings);
@@ -1148,7 +1181,7 @@ static void processFrame( GstWesterosSink *sink )
    
    GST_DEBUG_OBJECT(sink, "processFrame: enter");
    
-   if ( (sink->soc.captureWidth != sink->srcWidth) || (sink->soc.captureHeight != sink->srcHeight) )
+   if ( (sink->soc.captureWidth == -1) || (sink->soc.captureHeight == -1) )
    {
       allocCaptureSurfaces( sink );
    }

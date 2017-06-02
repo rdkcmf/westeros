@@ -39,6 +39,8 @@ struct _GstWesterosSinkSoc
 {
    int captureWidth;
    int captureHeight;
+   int captureWidthNext;
+   int captureHeightNext;
    NEXUS_SurfaceHandle captureSurface[NUM_CAPTURE_SURFACES];
 
    NxClient_AllocResults allocSurface;
