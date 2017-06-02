@@ -411,8 +411,11 @@ static void pointerButton( void *data, struct wl_pointer *pointer, uint32_t seri
    UNUSED(serial);
    AppCtx *ctx= (AppCtx*)data;
 
-   printf("pointer button %u state %u (%d, %d)\n", button, state, ctx->pointerX, ctx->pointerY);
-   ctx->verboseLog= (state == WL_POINTER_BUTTON_STATE_PRESSED);
+   if ( ctx->verboseLog )
+   {
+      printf("pointer button %u state %u (%d, %d)\n", button, state, ctx->pointerX, ctx->pointerY);
+   }
+
 }
 
 static void pointerAxis( void *data, struct wl_pointer *pointer, uint32_t time,
@@ -992,6 +995,10 @@ int main( int argc, char** argv)
       else if (!strcmp( (const char*)argv[i], "--noframe" ) )
       {
          paceRendering= false;
+      }
+      else if (!strcmp( (const char*)argv[i], "--verbose" ) )
+      {
+         ctx.verboseLog= true;
       }
       else if (!strcmp( (const char*)argv[i], "--log" ) )
       {
