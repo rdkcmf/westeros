@@ -1187,7 +1187,6 @@ static void processFrame( GstWesterosSink *sink )
                GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", newPts);
                sink->prevPositionSegmentStart = sink->positionSegmentStart;
                sink->firstPTS = newPts;
-               g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
             }
             if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
             {
@@ -1201,6 +1200,12 @@ static void processFrame( GstWesterosSink *sink )
                }
                sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
             }
+
+            if (sink->soc.frameCount == 0)
+            {
+                g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+            }
+
             sink->soc.frameCount++;
             sink->soc.noFrameCount= 0;
             UNLOCK( sink );
@@ -1272,7 +1277,6 @@ static void updateVideoStatus( GstWesterosSink *sink )
             GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", newPts);
             sink->prevPositionSegmentStart = sink->positionSegmentStart;
             sink->firstPTS = newPts;
-            g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
          }
          if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
          {
@@ -1286,6 +1290,12 @@ static void updateVideoStatus( GstWesterosSink *sink )
             }
             sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
          }
+
+         if (sink->soc.frameCount == 0)
+         {
+             g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+         }
+
          sink->soc.frameCount++;
          sink->soc.noFrameCount= 0;
       }
