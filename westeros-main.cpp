@@ -869,31 +869,34 @@ void* inputThread( void *data )
                                           else
                                              keyModifiers &= ~WstKeyboard_alt;
                                           break;
-                                        default:
-                                           {
-                                             switch ( e.value )
-                                             {
-                                                case 0:
-                                                   keyState= WstKeyboard_keyState_released;
-                                                   break;
-                                                case 1:
-                                                   keyState= WstKeyboard_keyState_depressed;
-                                                   break;
-                                                default:
-                                                   keyState= WstKeyboard_keyState_none;
-                                                   break;
-                                             }
 
-                                             if ( keyState != WstKeyboard_keyState_none )
-                                             {
-                                                WstCompositorKeyEvent( inCtx->wctx,
-                                                                       keyCode,
-                                                                       keyState,
-                                                                       keyModifiers );
-                                             }                                          
-                                           }
+                                        case KEY_CAPSLOCK:
+                                          if ( e.value )
+                                             keyModifiers ^= WstKeyboard_caps;
                                            break;
                                     }                                 
+
+                                    switch ( e.value )
+                                    {
+                                       case 0:
+                                          keyState= WstKeyboard_keyState_released;
+                                          break;
+                                       case 1:
+                                          keyState= WstKeyboard_keyState_depressed;
+                                          break;
+                                       default:
+                                          keyState= WstKeyboard_keyState_none;
+                                          break;
+                                    }
+
+                                    if ( keyState != WstKeyboard_keyState_none )
+                                    {
+                                       WstCompositorKeyEvent( inCtx->wctx,
+                                                              keyCode,
+                                                              keyState,
+                                                              keyModifiers );
+                                    }
+
                                  }
                                  break;
                            }
