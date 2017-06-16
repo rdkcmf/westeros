@@ -949,7 +949,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       result= gst_pad_query(sink->peerPad, query);
       if (!result) 
       {
-         GST_ERROR("queryPeerHandles: pad query for stc_channel failed\n");
+         GST_DEBUG("queryPeerHandles: pad query for stc_channel failed\n");
          gst_query_unref(query);
          return FALSE;
       }    
@@ -1001,7 +1001,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    result= gst_pad_query(sink->peerPad, query);
    if (!result) 
    {
-      GST_DEBUG("queryPeerHandles: pad query for video_pid_channel failed\n");
+      GST_ERROR("queryPeerHandles: pad query for video_pid_channel failed\n");
       gst_query_unref(query);
       return FALSE;
    }
