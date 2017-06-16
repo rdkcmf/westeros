@@ -127,6 +127,8 @@ typedef struct _AppCtx
    struct xkb_context *xkbCtx;
    struct xkb_keymap *xkbKeymap;
    struct xkb_state *xkbState;
+   xkb_mod_index_t modAlt;
+   xkb_mod_index_t modCtrl;
 
    EGLDisplay eglDisplay;
    EGLConfig eglConfig;
@@ -254,6 +256,11 @@ static void keyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_t f
             {
                printf("error: xkb_state_new failed\n");
             }
+            if ( ctx->xkbKeymap )
+            {
+               ctx->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
+               ctx->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
+            }
             munmap( map, size );
          }
       }
@@ -300,7 +307,21 @@ static void keyboardKey( void *data, struct wl_keyboard *keyboard, uint32_t seri
 
       if ( ctx->verboseLog )
       {
-         printf("keyboardKey: sym %X state %s time %u\n", sym, (state == WL_KEYBOARD_KEY_STATE_PRESSED ? "Down" : "Up"), time);
+         int ctrl= 0;
+         int alt= 0;
+
+         if ( xkb_state_mod_index_is_active( ctx->xkbState, ctx->modCtrl, XKB_STATE_MODS_DEPRESSED) == 1 )
+         {
+            ctrl= 1;
+         }
+
+         if ( xkb_state_mod_index_is_active( ctx->xkbState, ctx->modAlt, XKB_STATE_MODS_DEPRESSED) == 1 )
+         {
+            alt= 1;
+         }
+
+         printf("keyboardKey: sym %X state %s ctrl %d alt %d time %u\n",
+                sym, (state == WL_KEYBOARD_KEY_STATE_PRESSED ? "Down" : "Up"), ctrl, alt, time);
       }
 
       if ( state == WL_KEYBOARD_KEY_STATE_PRESSED )
