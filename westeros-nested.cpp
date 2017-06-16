@@ -73,6 +73,7 @@ typedef struct _WstNestedConnection
    bool started;
    bool stopRequested;
    pthread_t nestedThreadId;
+   pthread_mutex_t buffersToReleaseMutex;
    uint32_t pointerEnterSerial;
    std::vector<WstNestedBufferInfo> buffersToRelease;
    std::map<struct wl_surface*, int32_t> surfaceMap;
@@ -612,6 +613,7 @@ WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx,
       nc->surfaceInfoMap= std::map<struct wl_surface*, WstNestedSurfaceInfo*>();
       nc->vpcSurfaceMap= std::map<struct wl_vpc_surface*, struct wl_surface*>();
       nc->buffersToRelease= std::vector<WstNestedBufferInfo>();
+      pthread_mutex_init( &nc->buffersToReleaseMutex, 0 );
 
       nc->display= wl_display_connect( displayName );
       if ( !nc->display )
@@ -771,6 +773,7 @@ void WstNestedConnectionDestroy( WstNestedConnection *nc )
          nc->display= 0;
       }
       nc->surfaceMap.clear();
+      pthread_mutex_destroy( &nc->buffersToReleaseMutex );
       free( nc );
    }
 }
@@ -846,7 +849,8 @@ void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surfa
          }
       }
       {
-         for ( std::vector<WstNestedBufferInfo>::iterator it= nc->buffersToRelease.begin(); 
+         pthread_mutex_lock( &nc->buffersToReleaseMutex );
+         for ( std::vector<WstNestedBufferInfo>::iterator it= nc->buffersToRelease.begin();
                it != nc->buffersToRelease.end(); )
          {
             if ( surface == (*it).surface )
@@ -854,6 +858,7 @@ void WstNestedConnectionDestroySurface( WstNestedConnection *nc, struct wl_surfa
             else
                 ++it;
          }         
+         pthread_mutex_unlock( &nc->buffersToReleaseMutex );
       }
       wl_surface_destroy( surface );
       wl_display_flush( nc->display );      
@@ -1004,7 +1009,9 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
             WstNestedBufferInfo bufferInfo;
             bufferInfo.surface= binfo->surface;
             bufferInfo.bufferRemote= bufferRemote;
+            pthread_mutex_lock( &binfo->nc->buffersToReleaseMutex );
             binfo->nc->buffersToRelease.push_back( bufferInfo );
+            pthread_mutex_unlock( &binfo->nc->buffersToReleaseMutex );
          }
       }
       free(binfo);
@@ -1106,6 +1113,7 @@ void WstNestedConnectionAttachAndCommitClone( WstNestedConnection *nc,
 
 void WstNestedConnectionReleaseRemoteBuffers( WstNestedConnection *nc )
 {
+   pthread_mutex_lock( &nc->buffersToReleaseMutex );
    while( nc->buffersToRelease.size() )
    {
       std::vector<WstNestedBufferInfo>::iterator it= nc->buffersToRelease.begin();
@@ -1113,6 +1121,7 @@ void WstNestedConnectionReleaseRemoteBuffers( WstNestedConnection *nc )
       wl_buffer_send_release( bufferResource );
       nc->buffersToRelease.erase(it);
    }
+   pthread_mutex_unlock( &nc->buffersToReleaseMutex );
 }
 
 void WstNestedConnectionPointerSetCursor( WstNestedConnection *nc, 
