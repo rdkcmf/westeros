@@ -1417,6 +1417,37 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
    }
 }
 
+gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
+{
+   gboolean rv = FALSE;
+   GValue val = {0, };
+
+   switch (GST_QUERY_TYPE(query))
+   {
+      case GST_QUERY_CUSTOM:
+         {
+            GstStructure *query_structure = (GstStructure*) gst_query_get_structure(query);
+            const gchar *struct_name = gst_structure_get_name(query_structure);
+            if (!strcasecmp(struct_name, "get_video_handle"))
+            {
+               g_value_init(&val, G_TYPE_POINTER);
+               g_value_set_pointer(&val, (gpointer)sink->soc.videoDecoder);
+
+               gst_structure_set_value(query_structure, "video_handle", &val);
+
+               rv = TRUE;
+            }
+
+         }
+         break;
+
+      default:
+         break;
+   }
+
+   return rv;
+}
+
 static void firstPtsPassedCallback( void *userData, int n )
 {
    GstWesterosSink *sink= (GstWesterosSink*)userData;

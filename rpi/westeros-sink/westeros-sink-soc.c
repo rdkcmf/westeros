@@ -1983,3 +1983,12 @@ static gpointer captureThread(gpointer data)
    return NULL;
 }
 
+gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
+{
+   gboolean result = FALSE;
+
+   //TBD
+
+   return result;
+}
+

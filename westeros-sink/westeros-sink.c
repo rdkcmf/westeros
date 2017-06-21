@@ -66,10 +66,12 @@ static gboolean gst_westeros_sink_check_caps(GstWesterosSink *sink, GstPad *peer
 static gboolean gst_westeros_sink_event(GstPad *pad, GstObject *parent, GstEvent *event);
 static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstObject *parent, GstPad *peer);
 static void gst_westeros_sink_unlink(GstPad *pad, GstObject *parent);
+static gboolean gst_westeros_sink_sink_query(GstPad *pad, GstObject *parent, GstQuery *query);
 #else
 static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event);
 static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstPad *peer);
 static void gst_westeros_sink_unlink(GstPad *pad);
+static gboolean gst_westeros_sink_sink_query(GstPad *pad, GstQuery *query);
 #endif
 static GstFlowReturn gst_westeros_sink_render(GstBaseSink *base_sink, GstBuffer *buffer);
 static GstFlowReturn gst_westeros_sink_preroll(GstBaseSink *base_sink, GstBuffer *buffer);
@@ -361,6 +363,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    gst_pad_set_event_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_event));
    gst_pad_set_link_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_link));
    gst_pad_set_unlink_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_unlink));
+   gst_pad_set_query_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_sink_query));
     
    gst_base_sink_set_sync(GST_BASE_SINK(sink), FALSE);
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), FALSE);
@@ -965,6 +968,28 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
    #endif
   
    return result;
+}
+
+#ifdef USE_GST1
+static gboolean gst_westeros_sink_sink_query(GstPad *pad, GstObject *parent, GstQuery *query)
+{
+   GstWesterosSink *sink= GST_WESTEROS_SINK(parent);
+#else
+static gboolean gst_westeros_sink_sink_query(GstPad *pad, GstQuery *query)
+{
+   GstWesterosSink *sink= GST_WESTEROS_SINK(gst_pad_get_parent(pad));
+#endif
+
+   gboolean rv = FALSE;
+
+   rv = gst_westeros_sink_soc_query(sink, query);
+
+   if (rv == FALSE)
+   {
+      rv = GST_ELEMENT_CLASS(parent_class)->query (GST_ELEMENT_CAST(sink), query);
+   }
+
+   return rv;
 }
 
 static gboolean gst_westeros_sink_check_caps(GstWesterosSink *sink, GstPad *peer)
