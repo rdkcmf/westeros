@@ -359,6 +359,12 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->peerPad= NULL;
    
    sink->parentEventFunc = GST_PAD_EVENTFUNC(GST_BASE_SINK_PAD(sink));
+   sink->defaultQueryFunc = GST_PAD_QUERYFUNC(GST_BASE_SINK_PAD(sink));
+   if ( sink->defaultQueryFunc == NULL )
+   {
+      sink->defaultQueryFunc= gst_pad_query_default;
+   }
+
 
    gst_pad_set_event_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_event));
    gst_pad_set_link_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_link));
@@ -986,7 +992,11 @@ static gboolean gst_westeros_sink_sink_query(GstPad *pad, GstQuery *query)
 
    if (rv == FALSE)
    {
-      rv = GST_ELEMENT_CLASS(parent_class)->query (GST_ELEMENT_CAST(sink), query);
+      #ifdef USE_GST1
+      rv= sink->defaultQueryFunc(pad, parent, query);
+      #else
+      rv= sink->defaultQueryFunc(pad, query);
+      #endif
    }
 
    return rv;

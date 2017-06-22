@@ -58,6 +58,7 @@ struct _GstWesterosSink
 {
    GstBaseSink parent;
    GstPadEventFunction parentEventFunc;
+   GstPadQueryFunction defaultQueryFunc;
    
    GstPad *peerPad; 
    gboolean rejectPrerollBuffers;
