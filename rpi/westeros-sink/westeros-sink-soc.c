@@ -1968,6 +1968,10 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
       }
       
       sink->soc.buffCurrent= buff;
+
+      #ifdef USE_GST1
+      gst_buffer_unmap( buffer, &map);
+      #endif
    }
 
 exit:
