@@ -1914,9 +1914,9 @@ void WstCompositorStop( WstCompositor *ctx )
             pthread_mutex_unlock( &ctx->mutex );
             pthread_join( ctx->compositorThreadId, NULL );
             pthread_mutex_lock( &ctx->mutex );
-
-            wstCompositorReleaseResources( ctx );
          }
+
+         wstCompositorReleaseResources( ctx );
 
          if ( !ctx->isNested )
          {
