@@ -343,6 +343,7 @@ void WstSimpleShellUninit( wl_simple_shell *shell )
          wl_event_source_remove( shell->delayTimer );
          shell->delayTimer= 0;
       }
+      wl_global_destroy( shell->wl_simple_shell_global );
       shell->pendingCreateBroadcast.clear();
       shell->surfaces.clear();
       shell->shells.clear();
