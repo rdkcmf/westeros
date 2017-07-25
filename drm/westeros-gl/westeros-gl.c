@@ -61,8 +61,8 @@ static void destroyGbmCtx( struct gbm_bo *bo, void *userData );
 typedef struct _GbmCtx
 {
    int front;
-   uint32_t handle[2];
-   int fb_id[2];
+   uint32_t handle;	//Everytime different bo is returned
+   int fb_id;		//so no need to handle it
 } GbmCtx;
 
 typedef struct _NativeWindowItem
@@ -473,6 +473,7 @@ static void swapDRMBuffers(void* nativeBuffer)
 {
    struct gbm_surface* surface;
    struct gbm_bo *bo;
+   static struct gbm_bo *previousBO = NULL;
    uint32_t handle, stride;
    GbmCtx *gbmCtx= 0;
    int fb_id;
@@ -515,9 +516,8 @@ static void swapDRMBuffers(void* nativeBuffer)
 
             if ( gbmCtx )
             {
-               int front= gbmCtx->front;
-               front= (front+1)%2;
-               if ( gbmCtx->handle[front] != handle )
+               /* buffering logic change to fix: very minor lines observed in video occasionally. Releasing the current bo when it's                   fb is with display can cause glitches. */
+               if ( gbmCtx->handle != handle )
                {
                   /**
                    * TODO: Support different buffer types. Currently hardcoded to 24bpp
@@ -530,14 +530,13 @@ static void swapDRMBuffers(void* nativeBuffer)
                      return;
                   }
                   printf( "westeros_gl: WstGLSwapBuffers: handle %d fb_id %d\n", handle, fb_id );
-                  gbmCtx->handle[front]= handle;
-                  gbmCtx->fb_id[front]= fb_id;
+                  gbmCtx->handle = handle;
+                  gbmCtx->fb_id = fb_id;
                }
                else
                {
-                  fb_id= gbmCtx->fb_id[front];
+                  fb_id= gbmCtx->fb_id;
                }
-               gbmCtx->front= front;
             }
 
             #ifdef USE_PAGEFLIP
@@ -579,10 +578,6 @@ static void swapDRMBuffers(void* nativeBuffer)
 	       else if (FD_ISSET(g_wstCtx->drmFd, &fds)) {
 			drmHandleEvent(g_wstCtx->drmFd, &ev);
 	       }
-	       
-               /* release the buffer if pageflip done */
-               if (pageflip_pending==0)
-		  gbm_surface_release_buffer(surface, bo);
             }
             #else
             ret = drmModeSetCrtc(g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, 0, 0,
@@ -615,6 +610,12 @@ static void swapDRMBuffers(void* nativeBuffer)
             }
             #endif
 
+         /* releasing previous bo safetly as current bo is already set to display controller */
+         if (previousBO)
+         {
+            gbm_surface_release_buffer(surface, previousBO);
+         }
+         previousBO=bo;
          }
 
          #ifndef USE_PAGEFLIP
@@ -789,7 +790,7 @@ exit:
 static void destroyGbmCtx( struct gbm_bo *bo, void *userData )
 {
    GbmCtx *gbmCtx= (GbmCtx*)userData;
-   drmModeRmFB(g_wstCtx->drmFd, gbmCtx->fb_id[gbmCtx->front]);
+   drmModeRmFB(g_wstCtx->drmFd, gbmCtx->fb_id);
    printf("westeros-gl: destroyGbmCtx %p\n", gbmCtx );
    if ( gbmCtx )
    {
