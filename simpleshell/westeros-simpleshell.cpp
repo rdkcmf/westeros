@@ -100,10 +100,48 @@ const static struct wl_simple_shell_interface simple_shell_interface = {
    wstISimpleShellSetFocus
 };
 
+static void wstSimpleShellBroadcastSurfaceUpdate(struct wl_client *client, struct wl_simple_shell *shell, uint32_t surfaceId )
+{
+   const char *name= 0;
+
+   bool visible;
+   int x, y, width, height;
+   float opacity, zorder;
+   wl_fixed_t fixedOpacity, fixedZOrder;
+
+   shell->callbacks->get_name( shell->userData, surfaceId, &name );
+   if ( !name )
+   {
+      name= (const char *)DEFAULT_NAME;
+   }
+
+   shell->callbacks->get_status( shell->userData, surfaceId,
+                                 &visible,
+                                 &x, &y, &width, &height,
+                                 &opacity, &zorder );
+
+   fixedOpacity= wl_fixed_from_double( (double)opacity );
+   fixedZOrder= wl_fixed_from_double( (double)zorder );
+
+   // Broadcast the surface update announcement to all other clients.
+   for( std::vector<ShellInfo>::iterator it= shell->shells.begin();
+        it != shell->shells.end();
+        ++it )
+   {
+      if ((*it).client != client) {
+         struct wl_resource *shell_resource = (*it).resource;
+
+         wl_simple_shell_send_surface_status(shell_resource, surfaceId,
+                                             name, (visible ? 1 : 0),
+                                             x, y, width, height, fixedOpacity, fixedZOrder);
+      }
+   }
+}
+
 static void wstISimpleShellSetName(struct wl_client *client, struct wl_resource *resource, 
                                       uint32_t surfaceId, const char *name)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
 
    shell->callbacks->set_name( shell->userData, surfaceId, name );
 
@@ -120,52 +158,62 @@ static void wstISimpleShellSetName(struct wl_client *client, struct wl_resource 
          break;
       }
    }
+
+   wstSimpleShellBroadcastSurfaceUpdate(client, shell, surfaceId );
 }
 
 static void wstISimpleShellSetVisible(struct wl_client *client, struct wl_resource *resource, 
                                       uint32_t surfaceId, uint32_t visible)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
 
    shell->callbacks->set_visible( shell->userData, surfaceId, (visible != 0) );
+
+   wstSimpleShellBroadcastSurfaceUpdate(client, shell, surfaceId );
 }
 
 static void wstISimpleShellSetGeometry(struct wl_client *client, struct wl_resource *resource, 
                                        uint32_t surfaceId, int32_t x, int32_t y, int32_t width, int32_t height)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
 
    shell->callbacks->set_geometry( shell->userData, surfaceId, x, y, width, height );
+
+   wstSimpleShellBroadcastSurfaceUpdate(client, shell, surfaceId );
 }
 
 static void wstISimpleShellSetOpacity(struct wl_client *client, struct wl_resource *resource, 
                                       uint32_t surfaceId, wl_fixed_t opacity)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
    float opacityLevel= wl_fixed_to_double( opacity );
 
    if ( opacityLevel < 0.0 ) opacityLevel= 0.0;
    if ( opacityLevel > 1.0 ) opacityLevel= 1.0;
 
    shell->callbacks->set_opacity( shell->userData, surfaceId, opacityLevel );
+
+   wstSimpleShellBroadcastSurfaceUpdate(client, shell, surfaceId );
 }
 
 static void wstISimpleShellSetZOrder(struct wl_client *client, struct wl_resource *resource, 
                                      uint32_t surfaceId, wl_fixed_t zorder)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
    float zOrderLevel= wl_fixed_to_double( zorder );
 
    if ( zOrderLevel < 0.0 ) zOrderLevel= 0.0;
    if ( zOrderLevel > 1.0 ) zOrderLevel= 1.0;
 
    shell->callbacks->set_zorder( shell->userData, surfaceId, zOrderLevel );
+
+   wstSimpleShellBroadcastSurfaceUpdate(client, shell, surfaceId );
 }
 
 static void wstISimpleShellGetStatus(struct wl_client *client, struct wl_resource *resource, uint32_t surfaceId )
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
-	const char *name= 0;
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   const char *name= 0;
    bool visible;
    int x, y, width, height;
    float opacity, zorder;
@@ -192,7 +240,7 @@ static void wstISimpleShellGetStatus(struct wl_client *client, struct wl_resourc
 
 static void wstISimpleShellGetSurfaces(struct wl_client *client, struct wl_resource *resource)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
 
    for( std::vector<uint32_t>::iterator it= shell->surfaces.begin();
         it != shell->surfaces.end();
@@ -214,7 +262,7 @@ static void wstISimpleShellSetFocus(struct wl_client *client, struct wl_resource
 
 static void destroy_shell(struct wl_resource *resource)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
 
    for ( std::vector<ShellInfo>::iterator it= shell->shells.begin(); 
          it != shell->shells.end();
@@ -230,11 +278,11 @@ static void destroy_shell(struct wl_resource *resource)
 
 static void wstSimpleShellBind(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)data;
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)data;
    struct wl_resource *resource;
    ShellInfo info;
 
-	printf("westeros-simpleshell: wstSimpleShellBind: enter: client %p data %p version %d id %d\n", client, data, version, id);
+   printf("westeros-simpleshell: wstSimpleShellBind: enter: client %p data %p version %d id %d\n", client, data, version, id);
 
    resource= wl_resource_create(client, &wl_simple_shell_interface, MIN(version, 1), id);
    if (!resource) 
@@ -252,7 +300,7 @@ static void wstSimpleShellBind(struct wl_client *client, void *data, uint32_t ve
 
 static void wstSimpleShellBroadcastCreation( struct wl_simple_shell *shell, uint32_t surfaceId )
 {
-	const char *name= 0;
+   const char *name= 0;
 
    // Get any name the creator may have assigned the surface
    shell->callbacks->get_name( shell->userData, surfaceId, &name );
@@ -263,7 +311,7 @@ static void wstSimpleShellBroadcastCreation( struct wl_simple_shell *shell, uint
    printf("broadcast for surfaceId %x name %s\n", surfaceId, name);
 
    // Broadcast the surface creation announcement
-   for( std::vector<ShellInfo>::iterator it= shell->shells.begin(); 
+   for( std::vector<ShellInfo>::iterator it= shell->shells.begin();
         it != shell->shells.end();
         ++it )
    {
@@ -279,7 +327,7 @@ static int wstSimpleShellTimeOut( void *data )
    long long now;
    long long delay;
    PendingBroadcastInfo pendingInfo;
-	struct wl_simple_shell *shell= (struct wl_simple_shell*)data;
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)data;
 
    while( more )
    {
@@ -324,7 +372,7 @@ wl_simple_shell* WstSimpleShellInit( struct wl_display *display,
    struct wl_simple_shell *shell= 0;
    struct wl_event_loop *loop= 0;
    
-	printf("westeros-simpleshell: WstSimpleShellInit: enter: display %p\n", display );
+   printf("westeros-simpleshell: WstSimpleShellInit: enter: display %p\n", display );
    shell= (struct wl_simple_shell*)calloc( 1, sizeof(struct wl_simple_shell) );
    if ( !shell )
    {
@@ -354,7 +402,7 @@ wl_simple_shell* WstSimpleShellInit( struct wl_display *display,
    shell->wl_simple_shell_global= wl_global_create(display, &wl_simple_shell_interface, 1, shell, wstSimpleShellBind );
 
 exit:
-	printf("westeros-simpleshell: WstSimpleShellInit: exit: display %p shell %p\n", display, shell);
+   printf("westeros-simpleshell: WstSimpleShellInit: exit: display %p shell %p\n", display, shell);
 
    return shell;
 }
