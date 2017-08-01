@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 #include <gst/gst.h>
 
 #include "wayland-client.h"
@@ -260,12 +261,25 @@ void destroyPipeline( AppCtx *ctx )
    }
 }
 
+static AppCtx *g_ctx= 0;
+
+static void signalHandler(int signum)
+{
+   printf("signalHandler: signum %d\n", signum);
+   if ( g_ctx )
+   {
+	   g_main_loop_quit( g_ctx->loop );
+	   g_ctx= 0;
+	}
+}
+
 int main( int argc, char **argv )
 {
    int result= -1;
    int argidx;
    const char *uri= 0;
    AppCtx *ctx= 0;
+   struct sigaction sigint;
    
    printf("westeros_player: v1.0\n\n" );
    
@@ -349,6 +363,13 @@ int main( int argc, char **argv )
          
          if ( GST_STATE_CHANGE_FAILURE != gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
          {
+            sigint.sa_handler = signalHandler;
+            sigemptyset(&sigint.sa_mask);
+            sigint.sa_flags = SA_RESETHAND;
+            sigaction(SIGINT, &sigint, NULL);
+
+            g_ctx= ctx;
+
             g_main_loop_run( ctx->loop );
          }
       }
