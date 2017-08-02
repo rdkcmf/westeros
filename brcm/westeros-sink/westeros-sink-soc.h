@@ -73,6 +73,7 @@ struct _GstWesterosSinkSoc
    NEXUS_VideoFormat outputFormat;
    gfloat serverPlaySpeed;
    gboolean stoppedForServerPlaySpeed;
+   gboolean secureVideo;
 
    int videoX;
    int videoY;
