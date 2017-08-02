@@ -6420,12 +6420,40 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
 #define TEMPFILE_PREFIX "westeros-"
 #define TEMPFILE_TEMPLATE "/tmp/" ## TEMPFILE_PREFIX ## "XXXXXX"
 
+static int wstConvertToReadOnlyFile( int fd )
+{
+   int readOnlyFd= -1;
+   int pid= getpid();
+   int len, prefixlen;
+   char path[32];
+   char link[256];
+
+   prefixlen= strlen(TEMPFILE_PREFIX);
+   sprintf(path, "/proc/%d/fd/%d", pid, fd );
+   len= readlink( path, link, sizeof(link)-1 );
+   if ( len > prefixlen )
+   {
+      link[len]= '\0';
+      if ( strstr( link, TEMPFILE_PREFIX ) )
+      {
+         readOnlyFd= open( link, O_RDONLY );
+         if ( readOnlyFd < 0 )
+         {
+            ERROR( "unable to obtain a readonly fd for fd %d", fd);
+         }
+      }
+   }
+
+   return readOnlyFd;
+}
+
 static bool wstInitializeKeymap( WstCompositor *ctx )
 {
    bool result= false;
    char *keymapStr= 0;
    char filename[32];
    int lenDidWrite;
+   int readOnlyFd;
 
    ctx->xkbCtx= xkb_context_new( XKB_CONTEXT_NO_FLAGS );
    if ( !ctx->xkbCtx )
@@ -6474,9 +6502,21 @@ static bool wstInitializeKeymap( WstCompositor *ctx )
       goto exit;      
    }
 
+   readOnlyFd= wstConvertToReadOnlyFile( ctx->xkbKeymapFd );
+   if ( readOnlyFd < 0 )
+   {
+      sprintf( ctx->lastErrorDetail,
+               "Error.  Unable to create read-only fd for keymap temp file" );
+      goto exit;
+   }
+
+   close( ctx->xkbKeymapFd );
+
+   ctx->xkbKeymapFd= readOnlyFd;
+
    ctx->xkbKeymapArea= (char*)mmap( NULL,
                                     ctx->xkbKeymapSize,
-                                    PROT_READ | PROT_WRITE,
+                                    PROT_READ,
                                     MAP_SHARED | MAP_POPULATE,
                                     ctx->xkbKeymapFd,
                                     0  // offset
