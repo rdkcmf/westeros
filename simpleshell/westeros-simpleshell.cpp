@@ -33,9 +33,10 @@
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 
 #define DEFAULT_NAME "noname"
-#define BROADCAST_DELAY (10)
+#define BROADCAST_DELAY (2000)
 
 static void destroy_shell(struct wl_resource *resource);
+static void wstSimpleShellBroadcastCreation( struct wl_simple_shell *shell, uint32_t surfaceId );
 
 typedef struct _ShellInfo
 {
@@ -102,6 +103,20 @@ static void wstISimpleShellSetName(struct wl_client *client, struct wl_resource 
 	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
 
    shell->callbacks->set_name( shell->userData, surfaceId, name );
+
+   for( std::vector<PendingBroadcastInfo>::iterator it= shell->pendingCreateBroadcast.begin();
+        it != shell->pendingCreateBroadcast.end();
+        ++it )
+   {
+      if ( (*it).surfaceId == surfaceId )
+      {
+         shell->pendingCreateBroadcast.erase( it );
+
+         wstSimpleShellBroadcastCreation( shell, surfaceId );
+
+         break;
+      }
+   }
 }
 
 static void wstISimpleShellSetVisible(struct wl_client *client, struct wl_resource *resource, 
@@ -190,7 +205,7 @@ static void wstISimpleShellGetSurfaces(struct wl_client *client, struct wl_resou
 static void destroy_shell(struct wl_resource *resource)
 {
 	struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
-   
+
    for ( std::vector<ShellInfo>::iterator it= shell->shells.begin(); 
          it != shell->shells.end();
          ++it )
