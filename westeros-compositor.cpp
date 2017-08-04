@@ -170,7 +170,9 @@ typedef struct _WstKeyboard
 {
    WstSeat *seat;
    struct wl_list resourceList;
+   struct wl_list focusResourceList;
    struct wl_array keys;
+   WstSurface *focus;
 
    uint32_t currentModifiers;
 
@@ -684,6 +686,8 @@ static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
 static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_t keyState, uint32_t modifiers );
 static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource *resource );
+static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface );
+static void wstKeyboardMoveFocusToClient( WstKeyboard *keyboard, struct wl_client *client );
 static void wstProcessPointerEnter( WstPointer *pointer, int x, int y, struct wl_surface *surfaceNested );
 static void wstProcessPointerLeave( WstPointer *pointer, struct wl_surface *surfaceNested );
 static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t y );
@@ -1914,9 +1918,9 @@ void WstCompositorStop( WstCompositor *ctx )
             pthread_mutex_unlock( &ctx->mutex );
             pthread_join( ctx->compositorThreadId, NULL );
             pthread_mutex_lock( &ctx->mutex );
-         }
 
-         wstCompositorReleaseResources( ctx );
+            wstCompositorReleaseResources( ctx );
+         }
 
          if ( !ctx->isNested )
          {
@@ -3038,7 +3042,7 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
                      struct wl_resource *resource;
                      
                      serial= wl_display_next_serial( ctx->display );
-                     wl_resource_for_each( resource, &keyboard->resourceList )
+                     wl_resource_for_each( resource, &keyboard->focusResourceList )
                      {
                         wl_keyboard_send_key( resource, 
                                               serial,
@@ -3063,7 +3067,7 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
                      struct wl_resource *resource;
                      
                      serial= wl_display_next_serial( ctx->display );
-                     wl_resource_for_each( resource, &keyboard->resourceList )
+                     wl_resource_for_each( resource, &keyboard->focusResourceList )
                      {
                         wl_keyboard_send_modifiers( resource,
                                                     serial,
@@ -3847,6 +3851,13 @@ static void wstSurfaceDestroy( WstSurface *surface )
       surface->attachedBufferResource= 0;
    }
 
+   // Remove from keyboard focus
+   if ( ctx->seat->keyboard &&
+        (ctx->seat->keyboard->focus == surface) )
+   {
+      ctx->seat->keyboard->focus= 0;
+   }
+
    // Remove from pointer focus
    if ( ctx->seat->pointer &&
         (ctx->seat->pointer->focus == surface) )
@@ -3953,6 +3964,11 @@ static void wstSurfaceDestroy( WstSurface *surface )
    assert(surface->resource == NULL);
    
    free(surface);
+
+   if ( ctx->seat->pointer )
+   {
+      wstPointerCheckFocus( ctx->seat->pointer, ctx->seat->pointer->pointerX, ctx->seat->pointer->pointerY );
+   }
    
    // Update composited output to reflect removeal of surface
    wstCompositorScheduleRepaint( ctx );
@@ -5430,7 +5446,7 @@ static void wstDefaultNestedKeyboardHandleModifiers( void *userData, uint32_t mo
       {
          int eventIndex= ctx->eventIndex;
          pthread_mutex_lock( &ctx->mutex );
-         ctx->eventQueue[eventIndex].type= WstEventType_keyCode;
+         ctx->eventQueue[eventIndex].type= WstEventType_keyModifiers;
          ctx->eventQueue[eventIndex].v1= mods_depressed;
          ctx->eventQueue[eventIndex].v2= mods_latched;
          ctx->eventQueue[eventIndex].v3= mods_locked;
@@ -5728,6 +5744,7 @@ static bool wstSeatInit( WstCompositor *ctx )
    keyboard= seat->keyboard;
    keyboard->seat= seat;
    wl_list_init( &keyboard->resourceList );
+   wl_list_init( &keyboard->focusResourceList );
    wl_array_init( &keyboard->keys );
    
    if ( !ctx->isNested )
@@ -5911,12 +5928,13 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
    WstSeat *seat= (WstSeat*)wl_resource_get_user_data(resource);
    WstKeyboard *keyboard= seat->keyboard;
    struct wl_resource *resourceKbd= 0;
+   struct wl_client *focusClient= 0;
    
    if ( !keyboard )
    {
       return;
    }
-   
+
    resourceKbd= wl_resource_create( client, 
                                     &wl_keyboard_interface, 
                                     wl_resource_get_version(resource),
@@ -5926,8 +5944,17 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
       wl_client_post_no_memory(client);
       return;
    }
-   
-   wl_list_insert( &keyboard->resourceList, wl_resource_get_link(resourceKbd) );
+
+   if ( keyboard->focus ) focusClient= wl_resource_get_client(keyboard->focus->resource);
+
+   if ( focusClient == client )
+   {
+      wl_list_insert( &keyboard->focusResourceList, wl_resource_get_link(resourceKbd) );
+   }
+   else
+   {
+      wl_list_insert( &keyboard->resourceList, wl_resource_get_link(resourceKbd) );
+   }
    
    wl_resource_set_implementation( resourceKbd,
                                    &keyboard_interface,
@@ -5960,26 +5987,56 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
                surface= compositor->clientInfoMap[client]->surface;
                if ( surface )
                {
-                  uint32_t serial;
-                  
-                  serial= wl_display_next_serial( compositor->display );
-                  surfaceResource= surface->resource;
-                                 
-                  wl_keyboard_send_enter( resourceKbd,
-                                          serial,
-                                          surfaceResource,
-                                          &keyboard->keys );
-
-                  if ( !compositor->isNested )
+                  if ( !keyboard->focus || (focusClient == client) )
                   {
-                     wstKeyboardSendModifiers( keyboard, resourceKbd );
+                     if ( keyboard->focus )
+                     {
+                        uint32_t serial;
+
+                        serial= wl_display_next_serial( compositor->display );
+                        surfaceResource= surface->resource;
+
+                        wl_keyboard_send_enter( resourceKbd,
+                                                serial,
+                                                surfaceResource,
+                                                &keyboard->keys );
+
+                        if ( !compositor->isNested )
+                        {
+                           wstKeyboardSendModifiers( keyboard, resourceKbd );
+                        }
+                     }
+                     else
+                     {
+                        wstKeyboardSetFocus( keyboard, surface );
+                     }
                   }
                }
                
                break;
             }
          }
-      }                              
+      }
+
+      if ( !keyboard->focus )
+      {
+         // This is a workaround for apps that register keyboard listeners with one client
+         // and create surfaces with different client
+         if ( wl_list_empty(&keyboard->focusResourceList) && !wl_list_empty(&keyboard->resourceList) )
+         {
+            struct wl_client *client= 0;
+            resource= wl_container_of( keyboard->resourceList.next, resource, link);
+            if ( resource )
+            {
+               client= wl_resource_get_client( resource );
+               if ( client )
+               {
+                  DEBUG("wstProcessKeyEvent: move focus to client %p based on resource %p\n", client, resource);
+                  wstKeyboardMoveFocusToClient( keyboard, client );
+               }
+            }
+         }
+      }
    }                               
 }
 
@@ -6607,7 +6664,7 @@ static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_
 
    if ( changes )
    {
-      wl_resource_for_each( resource, &keyboard->resourceList )
+      wl_resource_for_each( resource, &keyboard->focusResourceList )
       {
          wstKeyboardSendModifiers( keyboard, resource );
       }
@@ -6619,7 +6676,7 @@ static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_
           ? WL_KEYBOARD_KEY_STATE_PRESSED
           : WL_KEYBOARD_KEY_STATE_RELEASED;
              
-   wl_resource_for_each( resource, &keyboard->resourceList )
+   wl_resource_for_each( resource, &keyboard->focusResourceList )
    {
       wl_keyboard_send_key( resource, 
                             serial,
@@ -6677,6 +6734,95 @@ static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource 
                                modLocked,    // mod locked
                                modGroup      // mod group
                              );
+}
+
+static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface )
+{
+   WstCompositor *compositor= keyboard->seat->compositor;
+   uint32_t serial;
+   struct wl_client *surfaceClient;
+   struct wl_resource *resource;
+
+   if ( keyboard->focus != surface )
+   {
+      if ( surface )
+      {
+         struct wl_resource *temp;
+         surfaceClient= wl_resource_get_client( surface->resource );
+         wl_resource_for_each_safe( resource, temp, &keyboard->focusResourceList )
+         {
+            if ( wl_resource_get_client( resource ) == surfaceClient )
+            {
+               // Focus is already on client
+               return;
+            }
+         }
+
+         // This is a workaround for apps that register keyboard listeners with one client
+         // and create surfaces with different client
+         bool clientHasListeners= false;
+         wl_resource_for_each_safe( resource, temp, &keyboard->resourceList )
+         {
+            if ( wl_resource_get_client( resource ) == surfaceClient )
+            {
+               clientHasListeners= true;
+            }
+         }
+
+         if ( !clientHasListeners && !wl_list_empty(&keyboard->focusResourceList) )
+         {
+            DEBUG("Don't move focus to client with no listeners\n");
+            return;
+         }
+      }
+
+      if ( keyboard->focus )
+      {
+         serial= wl_display_next_serial( compositor->display );
+         surfaceClient= wl_resource_get_client( keyboard->focus->resource );
+         wl_resource_for_each( resource, &keyboard->focusResourceList )
+         {
+            wl_keyboard_send_leave( resource, serial, keyboard->focus->resource );
+         }
+         keyboard->focus= 0;
+      }
+
+      keyboard->focus= surface;
+
+      if ( keyboard->focus )
+      {
+         surfaceClient= wl_resource_get_client( keyboard->focus->resource );
+         wstKeyboardMoveFocusToClient( keyboard, surfaceClient );
+
+         serial= wl_display_next_serial( compositor->display );
+         wl_resource_for_each( resource, &keyboard->focusResourceList )
+         {
+            wl_keyboard_send_enter( resource, serial, keyboard->focus->resource, &keyboard->keys );
+         }
+      }
+      else
+      {
+         wstKeyboardMoveFocusToClient( keyboard, 0 );
+      }
+   }
+}
+
+static void wstKeyboardMoveFocusToClient( WstKeyboard *keyboard, struct wl_client *client )
+{
+   struct wl_resource *resource;
+   struct wl_resource *temp;
+
+   wl_list_insert_list( &keyboard->resourceList, &keyboard->focusResourceList );
+   wl_list_init( &keyboard->focusResourceList );
+
+   wl_resource_for_each_safe( resource, temp, &keyboard->resourceList )
+   {
+      if ( wl_resource_get_client( resource ) == client )
+      {
+         wl_list_remove( wl_resource_get_link( resource ) );
+         wl_list_insert( &keyboard->focusResourceList, wl_resource_get_link(resource) );
+      }
+   }
 }
 
 static void wstProcessPointerEnter( WstPointer *pointer, int x, int y, struct wl_surface *surfaceNested )
@@ -6868,6 +7014,15 @@ static void wstProcessPointerButtonEvent( WstPointer *pointer, uint32_t button, 
       {
          wl_pointer_send_button( resource, serial, time, button, buttonState );
       }
+
+      if ( buttonState == WstPointer_buttonState_depressed )
+      {
+         WstKeyboard *keyboard= pointer->seat->keyboard;
+         if ( keyboard )
+         {
+            wstKeyboardSetFocus( pointer->seat->keyboard, pointer->focus );
+         }
+      }
    }
 }
 
@@ -6917,6 +7072,10 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
                {
                   eligible= false;
                } 
+            }
+            else if ( surface->vpcSurface )
+            {
+               eligible= false;
             }
             else
             {
@@ -7048,7 +7207,7 @@ static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *
 {
    struct wl_resource *resource;
    struct wl_resource *temp;
-   
+
    wl_list_insert_list( &pointer->resourceList, &pointer->focusResourceList );
    wl_list_init( &pointer->focusResourceList );
    
