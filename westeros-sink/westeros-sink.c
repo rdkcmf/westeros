@@ -389,6 +389,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    
    sink->srcWidth= 1280;
    sink->srcHeight= 720;
+   sink->maxWidth= 0;
+   sink->maxHeight= 0;
 
    sink->windowX= DEFAULT_WINDOW_X;
    sink->windowY= DEFAULT_WINDOW_Y;
@@ -875,6 +877,29 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
 
    switch (GST_EVENT_TYPE(event))
    {
+      case GST_EVENT_CAPS:
+         if (sink->maxWidth && sink->maxHeight)
+         {
+            GstCaps *caps;
+            gst_event_parse_caps(event, &caps);
+            GstStructure* structure = gst_caps_get_structure(caps, 0);
+            if (structure && (gst_structure_has_field(structure, "width") || gst_structure_has_field(structure, "height")))
+            {
+               gint width, height;
+               gst_structure_get_int(structure, "width", &width);
+               gst_structure_get_int(structure, "height", &height);
+               if (width > sink->maxWidth || height > sink->maxHeight)
+               {
+                  GST_ERROR("width=%d height=%d > maxWidth=%d maxHeight=%d\n", width, height, sink->maxWidth, sink->maxHeight);
+                  const char *err_string = "Maximum video dimensions exceeded";
+                  GError *error = g_error_new(GST_STREAM_ERROR, GST_STREAM_ERROR_WRONG_TYPE, err_string);
+                  GstMessage *message = gst_message_new_error(GST_OBJECT_CAST(sink), error, err_string);
+                  gst_element_post_message(GST_ELEMENT_CAST(sink), message);
+                  g_error_free(error);
+               }
+            }
+         }
+         break;
       case GST_EVENT_FLUSH_START:
          LOCK( sink );
          sink->position= 0;

@@ -72,6 +72,8 @@ struct _GstWesterosSink
    
    int srcWidth;
    int srcHeight;
+   int maxWidth;
+   int maxHeight;
 
    int windowX;
    int windowY;
