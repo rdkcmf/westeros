@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #include "westeros-sink.h"
+#include "wayland-egl.h"
 
 #define PREROLL_OFFSET (0LL)
 
@@ -53,9 +54,24 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
+static OMX_ERRORTYPE omxComponentSetState( GstWesterosSink *sink, OMX_HANDLETYPE hComp, OMX_STATETYPE state );
 static void flushComponents( GstWesterosSink *sink );
+static void transitionToRenderer( GstWesterosSink *sink, WstOmxComponent *rend );
+static bool setupEGL( GstWesterosSink *sink );
+static void termEGL( GstWesterosSink *sink );
+static GLuint createShader(GstWesterosSink *sink, GLenum shaderType, const char *shaderSource );
+static bool setupGfx( GstWesterosSink *sink );
+static void termGfx( GstWesterosSink *sink );
+static void createImage( GstWesterosSink *sink );
+static void destroyImage( GstWesterosSink *sink );
+static void drawImage( GstWesterosSink *sink );
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer );
 static gpointer captureThread(gpointer data);
+
+extern "C"
+{
+struct wl_display *khrn_platform_get_wl_display();
+}
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -85,8 +101,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    
    #ifdef GLIB_VERSION_2_32 
    g_mutex_init( &sink->soc.mutex );
+   g_mutex_init( &sink->soc.mutexNewFrame );
+   g_cond_init( &sink->soc.condNewFrame );
    #else
    sink->soc.mutex= g_mutex_new();
+   sink->soc.mutexNewFrame= g_mutex_new();
+   sink->soc.condNewFrame= g_cond_new();
    #endif
 
    sink->soc.bcmHostIsInit= false;
@@ -115,6 +135,37 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.quitCaptureThread= TRUE;
    sink->soc.captureThread= NULL;
    sink->soc.buffCurrent= 0;
+   sink->soc.sharedWLDisplay= false;
+   sink->soc.eglSetup= false;
+   sink->soc.eglDisplay= EGL_NO_DISPLAY;
+   sink->soc.eglContext= EGL_NO_CONTEXT;
+   sink->soc.eglSurface= EGL_NO_SURFACE;
+   sink->soc.wlEGLWindow= 0;
+   sink->soc.gfxSetup= false;
+   sink->soc.eglCreateImageKHR= 0;
+   sink->soc.eglDestroyImageKHR= 0;
+   sink->soc.pEGLBufferHeader= 0;
+   sink->soc.textureId= 0;
+   sink->soc.eglImage= 0;
+   sink->soc.textureWidth= 0;
+   sink->soc.textureHeight= 0;
+   sink->soc.newFrame= false;
+   sink->soc.videoOutputChanged= true;
+   sink->soc.frameWidth= 0;
+   sink->soc.frameHeight= 0;
+   #ifdef USE_GLES2
+   sink->soc.progId= 0;
+   sink->soc.vertId= 0;
+   sink->soc.fragId= 0;
+   sink->soc.posLoc= 0;
+   sink->soc.uvLoc= 1;
+
+   memset( sink->soc.matrix, 0, sizeof(sink->soc.matrix));
+   sink->soc.matrix[0]= 1.0f;
+   sink->soc.matrix[5]= 1.0f;
+   sink->soc.matrix[10]= 1.0f;
+   sink->soc.matrix[15]= 1.0f;
+   #endif
 
    moduleName= MODULE_BCMHOST;
    module= dlopen( moduleName, RTLD_NOW );
@@ -234,6 +285,19 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       goto exit;
    }
    sink->soc.omxIsInit= true;
+
+   /*
+    * The userland EGL implementation has an implicit restriction of each process only being able to
+    * interact as a wayland-egl client of one wayland display.  This breaks applications that use
+    * wayland-egl for graphics and also use westeros-sink for video.  To workaround this, the rpi
+    * wesrteros-sink soc code tries to detect and share any existing wl_display connection.
+    */
+   sink->display= khrn_platform_get_wl_display();
+   GST_DEBUG("gst_westeros_sink_soc_init: khrn_platform_get_wl_display returns %p\n", sink->display);
+   if ( sink->display )
+   {
+      sink->soc.sharedWLDisplay= true;
+   }
    
    result= TRUE;
 
@@ -255,6 +319,14 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
    {
       wl_sb_destroy( sink->soc.sb );
       sink->soc.sb= 0;
+   }
+
+   if ( sink->soc.sharedWLDisplay )
+   {
+      /* We are sharing a wl_display connection.  Clear the reference so the
+       * generic sink term code doesn't destroy the display out from under
+       * the application which is also using the display for graphics */
+      sink->display= 0;
    }
 
    if ( sink->soc.OMX_Deinit )
@@ -281,8 +353,12 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
 
    #ifdef GLIB_VERSION_2_32 
    g_mutex_clear( &sink->soc.mutex );
+   g_mutex_clear( &sink->soc.mutexNewFrame );
+   g_cond_clear( &sink->soc.condNewFrame );
    #else
    g_mutex_free( sink->soc.mutex );
+   g_mutex_free( sink->soc.mutexNewFrame );
+   g_cond_free( sink->soc.condNewFrame );
    #endif  
 }
 
@@ -328,6 +404,33 @@ void gst_westeros_sink_soc_registryHandleGlobalRemove( GstWesterosSink *sink,
    WESTEROS_UNUSED(sink);
    WESTEROS_UNUSED(registry);
    WESTEROS_UNUSED(name);
+}
+
+static void waitForNewFrame( GstWesterosSink *sink )
+{
+  #ifdef GLIB_VERSION_2_32
+  g_mutex_lock( &sink->soc.mutexNewFrame );
+  g_cond_wait( &sink->soc.condNewFrame, &sink->soc.mutexNewFrame );
+  g_mutex_unlock( &sink->soc.mutexNewFrame );
+  #else
+  g_mutex_lock( sink->soc.mutexNewFrame );
+  g_cond_wait( sink->soc.condNewFrame, sink->soc.mutexNewFrame );
+  g_mutex_unlock( sink->soc.mutexNewFrame );
+  #endif
+}
+
+
+static void signalNewFrame( GstWesterosSink *sink )
+{
+  #ifdef GLIB_VERSION_2_32
+  g_mutex_lock( &sink->soc.mutexNewFrame );
+  g_cond_signal( &sink->soc.condNewFrame );
+  g_mutex_unlock( &sink->soc.mutexNewFrame );
+  #else
+  g_mutex_lock( sink->soc.mutexNewFrame );
+  g_cond_signal( sink->soc.condNewFrame );
+  g_mutex_unlock( sink->soc.mutexNewFrame );
+  #endif
 }
 
 static const char *omxStateName( OMX_STATETYPE state )
@@ -418,6 +521,12 @@ static OMX_ERRORTYPE omxEventHandler( OMX_IN OMX_HANDLETYPE hComponent,
       case OMX_EventCmdComplete:
          pAsync= omxGetAsyncResult( sink, nData1, nData2 );
          break;
+      case OMX_EventPortSettingsChanged:
+         if ( nData1 == sink->soc.vidDec.vidOutPort )
+         {
+            sink->soc.videoOutputChanged= true;
+         }
+         break;
       case OMX_EventError:
          pAsync= &sink->soc.asyncError;
          break;
@@ -472,6 +581,25 @@ static OMX_ERRORTYPE omxFillBufferDone( OMX_IN OMX_HANDLETYPE hComponent,
                             OMX_IN OMX_PTR pAppData,
                             OMX_IN OMX_BUFFERHEADERTYPE* pBuffer )
 {
+   OMX_ERRORTYPE omxerr;
+   GstWesterosSink *sink= (GstWesterosSink*)pAppData;
+
+   if ( hComponent == sink->soc.eglRend.hComp )
+   {
+      GST_LOG("omxFillBufferDone for eglRender\n");
+
+      sink->soc.newFrame= true;
+      signalNewFrame( sink );
+
+      if ( sink->soc.useGfxPath )
+      {
+         omxerr= OMX_FillThisBuffer( sink->soc.rend->hComp, sink->soc.pEGLBufferHeader );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("omxFillBufferDone: OMX_FillThisBuffer for eglRender: omxerr %x", omxerr );
+         }
+      }
+   }
    return OMX_ErrorNone;
 }
 
@@ -1103,6 +1231,18 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    sem_post( &sink->soc.semInputBuffers );
    UNLOCK_SOC(sink);
 
+   LOCK( sink );
+   if ( sink->soc.captureThread )
+   {
+      sink->soc.quitCaptureThread= TRUE;
+      UNLOCK( sink );
+      signalNewFrame( sink );
+      g_thread_join( sink->soc.captureThread );
+      LOCK( sink );
+      sink->soc.captureThread= NULL;
+   }
+   UNLOCK( sink );
+
    flushComponents( sink );
 
    if ( sink->soc.tunnelActiveVidDec )
@@ -1474,6 +1614,31 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
    if ( sink->soc.playingVideo && !sink->flushStarted )
    {
+      LOCK(sink);
+      if ( (sink->soc.decoderReady && !sink->soc.tunnelActiveVidSched) ||
+            (sink->soc.tunnelActiveVidSched && sink->soc.videoOutputChanged) )
+      {
+         OMX_PARAM_PORTDEFINITIONTYPE portDef;
+
+         portDef.nSize= sizeof(OMX_PARAM_PORTDEFINITIONTYPE);
+         portDef.nVersion.nVersion= OMX_VERSION;
+         portDef.nPortIndex= sink->soc.vidDec.vidOutPort;
+
+         omxerr= OMX_GetParameter( sink->soc.vidDec.hComp, OMX_IndexParamPortDefinition, &portDef );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("gst_westeros_sink_soc_render: "
+                      "OMX_GetParameter for OMX_PARAM_PORTDEFINITIONTYPE for vidDec output port %d failed: %x", sink->soc.vidDec.vidOutPort, omxerr);
+            goto exit;
+         }
+
+         sink->soc.frameWidth= portDef.format.video.nFrameWidth;
+         sink->soc.frameHeight= portDef.format.video.nFrameHeight;
+         printf("gst_westeros_sink_soc_render: video frame size (%d x %d)\n", sink->soc.frameWidth, sink->soc.frameHeight );
+
+         sink->soc.videoOutputChanged= false;
+      }
+
       if ( sink->soc.decoderReady && !sink->soc.tunnelActiveVidSched )
       {
          if ( !gst_westeros_sink_soc_setup_tunnel( sink, 
@@ -1481,6 +1646,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                                                    &sink->soc.vidSched, sink->soc.vidSched.vidInPort ) )
          {
             GST_ERROR( "gst_westeros_sink_soc_render: failed to setup tunnel from vidDec to vidSched" );
+            UNLOCK(sink);
             goto exit;
          }
          sink->soc.tunnelActiveVidDec= true;
@@ -1516,6 +1682,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                                                    sink->soc.rend, sink->soc.rend->vidInPort ) )
          {
             GST_ERROR( "gst_westeros_sink_soc_render: failed to setup tunnel from vidSched to %s", sink->soc.rend->name );
+            UNLOCK(sink);
             goto exit;
          }
          sink->soc.tunnelActiveVidSched= true;
@@ -1529,6 +1696,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                       sink->soc.rend->name, omxerr );
          }
       }
+      UNLOCK(sink);
 
       processFrame( sink, buffer );
 
@@ -1744,7 +1912,12 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    if ( useGfxPath && !oldUseGfxPath )
    {
       struct wl_buffer *buff;
-      
+
+      if ( sink->soc.frameWidth && sink->soc.frameHeight )
+      {
+         transitionToRenderer( sink, &sink->soc.eglRend );
+      }
+
       buff= wl_sb_create_buffer( sink->soc.sb, 
                                  0,
                                  sink->windowWidth, 
@@ -1759,6 +1932,8 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    }
    else if ( !useGfxPath && oldUseGfxPath )
    {
+      transitionToRenderer( sink, &sink->soc.vidRend );
+
       gst_westeros_sink_soc_update_video_position( sink );
       
       wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
@@ -1767,10 +1942,6 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       wl_display_flush(sink->display);
       wl_display_dispatch_queue_pending(sink->display, sink->queue);
    }   
-      
-   // Next:  need to determine egl_render output buffer size, use OMX_AllocateBuffer to allocate buffers,
-   // then, when buffer is filled, create dispmanx resource and copy the buffer data into it, then send 
-   // resource to the compositor using wl_simplebuffer
 }
 
 void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
@@ -1786,11 +1957,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
    wh= sink->windowHeight;
    sink->windowChange= false;
       
-   if ( sink->soc.useGfxPath )
-   {
-      // TBD
-   }
-   else
+   if ( !sink->soc.useGfxPath )
    {
       vx= ((wx*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
       vy= ((wy*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
@@ -1841,6 +2008,618 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
          wl_surface_commit( sink->surface );
       }
    }
+}
+
+void transitionToRenderer( GstWesterosSink *sink, WstOmxComponent *rend )
+{
+   OMX_ERRORTYPE omxerr;
+   OMX_STATETYPE state;
+   bool toGfx= (rend == &sink->soc.eglRend);
+
+   LOCK(sink);
+   if ( toGfx && !sink->soc.captureThread )
+   {
+      sink->soc.quitCaptureThread= FALSE;
+      if ( sink->soc.captureThread == NULL )
+      {
+         GST_DEBUG_OBJECT(sink, "transitionToRenderer: starting westeros_sink_capture thread");
+         sink->soc.captureThread= g_thread_new("westeros_sink_capture", captureThread, sink);
+      }
+   }
+
+   if ( sink->soc.rend != rend )
+   {
+      if ( sink->soc.tunnelActiveVidSched )
+      {
+         omxerr= OMX_SendCommand( sink->soc.vidSched.hComp, OMX_CommandPortDisable, sink->soc.vidSched.vidInPort, NULL );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("transitionToRenderer: disable vidSched port %d: omxerr %x", sink->soc.vidSched.vidInPort, omxerr );
+         }
+
+         omxerr= OMX_SendCommand( sink->soc.vidSched.hComp, OMX_CommandPortDisable, sink->soc.vidSched.vidOutPort, NULL );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("transitionToRenderer: disable vidSched port %d: omxerr %x", sink->soc.vidSched.vidOutPort, omxerr );
+         }
+
+         omxerr= OMX_SendCommand( sink->soc.rend->hComp, OMX_CommandPortDisable, sink->soc.rend->vidInPort, NULL );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("transitionToRenderer: disable %s port %d: omxerr %x",
+                       sink->soc.rend->name, sink->soc.rend->vidInPort, omxerr );
+         }
+
+         if ( !toGfx )
+         {
+            omxerr= OMX_SendCommand( sink->soc.rend->hComp, OMX_CommandPortDisable, sink->soc.rend->vidOutPort, NULL );
+            if ( omxerr != OMX_ErrorNone )
+            {
+               GST_ERROR("transitionToRenderer: disable %s port %d: omxerr %x",
+                          sink->soc.rend->name, sink->soc.rend->vidOutPort, omxerr );
+            }
+         }
+
+         omxWaitCommandComplete( sink, OMX_CommandPortDisable, sink->soc.vidSched.vidOutPort );
+
+         omxWaitCommandComplete( sink, OMX_CommandPortDisable, sink->soc.rend->vidInPort );
+
+         // Without this sleep, egl_render module doesn't fill buffers.  Why?
+         usleep( 75000 );
+
+         omxerr= OMX_SendCommand( sink->soc.vidSched.hComp, OMX_CommandPortEnable, sink->soc.vidSched.vidInPort, NULL );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("transitionToRenderer: enable vidSched port %d: omxerr %x", sink->soc.vidSched.vidInPort, omxerr );
+         }
+
+         sink->soc.tunnelActiveVidSched= false;
+      }
+
+      sink->soc.rend= rend;
+
+      if ( !gst_westeros_sink_soc_setup_tunnel( sink,
+                                                &sink->soc.vidSched, sink->soc.vidSched.vidOutPort,
+                                                sink->soc.rend, sink->soc.rend->vidInPort ) )
+      {
+         GST_ERROR( "transitionToRenderer: failed to setup tunnel from vidSched to %s", sink->soc.rend->name );
+         goto exit;
+      }
+      sink->soc.tunnelActiveVidSched= true;
+
+      if ( toGfx )
+      {
+         if (!sink->soc.pEGLBufferHeader )
+         {
+            omxerr= OMX_GetState( sink->soc.rend->hComp, &state );
+            assert( omxerr == OMX_ErrorNone );
+            GST_DEBUG_OBJECT(sink, "transitionToRenderer: %s in state %s", rend->name, omxStateName(state) );
+
+            if ( state != OMX_StateIdle )
+            {
+               GST_DEBUG_OBJECT(sink, "transitionToRenderer: calling OMX_SendCommand for %s setState OMX_StateIdle", rend->name );
+               omxerr= omxSendCommandSync( sink, sink->soc.rend->hComp, OMX_CommandStateSet, OMX_StateIdle, NULL );
+               if ( omxerr != OMX_ErrorNone )
+               {
+                  GST_ERROR("transitionToRenderer: OMX_SendCommand for %s setState OMX_StateIdle: omxerr %x", rend->name, omxerr );
+               }
+            }
+
+            omxerr= omxSendCommandAsync( sink, sink->soc.rend->hComp, OMX_CommandPortEnable, sink->soc.rend->vidOutPort, NULL );
+            assert( omxerr == OMX_ErrorNone );
+            GST_DEBUG_OBJECT(sink, "transitionToRenderer: enable %s port %d", rend->name, sink->soc.rend->vidOutPort );
+
+            omxerr= OMX_UseEGLImage( sink->soc.rend->hComp, &sink->soc.pEGLBufferHeader, sink->soc.rend->vidOutPort, NULL, sink->soc.eglImage );
+            GST_DEBUG_OBJECT(sink, "transitiontoRenderer: OMX_UseEGLImage omxerr %x texid %x eglImage %p pEGLBufferHeader %p\n", omxerr, sink->soc.textureId, sink->soc.eglImage, sink->soc.pEGLBufferHeader);
+            if ( omxerr != OMX_ErrorNone )
+            {
+               GST_ERROR("transitionToRenderer: OMX_UseEGLImage for eglRender: omxerr %x", omxerr );
+            }
+
+            omxerr= OMX_GetState( sink->soc.rend->hComp, &state );
+            assert( omxerr == OMX_ErrorNone );
+            GST_DEBUG_OBJECT(sink, "transitionToRenderer: %s in state %s", rend->name, omxStateName(state) );
+
+            if ( state != OMX_StateExecuting )
+            {
+               GST_DEBUG_OBJECT(sink, "transitionToRenderer: calling OMX_SendCommand for %s setState OMX_StateExecuting", rend->name );
+               omxerr= omxSendCommandSync( sink, sink->soc.rend->hComp, OMX_CommandStateSet, OMX_StateExecuting, NULL );
+               if ( omxerr != OMX_ErrorNone )
+               {
+                  GST_ERROR("transitionToRenderer: OMX_SendCommand for %s setState OMX_StateExecuting: omxerr %x", rend->name, omxerr );
+               }
+            }
+         }
+         else
+         {
+            omxerr= omxSendCommandAsync( sink, sink->soc.rend->hComp, OMX_CommandPortEnable, sink->soc.rend->vidOutPort, NULL );
+            assert( omxerr == OMX_ErrorNone );
+            GST_DEBUG_OBJECT(sink, "transitionToRenderer: enable %s port %d", rend->name, sink->soc.rend->vidOutPort );
+         }
+      }
+
+      if ( toGfx )
+      {
+         omxerr= OMX_FillThisBuffer( sink->soc.rend->hComp, sink->soc.pEGLBufferHeader );
+         GST_DEBUG_OBJECT(sink, "transitionToRenderer: OMX_FillThisBuffer omxerr %x\n", omxerr);
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("transitionToRenderer: OMX_FillThisBuffer for eglRender: omxerr %x", omxerr );
+         }
+      }
+   }
+
+exit:
+   UNLOCK(sink);
+   return;
+}
+
+#define RED_SIZE (8)
+#define GREEN_SIZE (8)
+#define BLUE_SIZE (8)
+#define ALPHA_SIZE (8)
+#define DEPTH_SIZE (0)
+
+static bool setupEGL( GstWesterosSink *sink )
+{
+   bool result= false;
+   int i;
+   EGLBoolean b;
+   EGLint major, minor;
+   EGLint configCount;
+   EGLConfig *eglConfigs= 0;
+   #ifdef USE_GLES2
+   EGLint ctxAttrib[3];
+   #endif
+   EGLint attr[24];
+   EGLint redSize, greenSize, blueSize, alphaSize, depthSize;
+
+   if ( !sink->soc.eglSetup )
+   {
+      sink->soc.eglDisplay= eglGetDisplay( sink->display );
+      if ( sink->soc.eglDisplay == EGL_NO_DISPLAY )
+      {
+         GST_ERROR( "no EGL display available" );
+         goto exit;
+      }
+
+      b= eglInitialize( sink->soc.eglDisplay, &major, &minor );
+      if ( !b )
+      {
+         GST_ERROR( "unable to initialize EGL display" );
+         goto exit;
+      }
+
+      b= eglGetConfigs( sink->soc.eglDisplay, NULL, 0, &configCount );
+      if ( !b )
+      {
+         GST_ERROR("unable to get count of EGL configurations: %X", eglGetError());
+         goto exit;
+      }
+
+      eglConfigs= (EGLConfig*)malloc( configCount*sizeof(EGLConfig) );
+      if ( !eglConfigs )
+      {
+         GST_ERROR("unable to allocate memory for EGL configurations");
+         goto exit;
+      }
+
+      i= 0;
+      attr[i++]= EGL_RED_SIZE;
+      attr[i++]= RED_SIZE;
+      attr[i++]= EGL_GREEN_SIZE;
+      attr[i++]= GREEN_SIZE;
+      attr[i++]= EGL_BLUE_SIZE;
+      attr[i++]= BLUE_SIZE;
+      attr[i++]= EGL_ALPHA_SIZE;
+      attr[i++]= ALPHA_SIZE;
+      attr[i++]= EGL_DEPTH_SIZE;
+      attr[i++]= DEPTH_SIZE;
+      attr[i++]= EGL_SURFACE_TYPE;
+      attr[i++]= EGL_WINDOW_BIT;
+      #ifdef USE_GLES2
+      attr[i++]= EGL_STENCIL_SIZE;
+      attr[i++]= 0;
+      attr[i++]= EGL_RENDERABLE_TYPE;
+      attr[i++]= EGL_OPENGL_ES2_BIT;
+      #endif
+      attr[i++]= EGL_NONE;
+
+      b= eglChooseConfig( sink->soc.eglDisplay,
+                          attr,
+                          eglConfigs,
+                          configCount,
+                          &configCount );
+      if ( !b )
+      {
+         GST_ERROR("eglChooseConfig failed: %X", eglGetError());
+         goto exit;
+      }
+
+      for( i= 0; i < configCount; ++i )
+      {
+         eglGetConfigAttrib( sink->soc.eglDisplay, eglConfigs[i], EGL_RED_SIZE, &redSize );
+         eglGetConfigAttrib( sink->soc.eglDisplay, eglConfigs[i], EGL_GREEN_SIZE, &greenSize );
+         eglGetConfigAttrib( sink->soc.eglDisplay, eglConfigs[i], EGL_BLUE_SIZE, &blueSize );
+         eglGetConfigAttrib( sink->soc.eglDisplay, eglConfigs[i], EGL_ALPHA_SIZE, &alphaSize );
+         eglGetConfigAttrib( sink->soc.eglDisplay, eglConfigs[i], EGL_DEPTH_SIZE, &depthSize );
+
+         GST_DEBUG("setupEGL: config %d: red: %d green: %d blue: %d alpha: %d depth: %d\n",
+                 i, redSize, greenSize, blueSize, alphaSize, depthSize );
+         if ( (redSize == RED_SIZE) &&
+              (greenSize == GREEN_SIZE) &&
+              (blueSize == BLUE_SIZE) &&
+              (alphaSize == ALPHA_SIZE) &&
+              (depthSize >= DEPTH_SIZE) )
+         {
+            GST_DEBUG( "setupEGL: choosing config %d\n", i);
+            break;
+         }
+      }
+
+      if ( i == configCount )
+      {
+         GST_ERROR("no suitable configuration available\n");
+         goto exit;
+      }
+      sink->soc.eglConfig= eglConfigs[i];
+
+      #ifdef USE_GLES2
+      ctxAttrib[0]= EGL_CONTEXT_CLIENT_VERSION;
+      ctxAttrib[1]= 2;
+      ctxAttrib[2]= EGL_NONE;
+      #endif
+
+      sink->soc.eglContext= eglCreateContext( sink->soc.eglDisplay,
+                                              sink->soc.eglConfig,
+                                              EGL_NO_CONTEXT,
+                                              #ifdef USE_GLES2
+                                              ctxAttrib
+                                              #else
+                                              NULL
+                                              #endif
+                                            );
+      if ( sink->soc.eglContext == EGL_NO_CONTEXT )
+      {
+         GST_ERROR("eglCreateContext failed: %X", eglGetError());
+         goto exit;
+      }
+      GST_INFO("setupEGL: eglContext: %p\n", sink->soc.eglContext);
+
+      sink->soc.eglSetup= true;
+   }
+
+exit:
+
+   result= (sink->soc.eglSetup == true);
+
+   if ( eglConfigs )
+   {
+      free( eglConfigs );
+   }
+
+   if ( !result )
+   {
+      termEGL( sink );
+   }
+
+   return result;
+}
+
+static void termEGL( GstWesterosSink *sink )
+{
+   if ( sink->soc.eglDisplay != EGL_NO_DISPLAY )
+   {
+      eglMakeCurrent( sink->soc.eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT );
+      eglDestroyContext( sink->soc.eglDisplay, sink->soc.eglContext );
+      sink->soc.eglContext= EGL_NO_CONTEXT;
+
+      if ( !sink->soc.sharedWLDisplay )
+      {
+         eglTerminate( sink->soc.eglDisplay );
+         sink->soc.eglDisplay= EGL_NO_DISPLAY;
+         eglReleaseThread();
+      }
+   }
+   sink->soc.eglSetup= false;
+}
+
+#ifdef USE_GLES2
+static const char *fragShaderText =
+  "#ifdef GL_ES\n"
+  "precision mediump float;\n"
+  "#endif\n"
+  "uniform sampler2D s_texture;\n"
+  "uniform float u_alpha;\n"
+  "varying vec2 v_uv;\n"
+  "void main()\n"
+  "{\n"
+  "  gl_FragColor = texture2D(s_texture, v_uv) * u_alpha;\n"
+  "}\n";
+
+static const char *vertexShaderText =
+  "uniform vec2 u_resolution;\n"
+  "uniform mat4 amymatrix;\n"
+  "attribute vec2 pos;\n"
+  "attribute vec2 uv;\n"
+  "varying vec2 v_uv;\n"
+  "void main()\n"
+  "{\n"
+  "  vec4 p = amymatrix * vec4(pos, 0, 1);\n"
+  "  vec4 zeroToOne = p / vec4(u_resolution, u_resolution.x, 1);\n"
+  "  vec4 zeroToTwo = zeroToOne * vec4(2.0, 2.0, 1, 1);\n"
+  "  vec4 clipSpace = zeroToTwo - vec4(1.0, 1.0, 0, 0);\n"
+  "  clipSpace.w = 1.0+clipSpace.z;\n"
+  "  gl_Position =  clipSpace * vec4(1, -1, 1, 1);\n"
+  "  v_uv = uv;\n"
+  "}\n";
+
+static GLuint createShader(GstWesterosSink *sink, GLenum shaderType, const char *shaderSource )
+{
+   GLuint shader= 0;
+   GLint shaderStatus;
+   GLsizei length;
+   char logText[1000];
+
+   shader= glCreateShader( shaderType );
+   if ( shader )
+   {
+      glShaderSource( shader, 1, (const char **)&shaderSource, NULL );
+      glCompileShader( shader );
+      glGetShaderiv( shader, GL_COMPILE_STATUS, &shaderStatus );
+      if ( !shaderStatus )
+      {
+         glGetShaderInfoLog( shader, sizeof(logText), &length, logText );
+         GST_ERROR("Error compiling %s shader: %*s\n",
+                   ((shaderType == GL_VERTEX_SHADER) ? "vertex" : "fragment"),
+                   length,
+                   logText );
+      }
+   }
+
+   return shader;
+}
+#endif
+
+static bool setupGfx( GstWesterosSink *sink )
+{
+   bool result= false;
+
+   if ( !sink->soc.gfxSetup )
+   {
+      EGLBoolean b;
+      GLint statusShader;
+
+      setupEGL( sink );
+
+      sink->soc.wlEGLWindow= wl_egl_window_create( sink->surface, sink->windowWidth, sink->windowHeight );
+
+      sink->soc.eglSurface= eglCreateWindowSurface( sink->soc.eglDisplay,
+                                                    sink->soc.eglConfig,
+                                                    (EGLNativeWindowType)sink->soc.wlEGLWindow,
+                                                    NULL );
+      GST_DEBUG("setupGfx: eglSurface %p\n", sink->soc.eglSurface );
+      if ( sink->soc.eglSurface == EGL_NO_SURFACE )
+      {
+         GST_ERROR("eglCreateWindowSurface failed: %X", eglGetError());
+         goto exit;
+      }
+
+      b= eglMakeCurrent( sink->soc.eglDisplay, sink->soc.eglSurface, sink->soc.eglSurface, sink->soc.eglContext );
+      if ( !b )
+      {
+         GST_ERROR("eglMakeCurrent failed: %X", eglGetError());
+         goto exit;
+      }
+
+      sink->soc.eglCreateImageKHR= (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+      GST_DEBUG("setupGfx: eglCreateImageKHR %p\n", sink->soc.eglCreateImageKHR );
+
+      sink->soc.eglDestroyImageKHR= (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+      GST_DEBUG("setupGfx: eglDestroyImageKHR %p\n", sink->soc.eglDestroyImageKHR );
+
+      glGetError();
+      createImage( sink );
+
+      #ifdef USE_GLES2
+      sink->soc.vertId= createShader(sink, GL_VERTEX_SHADER, vertexShaderText);
+      sink->soc.fragId= createShader(sink, GL_FRAGMENT_SHADER, fragShaderText);
+      sink->soc.progId= glCreateProgram();
+      glAttachShader(sink->soc.progId, sink->soc.vertId);
+      glAttachShader(sink->soc.progId, sink->soc.fragId);
+      glBindAttribLocation(sink->soc.progId, sink->soc.posLoc, "pos");
+      glBindAttribLocation(sink->soc.progId, sink->soc.uvLoc, "uv");
+      glLinkProgram(sink->soc.progId);
+      glGetProgramiv(sink->soc.progId, GL_LINK_STATUS, &statusShader);
+      if (!statusShader)
+      {
+         char log[1000];
+         GLsizei len;
+         glGetProgramInfoLog(sink->soc.progId, 1000, &len, log);
+         GST_ERROR("Error: linking:\n%*s\n", len, log);
+      }
+      sink->soc.resLoc= glGetUniformLocation(sink->soc.progId,"u_resolution");
+      sink->soc.matrixLoc= glGetUniformLocation(sink->soc.progId,"amymatrix");
+      sink->soc.alphaLoc= glGetUniformLocation(sink->soc.progId,"u_alpha");
+      sink->soc.textureLoc= glGetUniformLocation(sink->soc.progId,"s_texture");
+      #else
+      glHint( GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST );
+      #endif
+
+      sink->soc.rend= &sink->soc.eglRend;
+
+      sink->soc.gfxSetup= true;
+   }
+
+exit:
+
+   result= (sink->soc.gfxSetup == true);
+
+   return result;
+}
+
+static void termGfx( GstWesterosSink *sink )
+{
+   destroyImage( sink );
+   #ifdef USE_GLES2
+   if ( sink->soc.vertId )
+   {
+      glDeleteShader( sink->soc.vertId );
+      sink->soc.vertId= 0;
+   }
+   if ( sink->soc.fragId )
+   {
+      glDeleteShader( sink->soc.fragId );
+      sink->soc.fragId= 0;
+   }
+   if ( sink->soc.progId )
+   {
+      glDeleteProgram( sink->soc.progId );
+      sink->soc.progId= 0;
+   }
+   #endif
+   if ( sink->soc.eglSurface != EGL_NO_SURFACE )
+   {
+      eglDestroySurface( sink->soc.eglDisplay, sink->soc.eglSurface );
+      sink->soc.eglSurface= EGL_NO_SURFACE;
+   }
+   if ( sink->soc.wlEGLWindow )
+   {
+      wl_egl_window_destroy( sink->soc.wlEGLWindow );
+      sink->soc.wlEGLWindow= 0;
+   }
+   termEGL(sink);
+   sink->soc.gfxSetup= false;
+}
+
+static void createImage( GstWesterosSink *sink )
+{
+   destroyImage( sink );
+
+   glGenTextures( 1, &sink->soc.textureId );
+
+   glBindTexture(GL_TEXTURE_2D, sink->soc.textureId);
+
+   glTexImage2D( GL_TEXTURE_2D,
+                 0,
+                 GL_RGBA,
+                 sink->soc.frameWidth,
+                 sink->soc.frameHeight,
+                 0,
+                 GL_RGBA,
+                 GL_UNSIGNED_BYTE,
+                 NULL );
+
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+   sink->soc.eglImage= sink->soc.eglCreateImageKHR( sink->soc.eglDisplay,
+                                                    sink->soc.eglContext,
+                                                    EGL_GL_TEXTURE_2D_KHR,
+                                                    (EGLClientBuffer)sink->soc.textureId,
+                                                    NULL );
+
+   sink->soc.textureWidth= sink->soc.frameWidth;
+   sink->soc.textureHeight= sink->soc.frameHeight;
+}
+
+static void destroyImage( GstWesterosSink *sink )
+{
+   if ( sink->soc.textureId )
+   {
+      glDeleteTextures( 1, &sink->soc.textureId );
+      sink->soc.textureId= 0;
+   }
+   if ( sink->soc.eglImage )
+   {
+      sink->soc.eglDestroyImageKHR( sink->soc.eglDisplay, sink->soc.eglImage );
+      sink->soc.eglImage= 0;
+   }
+   sink->soc.textureWidth= 0;
+   sink->soc.textureHeight= 0;
+}
+
+static void drawImage ( GstWesterosSink *sink )
+{
+   float x, y, w, h;
+
+   x= 0;
+   y= 0;
+   w= sink->windowWidth;
+   h= sink->windowHeight;
+
+   const float verts[4][2] =
+   {
+      { x, y },
+      { x+w, y },
+      { x,  y+h },
+      { x+w, y+h }
+   };
+
+   const float uv[4][2] =
+   {
+      #ifdef USE_GLES2
+      { 0,  0 },
+      { 1,  0 },
+      { 0,  1 },
+      { 1,  1 }
+      #else
+      { 0,  1 },
+      { 1,  1 },
+      { 0,  0 },
+      { 1,  0 }
+      #endif
+   };
+
+   #ifdef USE_GLES2
+   glViewport( 0, 0, w, h );
+   glClearColor( 0.0f, 1.0f, 0.0f, 1.0f );
+   glClear( GL_COLOR_BUFFER_BIT );
+   glEnable(GL_BLEND);
+
+   glBlendFuncSeparate( GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE );
+   glUseProgram(sink->soc.progId);
+   glUniform2f(sink->soc.resLoc, w, h);
+   glUniformMatrix4fv(sink->soc.matrixLoc, 1, GL_FALSE, (GLfloat*)sink->soc.matrix);
+   glUniform1f(sink->soc.alphaLoc, 1.0f);
+
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, sink->soc.textureId);
+   glUniform1i(sink->soc.textureLoc, 0);
+   glVertexAttribPointer(sink->soc.posLoc, 2, GL_FLOAT, GL_FALSE, 0, verts);
+   glVertexAttribPointer(sink->soc.uvLoc, 2, GL_FLOAT, GL_FALSE, 0, uv);
+   glEnableVertexAttribArray(sink->soc.posLoc);
+   glEnableVertexAttribArray(sink->soc.uvLoc);
+   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+   glDisableVertexAttribArray(sink->soc.posLoc);
+   glDisableVertexAttribArray(sink->soc.uvLoc);
+   #else
+   glViewport( 0, 0, w, h );
+   glClearColor( 0.0f, 1.0f, 0.0f, 1.0f );
+   glClear( GL_COLOR_BUFFER_BIT );
+   glMatrixMode(GL_PROJECTION);
+   glLoadIdentity();
+   glOrthof( 0.0f, sink->windowWidth, 0.0f, sink->windowHeight, 0.0f, 1.0f );
+   glEnableClientState( GL_VERTEX_ARRAY );
+   glVertexPointer( 2, GL_FLOAT, 0, verts );
+   glMatrixMode(GL_MODELVIEW);
+   glLoadIdentity();
+   glTexCoordPointer(2, GL_FLOAT, 0, uv);
+   glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+   glEnable(GL_TEXTURE_2D);
+   glBindTexture(GL_TEXTURE_2D, sink->soc.textureId);
+   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+   #endif
+
+   glFlush();
+   glFinish();
+
+   eglSwapBuffers( sink->soc.eglDisplay, sink->soc.eglSurface );
+
+   wl_display_flush(sink->display);
+   wl_display_dispatch_queue_pending(sink->display, sink->queue);
 }
 
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
@@ -1978,17 +2757,39 @@ exit:
    return;     
 }
 
-static gpointer captureThread(gpointer data) 
+static gpointer captureThread(gpointer data)
 {
    GstWesterosSink *sink= (GstWesterosSink*)data;
 
-   //TBD
-   
+   GST_DEBUG_OBJECT(sink, "captureThread: enter");
+
+   setupGfx( sink );
+
+   while( !sink->soc.quitCaptureThread )
+   {
+      waitForNewFrame( sink );
+      if ( sink->soc.useGfxPath && sink->soc.newFrame )
+      {
+         sink->soc.newFrame= false;
+         drawImage( sink );
+      }
+   }
+
+   GST_DEBUG_OBJECT(sink, "captureThread: ending");
+
+   termGfx( sink );
+
+   GST_DEBUG_OBJECT(sink, "captureThread: exit");
+
+   g_thread_exit(NULL);
+
    return NULL;
 }
 
 gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
 {
+   WESTEROS_UNUSED(sink);
+   WESTEROS_UNUSED(query);
    gboolean result = FALSE;
 
    //TBD

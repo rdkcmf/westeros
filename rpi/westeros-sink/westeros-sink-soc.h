@@ -19,10 +19,23 @@
 #ifndef __WESTEROS_SINK_SOC_H__
 #define __WESTEROS_SINK_SOC_H__
 
+#define USE_GLES2
+
 #include <stdlib.h>
 #include <semaphore.h>
 
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
+#ifdef USE_GLES2
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#else
+#include <GLES/gl.h>
+#endif
+
 #include "simplebuffer-client-protocol.h"
+#include "westeros-gl.h"
 
 #include "IL/OMX_Core.h"
 #include "IL/OMX_Broadcom.h"
@@ -72,7 +85,40 @@ struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
    int activeBuffers;
-   
+   bool sharedWLDisplay;
+   struct wl_egl_window *wlEGLWindow;
+
+   bool eglSetup;
+   EGLDisplay eglDisplay;
+   EGLConfig eglConfig;
+   EGLContext eglContext;
+   EGLSurface eglSurface;
+
+   bool gfxSetup;
+   GLuint textureId;
+   EGLImageKHR eglImage;
+   int textureWidth;
+   int textureHeight;
+   PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
+   PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR;
+   OMX_BUFFERHEADERTYPE *pEGLBufferHeader;
+   bool newFrame;
+   bool videoOutputChanged;
+   int frameWidth;
+   int frameHeight;
+   #ifdef USE_GLES2
+   float matrix[16];
+   GLuint vertId;
+   GLuint fragId;
+   GLuint progId;
+   GLint posLoc;
+   GLint uvLoc;
+   GLint resLoc;
+   GLint matrixLoc;
+   GLint alphaLoc;
+   GLint textureLoc;
+   #endif
+
    void *moduleBcmHost;
    bool bcmHostIsInit;
    BcmHostInit_t bcm_host_init;
@@ -116,8 +162,12 @@ struct _GstWesterosSinkSoc
 
    #ifdef GLIB_VERSION_2_32 
    GMutex mutex;
+   GMutex mutexNewFrame;
+   GCond condNewFrame;
    #else
    GMutex *mutex;
+   GMutex *mutexNewFrame;
+   GCond *condNewFrame;
    #endif
    gboolean quitCaptureThread;
    GThread *captureThread;

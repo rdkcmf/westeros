@@ -424,9 +424,10 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->segmentNumber= 0;
    sink->queryPositionFromPeer= FALSE;
 
+   sink->display= 0;
+
    if ( gst_westeros_sink_soc_init( sink ) == TRUE )
    {
-      sink->display= 0;
       sink->registry= 0;
       sink->shell= 0;
       sink->compositor= 0;
@@ -434,7 +435,10 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
       sink->vpc= 0;
       sink->vpcSurface= 0;
 
-      sink->display= wl_display_connect(NULL);
+      if ( !sink->display ) 
+      {
+         sink->display= wl_display_connect(NULL);
+      }
 
       if ( sink->display )
       {
