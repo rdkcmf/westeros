@@ -43,6 +43,9 @@ libwesteros_sink_la_LDFLAGS= \
    -lwesteros_compositor \   
    -lwesteros_simplebuffer_client \
    -lwesteros_simpleshell_client \
+   -lwayland-egl \
+   -lGLESv2 \
+   -lEGL \
    -ldl
    
 distcleancheck_listfiles = *-libtool
