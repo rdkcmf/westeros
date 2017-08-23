@@ -1165,15 +1165,6 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
           GST_ERROR("Error NEXUS_SimpleVideoDecoder_StartCapture: %d", (int)rc);
       }
       sink->soc.captureEnabled= TRUE;
-
-      /* Move HW path video off screen.  The natural inclination would be to suppress
-       * its presentation by setting captureSettings.displayEnable to false, but doing
-       * so seems to cause HW path video to never present again when capture is disabled.
-       * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
-       */
-      NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-      vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
-      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
    }
    else if ( !useGfxPath && sink->soc.captureEnabled )
    {
