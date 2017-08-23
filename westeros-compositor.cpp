@@ -6386,6 +6386,16 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
       WstVpcSurface *vpcSurface= (*it);
       WstRect rect;
 
+      if ( useHWPath != vpcSurface->useHWPath )
+      {
+         DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPath );
+         vpcSurface->useHWPathNext= useHWPath;
+         vpcSurface->pathTransitionPending= true;
+         wl_vpc_surface_send_video_path_change( vpcSurface->resource,
+                                                useHWPath ? WL_VPC_SURFACE_PATHWAY_HARDWARE
+                                                          : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
+      }
+
       if ( (transX != vpcSurface->xTrans) ||
            (transY != vpcSurface->yTrans) ||
            (scaleXNum != vpcSurface->xScaleNum) ||
@@ -6414,18 +6424,8 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
                                                  vpcSurface->outputWidth,
                                                  vpcSurface->outputHeight );
       }
-      
-      if ( useHWPath != vpcSurface->useHWPath )
-      {
-         DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPath );
-         vpcSurface->useHWPathNext= useHWPath;
-         vpcSurface->pathTransitionPending= true;
-         wl_vpc_surface_send_video_path_change( vpcSurface->resource, 
-                                                useHWPath ? WL_VPC_SURFACE_PATHWAY_HARDWARE
-                                                          : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
-      }
 
-      if ( vpcSurface->useHWPath )
+      if ( vpcSurface->useHWPath || vpcSurface->useHWPathNext )
       {
          int vx, vy, vw, vh;
          vx= vpcSurface->surface->x;
@@ -6440,14 +6440,17 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
          {
             vh= outputHeight-vy;
          }
-         rect.x= transX+vx*scaleX;
-         rect.y= transY+vy*scaleY;
-         rect.width= vw*scaleX;
-         rect.height= vh*scaleY;
-         vpcSurface->hwX= rect.x;
-         vpcSurface->hwY= rect.y;
-         vpcSurface->hwWidth= rect.width;
-         vpcSurface->hwHeight= rect.height;
+         if ( !isRotated )
+         {
+            vpcSurface->hwX= transX+vx*scaleX;
+            vpcSurface->hwY= transY+vy*scaleY;
+            vpcSurface->hwWidth= vw*scaleX;
+            vpcSurface->hwHeight= vh*scaleY;
+         }
+         rect.x= vpcSurface->hwX;
+         rect.y= vpcSurface->hwY;
+         rect.width= vpcSurface->hwWidth;
+         rect.height= vpcSurface->hwHeight;
          if ( ctx->renderer->hints & WstHints_holePunch )
          {
             ctx->renderer->holePunch( ctx->renderer, rect.x, rect.y, rect.width, rect.height );
