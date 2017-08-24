@@ -6440,7 +6440,12 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
          {
             vh= outputHeight-vy;
          }
-         if ( !isRotated )
+         // Don't update hardware video rect under certain conditions to avoid visual
+         // artifacts.  If we are rotating, we will be presenting video with the graphics
+         // path and the transformed rect is not suitable for hardware positioning.  On non-rotation
+         // transitions from HW presentation to Gfx don't update the HW rect so the hole
+         // punch doesn't move before the first graphics surface arrives.
+         if ( !isRotated && (!vpcSurface->pathTransitionPending || vpcSurface->useHWPathNext) )
          {
             vpcSurface->hwX= transX+vx*scaleX;
             vpcSurface->hwY= transY+vy*scaleY;
