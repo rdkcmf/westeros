@@ -425,6 +425,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->queryPositionFromPeer= FALSE;
 
    sink->display= 0;
+   sink->currentSegment = NULL;
 
    if ( gst_westeros_sink_soc_init( sink ) == TRUE )
    {
@@ -956,6 +957,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
 
             
             LOCK( sink );
+            sink->currentSegment = dataSegment;
             sink->flushStarted= FALSE;
             if (appliedRate != 1.0)
             {
