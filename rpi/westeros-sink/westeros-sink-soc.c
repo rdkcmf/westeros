@@ -448,6 +448,142 @@ static const char *omxStateName( OMX_STATETYPE state )
    return stateName;
 }
 
+static const char *omxComponentName( GstWesterosSink *sink, OMX_IN OMX_HANDLETYPE hComponent )
+{
+   const char *componentName= "unknown";
+
+   if ( hComponent == sink->soc.vidDec.hComp )
+   {
+      componentName= sink->soc.vidDec.name;
+   }
+   else if ( hComponent == sink->soc.vidSched.hComp )
+   {
+      componentName= sink->soc.vidSched.name;
+   }
+   else if ( hComponent == sink->soc.clock.hComp )
+   {
+      componentName= sink->soc.clock.name;
+   }
+   else if ( hComponent == sink->soc.vidRend.hComp )
+   {
+      componentName= sink->soc.vidRend.name;
+   }
+   else if ( hComponent == sink->soc.eglRend.hComp )
+   {
+      componentName= sink->soc.eglRend.name;
+   }
+   return componentName;
+}
+
+static const char *omxPortName( GstWesterosSink *sink, OMX_U32 port )
+{
+   const char *portName= "unknown";
+
+   if ( port == sink->soc.vidDec.vidInPort )
+   {
+      portName= "vidDecVidInput";
+   }
+   else if ( port == sink->soc.vidDec.vidOutPort )
+   {
+      portName= "vidDecVidOutput";
+   }
+   else if ( port == sink->soc.vidSched.vidInPort )
+   {
+      portName= "vidSchedVidInput";
+   }
+   else if ( port == sink->soc.vidSched.vidOutPort )
+   {
+      portName= "vidSchedVidOutput";
+   }
+   else if ( port == sink->soc.vidSched.otherInPort )
+   {
+      portName= "vidSchedOtherInput";
+   }
+   else if ( port == sink->soc.vidRend.vidInPort )
+   {
+      portName= "vidRendVidInput";
+   }
+   else if ( port == sink->soc.eglRend.vidInPort )
+   {
+      portName= "eglRendVidInput";
+   }
+   else if ( port == sink->soc.eglRend.vidOutPort )
+   {
+      portName= "eglRendVidOutput";
+   }
+   else if ( port == sink->soc.clock.otherOutPort )
+   {
+      portName= "clockOtherOutput";
+   }
+   return portName;
+}
+
+static const char *omxCommandName( OMX_U32 cmd )
+{
+   const char *name= "unknown";
+
+   switch( cmd )
+   {
+      case OMX_CommandStateSet: name= "StateSet"; break;
+      case OMX_CommandFlush: name= "Flush"; break;
+      case OMX_CommandPortDisable: name= "PortDisable"; break;
+      case OMX_CommandPortEnable: name= "PortEnable"; break;
+      case OMX_CommandMarkBuffer: name= "MarkBuffer"; break;
+   }
+   return name;
+}
+
+static void omxDumpEvent( GstWesterosSink *sink,
+                          OMX_IN OMX_HANDLETYPE hComponent,
+                          OMX_IN OMX_PTR pAppData,
+                          OMX_IN OMX_EVENTTYPE eEvent,
+                          OMX_IN OMX_U32 nData1,
+                          OMX_IN OMX_U32 nData2,
+                          OMX_IN OMX_PTR pEventData )
+{
+   const char *compName= omxComponentName( sink, hComponent );
+   switch ( eEvent )
+   {
+      case OMX_EventCmdComplete:
+         switch( nData1 )
+         {
+            case OMX_CommandStateSet:
+            case OMX_CommandFlush:
+            case OMX_CommandMarkBuffer:
+               printf("OMXEvent: CmdComplete: %s: cmd: %s n2 %d\n", compName, omxCommandName(nData1), nData2);
+               break;
+            case OMX_CommandPortDisable:
+            case OMX_CommandPortEnable:
+               printf("OMXEvent: CmdComplete: %s: cmd: %s %s (%d)\n", compName, omxCommandName(nData1), omxPortName(sink, nData2), nData2);
+               break;
+         }
+         break;
+      case OMX_EventError:
+         printf("OMXEvent: Error: %s: type: %x n2 %d\n", compName, nData1, nData2);
+         break;
+      case OMX_EventPortSettingsChanged:
+         printf("OMXEvent: PortSettingsChanged: %s: port: %s (%d) n2 %d\n", compName, omxPortName(sink, nData1), nData1, nData2);
+         break;
+      case OMX_EventBufferFlag:
+         printf("OMXEvent: BufferFlag: %s: n1: %d n2 %d\n", compName, nData1, nData2);
+         break;
+      case OMX_EventResourcesAcquired:
+         printf("OMXEvent: ResourcesAcquired: %s: n1: %d n2 %d\n", compName, nData1, nData2);
+         break;
+      case OMX_EventComponentResumed:
+         printf("OMXEvent: ComponentResumed: %s: n1: %d n2 %d\n", compName, nData1, nData2);
+         break;
+      case OMX_EventDynamicResourcesAvailable:
+         printf("OMXEvent: DynamicResourcesAvailable: %s: n1: %d n2 %d\n", compName, nData1, nData2);
+         break;
+      case OMX_EventPortFormatDetected:
+         printf("OMXEvent: PortFormatDetected: %s: n1: %d n2 %d\n", compName, nData1, nData2);
+         break;
+      default:
+         break;
+   }
+}
+
 static OMX_AsyncResult *omxGetAsyncResult( GstWesterosSink *sink, OMX_U32 cmd, OMX_U32 nData1 )
 {
    OMX_AsyncResult *pAsync= 0;
@@ -512,9 +648,15 @@ static OMX_ERRORTYPE omxEventHandler( OMX_IN OMX_HANDLETYPE hComponent,
    GstWesterosSink *sink= (GstWesterosSink*)pAppData;
    OMX_AsyncResult *pAsync= 0;
    bool eosDetected= false;
+   GstDebugLevel level;
 
    GST_LOG("omxEventHandler: pAppData %p eEvent %d nData1 %x nData2 %d pEventData %p",
            pAppData, eEvent, nData1, nData2, pEventData );
+   level= gst_debug_category_get_threshold( gst_westeros_sink_debug );
+   if ( level >= GST_LEVEL_INFO )
+   {
+      omxDumpEvent( sink, hComponent, pAppData, eEvent, nData1, nData2, pEventData );
+   }
    LOCK_SOC(sink);
    switch( eEvent )
    {
@@ -1268,6 +1410,16 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
          GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable vidSched port %d: omxerr %x", sink->soc.vidSched.vidOutPort, omxerr );
       }
 
+      if ( sink->soc.rend == &sink->soc.eglRend )
+      {
+         omxerr= OMX_SendCommand( sink->soc.rend->hComp, OMX_CommandPortDisable, sink->soc.rend->vidOutPort, NULL );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable %s port %d: omxerr %x",
+                       sink->soc.rend->name, sink->soc.rend->vidInPort, omxerr );
+         }
+      }
+
       omxerr= OMX_SendCommand( sink->soc.rend->hComp, OMX_CommandPortDisable, sink->soc.rend->vidInPort, NULL );
       if ( omxerr != OMX_ErrorNone )
       {
@@ -1341,6 +1493,16 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    {
       sem_destroy( &sink->soc.semInputBuffers );
       sink->soc.semInputActive= false;
+   }
+
+   if ( sink->soc.pEGLBufferHeader )
+   {
+      GST_LOG("gst_westeros_sink_soc_paused_to_ready: free pEGLBuffer %p", sink->soc.pEGLBufferHeader );
+      OMX_FreeBuffer( sink->soc.eglRend.hComp,
+                      sink->soc.eglRend.vidOutPort,
+                      sink->soc.pEGLBufferHeader );
+      sink->soc.pEGLBufferHeader= 0;
+      usleep( 200000 );
    }
    
    // Need to wait for viddec inport to disable?  Without sleep get 0x80001000 on vidDec transition to Idle state
