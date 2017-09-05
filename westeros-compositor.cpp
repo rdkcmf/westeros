@@ -346,7 +346,6 @@ typedef struct _WstCompositor
    WstClientStatus clientStatusCB;
    
    bool running;
-   bool stopRequested;
    bool compositorReady;
    bool compositorThreadStarted;
    pthread_t compositorThreadId;
@@ -1906,21 +1905,17 @@ void WstCompositorStop( WstCompositor *ctx )
       if ( ctx->running )
       {
          ctx->running= false;
-         
-         if ( ctx->compositorThreadStarted )
-         {
-            pthread_t threadId= ctx->compositorThreadId;
-            ctx->stopRequested= true;
-            if ( ctx->display )
-            {
-               wl_display_terminate(ctx->display);
-            }
-            pthread_mutex_unlock( &ctx->mutex );
-            pthread_join( ctx->compositorThreadId, NULL );
-            pthread_mutex_lock( &ctx->mutex );
 
-            wstCompositorReleaseResources( ctx );
+         if ( ctx->compositorThreadStarted && ctx->display )
+         {
+            wl_display_terminate( ctx->display );
          }
+
+         pthread_mutex_unlock( &ctx->mutex );
+         pthread_join( ctx->compositorThreadId, NULL );
+         pthread_mutex_lock( &ctx->mutex );
+
+         wstCompositorReleaseResources( ctx );
 
          if ( !ctx->isNested )
          {
@@ -2877,7 +2872,6 @@ static void wstCompositorReleaseResources( WstCompositor *ctx )
    {
       WstNestedConnectionReleaseRemoteBuffers( ctx->nc );
       WstNestedConnectionDisconnect( ctx->nc );
-      ctx->nc= 0;
    }
 
    if ( ctx->isRepeater )
