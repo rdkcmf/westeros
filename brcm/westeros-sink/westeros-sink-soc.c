@@ -882,6 +882,8 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    startSettings.settings.timestampMode= NEXUS_VideoDecoderTimestampMode_eDisplay;                
    startSettings.settings.prerollRate= 1;
    startSettings.displayEnabled= true;
+   startSettings.maxWidth= sink->maxWidth;
+   startSettings.maxHeight= sink->maxHeight;
 
    rc= NEXUS_SimpleVideoDecoder_SetStcChannel(sink->soc.videoDecoder, sink->soc.stcChannel);
    if ( rc != NEXUS_SUCCESS )
