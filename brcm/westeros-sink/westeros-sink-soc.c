@@ -241,10 +241,18 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
          sink->soc.videoPidChannel= NULL;
          sink->soc.codec= bvideo_codec_unknown;
 
-         NEXUS_VideoDecoderSettings settings;
-         NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
-         sink->maxWidth=(int) settings.maxWidth;
-         sink->maxHeight=(int) settings.maxHeight;
+         NEXUS_VideoDecoderCapabilities videoDecoderCaps;
+         NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
+         if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
+         {
+            sink->maxWidth= 3840;
+            sink->maxHeight= 2160;
+         }
+         else
+         {
+            sink->maxWidth= 1920;
+            sink->maxHeight= 1080;
+         }
 
          result= TRUE;
       }
