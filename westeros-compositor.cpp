@@ -1906,6 +1906,13 @@ void WstCompositorStop( WstCompositor *ctx )
       {
          ctx->running= false;
 
+         ctx->outputNestedListener= 0;
+         ctx->outputNestedListenerUserData= 0;
+         ctx->keyboardNestedListener= 0;
+         ctx->keyboardNestedListenerUserData= 0;
+         ctx->pointerNestedListener= 0;
+         ctx->pointerNestedListenerUserData= 0;
+
          if ( ctx->compositorThreadStarted && ctx->display )
          {
             wl_display_terminate( ctx->display );
