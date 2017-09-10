@@ -897,7 +897,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                {
                   GST_ERROR("width=%d height=%d > maxWidth=%d maxHeight=%d\n", width, height, sink->maxWidth, sink->maxHeight);
                   const char *err_string = "Maximum video dimensions exceeded";
-                  GError *error = g_error_new(GST_STREAM_ERROR, GST_STREAM_ERROR_WRONG_TYPE, err_string);
+                  GError *error = g_error_new(GST_STREAM_ERROR, GST_STREAM_ERROR_WRONG_TYPE, "%s", err_string);
                   GstMessage *message = gst_message_new_error(GST_OBJECT_CAST(sink), error, err_string);
                   gst_element_post_message(GST_ELEMENT_CAST(sink), message);
                   g_error_free(error);
