@@ -652,7 +652,8 @@ static uint32_t find_crtc_for_connector(WstGLCtx *ctx, drmModeRes *res, drmModeC
     {
         drmModeEncoder *encoder = drmModeGetEncoder(ctx->drmFd, conn->encoders[i]);
 
-        if (encoder) {
+        if (encoder)
+        {
             uint32_t crtc_id = find_crtc_for_encoder(res, encoder);
 
             drmModeFreeEncoder(encoder);
@@ -802,23 +803,26 @@ static bool setupDRM( WstGLCtx *ctx )
    }
    else
    {
-         uint32_t crtc_id = find_crtc_for_connector(ctx, res, conn);
-           if (crtc_id == 0)
-           {
-                  printf("westeros-gl: setupDrm: unable to get an encoder/CRTC for connector %p on card (%s)\n", ctx->drmConnector, c
-           }
-           else
-           {
-                  printf("westeros-gl: setupDrm: found the CRTC %d for the connecter %p\n", crtc_id, ctx->drmConnector);
-                  for (i = 0; i < res->count_crtcs; i++) {
-                          if (res->crtcs[i] == crtc_id) {
-                              break;
-                          }
-                  }
-                  ctx->drmEncoder = drmModeGetEncoder(ctx->drmFd, res->encoders[i]);
-                  ctx->drmEncoder->crtc_id = crtc_id;
-                  result= true;
-           }
+        uint32_t crtc_id = find_crtc_for_connector(ctx, res, conn);
+        if (crtc_id == 0)
+        {
+            printf("westeros-gl: setupDrm: unable to get an encoder/CRTC for connector %p on card (%s)\n",
+                   ctx->drmConnector, card);
+        }
+        else
+        {
+            printf("westeros-gl: setupDrm: found the CRTC %d for the connecter %p\n", crtc_id, ctx->drmConnector);
+            for (i = 0; i < res->count_crtcs; i++)
+            {
+                if (res->crtcs[i] == crtc_id)
+                {
+                    break;
+                }
+            }
+            ctx->drmEncoder = drmModeGetEncoder(ctx->drmFd, res->encoders[i]);
+            ctx->drmEncoder->crtc_id = crtc_id;
+            result= true;
+        }
    }
 
 exit:
