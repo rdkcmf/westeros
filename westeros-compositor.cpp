@@ -113,6 +113,8 @@ typedef enum _WstEventType
    WstEventType_pointerLeave,
    WstEventType_pointerMove,
    WstEventType_pointerButton,
+   WstEventType_resolutionChangeBegin,
+   WstEventType_resolutionChangeEnd
 } WstEventType;
 
 typedef enum
@@ -313,6 +315,18 @@ typedef struct _WstOutput
    
 } WstOutput;
 
+typedef bool (*WstModuleInit)( WstCompositor *ctx, struct wl_display* );
+typedef void (*WstModuleTerm)( WstCompositor *ctx );
+
+typedef struct _WstModule
+{
+   const char *moduleName;
+   void *module;
+   WstModuleInit initEntryPoint;
+   WstModuleTerm termEntryPoint;
+   bool isInitialized;
+} WstModule;
+
 typedef struct _WstCompositor
 {
    const char *displayName;
@@ -330,6 +344,7 @@ typedef struct _WstCompositor
    void *nativeWindow;
    int outputWidth;
    int outputHeight;
+   std::vector<WstModule*> modules;
    
    int eventIndex;   
    WstEvent eventQueue[WST_EVENT_QUEUE_SIZE];
@@ -739,6 +754,7 @@ WstCompositor* WstCompositorCreate()
       ctx->clientInfoMap= std::map<struct wl_client*, WstClientInfo*>();
       ctx->surfaceInfoMap= std::map<struct wl_resource*, WstSurfaceInfo*>();
       ctx->vpcSurfaces= std::vector<WstVpcSurface*>();
+      ctx->modules= std::vector<WstModule*>();
       
       ctx->xkbNames.rules= strdup("evdev");
       ctx->xkbNames.model= strdup("pc105");
@@ -809,7 +825,25 @@ void WstCompositorDestroy( WstCompositor *ctx )
          free( (void*)ctx->xkbNames.options );
          ctx->xkbNames.options= 0;
       }
-      
+
+      while( !ctx->modules.empty() )
+      {
+         WstModule* module= ctx->modules.back();
+         ctx->modules.pop_back();
+         if ( module )
+         {
+            if ( module->moduleName )
+            {
+               free( (void*)module->moduleName );
+            }
+            if ( module->module )
+            {
+               dlclose( module->module );
+            }
+            free( module );
+         }
+      }
+
       pthread_mutex_destroy( &ctx->mutex );
       
       free( ctx );
@@ -1280,6 +1314,148 @@ exit:
    
    return result;
 }                                    
+
+bool WstCompositorAddModule( WstCompositor *ctx, const char *moduleName )
+{
+   bool result= false;
+   WstModule *moduleNew= 0;
+
+   if ( ctx )
+   {
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot add module while compositor is running" );
+         goto exit;
+      }
+
+      moduleNew= (WstModule*)calloc( 1, sizeof(WstModule) );
+      if ( !moduleNew )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Unable to allocate memory for new module" );
+         goto exit;
+      }
+
+      moduleNew->moduleName= strdup(moduleName);
+      if ( !moduleNew->moduleName )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Unable to allocate memory for new module name" );
+         goto exit;
+      }
+
+      moduleNew->module= dlopen( moduleName, RTLD_NOW );
+      if ( !moduleNew->module )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Unable to open new module (%.*s)", (WST_MAX_ERROR_DETAIL-64), dlerror() );
+         goto exit;
+      }
+
+      moduleNew->initEntryPoint= (WstModuleInit)dlsym( moduleNew->module, "moduleInit" );
+      if ( !moduleNew->initEntryPoint )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Module missing moduleInit entry point (%.*s)", (WST_MAX_ERROR_DETAIL-64), dlerror() );
+         goto exit;
+      }
+
+      moduleNew->termEntryPoint= (WstModuleTerm)dlsym( moduleNew->module, "moduleTerm" );
+      if ( !moduleNew->termEntryPoint )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Module missing moduleTerm entry point (%.*s)", (WST_MAX_ERROR_DETAIL-64), dlerror() );
+         goto exit;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->modules.push_back( moduleNew );
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
+   }
+
+exit:
+
+   if ( !result )
+   {
+      if ( moduleNew )
+      {
+         if ( moduleNew->moduleName )
+         {
+            free( (void*)moduleNew->moduleName );
+         }
+
+         if ( moduleNew->module )
+         {
+            dlclose( moduleNew->module );
+         }
+
+         free( moduleNew );
+      }
+   }
+
+   return result;
+}
+
+void WstCompositorResolutionChangeBegin( WstCompositor *ctx )
+{
+   DEBUG("WstCompositorResolutionChangeBegin");
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( !ctx->isNested && !ctx->isEmbedded )
+      {
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_resolutionChangeBegin;
+
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+
+         ctx->allowImmediateRepaint= true;
+         wstCompositorScheduleRepaint( ctx );
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+   DEBUG("WstCompositorResolutionChangeBegin: exit");
+}
+
+void WstCompositorResolutionChangeEnd( WstCompositor *ctx, int width, int height )
+{
+   DEBUG("WstCompositorResolutionChangeEnd: (%d x %d)", width, height);
+   if ( ctx )
+   {
+      if ( ctx->renderer && ctx->renderer->resolutionChangeEnd )
+      {
+         WstCompositorSetOutputSize( ctx, width, height );
+         ctx->outputSizeChanged= true;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( !ctx->isNested && !ctx->isEmbedded )
+      {
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_resolutionChangeEnd;
+         ctx->eventQueue[eventIndex].v1= width;
+         ctx->eventQueue[eventIndex].v2= height;
+
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+
+         ctx->allowImmediateRepaint= true;
+         wstCompositorScheduleRepaint( ctx );
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+   DEBUG("WstCompositorResolutionChangeEnd: exit");
+}
 
 const char *WstCompositorGetDisplayName( WstCompositor *ctx )
 {
@@ -2802,12 +2978,43 @@ static void* wstCompositorThread( void *arg )
    pthread_mutex_lock( &ctx->mutex );
    wl_event_source_timer_update( ctx->displayTimer, ctx->framePeriodMillis );
    pthread_mutex_unlock( &ctx->mutex );
+
+   for ( std::vector<WstModule*>::iterator it= ctx->modules.begin();
+         it != ctx->modules.end();
+         ++it )
+   {
+      bool result;
+      WstModule *module= (*it);
+
+      DEBUG("calling moduleInit for module (%s)...", module->moduleName );
+      result= module->initEntryPoint( ctx, ctx->display );
+      DEBUG("done calling moduleInit for module (%s) result %d", module->moduleName, result );
+      if ( result )
+      {
+         module->isInitialized= true;
+      }
+   }
    
    ctx->compositorReady= true;   
    ctx->needRepaint= true;
+
    DEBUG("calling wl_display_run for display: %s", ctx->displayName );
    wl_display_run(ctx->display);
    DEBUG("done calling wl_display_run for display: %s", ctx->displayName );
+
+   for ( std::vector<WstModule*>::iterator it= ctx->modules.begin();
+         it != ctx->modules.end();
+         ++it )
+   {
+      WstModule *module= (*it);
+
+      if ( module->isInitialized )
+      {
+         DEBUG("calling moduleTerm for module (%s)...", module->moduleName );
+         module->termEntryPoint( ctx );
+         DEBUG("done calling moduleTerm for module (%s)", module->moduleName );
+      }
+   }
 
 exit:
 
@@ -3146,6 +3353,30 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
                }
             }
             break;
+         case WstEventType_resolutionChangeBegin:
+            {
+               if ( ctx->renderer )
+               {
+                  WstRendererResolutionChangeBegin( ctx->renderer );
+               }
+            }
+            break;
+         case WstEventType_resolutionChangeEnd:
+            {
+               int width, height;
+
+               width= ctx->eventQueue[i].v1;
+               height= ctx->eventQueue[i].v2;
+
+               if ( !ctx->isNested && !ctx->isEmbedded )
+               {
+                  if ( ctx->renderer )
+                  {
+                     WstRendererResolutionChangeEnd( ctx->renderer );
+                  }
+               }
+            }
+            break;
          default:
             WARNING("wstCompositorProcessEvents: unknown event type %d", ctx->eventQueue[i].type );
             break;
@@ -3194,12 +3425,12 @@ static int wstCompositorDisplayTimeOut( void *data )
    
    frameTime= wstGetCurrentTimeMillis();   
    
-   wstCompositorProcessEvents( ctx );
-   
    if ( ctx->outputSizeChanged )
    {
       wstOutputChangeSize( ctx );
    }
+
+   wstCompositorProcessEvents( ctx );
 
    if ( ctx->dispatchCB )
    {
@@ -4669,6 +4900,7 @@ static void wstOutputChangeSize( WstCompositor *ctx )
          }
       }
    }
+   wl_display_flush_clients(ctx->display);
 }
 
 static void wstShellBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)

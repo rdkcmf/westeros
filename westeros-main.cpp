@@ -154,6 +154,7 @@ static void showUsage()
    printf("  --enableCursor : display default pointer cursor\n" );
    #endif
    #endif
+   printf("  --module <module> : use named module\n" );
    printf("  -? : show usage\n" );
    printf("\n" );
 }
@@ -2143,6 +2144,21 @@ int main( int argc, char** argv)
       }
       #endif
       #endif
+      else
+      if ( (len == 8) && !strncmp( (const char*)argv[i], "--module", len) )
+      {
+         if ( i < argc-1 )
+         {
+            ++i;
+            const char *module= argv[i];
+
+            if ( !WstCompositorAddModule( wctx, module) )
+            {
+               error= true;
+               break;
+            }
+         }
+      }
       else
       if ( (len == 2) && !strncmp( (const char*)argv[i], "-?", len) )
       {

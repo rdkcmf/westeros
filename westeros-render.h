@@ -84,6 +84,8 @@ typedef void (*WSTMethodSurfaceSetZOrder)( WstRenderer *renderer, WstRenderSurfa
 typedef float (*WSTMethodSurfaceGetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float *z );
 typedef void (*WSTMethodDelegateUpdateScene)( WstRenderer *renderer, std::vector<WstRect> &rects );
 typedef void (*WSTMethodHolePunch)( WstRenderer *renderr, int x, int y, int width, int height );
+typedef void (*WSTMethodResolutionChangeBegin)( WstRenderer *renderer );
+typedef void (*WSTMethodResolutionChangeEnd)( WstRenderer *renderer );
 
 typedef struct _WstRenderer
 {
@@ -108,6 +110,8 @@ typedef struct _WstRenderer
    WSTMethodSurfaceGetZOrder surfaceGetZOrder;
    WSTMethodDelegateUpdateScene delegateUpdateScene;
    WSTMethodHolePunch holePunch;
+   WSTMethodResolutionChangeBegin resolutionChangeBegin;
+   WSTMethodResolutionChangeEnd resolutionChangeEnd;
 
    // For nested composition
    WstNestedConnection *nc;
@@ -142,6 +146,8 @@ float WstRendererSurfaceGetOpacity( WstRenderer *renderer, WstRenderSurface *sur
 void WstRendererSurfaceSetZOrder( WstRenderer *renderer, WstRenderSurface *surface, float z );
 float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surface, float *z );
 void WstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<WstRect> &rects );
+void WstRendererResolutionChangeBegin( WstRenderer *renderer );
+void WstRendererResolutionChangeEnd( WstRenderer *renderer );
 
 #endif
 

@@ -203,6 +203,9 @@ typedef struct _WstRendererGL
    EGLConfig eglConfig;
    EGLContext eglContext;   
    EGLSurface eglSurface;
+   #ifdef _WESTEROS_GL_ICEGDL_
+   EGLSurface eglSurfaceSave;
+   #endif
 
    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
    PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR;
@@ -1495,6 +1498,8 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
 {
    WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
 
+   if ( rendererGL->eglSurface == EGL_NO_SURFACE ) return;
+
    if ( (renderer->outputWidth != rendererGL->outputWidth) ||
         (renderer->outputHeight != rendererGL->outputHeight) )
    {
@@ -1762,6 +1767,60 @@ static float wstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurfac
    return zLevel;
 }
 
+#ifndef WESTEROS_PLATFORM_QEMUX86
+static void wstRendererResolutionChangeBegin( WstRenderer *renderer )
+{
+   if ( !renderer->displayNested )
+   {
+      WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
+
+      #if defined (WESTEROS_PLATFORM_EMBEDDED)
+      #ifdef _WESTEROS_GL_ICEGDL_
+      rendererGL->eglSurfaceSave= rendererGL->eglSurface;
+      rendererGL->eglSurface= EGL_NO_SURFACE;
+      #else
+      eglMakeCurrent( rendererGL->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT );
+      if ( rendererGL->eglSurface )
+      {
+         eglDestroySurface( rendererGL->eglDisplay, rendererGL->eglSurface );
+         rendererGL->eglSurface= EGL_NO_SURFACE;
+      }
+      #endif
+      if ( rendererGL->nativeWindow )
+      {
+         WstGLDestroyNativeWindow( rendererGL->glCtx, rendererGL->nativeWindow );
+         rendererGL->nativeWindow= 0;
+      }
+      #endif
+   }
+}
+
+static void wstRendererResolutionChangeEnd( WstRenderer *renderer )
+{
+   if ( !renderer->displayNested )
+   {
+      WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
+
+      #if defined (WESTEROS_PLATFORM_EMBEDDED)
+      rendererGL->nativeWindow= WstGLCreateNativeWindow( rendererGL->glCtx, 0, 0, renderer->outputWidth, renderer->outputHeight );
+      #ifdef _WESTEROS_GL_ICEGDL_
+      rendererGL->eglSurface= rendererGL->eglSurfaceSave;
+      rendererGL->eglSurfaceSave= EGL_NO_SURFACE;
+      #else
+      if ( rendererGL->nativeWindow )
+      {
+         // Create an EGL window surface
+         rendererGL->eglSurface= eglCreateWindowSurface( rendererGL->eglDisplay,
+                                                         rendererGL->eglConfig,
+                                                         (EGLNativeWindowType)rendererGL->nativeWindow,
+                                                         NULL );
+      }
+      #endif
+      #endif
+   }
+}
+#endif
+
 extern "C"
 {
 
@@ -1787,6 +1846,10 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceGetOpacity= wstRendererSurfaceGetOpacity;
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
+      #ifndef WESTEROS_PLATFORM_QEMUX86
+      renderer->resolutionChangeBegin= wstRendererResolutionChangeBegin;
+      renderer->resolutionChangeEnd= wstRendererResolutionChangeEnd;
+      #endif
    }
    else
    {

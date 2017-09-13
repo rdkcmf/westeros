@@ -226,6 +226,25 @@ float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surf
 
 void WstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<WstRect> &rects )
 {
-   renderer->delegateUpdateScene( renderer, rects );
+   if ( renderer->delegateUpdateScene )
+   {
+      renderer->delegateUpdateScene( renderer, rects );
+   }
+}
+
+void WstRendererResolutionChangeBegin( WstRenderer *renderer )
+{
+   if ( renderer->resolutionChangeBegin )
+   {
+      renderer->resolutionChangeBegin( renderer );
+   }
+}
+
+void WstRendererResolutionChangeEnd( WstRenderer *renderer )
+{
+   if ( renderer->resolutionChangeEnd )
+   {
+      renderer->resolutionChangeEnd( renderer );
+   }
 }
 

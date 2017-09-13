@@ -252,7 +252,39 @@ bool WstCompositorSetAllowCursorModification( WstCompositor *ctx, bool allow );
  */
 bool WstCompositorSetDefaultCursor( WstCompositor *ctx, unsigned char *imgData,
                                     int width, int height, int hotSpotX, int hotSpotY );
-                                     
+
+/**
+ * WstCompositorAddModule
+ *
+ * Specify the name of a module the compositor will load.  This
+ * will be a shared library file name without path.  Modules can be used
+ * to add new protocols or other functionality to the compositor instance.
+ * The module name will be added to a list of modules to load and initialize
+ * when the comnpositor starts. The module needs to supply module
+ * initialization and termination entry points:
+ *
+ * bool moduleInit( WstCompositor *ctx, struct wl_display );
+ * void moduleTerm( WstCompositor *ctx );
+ *
+ * This API must be called prior to WstCompositorStart.
+ *
+ */
+bool WstCompositorAddModule( WstCompositor *ctx, const char *moduleName );
+
+/**
+ * WstCompositorResolutionChangeBegin
+ *
+ * Signal the compositor that a display resolution change is about to happen
+ */
+void WstCompositorResolutionChangeBegin( WstCompositor *ctx );
+
+/**
+ * WstCompositorResolutionChangeBegin
+ *
+ * Signal the compositor that a display resolution change has completed
+ */
+void WstCompositorResolutionChangeEnd( WstCompositor *ctx, int width, int height );
+
 /**
  * WstCompositorGetDisplayName
  *
