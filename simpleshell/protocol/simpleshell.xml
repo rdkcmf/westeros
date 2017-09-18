@@ -149,7 +149,12 @@
        the request.
       </description>
     </request>
-    
+
+    <!-- Set the focus on a surface -->
+    <request name="set_focus">
+      <arg name="surfaceId" type="uint"/>
+    </request>
+
   </interface>
   
 </protocol>

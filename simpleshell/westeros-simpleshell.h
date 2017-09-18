@@ -36,6 +36,7 @@ struct wayland_simple_shell_callbacks {
    void (*get_status)( void *userData, uint32_t surfaceId, bool *visible, 
                        int32_t *x, int32_t *y, int32_t *width, int32_t *height,
                        float *opacity, float *zorder );
+   void (*set_focus)( void *userData, uint32_t surfaceId);
 };
 
 wl_simple_shell* WstSimpleShellInit( struct wl_display *display,

@@ -2708,6 +2708,37 @@ static void simpleShellSetZOrder( void* userData, uint32_t surfaceId, float zord
    }
 }
 
+static void simpleShellSetFocus( void* userData, uint32_t surfaceId )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   DEBUG("%s: surfaceId %x", __FUNCTION__, surfaceId);
+
+   if ( ctx->seat )
+   {
+      if ( ctx->seat->keyboard )
+      {
+          WstSurface *surface= wstGetSurfaceFromSurfaceId(ctx, surfaceId);
+          if ( surface )
+          {
+             wstKeyboardSetFocus( ctx->seat->keyboard, surface );
+          }
+          else
+          {
+             ERROR("failed to set focus - missing surface");
+          }
+      }
+      else
+      {
+         ERROR("failed to set focus - missing keyboard");
+      }
+   }
+   else
+   {
+      ERROR("failed to set focus - missing seat");
+   }
+}
+
 static void simpleShellGetName( void* userData, uint32_t surfaceId, const char **name )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -2776,7 +2807,8 @@ struct wayland_simple_shell_callbacks simpleShellCallbacks= {
    simpleShellSetOpacity,
    simpleShellSetZOrder,
    simpleShellGetName,
-   simpleShellGetStatus
+   simpleShellGetStatus,
+   simpleShellSetFocus
 };
 
 static void* wstCompositorThread( void *arg )

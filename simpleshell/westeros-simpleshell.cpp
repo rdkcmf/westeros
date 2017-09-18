@@ -86,6 +86,8 @@ static void wstISimpleShellSetZOrder(struct wl_client *client, struct wl_resourc
                                      uint32_t surfaceId, wl_fixed_t zorder);
 static void wstISimpleShellGetStatus(struct wl_client *client, struct wl_resource *resource, uint32_t surface);
 static void wstISimpleShellGetSurfaces(struct wl_client *client, struct wl_resource *resource);
+static void wstISimpleShellSetFocus(struct wl_client *client, struct wl_resource *resource,
+                                     uint32_t surfaceId);
 
 const static struct wl_simple_shell_interface simple_shell_interface = {
    wstISimpleShellSetName,
@@ -94,7 +96,8 @@ const static struct wl_simple_shell_interface simple_shell_interface = {
    wstISimpleShellSetOpacity,
    wstISimpleShellSetZOrder,
    wstISimpleShellGetStatus,
-   wstISimpleShellGetSurfaces
+   wstISimpleShellGetSurfaces,
+   wstISimpleShellSetFocus
 };
 
 static void wstISimpleShellSetName(struct wl_client *client, struct wl_resource *resource, 
@@ -200,6 +203,13 @@ static void wstISimpleShellGetSurfaces(struct wl_client *client, struct wl_resou
    }
    
    wl_simple_shell_send_get_surfaces_done( resource );
+}
+
+static void wstISimpleShellSetFocus(struct wl_client *client, struct wl_resource *resource,
+                                    uint32_t surfaceId)
+{
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   shell->callbacks->set_focus(shell->userData, surfaceId);
 }
 
 static void destroy_shell(struct wl_resource *resource)
