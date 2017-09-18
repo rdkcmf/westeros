@@ -7039,6 +7039,10 @@ static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface )
          wl_resource_for_each( resource, &keyboard->focusResourceList )
          {
             wl_keyboard_send_enter( resource, serial, keyboard->focus->resource, &keyboard->keys );
+            if ( !compositor->isNested )
+            {
+               wstKeyboardSendModifiers( keyboard, resource );
+            }
          }
       }
       else
