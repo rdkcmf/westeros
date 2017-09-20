@@ -19,7 +19,7 @@
 
 AUTOMAKE_OPTIONS = subdir-objects
 
-SUBDIRS = 
+SUBDIRS = essos
 AM_CXXFLAGS= \
 	-I$(top_srcdir)/include \
    -I${PKG_CONFIG_SYSROOT_DIR}/$(includedir)/wayland \
