@@ -1782,6 +1782,12 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       {
          OMX_PARAM_PORTDEFINITIONTYPE portDef;
 
+         omxerr= OMX_SendCommand( sink->soc.vidDec.hComp, OMX_CommandPortDisable, sink->soc.vidDec.vidOutPort, NULL );
+         if ( omxerr != OMX_ErrorNone )
+         {
+            GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable vidDec port %d: omxerr %x", sink->soc.vidDec.vidOutPort, omxerr );
+         }
+
          portDef.nSize= sizeof(OMX_PARAM_PORTDEFINITIONTYPE);
          portDef.nVersion.nVersion= OMX_VERSION;
          portDef.nPortIndex= sink->soc.vidDec.vidOutPort;
@@ -1797,6 +1803,31 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          sink->soc.frameWidth= portDef.format.video.nFrameWidth;
          sink->soc.frameHeight= portDef.format.video.nFrameHeight;
          printf("gst_westeros_sink_soc_render: video frame size (%d x %d)\n", sink->soc.frameWidth, sink->soc.frameHeight );
+
+         if ( sink->soc.tunnelActiveVidSched )
+         {
+            omxerr= omxSendCommandSync( sink, sink->soc.rend->hComp, OMX_CommandStateSet, OMX_StateIdle, NULL );
+            if ( omxerr != OMX_ErrorNone )
+            {
+               GST_ERROR("gst_westeros_sink_soc_render: OMX_SendCommand for rend setState OMX_StateIdle: omxerr %x", omxerr );
+            }
+
+            omxerr= omxSendCommandSync( sink, sink->soc.vidSched.hComp, OMX_CommandStateSet, OMX_StateIdle, NULL );
+            if ( omxerr != OMX_ErrorNone )
+            {
+               GST_ERROR("gst_westeros_sink_soc_render: OMX_SendCommand for vidSched setState OMX_StateIdle: omxerr %x", omxerr );
+            }
+
+            sink->soc.tunnelActiveVidSched= false;
+         }
+         else
+         {
+            omxerr= OMX_SendCommand( sink->soc.vidDec.hComp, OMX_CommandPortEnable, sink->soc.vidDec.vidOutPort, NULL );
+            if ( omxerr != OMX_ErrorNone )
+            {
+               GST_ERROR("gst_westeros_sink_soc_paused_to_ready: disable vidDec port %d: omxerr %x", sink->soc.vidDec.vidOutPort, omxerr );
+            }
+         }
 
          sink->soc.videoOutputChanged= false;
       }
