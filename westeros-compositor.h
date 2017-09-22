@@ -56,6 +56,7 @@ typedef enum _WstClient_status
 typedef void (*WstTerminatedCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstDispatchCallback)( WstCompositor *ctx, void *userData );
 typedef void (*WstInvalidateSceneCallback)( WstCompositor *ctx, void *userData );
+typedef void (*WstDecodeHandlerCallback)( WstCompositor *ctx, void *userData, uint32_t decoderHandle);
 typedef void (*WstHidePointerCallback)( WstCompositor *ctx, bool hidePointer, void *userData );
 typedef void (*WstClientStatus)( WstCompositor *ctx, int status, int clientPID, int detail, void *userData );
 
@@ -393,6 +394,13 @@ bool WstCompositorSetDispatchCallback( WstCompositor *ctx, WstDispatchCallback c
  * scene has become invalid and that WstCompositorComposeEmbedded should be called.
  */
 bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneCallback cb, void *userData );
+
+/**
+ * WstCompositorSetDecoderHandleCallback
+ *
+ * Specifies a callback for a compositor to invoke to signal with Decoder handle for CC support in player applications.
+ */
+bool WstCompositorSetDecoderHandleCallback( WstCompositor *ctx, WstDecodeHandlerCallback cb, void *userData );
 
 /**
  * WstCompositorSetHidePointerCallback
