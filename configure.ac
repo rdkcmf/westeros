@@ -53,6 +53,7 @@ GLEW_DETECTED=" "
 WAYLAND_EGL_DETECTED=" "
 ENABLE_XDG_V4=" "
 ENABLE_XDG_V5=" "
+ENABLE_ESSOS=" "
 
 # Checks for library functions.
 #Add the subdirectories to be considered for building.
@@ -160,6 +161,18 @@ AC_ARG_ENABLE([xdgv5],
               ],
               [echo "xdg_shell protocol v5 is disabled"])
 AM_CONDITIONAL([ENABLE_XDG_V5], [test x$ENABLE_XDG_V5 = xtrue])              
+
+AC_ARG_ENABLE([essos],
+              AS_HELP_STRING([--enable-essos],[enable essos (default is yes)]),
+              [
+                case "${enableval}" in
+                 yes) ENABLE_ESSOS=true ;;
+                  no) ENABLE_ESSOS=no ;;
+                   *) AC_MSG_ERROR([bad value ${enableval} for --enable-essos]) ;;
+                esac
+              ],
+              [echo "essos is disabled"])
+AM_CONDITIONAL([ENABLE_ESSOS], [test x$ENABLE_ESSOS != xno])
 
 GST_MAJORMINOR=1.0
 PKG_CHECK_MODULES([GST], [gstreamer-1.0 >= 1.0], have_gst1="yes", have_gst1="no")

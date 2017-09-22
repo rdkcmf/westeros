@@ -19,7 +19,7 @@
 
 AUTOMAKE_OPTIONS = subdir-objects
 
-SUBDIRS = essos
+SUBDIRS =
 AM_CXXFLAGS= \
 	-I$(top_srcdir)/include \
    -I${PKG_CONFIG_SYSROOT_DIR}/$(includedir)/wayland \
@@ -30,6 +30,10 @@ AM_LDFLAGS=$(WAYLANDLIB)
 ## --- Configurtion -------
 if !HAVE_GLEW
 AM_CXXFLAGS += -DWESTEROS_PLATFORM_EMBEDDED
+endif
+
+if ENABLE_ESSOS
+SUBDIRS += essos
 endif
 
 if HAVE_WAYLAND_EGL

@@ -167,7 +167,7 @@ westeros-core:
 	automake --foreign --add-missing && \
 	rm -f configure && \
 	autoconf && \
-	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test && \
+	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test --enable-essos=no && \
 	make && make install
 
 
