@@ -47,6 +47,7 @@ IARM_CFLAGS=" "
 ENABLE_WESTEROS_APP=" "
 ENABLE_WESTEROS_TEST=" "
 ENABLE_WESTEROS_PLAYER=" "
+ENABLE_PLATFORM_EMBEDDED=" "
 EGL_DETECTED=" "
 GLESV2_DETECTED=" "
 GLEW_DETECTED=" "
@@ -71,12 +72,10 @@ PKG_CHECK_MODULES([WAYLAND_EGL],[wayland-egl >= 0.0],[WAYLAND_EGL_DETECTED=true]
 PKG_CHECK_MODULES([XKBCOMMON],[xkbcommon >= 0.4])
 PKG_CHECK_MODULES([EGL],[egl >= 0.0],[EGL_DETECTED=true],[EGL_DETECTED=false])
 PKG_CHECK_MODULES([GLESV2],[glesv2 >= 0.0],[GLESV2_DETECTED=true],[GLESV2_DETECTED=false])
-PKG_CHECK_MODULES([GLEW],[glew >= 0.0],[GLEW_DETECTED=true],[GLEW_DETECTED=false])
 
 AM_CONDITIONAL([HAVE_WAYLAND_EGL], [test x$WAYLAND_EGL_DETECTED = xtrue])              
 AM_CONDITIONAL([HAVE_EGL], [test x$EGL_DETECTED = xtrue])              
 AM_CONDITIONAL([HAVE_GLESV2], [test x$GLESV2_DETECTED = xtrue])              
-AM_CONDITIONAL([HAVE_GLEW], [test x$GLEW_DETECTED = xtrue])              
 
 AC_ARG_ENABLE([app],
               AS_HELP_STRING([--enable-app],[enable westeros app (default is no)]),
@@ -138,6 +137,18 @@ AC_ARG_ENABLE([sbprotocol],
               [echo "westeros wl_sb protocol is disabled"])
 AM_CONDITIONAL([ENABLE_WESTEROS_SBPROTOCOL], [test x$ENABLE_WESTEROS_SBPROTOCOL = xtrue])              
 
+AC_ARG_ENABLE([embedded],
+              AS_HELP_STRING([--enable-embedded],[enable westeros platform embedded (default is yes)]),
+              [
+                case "${enableval}" in
+                 yes) ENABLE_PLATFORM_EMBEDDED=true ;;
+                  no) ENABLE_PLATFORM_EMBEDDED=no ;;
+                   *) AC_MSG_ERROR([bad value ${enableval} for --enable-embedded]) ;;
+                esac
+              ],
+              [echo "westeros platform embedded is enabled"])
+AM_CONDITIONAL([ENABLE_PLATFORM_EMBEDDED], [test x$ENABLE_PLATFORM_EMBEDDED != xno])
+
 AC_ARG_ENABLE([xdgv4],
               AS_HELP_STRING([--enable-xdgv4],[enable xdg_shell protocol v4 (default is no)]),
               [
@@ -171,7 +182,7 @@ AC_ARG_ENABLE([essos],
                    *) AC_MSG_ERROR([bad value ${enableval} for --enable-essos]) ;;
                 esac
               ],
-              [echo "essos is disabled"])
+              [echo "essos is enabled"])
 AM_CONDITIONAL([ENABLE_ESSOS], [test x$ENABLE_ESSOS != xno])
 
 GST_MAJORMINOR=1.0
