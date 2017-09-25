@@ -1085,17 +1085,17 @@ exit:
 bool WstCompositorSetOutputSize( WstCompositor *ctx, int width, int height )
 {
    bool result= false;
-   
+
    if ( ctx )
    {
-      if ( width == 0 )
+      if ( width <= 0 )
       {
          sprintf( ctx->lastErrorDetail,
                   "Invalid argument.  The output width (%u) must be greater than zero", width );
          goto exit;      
       }
 
-      if ( height == 0 )
+      if ( height <= 0 )
       {
          sprintf( ctx->lastErrorDetail,
                   "Invalid argument.  The output height (%u) must be greater than zero", height );
