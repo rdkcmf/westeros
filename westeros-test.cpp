@@ -1147,7 +1147,10 @@ exit:
 
    printf("westeros_test: exiting...\n");
 
-   setBlockingMode(NON_BLOCKING_DISABLED);
+   if ( !isBackgroundProcess )
+   {
+      setBlockingMode(NON_BLOCKING_DISABLED);
+   }
    
    if ( ctx.compositor )
    {
