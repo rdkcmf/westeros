@@ -947,8 +947,11 @@ int main( int argc, char** argv)
    const char *display_name= 0;
    bool paceRendering= true;
    EGLBoolean swapok;
+   bool isBackgroundProcess;
 
    printf("westeros_test: v1.0\n" );
+
+   isBackgroundProcess= ( getpgrp() != tcgetpgrp(STDOUT_FILENO) );
 
    memset( &ctx, 0, sizeof(AppCtx) );
 
@@ -1059,7 +1062,10 @@ int main( int argc, char** argv)
 	sigint.sa_flags = SA_RESETHAND;
 	sigaction(SIGINT, &sigint, NULL);
 
-   setBlockingMode(NON_BLOCKING_ENABLED);
+   if ( !isBackgroundProcess )
+   {
+      setBlockingMode(NON_BLOCKING_ENABLED);
+   }
 
    ctx.inputState= InputState_main;
    ctx.attribute= Attribute_position;
@@ -1087,7 +1093,7 @@ int main( int argc, char** argv)
          drawFrame(&ctx);
       }
 
-      if ( ctx.getShell )
+      if ( ctx.getShell && !isBackgroundProcess )
       {      
          if ( isKeyHit() )
          {
