@@ -2665,6 +2665,7 @@ static void simpleShellSetGeometry( void* userData, uint32_t surfaceId, int x, i
             }
          }
       }
+      wstCompositorScheduleRepaint( ctx );
    }
 }
 
