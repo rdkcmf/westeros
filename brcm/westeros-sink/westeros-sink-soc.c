@@ -661,7 +661,12 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
       rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
       BDBG_ASSERT(!rc);
    }
-   
+
+   if ( sink->vpcSurface )
+   {
+       wl_vpc_surface_set_decoder_handle(sink->vpcSurface, sink->soc.videoDecoder);
+   }
+
    return TRUE;
 }
 
