@@ -1045,10 +1045,10 @@ static void wstRendererGLRenderSurface( WstRendererGL *renderer, WstRenderSurfac
 
    const float verts[4][2] =
    {
-      { surface->x, surface->y },
-      { surface->x+surface->width, surface->y },
-      { surface->x,  surface->y+surface->height },
-      { surface->x+surface->width, surface->y+surface->height }
+      { float(surface->x), float(surface->y) },
+      { float(surface->x+surface->width), float(surface->y) },
+      { float(surface->x), float(surface->y+surface->height) },
+      { float(surface->x+surface->width), float(surface->y+surface->height) }
    };
 
    const float uvNormal[4][2] =
