@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -716,6 +717,7 @@ static void wstPointerUpdatePosition( WstPointer *pointer );
 static void wstPointerSetFocus( WstPointer *pointer, WstSurface *surface, wl_fixed_t x, wl_fixed_t y );
 static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *client );
 static void wstRemoveTempFile( int fd );
+static void wstPruneOrphanFiles( WstCompositor *ctx );
 static bool wstInitializeDefaultCursor( WstCompositor *compositor, 
                                         unsigned char *imgData, int width, int height,
                                         int hotspotX, int hotspotY  );
@@ -2861,6 +2863,8 @@ static void* wstCompositorThread( void *arg )
       ERROR("unable to create primary display");
       goto exit;
    }
+
+   wstPruneOrphanFiles( ctx );
 
    ctx->display= display;
 
@@ -6802,14 +6806,14 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
 }
 
 #define TEMPFILE_PREFIX "westeros-"
-#define TEMPFILE_TEMPLATE "/tmp/" ## TEMPFILE_PREFIX ## "XXXXXX"
+#define TEMPFILE_TEMPLATE "/tmp/" TEMPFILE_PREFIX "%d-XXXXXX"
 
 static int wstConvertToReadOnlyFile( int fd )
 {
    int readOnlyFd= -1;
    int pid= getpid();
    int len, prefixlen;
-   char path[32];
+   char path[34];
    char link[256];
 
    prefixlen= strlen(TEMPFILE_PREFIX);
@@ -6835,7 +6839,7 @@ static bool wstInitializeKeymap( WstCompositor *ctx )
 {
    bool result= false;
    char *keymapStr= 0;
-   char filename[32];
+   char filename[34];
    int lenDidWrite;
    int readOnlyFd;
 
@@ -6869,7 +6873,7 @@ static bool wstInitializeKeymap( WstCompositor *ctx )
    ctx->xkbKeymapFormat= WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1;
    ctx->xkbKeymapSize= strlen(keymapStr)+1;
    
-   strcpy( filename, "/tmp/westeros-XXXXXX" );
+   snprintf( filename, sizeof(filename), TEMPFILE_TEMPLATE, getpid() );
    ctx->xkbKeymapFd= mkostemp( filename, O_CLOEXEC );
    if ( ctx->xkbKeymapFd < 0 )
    {
@@ -7578,6 +7582,43 @@ static void wstRemoveTempFile( int fd )
    {
       DEBUG( "removing tempory file (%s)", link );
       remove( link );
+   }
+}
+
+static void wstPruneOrphanFiles( WstCompositor *ctx )
+{
+   DIR *dir;
+   struct dirent *result;
+   struct stat fileinfo;
+   int prefixLen;
+   int pid, rc;
+   char work[34];
+   if ( NULL != (dir = opendir( "/tmp" )) )
+   {
+      prefixLen= strlen(TEMPFILE_PREFIX);
+      while( NULL != (result = readdir( dir )) )
+      {
+         if ( (result->d_type != DT_DIR) &&
+             !strncmp(result->d_name, TEMPFILE_PREFIX, prefixLen) )
+         {
+            snprintf( work, sizeof(work), "%s/%s", "/tmp", result->d_name);
+            if ( sscanf( work, TEMPFILE_TEMPLATE, &pid ) == 1 )
+            {
+               // Check if the pid of this temp file is still valid
+               snprintf(work, sizeof(work), "/proc/%d", pid);
+               rc= stat( work, &fileinfo );
+               if ( rc )
+               {
+                  // The pid is not valid, delete the file
+                  snprintf( work, sizeof(work), "%s/%s", "/tmp", result->d_name);
+                  INFO("removing temp file: %s", work);
+                  remove( work );
+               }
+            }
+         }
+      }
+
+      closedir( dir );
    }
 }
 
