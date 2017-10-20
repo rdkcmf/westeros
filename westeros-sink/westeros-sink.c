@@ -275,6 +275,61 @@ static void registryHandleGlobalRemove(void *data,
    gst_westeros_sink_soc_registryHandleGlobalRemove( sink, registry, name );
 }
 
+#include <dlfcn.h>
+void captureInit( GstWesterosSink *sink )
+{
+   const char *env= getenv("WESTEROSSINK_ENABLE_CAPTURE");
+   if ( env )
+   {
+      GST_DEBUG_OBJECT(sink, "WESTEROSSINK_ENABLE_CAPTURE=(%s)",env);
+      void *module= dlopen( "libmediacapture.so.0.0.0", RTLD_NOW );
+      if ( module )
+      {
+         MediaCaptureCreateContext captureCreateContext= (MediaCaptureCreateContext)dlsym( module, "MediaCaptureCreateContext" );
+         MediaCaptureDestroyContext captureDestroyContext= (MediaCaptureDestroyContext)dlsym( module, "MediaCaptureDestroyContext" );
+         GST_DEBUG_OBJECT(sink, "mediacapture module %p create %p destroy %p", module, captureCreateContext, captureDestroyContext);
+
+         if ( captureCreateContext && captureDestroyContext )
+         {
+            sink->mediaCaptureContext= (*captureCreateContext)( GST_ELEMENT(sink) );
+            printf("westeros-sink: mediaCaptureContext: %p\n", sink->mediaCaptureContext);
+            if ( sink->mediaCaptureContext )
+            {
+               sink->mediaCaptureModule= module;
+               sink->mediaCaptureDestroyContext= captureDestroyContext;
+               module= 0;
+            }
+         }
+
+         if ( module )
+         {
+            dlclose( module );
+         }
+      }
+      else
+      {
+         printf("Unable to load capture module: %s\n", dlerror());
+      }
+   }
+}
+
+void captureTerm( GstWesterosSink *sink )
+{
+   if ( sink )
+   {
+      if ( sink->mediaCaptureContext && sink->mediaCaptureDestroyContext )
+      {
+         sink->mediaCaptureDestroyContext( sink->mediaCaptureContext );
+         sink->mediaCaptureContext= 0;
+      }
+      if ( sink->mediaCaptureModule )
+      {
+         //we get crashes if we call this
+         //dlclose(sink->mediaCaptureModule);
+         sink->mediaCaptureModule= 0;
+      }
+   }
+}
 
 #ifndef USE_GST1
 static void gst_westeros_sink_base_init(gpointer g_class)
@@ -426,6 +481,10 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
 
    sink->display= 0;
    sink->currentSegment = NULL;
+
+   sink->mediaCaptureModule= 0;
+   sink->mediaCaptureContext= 0;
+   sink->mediaCaptureDestroyContext= 0;
 
    if ( gst_westeros_sink_soc_init( sink ) == TRUE )
    {
@@ -710,6 +769,8 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
       case GST_STATE_CHANGE_READY_TO_PAUSED:
       {
+         captureInit(sink);
+
          if ( gst_westeros_sink_soc_ready_to_paused(sink, &passToDefault) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
@@ -764,6 +825,9 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             {
                result= GST_STATE_CHANGE_FAILURE;
             }
+
+            captureTerm(sink);
+
             gst_westeros_sink_term( sink );
          }
          break;

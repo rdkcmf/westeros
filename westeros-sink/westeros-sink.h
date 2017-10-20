@@ -50,6 +50,9 @@ G_BEGIN_DECLS
 typedef struct _GstWesterosSink GstWesterosSink;
 typedef struct _GstWesterosSinkClass GstWesterosSinkClass;
 
+typedef void* (*MediaCaptureCreateContext)( GstElement *element );
+typedef void (*MediaCaptureDestroyContext)( void *context );
+
 #define PROP_SOC_BASE (100)
 
 #include "westeros-sink-soc.h"
@@ -122,6 +125,10 @@ struct _GstWesterosSink
    struct wl_vpc *vpc;
    struct wl_vpc_surface *vpcSurface;
    
+   void *mediaCaptureModule;
+   MediaCaptureDestroyContext mediaCaptureDestroyContext;
+   void *mediaCaptureContext;
+
    struct _GstWesterosSinkSoc soc;
 };
 
