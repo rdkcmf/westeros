@@ -295,6 +295,7 @@ typedef struct _WstClientInfo
 {
    struct wl_resource *sbResource;
    WstSurface *surface;
+   bool usesXdgShell;
 } WstClientInfo;
 
 typedef struct _WstOutput
@@ -705,6 +706,7 @@ static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
 static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_t keyState, uint32_t modifiers );
 static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource *resource );
+static void wstKeyboardCheckFocus( WstKeyboard *keyboard, WstSurface *surface );
 static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface );
 static void wstKeyboardMoveFocusToClient( WstKeyboard *keyboard, struct wl_client *client );
 static void wstProcessPointerEnter( WstPointer *pointer, int x, int y, struct wl_surface *surfaceNested );
@@ -4018,6 +4020,11 @@ static void wstICompositorCreateSurface( struct wl_client *client, struct wl_res
    ctx->clientInfoMap[client]->surface= surface;
       
    DEBUG("wstICompositorCreateSurface: client %p resource %p id %d : surface resource %p", client, resource, id, surface->resource );
+
+   if ( ctx->seat && ctx->seat->keyboard )
+   {
+      wstKeyboardCheckFocus( ctx->seat->keyboard, surface );
+   }
    
    pthread_mutex_unlock( &ctx->mutex );
 
@@ -5214,6 +5221,9 @@ static void wstXdgShellBind( struct wl_client *client, void *data, uint32_t vers
    }
 
    wl_resource_set_implementation(resource, &xdg_shell_interface_impl, ctx, NULL);
+
+   wstUpdateClientInfo( ctx, client, 0 );
+   ctx->clientInfoMap[client]->usesXdgShell= true;
 }
 
 static void wstIXdgDestroy( struct wl_client *client, struct wl_resource *resource )
@@ -5287,6 +5297,17 @@ static void wstIXdgGetXdgSurface( struct wl_client *client,
                                   serial );
                                   
       wl_array_release( &states );
+   }
+
+   WstCompositor *compositor= surface->compositor;
+   if ( compositor )
+   {
+      pthread_mutex_lock( &compositor->mutex );
+      if ( compositor->seat && compositor->seat->keyboard )
+      {
+         wstKeyboardCheckFocus( compositor->seat->keyboard, surface );
+      }
+      pthread_mutex_unlock( &compositor->mutex );
    }
 }
 
@@ -7065,6 +7086,75 @@ static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource 
                                modLocked,    // mod locked
                                modGroup      // mod group
                              );
+}
+
+static void wstKeyboardCheckFocus( WstKeyboard *keyboard, WstSurface *surface )
+{
+   WstCompositor *compositor= keyboard->seat->compositor;
+   struct wl_client *surfaceClient;
+   struct wl_resource *resource;
+
+   if ( !keyboard->focus )
+   {
+      bool giveFocus= false;
+
+      surfaceClient= wl_resource_get_client( surface->resource );
+      wstUpdateClientInfo( compositor, surfaceClient, 0 );
+      if ( compositor->clientInfoMap[surfaceClient]->usesXdgShell )
+      {
+         if ( surface->roleName )
+         {
+            int len= strlen(surface->roleName );
+            if ( (len == 11) && !strncmp( surface->roleName, "xdg_surface", len ) )
+            {
+               giveFocus= true;
+            }
+         }
+      }
+      else
+      {
+         giveFocus= true;
+      }
+      if ( giveFocus )
+      {
+         // If nothing has keyboard focus yet, give it to this surface if the client has listeners.
+         // This is for the case of a client that gets a keyboard object before creating any surfaces.
+         if ( !compositor->seat->keyboard->focus )
+         {
+            struct wl_resource *temp;
+            WstKeyboard *keyboard= compositor->seat->keyboard;
+
+            DEBUG("wstKeyboardCheckFocus: no key focus yet");
+            bool clientHasListeners= false;
+            wl_resource_for_each_safe( resource, temp, &keyboard->resourceList )
+            {
+               if ( wl_resource_get_client( resource ) == surfaceClient )
+               {
+                  clientHasListeners= true;
+               }
+            }
+            if ( !clientHasListeners )
+            {
+               wl_resource_for_each_safe( resource, temp, &keyboard->focusResourceList )
+               {
+                  if ( wl_resource_get_client( resource ) == surfaceClient )
+                  {
+                     // Move focus to null client first since we have acted on the workaround for apps that register
+                     // keyboard listeners with one client and create surfaces with different client
+                     clientHasListeners= true;
+                     wstKeyboardMoveFocusToClient( keyboard, 0 );
+                  }
+               }
+            }
+            DEBUG("wstKeyboardCheckFocus: no key focus yet: client %p has listeners %d", surfaceClient, clientHasListeners);
+            if ( clientHasListeners )
+            {
+               DEBUG("wstKeyboardCheckFocus: give key focus to surface %p resource %p", surface, surface->resource);
+               wstKeyboardSetFocus( keyboard, surface );
+            }
+         }
+      }
+   }
 }
 
 static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface )
