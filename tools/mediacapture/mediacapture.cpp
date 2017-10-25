@@ -64,7 +64,7 @@ class rtMediaCaptureObject;
 #define DECODE_TIME (10000)
 #define POST_TIMEOUT (2000)
 #define POST_CHUNK_SIZE (16*1024)
-#define EMIT_BUFFER_SIZE (64*POST_CHUNK_SIZE)
+#define EMIT_BUFFER_SIZE (12*POST_CHUNK_SIZE)
 
 #define min( a, b ) ( ((a) <= (b)) ? (a) : (b) )
 
