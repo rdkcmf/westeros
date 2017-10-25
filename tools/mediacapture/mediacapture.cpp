@@ -89,6 +89,7 @@ typedef struct _SrcInfo
    int streamType;
    int streamId;
    int continuityCount;
+   long long firstPTS;
    long long pts;
    long long dts;
    int spsppsLen;
@@ -201,21 +202,24 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int len 
 #define LEVEL_WARNING (2)
 #define LEVEL_INFO    (3)
 #define LEVEL_DEBUG   (4)
-#define LEVEL_TRACE   (5)
+#define LEVEL_TRACE1  (5)
+#define LEVEL_TRACE2  (6)
 
 #define INT_FATAL(FORMAT, ...)      iprintf(1, "Mediacapture Fatal: " FORMAT "\n", ##__VA_ARGS__); fflush(stdout)
 #define INT_ERROR(FORMAT, ...)      iprintf(1, "Mediacapture Error: " FORMAT "\n", ##__VA_ARGS__); fflush(stdout)
 #define INT_WARNING(FORMAT, ...)    iprintf(2, "Mediacapture Warning: " FORMAT "\n",  ##__VA_ARGS__); fflush(stdout)
 #define INT_INFO(FORMAT, ...)       iprintf(3, "Mediacapture Info: " FORMAT "\n",  ##__VA_ARGS__); fflush(stdout)
 #define INT_DEBUG(FORMAT, ...)      iprintf(4, "Mediacapture Debug: " FORMAT "\n", ##__VA_ARGS__)
-#define INT_TRACE(FORMAT, ...)      iprintf(5, "Mediacapture Trace: " FORMAT "\n", ##__VA_ARGS__)
+#define INT_TRACE1(FORMAT, ...)     iprintf(5, "Mediacapture Trace: " FORMAT "\n", ##__VA_ARGS__)
+#define INT_TRACE2(FORMAT, ...)     iprintf(6, "Mediacapture Trace: " FORMAT "\n", ##__VA_ARGS__)
 
 #define FATAL(FORMAT, ...)          INT_FATAL(FORMAT, ##__VA_ARGS__)
 #define ERROR(FORMAT, ...)          INT_ERROR(FORMAT, ##__VA_ARGS__)
 #define WARNING(FORMAT, ...)        INT_WARNING(FORMAT, ##__VA_ARGS__)
 #define INFO(FORMAT, ...)           INT_INFO(FORMAT, ##__VA_ARGS__)
 #define DEBUG(FORMAT, ...)          INT_DEBUG(FORMAT, ##__VA_ARGS__)
-#define TRACE(FORMAT, ...)          INT_TRACE(FORMAT, ##__VA_ARGS__)
+#define TRACE1(FORMAT, ...)         INT_TRACE1(FORMAT, ##__VA_ARGS__)
+#define TRACE2(FORMAT, ...)         INT_TRACE2(FORMAT, ##__VA_ARGS__)
 
 static int gDebugLevel= 1;
 static int gNextId= 0;
@@ -224,6 +228,7 @@ static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
 static bool gIsPrimaryStatusKnown= false;
 static bool gIsPrimary= false;
 static rtObjectRef gServerObj;
+static std::vector<MediaCapContext*> gContextList= std::vector<MediaCapContext*>();
 #endif
 
 static void iprintf( int level, const char *fmt, ... )
@@ -319,34 +324,62 @@ rtError rtMediaCaptureObject::captureMediaSample( rtString file, int32_t duratio
 {
    rtError rc;
    rtString result;
+   bool validCtx= false;
 
    INFO("captureMediaSample: m_ctx %p", m_ctx);
-   if ( m_ctx->captureActive )
+
+   pthread_mutex_lock( &gMutex );
+   for ( std::vector<MediaCapContext*>::iterator it= gContextList.begin();
+         it != gContextList.end();
+         ++it )
    {
-      result= "failure: busy";
-      rc= f.send(result);
-      if( rc != RT_OK )
+      MediaCapContext *ctxIter= (*it);
+      if ( ctxIter == m_ctx )
       {
-         ERROR("captureMediaSample: send (busy) rc %d", rc);
+         validCtx= true;
+         break;
+      }
+   }
+   pthread_mutex_unlock( &gMutex );
+
+   if ( validCtx )
+   {
+      if ( m_ctx->captureActive )
+      {
+         result= "failure: busy";
+         rc= f.send(result);
+         if( rc != RT_OK )
+         {
+            ERROR("captureMediaSample: send (busy) rc %d", rc);
+         }
+      }
+      else
+      {
+         prepareForCapture( m_ctx );
+
+         if ( m_ctx->canCapture )
+         {
+            m_func= f;
+            startCapture( m_ctx, true, file.cString(), duration );
+         }
+         else
+         {
+            result= "failure: cannot capture current media";
+            rc= f.send(result);
+            if( rc != RT_OK )
+            {
+               ERROR("captureMediaSample: send (cannot capture) rc %d", rc);
+            }
+         }
       }
    }
    else
    {
-      prepareForCapture( m_ctx );
-
-      if ( m_ctx->canCapture )
+      result= "failure: source no longer available";
+      rc= f.send(result);
+      if( rc != RT_OK )
       {
-         m_func= f;
-         startCapture( m_ctx, true, file.cString(), duration );
-      }
-      else
-      {
-         result= "failure: cannot capture current media";
-         rc= f.send(result);
-         if( rc != RT_OK )
-         {
-            ERROR("captureMediaSample: send (cannot capture) rc %d", rc);
-         }
+         ERROR("captureMediaSample: send (no longer available) rc %d", rc);
       }
    }
    
@@ -357,51 +390,79 @@ rtError rtMediaCaptureObject::captureMediaStart( rtString endPoint, int32_t dura
 {
    rtError rc;
    rtString result;
+   bool validCtx= false;
 
    INFO("captureMediaStart: m_ctx %p", m_ctx);
-   if ( m_ctx->captureActive )
+
+   pthread_mutex_lock( &gMutex );
+   for ( std::vector<MediaCapContext*>::iterator it= gContextList.begin();
+         it != gContextList.end();
+         ++it )
    {
-      result= "failure: busy";
-      rc= f.send(result);
-      if( rc != RT_OK )
+      MediaCapContext *ctxIter= (*it);
+      if ( ctxIter == m_ctx )
       {
-         ERROR("captureMediaStart: send rc (busy) %d", rc);
+         validCtx= true;
+         break;
       }
    }
-   else
-   {
-      prepareForCapture( m_ctx );
+   pthread_mutex_unlock( &gMutex );
 
-      if ( m_ctx->canCapture )
+   if ( validCtx )
+   {
+      if ( m_ctx->captureActive )
       {
-         startCapture( m_ctx, false, endPoint.cString(), duration );
-         if ( m_ctx->captureActive )
+         result= "failure: busy";
+         rc= f.send(result);
+         if( rc != RT_OK )
          {
-            result= "success";
-            rc= f.send(result);
-            if( rc != RT_OK )
-            {
-               ERROR("captureMediaStart: send (success) rc %d", rc);
-            }
-         }
-         else
-         {
-            result= "failure";
-            rc= f.send(result);
-            if( rc != RT_OK )
-            {
-               ERROR("captureMediaStart: send (failure) rc %d", rc);
-            }
+            ERROR("captureMediaStart: send rc (busy) %d", rc);
          }
       }
       else
       {
-         result= "failure: cannot capture current media";
-         rc= f.send(result);
-         if( rc != RT_OK )
+         prepareForCapture( m_ctx );
+
+         if ( m_ctx->canCapture )
          {
-            ERROR("captureMediaStart: send (cannot capture) rc %d", rc);
+            startCapture( m_ctx, false, endPoint.cString(), duration );
+            if ( m_ctx->captureActive )
+            {
+               result= "success";
+               rc= f.send(result);
+               if( rc != RT_OK )
+               {
+                  ERROR("captureMediaStart: send (success) rc %d", rc);
+               }
+            }
+            else
+            {
+               result= "failure";
+               rc= f.send(result);
+               if( rc != RT_OK )
+               {
+                  ERROR("captureMediaStart: send (failure) rc %d", rc);
+               }
+            }
          }
+         else
+         {
+            result= "failure: cannot capture current media";
+            rc= f.send(result);
+            if( rc != RT_OK )
+            {
+               ERROR("captureMediaStart: send (cannot capture) rc %d", rc);
+            }
+         }
+      }
+   }
+   else
+   {
+      result= "failure: source no longer available";
+      rc= f.send(result);
+      if( rc != RT_OK )
+      {
+         ERROR("captureMediaStart: send (no longer available) rc %d", rc);
       }
    }
    return RT_OK;
@@ -411,34 +472,61 @@ rtError rtMediaCaptureObject::captureMediaStop( rtFunctionRef f )
 {
    rtError rc;
    rtString result;
+   bool validCtx= false;
 
    INFO("captureMediaStop: m_ctx %p", m_ctx);
 
-   if ( m_ctx->captureActive )
+   pthread_mutex_lock( &gMutex );
+   for ( std::vector<MediaCapContext*>::iterator it= gContextList.begin();
+         it != gContextList.end();
+         ++it )
    {
-      if ( m_ctx->postThreadStarted )
+      MediaCapContext *ctxIter= (*it);
+      if ( ctxIter == m_ctx )
       {
-         if ( m_ctx->captureActive )
+         validCtx= true;
+         break;
+      }
+   }
+   pthread_mutex_unlock( &gMutex );
+
+   if ( validCtx )
+   {
+      if ( m_ctx->captureActive )
+      {
+         if ( m_ctx->postThreadStarted )
          {
-            m_ctx->goodCapture= true;
-            stopCapture( m_ctx );
+            if ( m_ctx->captureActive )
+            {
+               m_ctx->goodCapture= true;
+               stopCapture( m_ctx );
+            }
+         }
+
+         result= "success";
+         rc= f.send(result);
+         if( rc != RT_OK )
+         {
+            ERROR("captureMediaStop: send rc (success) %d", rc);
          }
       }
-
-      result= "success";
-      rc= f.send(result);
-      if( rc != RT_OK )
+      else
       {
-         ERROR("captureMediaStop: send rc (success) %d", rc);
+         result= "success: nothing to stop";
+         rc= f.send(result);
+         if( rc != RT_OK )
+         {
+            ERROR("captureMediaStop: send rc (nothing to stop) %d", rc);
+         }
       }
    }
    else
    {
-      result= "success: nothing to stop";
+      result= "failure: source no longer available";
       rc= f.send(result);
       if( rc != RT_OK )
       {
-         ERROR("captureMediaStop: send rc (nothing to stop) %d", rc);
+         ERROR("captureMediaStop: send (no longer available) rc %d", rc);
       }
    }
 
@@ -670,7 +758,7 @@ static unsigned long getCRC(unsigned char *data, int size, int initial )
 
 static void dumpPacket( unsigned char *packet, int packetSize )
 {
-   if ( LEVEL_TRACE <= gDebugLevel )
+   if ( LEVEL_TRACE2 <= gDebugLevel )
    {
       int i;
       char buff[1024];   
@@ -698,7 +786,7 @@ static void dumpPacket( unsigned char *packet, int packetSize )
          buffPos += snprintf(&buff[buffPos], (sizeof (buff) - buffPos), "\n" );
          col= 0;
       }
-      TRACE("%s", buff );
+      TRACE2("%s", buff );
    }
 }
 
@@ -1197,6 +1285,7 @@ static void findSources(MediaCapContext *ctx)
                                        si->mimeType= 0;
                                        si->packetSize= -1;
                                        si->probeId= 0;
+                                       si->firstPTS= -1LL;
                                        ctx->srcList.push_back(si);
                                     }
                                     g_value_reset( &itemPad );
@@ -1246,6 +1335,7 @@ static void findSources(MediaCapContext *ctx)
                               si->mimeType= 0;
                               si->packetSize= -1;
                               si->probeId= 0;
+                              si->firstPTS= -1LL;
                               ctx->srcList.push_back(si);
                            }
                         }
@@ -1606,11 +1696,28 @@ static GstPadProbeReturn captureProbe( GstPad *pad, GstPadProbeInfo *info, gpoin
             si->dts= ((dts != -1LL) ? (si->pts-DECODE_TIME) : -1LL);
          }
 
+         if ( si->ctx->needTSEncapsulation && (si->firstPTS == -1LL) )
+         {
+            si->firstPTS= si->pts;
+            INFO("captureProbe: pid %x sets firstPTS to %lld", si->pid, si->pts);
+         }
          if ( si->ctx->captureStartTime == -1LL )
          {
             if ( si->pts != -1LL )
             {
-               si->ctx->captureStartTime= si->pts;
+               if ( si->ctx->needTSEncapsulation )
+               {
+                  if ( (si->ctx->videoPid == -1) || (si->pid == si->ctx->videoPid) )
+                  {
+                     si->ctx->captureStartTime= si->pts;
+                     INFO("captureProbe: pid %x (video pid %x) sets captureStartTime to %lld", si->pid, si->ctx->videoPid, si->pts);
+                  }
+               }
+               else
+               {
+                  si->ctx->captureStartTime= si->pts;
+                  INFO("captureProbe: sets captureStartTime to %lld", si->pts);
+               }
             }
             else
             {
@@ -1626,21 +1733,21 @@ static GstPadProbeReturn captureProbe( GstPad *pad, GstPadProbeInfo *info, gpoin
             }
          }
 
-         TRACE("probeId %u (%s): type %d buffer %p : size %d data %p pts %lld dts %lld", 
+         TRACE1("probeId %u (%s): type %d buffer %p : size %d data %p pts %lld dts %lld",
                  si->probeId, si->mimeType, info->type, info->data, inSize, inData, pts, dts);
          if ( inSize && inData )
          {
-            if ( LEVEL_TRACE <= gDebugLevel )
+            if ( LEVEL_TRACE2 <= gDebugLevel )
             {
                int i, imax= 192;
                if ( imax > inSize ) imax= inSize;
                for( i= 0; i < imax; ++i )
                {           
-                  iprintf(LEVEL_TRACE, " %02X ", inData[i] );
-                  if ( (i % 16) == 7 ) iprintf(LEVEL_TRACE, " - ");
-                  if ( (i % 16) == 15 ) iprintf(LEVEL_TRACE, "");
+                  iprintf(LEVEL_TRACE2, " %02X ", inData[i] );
+                  if ( (i % 16) == 7 ) iprintf(LEVEL_TRACE2, " - ");
+                  if ( (i % 16) == 15 ) iprintf(LEVEL_TRACE2, "\n");
                }
-               iprintf(LEVEL_TRACE,"");
+               iprintf(LEVEL_TRACE2,"\n");
             }
             processCaptureData( si->ctx, si, inData, inSize );
          }
@@ -1660,11 +1767,23 @@ static GstPadProbeReturn captureProbe( GstPad *pad, GstPadProbeInfo *info, gpoin
          {
             now= getCurrentTimeMillis()*90LL;
          }
-         if ( (si->ctx->captureStopTime != -1LL) && (now >= si->ctx->captureStopTime) )
+         if ( ((si->ctx->captureStopTime != -1LL) && (now >= si->ctx->captureStopTime)) &&
+               ( !si->ctx->needTSEncapsulation ||
+                 ((si->ctx->videoPid == -1) || (si->pid == si->ctx->videoPid)) ) )
          {
             si->probeId= 0;
 
             si->ctx->goodCapture= true;
+            if ( si->ctx->needTSEncapsulation )
+            {
+               INFO("captureProbe: calling stopCapture: pid %x now %lld startTime %lld stopTime %lld",
+                    si->pid, now, si->ctx->captureStartTime, si->ctx->captureStopTime);
+            }
+            else
+            {
+               INFO("captureProbe: calling stopCapture: now %lld startTime %lld stopTime %lld",
+                    now, si->ctx->captureStartTime, si->ctx->captureStopTime);
+            }
             stopCapture( si->ctx );
 
             return GST_PAD_PROBE_REMOVE;
@@ -1709,7 +1828,7 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
 {
    size_t ret= 0;
    MediaCapContext *ctx= (MediaCapContext*)userData;
-   TRACE("postReadCallback: data %p size %d, nitems %d", buffer, size, nitems);
+   TRACE1("postReadCallback: data %p size %d, nitems %d", buffer, size, nitems);
    if ( ctx )
    {
       int lenToRead= size*nitems;
@@ -1721,13 +1840,13 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
       }
       else
       {
-         bool wasFull;
+         bool isFull;
 
          pthread_mutex_lock( &ctx->emitMutex );
 
-         wasFull= (ctx->emitCount >= ctx->emitCapacity);
+         isFull= (ctx->emitCount >= ctx->emitCapacity);
 
-         TRACE("postReadCallback: wasFull %d lenToRead %d", wasFull, lenToRead);
+         TRACE1("postReadCallback: isFull %d lenToRead %d", isFull, lenToRead);
          for( ; ; )
          {
             int avail= ctx->emitCount;
@@ -1736,7 +1855,7 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
             {
                consume= avail;
             }
-            TRACE("postReadCallback: cap %d count %d avail %d consume %d", ctx->emitCapacity, ctx->emitCount, avail, consume);
+            TRACE1("postReadCallback: cap %d count %d avail %d consume %d", ctx->emitCapacity, ctx->emitCount, avail, consume);
             
             while( consume )
             {
@@ -1745,7 +1864,7 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
                {
                   copylen= consume;
                }         
-               TRACE("postReadCallback: consume %d copylen %d head %d tail %d", consume, copylen, ctx->emitHead, ctx->emitTail);
+               TRACE1("postReadCallback: consume %d copylen %d head %d tail %d", consume, copylen, ctx->emitHead, ctx->emitTail);
                if ( copylen )
                {
                   memcpy( &buffer[offset], &ctx->emitBuffer[ctx->emitTail], copylen );
@@ -1760,19 +1879,20 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
                   break;
                }
             }
+            isFull= (ctx->emitCount >= ctx->emitCapacity);
             pthread_mutex_unlock( &ctx->emitMutex );
 
-            TRACE("postReadCallback: offset %d dataLen %d", offset, lenToRead);
+            TRACE1("postReadCallback: offset %d dataLen %d", offset, lenToRead);
             if ( offset < lenToRead )
             {
                // Wait for more data
-               TRACE("postReadCallback: wait till not empty...");
+               TRACE1("postReadCallback: wait till not empty...");
                pthread_mutex_lock( &ctx->emitMutex );
                pthread_mutex_lock( &ctx->emitNotEmptyMutex );
                pthread_mutex_unlock( &ctx->emitMutex );
                pthread_cond_wait( &ctx->emitNotEmptyCond, &ctx->emitNotEmptyMutex );
                pthread_mutex_unlock( &ctx->emitNotEmptyMutex );
-               TRACE("postReadCallback: done wait till not empty");
+               TRACE1("postReadCallback: done wait till not empty");
             }
             else
             {
@@ -1786,24 +1906,24 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
             pthread_mutex_lock( &ctx->emitMutex );
          }
 
-         if ( wasFull )
+         if ( !isFull )
          {
             // Signal not full
-            TRACE("postReadCallback: signal not full: count %d capacity %d", ctx->emitCount, ctx->emitCapacity);
+            TRACE1("postReadCallback: signal not full: count %d capacity %d", ctx->emitCount, ctx->emitCapacity);
             pthread_mutex_lock( &ctx->emitMutex );
             pthread_mutex_lock( &ctx->emitNotFullMutex );
             pthread_mutex_unlock( &ctx->emitMutex );
             pthread_cond_signal( &ctx->emitNotFullCond );
             pthread_mutex_unlock( &ctx->emitNotFullMutex );
          }
-         TRACE("postReadCallback: done");
+         TRACE1("postReadCallback: done");
 
          ctx->totalBytesPosted += offset;
 
          ret= offset;
       }
    }
-   TRACE("postReadCallback: exit %d", ret);
+   TRACE1("postReadCallback: exit %d", ret);
    return ret;
 }
 
@@ -2024,6 +2144,7 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
             if ( !si->isVideo )
             {
                si->bufferCount= 0;
+               si->firstPTS= -1LL;
                si->probeId= gst_pad_add_probe( si->pad,
                                                (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER|GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM),
                                                captureProbe,
@@ -2043,6 +2164,7 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
             if ( si->isVideo )
             {
                si->bufferCount= 0;
+               si->firstPTS= -1LL;
                si->probeId= gst_pad_add_probe( si->pad,
                                                (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER|(int)GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM),
                                                captureProbe,
@@ -2173,9 +2295,9 @@ static void processCaptureData( MediaCapContext *ctx, SrcInfo *si, unsigned char
          }
          else
          {
-            TRACE("processCaptureData: calling emitCaptureData: data %p len %d", data, len);
+            TRACE1("processCaptureData: calling emitCaptureData: data %p len %d", data, len);
             emitCaptureData( ctx, data, len );
-            TRACE("processCaptureData: done calling emitCaptureData");
+            TRACE1("processCaptureData: done calling emitCaptureData");
          }
       }
 
@@ -2705,13 +2827,13 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
       else if ( !ctx->postThreadStopRequested && !ctx->postThreadAborted )
       {
          int offset= 0;
-         bool wasEmpty= false;
+         bool isEmpty= false;
 
          pthread_mutex_lock( &ctx->emitMutex );
 
-         wasEmpty= !ctx->emitCount;
+         isEmpty= !ctx->emitCount;
 
-         TRACE("emitCaptureData: endpoint: wasEmpty %d dataLen %d", wasEmpty, dataLen);
+         TRACE1("emitCaptureData: endpoint: isEmpty %d dataLen %d", isEmpty, dataLen);
          for( ; ; )
          {
             int avail= ctx->emitCapacity-ctx->emitCount;
@@ -2720,7 +2842,7 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
             {
                consume= avail;
             }
-            TRACE("emitCaptureData: endpoint: cap %d count %d avail %d consume %d", ctx->emitCapacity, ctx->emitCount, avail, consume);
+            TRACE1("emitCaptureData: endpoint: cap %d count %d avail %d consume %d", ctx->emitCapacity, ctx->emitCount, avail, consume);
             
             while( consume )
             {
@@ -2729,7 +2851,7 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
                {
                   copylen= consume;
                }         
-               TRACE("emitCaptureData: endpoint: consume %d copylen %d head %d tail %d", consume, copylen, ctx->emitHead, ctx->emitTail);
+               TRACE1("emitCaptureData: endpoint: consume %d copylen %d head %d tail %d", consume, copylen, ctx->emitHead, ctx->emitTail);
                if ( copylen )
                {
                   memcpy( &ctx->emitBuffer[ctx->emitHead], &data[offset], copylen );
@@ -2745,16 +2867,28 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
                   break;
                }
             }
-
+            isEmpty= !ctx->emitCount;
             pthread_mutex_unlock( &ctx->emitMutex );
 
-            TRACE("emitCaptureData: endpoint: offset %d dataLen %d", offset, dataLen);            
+            TRACE1("emitCaptureData: endpoint: offset %d dataLen %d", offset, dataLen);
             if ( offset < dataLen )
             {
                int rc;
                struct timeval now;
                struct timespec timeout;
                int timelimit= POST_TIMEOUT;
+
+               if ( !isEmpty )
+               {
+                  // Signal not empty
+                  TRACE1("emitCaptureData: endpoint: signal not empty: count %d", ctx->emitCount);
+                  pthread_mutex_lock( &ctx->emitMutex );
+                  pthread_mutex_lock( &ctx->emitNotEmptyMutex );
+                  pthread_mutex_unlock( &ctx->emitMutex );
+                  pthread_cond_signal( &ctx->emitNotEmptyCond );
+                  pthread_mutex_unlock( &ctx->emitNotEmptyMutex );
+                  isEmpty= false;
+               }
 
                gettimeofday(&now, 0);
                timeout.tv_nsec= now.tv_usec * 1000 + (timelimit % 1000) * 1000000;
@@ -2765,7 +2899,7 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
                   timeout.tv_sec++;
                }
                
-               TRACE("emitCaptureData: endpoint: wait till not full...");
+               TRACE1("emitCaptureData: endpoint: wait till not full...");
                // Wait for more room
                pthread_mutex_lock( &ctx->emitMutex );
                pthread_mutex_lock( &ctx->emitNotFullMutex );
@@ -2774,7 +2908,7 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
                pthread_mutex_unlock( &ctx->emitNotFullMutex );
                if ( rc == ETIMEDOUT )
                {
-                  ERROR("emitCaptureData: endpoint: wait till not full timout");
+                  ERROR("emitCaptureData: endpoint: wait till not full timeout");
                   ctx->postThreadStopRequested= true;
                   if ( ctx->curlfd >= 0 )
                   {
@@ -2784,7 +2918,7 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
                }
                else
                {
-                  TRACE("emitCaptureData: endpoint: done wait till not full");
+                  TRACE1("emitCaptureData: endpoint: done wait till not full");
                }
             }
             else
@@ -2799,17 +2933,17 @@ static void emitCaptureData( MediaCapContext *ctx, unsigned char *data, int data
             pthread_mutex_lock( &ctx->emitMutex );
          }
 
-         if ( wasEmpty )
+         if ( !isEmpty )
          {
             // Signal not empty
-            TRACE("emitCaptureData: endpoint: signal not empty: count %d", ctx->emitCount);
+            TRACE1("emitCaptureData: endpoint: signal not empty: count %d", ctx->emitCount);
             pthread_mutex_lock( &ctx->emitMutex );
             pthread_mutex_lock( &ctx->emitNotEmptyMutex );
             pthread_mutex_unlock( &ctx->emitMutex );
             pthread_cond_signal( &ctx->emitNotEmptyCond );
             pthread_mutex_unlock( &ctx->emitNotEmptyMutex );
          }
-         TRACE("emitCaptureData: endpoint: exit");
+         TRACE1("emitCaptureData: endpoint: exit");
       }
    }
 }
@@ -2844,9 +2978,14 @@ void* MediaCaptureCreateContext( GstElement *element )
       ctx->nextESPid= 0x50;
       ctx->nextVideoStreamId= 0xE0;
       ctx->nextAudioStreamId= 0xD0;
+      ctx->videoPid= -1;
       ctx->curlfd= -1;
 
       initCRCTable();
+
+      pthread_mutex_lock( &gMutex );
+      gContextList.push_back(ctx);
+      pthread_mutex_unlock( &gMutex );
 
       findSources( ctx );
 
@@ -2884,6 +3023,20 @@ void MediaCaptureDestroyContext( void *context )
    MediaCapContext *ctx= (MediaCapContext*)context;
    if ( ctx )
    {
+      pthread_mutex_lock( &gMutex );
+      for ( std::vector<MediaCapContext*>::iterator it= gContextList.begin();
+            it != gContextList.end();
+            ++it )
+      {
+         MediaCapContext *ctxIter= (*it);
+         if ( ctxIter == ctx )
+         {
+            gContextList.erase( it );
+            break;
+         }
+      }
+      pthread_mutex_unlock( &gMutex );
+
       if ( ctx->captureActive )
       {
          stopCapture( ctx );

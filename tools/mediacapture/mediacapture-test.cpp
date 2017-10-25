@@ -221,7 +221,7 @@ void captureSourceToFile( int src, const char *fileName, int duration, rtRemoteE
    }
 }
 
-static void displayPipelineList(rtRemoteEnvironment *env, rtObjectRef &registry)
+static void getAvailablePipelines(rtRemoteEnvironment *env, rtObjectRef &registry)
 {
    rtError rc;
    rtString list;
@@ -238,7 +238,6 @@ static void displayPipelineList(rtRemoteEnvironment *env, rtObjectRef &registry)
 
          gAvailablePipelines.clear();
 
-         printf("pipelines\n{\n");
          item= strtok( l, ",");
          if ( item )
          {
@@ -252,14 +251,12 @@ static void displayPipelineList(rtRemoteEnvironment *env, rtObjectRef &registry)
                   if ( item )
                   {
                      gAvailablePipelines.push_back(item);
-                     printf("  %d - %s\n", i, item);
                   }
                   ++i;
                }
                while( item && (i < n) );
             }
          }
-         printf("}\n");
 
          free(l);
       }
@@ -270,6 +267,21 @@ static void displayPipelineList(rtRemoteEnvironment *env, rtObjectRef &registry)
    }
 
    pthread_mutex_unlock( &gMutex );
+}
+
+static void displayPipelineList(rtRemoteEnvironment *env, rtObjectRef &registry)
+{
+   getAvailablePipelines( env, registry );
+
+   printf("pipelines\n{\n");
+   pthread_mutex_lock( &gMutex );
+   int count= gAvailablePipelines.size();
+   for( int i= 0; i < count; ++i)
+   {
+      printf("  %d - %s\n", i, gAvailablePipelines[i].c_str());
+   }
+   pthread_mutex_unlock( &gMutex );
+   printf("}\n");
 }
 
 static void listActions()
@@ -383,6 +395,7 @@ int main( int argc, const char **argv )
                      case '8':
                      case '9':
                         src= c-'0';
+                        getAvailablePipelines(env, registry);
                         if ( toFile )
                         {
                            captureSourceToFile( src, fileName, duration, env );

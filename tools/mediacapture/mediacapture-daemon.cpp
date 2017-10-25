@@ -26,6 +26,7 @@
 #include <signal.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <string>
 #include <vector>
@@ -56,6 +57,8 @@ class rtCaptureRegistryObject : public rtObject
      rtError registerPipeline( rtString pipelineName );
      rtError unregisterPipeline( rtString pipelineName );
      rtError getAvailablePipelines( rtString &result );
+
+     void validateAvailablePipelines();
 
    private:
 };
@@ -116,7 +119,9 @@ rtError rtCaptureRegistryObject::getAvailablePipelines( rtString &result )
    char work[16];
 
    result= "";
-   
+
+   validateAvailablePipelines();
+
    pthread_mutex_lock( &gMutex );
    snprintf( work, sizeof(work), "%d", gAvailablePipelines.size() );
    result.append(work);
@@ -133,6 +138,41 @@ rtError rtCaptureRegistryObject::getAvailablePipelines( rtString &result )
    pthread_mutex_unlock( &gMutex );
 
    return RT_OK;
+}
+
+void rtCaptureRegistryObject::validateAvailablePipelines()
+{
+   bool needAnotherPass;
+
+   do
+   {
+      needAnotherPass= false;
+      pthread_mutex_lock( &gMutex );
+      for ( std::vector<std::string>::iterator it= gAvailablePipelines.begin();
+            it != gAvailablePipelines.end();
+            ++it )
+      {
+         int pid;
+         std::string str= (*it);
+         if ( sscanf( str.c_str(), "media-%d-", &pid ) == 1 )
+         {
+            int rc;
+            char work[64];
+            struct stat fileinfo;
+
+            snprintf( work, sizeof(work), "/proc/%d", pid );
+            rc= stat( work, &fileinfo );
+            if ( rc )
+            {
+               gAvailablePipelines.erase(it);
+               needAnotherPass= true;
+               break;
+            }
+         }
+      }
+      pthread_mutex_unlock( &gMutex );
+   }
+   while( needAnotherPass );
 }
 
 int main( int argc, const char **argv )
