@@ -62,9 +62,10 @@ class rtMediaCaptureObject;
 #define NANO_SECONDS (1.0e9)
 #define PTS_OFFSET VIDEO_PTS_PCR_OFFSET
 #define DECODE_TIME (10000)
-#define POST_TIMEOUT (2000)
+#define POST_TIMEOUT (4000)
 #define POST_CHUNK_SIZE (16*1024)
 #define EMIT_BUFFER_SIZE (12*POST_CHUNK_SIZE)
+#define PROGRESS_INTERVAL (2000000)
 
 #define min( a, b ) ( ((a) <= (b)) ? (a) : (b) )
 
@@ -102,7 +103,6 @@ typedef struct _SrcInfo
    long long accumFirstPTS;
    int firstBlockLen;
    long long accumLastPTS;
-   long long lastEmittedPTS;
    int accumOffset;
    int accumSize;
    unsigned char *accumulator;
@@ -149,6 +149,9 @@ typedef struct _MediaCapContext
    int emitCount;
    long long totalBytesEmitted;
    long long totalBytesPosted;
+   long long lastReportedPostedBytes;
+   long long durationCaptured;
+   long long lastEmittedPTS;
    pthread_mutex_t emitMutex;
    pthread_mutex_t emitNotEmptyMutex;
    pthread_cond_t emitNotEmptyCond;
@@ -161,7 +164,9 @@ typedef struct _MediaCapContext
    bool postThreadStarted;
    bool postThreadStopRequested;
    bool postThreadAborted;
+   bool hitStopPoint;
    bool goodCapture;
+   bool captureCompleteSent;
 } MediaCapContext;
 
 static void iprintf( int level, const char *fmt, ... );
@@ -309,6 +314,10 @@ class rtMediaCaptureObject : public rtObject
 
      rtError captureMediaStop( rtFunctionRef f);
 
+     void reportCaptureStart();
+
+     void reportCaptureProgress(long long bytes, long long totalBytes);
+
      void reportCaptureComplete();
 
    private:
@@ -325,6 +334,7 @@ rtError rtMediaCaptureObject::captureMediaSample( rtString file, int32_t duratio
    rtError rc;
    rtString result;
    bool validCtx= false;
+   char work[256];
 
    INFO("captureMediaSample: m_ctx %p", m_ctx);
 
@@ -346,7 +356,9 @@ rtError rtMediaCaptureObject::captureMediaSample( rtString file, int32_t duratio
    {
       if ( m_ctx->captureActive )
       {
-         result= "failure: busy";
+         result= "";
+         snprintf( work, sizeof(work), "failure: (%s) busy", m_ctx->rtName );
+         result.append(work);
          rc= f.send(result);
          if( rc != RT_OK )
          {
@@ -364,8 +376,9 @@ rtError rtMediaCaptureObject::captureMediaSample( rtString file, int32_t duratio
          }
          else
          {
-            result= "failure: cannot capture current media";
-            rc= f.send(result);
+            result= "";
+            snprintf( work, sizeof(work), "failure: (%s) cannot capture current media", m_ctx->rtName );
+            result.append(work);
             if( rc != RT_OK )
             {
                ERROR("captureMediaSample: send (cannot capture) rc %d", rc);
@@ -391,6 +404,7 @@ rtError rtMediaCaptureObject::captureMediaStart( rtString endPoint, int32_t dura
    rtError rc;
    rtString result;
    bool validCtx= false;
+   char work[256];
 
    INFO("captureMediaStart: m_ctx %p", m_ctx);
 
@@ -412,7 +426,9 @@ rtError rtMediaCaptureObject::captureMediaStart( rtString endPoint, int32_t dura
    {
       if ( m_ctx->captureActive )
       {
-         result= "failure: busy";
+         result= "";
+         snprintf( work, sizeof(work), "failure: (%s) busy", m_ctx->rtName );
+         result.append(work);
          rc= f.send(result);
          if( rc != RT_OK )
          {
@@ -425,29 +441,31 @@ rtError rtMediaCaptureObject::captureMediaStart( rtString endPoint, int32_t dura
 
          if ( m_ctx->canCapture )
          {
+            m_ctx->totalBytesEmitted= 0;
+
             startCapture( m_ctx, false, endPoint.cString(), duration );
             if ( m_ctx->captureActive )
             {
-               result= "success";
-               rc= f.send(result);
-               if( rc != RT_OK )
-               {
-                  ERROR("captureMediaStart: send (success) rc %d", rc);
-               }
+               m_func= f;
+               reportCaptureStart();
             }
             else
             {
-               result= "failure";
+               result= "";
+               snprintf( work, sizeof(work), "failure: (%s) failed to start", m_ctx->rtName );
+               result.append(work);
                rc= f.send(result);
                if( rc != RT_OK )
                {
-                  ERROR("captureMediaStart: send (failure) rc %d", rc);
+                  ERROR("captureMediaStart: send (failed to start) rc %d", rc);
                }
             }
          }
          else
          {
-            result= "failure: cannot capture current media";
+            result= "";
+            snprintf( work, sizeof(work), "failure: (%s) cannot capture current media", m_ctx->rtName );
+            result.append(work);
             rc= f.send(result);
             if( rc != RT_OK )
             {
@@ -473,6 +491,7 @@ rtError rtMediaCaptureObject::captureMediaStop( rtFunctionRef f )
    rtError rc;
    rtString result;
    bool validCtx= false;
+   char work[256];
 
    INFO("captureMediaStop: m_ctx %p", m_ctx);
 
@@ -502,17 +521,12 @@ rtError rtMediaCaptureObject::captureMediaStop( rtFunctionRef f )
                stopCapture( m_ctx );
             }
          }
-
-         result= "success";
-         rc= f.send(result);
-         if( rc != RT_OK )
-         {
-            ERROR("captureMediaStop: send rc (success) %d", rc);
-         }
       }
       else
       {
-         result= "success: nothing to stop";
+         result= "";
+         snprintf( work, sizeof(work), "failure: (%s) nothing to stop", m_ctx->rtName );
+         result.append(work);
          rc= f.send(result);
          if( rc != RT_OK )
          {
@@ -533,20 +547,66 @@ rtError rtMediaCaptureObject::captureMediaStop( rtFunctionRef f )
    return RT_OK;
 }
 
+void rtMediaCaptureObject::reportCaptureStart()
+{
+   rtError rc;
+   if ( m_func.ptr() )
+   {
+      if ( !m_ctx->captureToFile )
+      {
+         char work[64];
+         rtString result= "";
+         snprintf( work, sizeof(work), "started: (%s)", m_ctx->rtName );
+         result.append(work);
+         rc= m_func.send(result);
+         if ( rc != RT_OK )
+         {
+            ERROR("rtMediaCaptureObject::reportCaptureStart: send rc %d", rc);
+         }
+      }
+   }
+}
+
+void rtMediaCaptureObject::reportCaptureProgress( long long bytes, long long totalBytes )
+{
+   rtError rc;
+   if ( m_func.ptr() )
+   {
+      if ( !m_ctx->captureToFile )
+      {
+         char work[256];
+         rtString result= "";
+
+         snprintf( work, sizeof(work), "progress: (%s) bytes %lld total bytes %lld", m_ctx->rtName, bytes, totalBytes);
+         result.append(work);
+
+         rc= m_func.send(result);
+         if ( rc != RT_OK )
+         {
+            ERROR("rtMediaCaptureObject::reportCaptureProgress: send rc %d", rc);
+         }
+      }
+   }
+}
+
 void rtMediaCaptureObject::reportCaptureComplete()
 {
    rtError rc;
    INFO("reportCaptureComplete: goodCapture %d", m_ctx->goodCapture);
    if ( m_func.ptr() )
    {
-      if ( m_ctx->captureToFile || m_ctx->goodCapture )
+      if ( m_ctx->captureToFile )
       {
-         rtString result= "success";   
+         rtString result= "complete";
          rc= m_func.send(result);
       }
       else
       {
-         rtString result= "failure: may have partial data";
+         char work[256];
+         rtString result= "";
+
+         snprintf( work, sizeof(work), "complete: (%s) bytes %lld duration %lld ms", m_ctx->rtName, m_ctx->totalBytesPosted, m_ctx->durationCaptured);
+         result.append(work);
          rc= m_func.send(result);
       }
       INFO("rtMediaCaptureObject::reportCaptureComplete: send rc %d", rc);
@@ -1606,7 +1666,6 @@ static void prepareForCapture( MediaCapContext *ctx )
                         ERROR("prepareForCapture: unable to allocate memory for stream (%s) accumulator", si->mimeType);
                         ctx->canCapture= false;
                      }
-                     si->lastEmittedPTS= -1LL;
                   }
                   if ( ctx->canCapture )
                   {
@@ -1758,32 +1817,28 @@ static GstPadProbeReturn captureProbe( GstPad *pad, GstPadProbeInfo *info, gpoin
 
          ++si->bufferCount;
 
-         long long now;
-         if ( si->pts != -1LL )
+         if ( !si->ctx->needTSEncapsulation )
          {
-            now= si->pts;
+            long long now= getCurrentTimeMillis()*90LL;
+            if ( (si->ctx->captureStopTime != -1LL) && (now >= si->ctx->captureStopTime) )
+            {
+               si->ctx->hitStopPoint= true;
+
+               INFO("captureProbe: calling stopCapture: now %lld startTime %lld stopTime %lld",
+                    now, si->ctx->captureStartTime, si->ctx->captureStopTime);
+            }
          }
-         else
+         else if ( si->ctx->hitStopPoint )
          {
-            now= getCurrentTimeMillis()*90LL;
+            INFO("captureProbe: calling stopCapture: pid %x now %lld startTime %lld stopTime %lld",
+                 si->pid, si->pts, si->ctx->captureStartTime, si->ctx->captureStopTime);
          }
-         if ( ((si->ctx->captureStopTime != -1LL) && (now >= si->ctx->captureStopTime)) &&
-               ( !si->ctx->needTSEncapsulation ||
-                 ((si->ctx->videoPid == -1) || (si->pid == si->ctx->videoPid)) ) )
+         if ( si->ctx->hitStopPoint )
          {
             si->probeId= 0;
 
             si->ctx->goodCapture= true;
-            if ( si->ctx->needTSEncapsulation )
-            {
-               INFO("captureProbe: calling stopCapture: pid %x now %lld startTime %lld stopTime %lld",
-                    si->pid, now, si->ctx->captureStartTime, si->ctx->captureStopTime);
-            }
-            else
-            {
-               INFO("captureProbe: calling stopCapture: now %lld startTime %lld stopTime %lld",
-                    now, si->ctx->captureStartTime, si->ctx->captureStopTime);
-            }
+
             stopCapture( si->ctx );
 
             return GST_PAD_PROBE_REMOVE;
@@ -1919,6 +1974,15 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
          TRACE1("postReadCallback: done");
 
          ctx->totalBytesPosted += offset;
+         long long intervalBytes= ctx->totalBytesPosted-ctx->lastReportedPostedBytes;
+         if ( intervalBytes >= PROGRESS_INTERVAL )
+         {
+            if ( ctx->apiObj.ptr() )
+            {
+               ((rtMediaCaptureObject*)ctx->apiObj.ptr())->reportCaptureProgress( intervalBytes, ctx->totalBytesPosted );
+            }
+            ctx->lastReportedPostedBytes= ctx->totalBytesPosted;
+         }
 
          ret= offset;
       }
@@ -2100,6 +2164,10 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
    if ( ctx )
    {
       ctx->goodCapture= false;
+      ctx->hitStopPoint= false;
+      ctx->captureCompleteSent= false;
+      ctx->totalBytesPosted= 0;
+      ctx->lastReportedPostedBytes= 0;
 
       if ( toFile )
       {
@@ -2125,6 +2193,8 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
 
       if ( okToStart )
       {
+         ctx->durationCaptured= 0LL;
+         ctx->lastEmittedPTS= -1LL;
          ctx->captureStartTime= -1LL;
          ctx->captureDuration= (duration*TICKS_90K_PER_MILLISECOND);
 
@@ -2247,6 +2317,31 @@ static void stopCapture( MediaCapContext *ctx )
             DEBUG("stopCapture: done calling pthread_join");            
          }
 
+         if ( !ctx->captureCompleteSent )
+         {
+            if ( ctx->needTSEncapsulation )
+            {
+               if ( ctx->lastEmittedPTS != -1LL )
+               {
+                  ctx->durationCaptured= (ctx->lastEmittedPTS - ctx->captureStartTime)/TICKS_90K_PER_MILLISECOND;
+               }
+               INFO("lastEmittedPTS %lld captureStartTime %lld durationCaptured %lld", ctx->lastEmittedPTS, ctx->captureStartTime, ctx->durationCaptured);
+            }
+            else
+            {
+               long long now= getCurrentTimeMillis()*TICKS_90K_PER_MILLISECOND;
+               ctx->durationCaptured= (now-ctx->captureStartTime)/TICKS_90K_PER_MILLISECOND;
+               INFO("now %lld captureStartTime %lld durationCaptured %lld", now, ctx->captureStartTime, ctx->durationCaptured);
+            }
+            #ifdef MEDIACAPTURE_USE_RTREMOTE
+            if ( ctx->apiObj.ptr() )
+            {
+               ((rtMediaCaptureObject*)ctx->apiObj.ptr())->reportCaptureComplete();
+            }
+            #endif
+            ctx->captureCompleteSent= true;
+         }
+
          if ( ctx->curl )
          {
             curl_easy_cleanup( ctx->curl );
@@ -2257,10 +2352,12 @@ static void stopCapture( MediaCapContext *ctx )
             pthread_cond_destroy( &ctx->emitNotEmptyCond );
             pthread_cond_destroy( &ctx->emitNotFullCond );
             ctx->curlfd= -1;
+            ctx->curl= 0;
          }
          if ( ctx->emitBuffer )
          {
             free( ctx->emitBuffer );
+            ctx->emitBuffer= 0;
          }
       }
 
@@ -2492,6 +2589,7 @@ static void flushCaptureDataByTime( MediaCapContext *ctx, long long ptsLimit, lo
                {
                   int dataRemaining= si->accumOffset-si->firstBlockLen;
                   DEBUG("flushCaptureDataByTime: calling emitCaptureData: pid %X pts %llx len %d", si->pid, si->accumFirstPTS, si->firstBlockLen);
+                  ctx->lastEmittedPTS= nextPTSToEmit;
                   emitCaptureData( ctx, si->accumulator, si->firstBlockLen );
                   if ( dataRemaining )
                   {
@@ -2501,7 +2599,14 @@ static void flushCaptureDataByTime( MediaCapContext *ctx, long long ptsLimit, lo
                }
             }
          }
-         
+
+         if ( (ctx->captureStopTime > 0) && (ctx->lastEmittedPTS >= ctx->captureStopTime) )
+         {
+            INFO("flushCaptureDataByTime: lastEmittedPTS %lld captureStopTime %lld", ctx->lastEmittedPTS, ctx->captureStopTime);
+            ctx->hitStopPoint= true;
+            break;
+         }
+
          nextPTSToEmit= -1LL;
       }
       else
@@ -2599,7 +2704,7 @@ static void checkBufferLevels( MediaCapContext *ctx, long long pcr )
    }
    
    DEBUG("firstCommonPTS %llx lastCommonPTS %llx", firstCommonPTS, lastCommonPTS);
-   if ( (firstCommonPTS > 0) && (lastCommonPTS > firstCommonPTS) )
+   if ( !ctx->hitStopPoint && (firstCommonPTS > 0) && (lastCommonPTS > firstCommonPTS) )
    {
       flushCaptureDataByTime( ctx, lastCommonPTS, pcr );
    }

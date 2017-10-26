@@ -35,6 +35,7 @@ static std::vector<std::string> gAvailablePipelines= std::vector<std::string>();
 static bool gCaptureComplete= true;
 static bool gRunning= false;
 static int gSrcActive= -1;
+static rtObjectRef gSrcObjActive= 0;
 
 static void signalHandler(int signum)
 {
@@ -50,9 +51,18 @@ void showUsage()
 static rtError captureCallback(int /*argc*/, rtValue const* argv, rtValue* /*result*/, void* /*argp*/)
 {
   rtString s = argv[0].toString();
+  const char *str= s.cString();
   
-  printf("capture result: %s\n", s.cString());
-  gCaptureComplete= true;
+  printf("%s\n", str);
+  if (
+       (strncmp( "failure", str, 7 ) == 0) ||
+       (strncmp( "success", str, 7 ) == 0) ||
+       (strncmp( "complete", str, 8 ) == 0)
+     )
+  {
+     gCaptureComplete= true;
+     gSrcObjActive= 0;
+  }
 
   return RT_OK;
 }
@@ -122,7 +132,11 @@ void startCaptureSourceToEndpoint( int src, const char *endpointName, int durati
          gSrcActive= src;
          gCaptureComplete= false;
          rc= server.send("captureMediaStart", endpoint, duration, new rtFunctionCallback(captureCallback) );
-         if ( rc != RT_OK )
+         if ( rc == RT_OK )
+         {
+            gSrcObjActive= server;
+         }
+         else
          {
             gSrcActive= -1;
             gCaptureComplete= true;
@@ -304,7 +318,7 @@ int main( int argc, const char **argv )
    const char* endpointName= 0;
    bool toFile= false;
    bool toEndpoint= false;
-   int duration= 0;
+   int duration= -1;
    int len;
 
    printf("mediacapture-test v1.0\n");
@@ -348,7 +362,7 @@ int main( int argc, const char **argv )
          showUsage();
          exit(0);
       }
-      if ( duration <= 0 )
+      if ( duration < 0 )
       {
          duration= 30000;
       }
