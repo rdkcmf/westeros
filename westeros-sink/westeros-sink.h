@@ -88,6 +88,7 @@ struct _GstWesterosSink
    bool visible;
    float opacity;
    float zorder;
+   gfloat playbackRate;
    
    int transX;
    int transY;

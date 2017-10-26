@@ -458,6 +458,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    
    sink->opacity= 1.0;
    sink->zorder= 0.0;
+   sink->playbackRate= 1.0;
 
    sink->transX= 0;
    sink->transY= 0;
@@ -1001,6 +1002,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             gint64 segmentStart, segmentPosition;
             GstFormat segmentFormat;
             gdouble appliedRate = 1.0;
+            gdouble playbackRate= 1.0;
 
             #ifdef USE_GST1
             const GstSegment *dataSegment;
@@ -1009,6 +1011,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             segmentStart= dataSegment->start;
             segmentPosition= dataSegment->position;
             appliedRate= dataSegment->applied_rate;
+            playbackRate= dataSegment->rate;
             #else
             gst_event_parse_new_segment(event, NULL, NULL, 
                                         &segmentFormat, &segmentStart, 
@@ -1023,6 +1026,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             LOCK( sink );
             sink->currentSegment = dataSegment;
             sink->flushStarted= FALSE;
+            sink->playbackRate= playbackRate;
             if (appliedRate != 1.0)
             {
                 GST_DEBUG_OBJECT(sink, "rate change done upstream");

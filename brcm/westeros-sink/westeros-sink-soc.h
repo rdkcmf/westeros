@@ -72,7 +72,8 @@ struct _GstWesterosSinkSoc
    gboolean enableCCPassthru;
    NEXUS_VideoFormat outputFormat;
    gfloat serverPlaySpeed;
-   gboolean stoppedForServerPlaySpeed;
+   gfloat clientPlaySpeed;
+   gboolean stoppedForPlaySpeedChange;
    gboolean secureVideo;
 
    int videoX;

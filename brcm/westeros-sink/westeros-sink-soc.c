@@ -75,6 +75,7 @@ static void underflowCallback( void *userData, int n );
 static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
+static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed );
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -216,7 +217,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
    sink->soc.serverPlaySpeed= 1.0;
-   sink->soc.stoppedForServerPlaySpeed= FALSE;
+   sink->soc.clientPlaySpeed= 1.0;
+   sink->soc.stoppedForPlaySpeedChange= FALSE;
    sink->soc.videoPlaying= FALSE;
    #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
    sink->soc.secureVideo= FALSE;
@@ -412,7 +414,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
                sink->videoStarted= FALSE;
                sink->soc.presentationStarted= FALSE;
                sink->soc.frameCount= 0;
-               sink->soc.stoppedForServerPlaySpeed= TRUE;
+               sink->soc.stoppedForPlaySpeedChange= TRUE;
                sink->soc.serverPlaySpeed= serverPlaySpeed;
 
                NEXUS_VideoDecoderTrickState trickState;
@@ -654,7 +656,8 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    queryPeerHandles(sink);
 
    sink->soc.serverPlaySpeed= 1.0;
-   sink->soc.stoppedForServerPlaySpeed= FALSE;
+   sink->soc.clientPlaySpeed= 1.0;
+   sink->soc.stoppedForPlaySpeedChange= FALSE;
 
    if ( sink->soc.stcChannel )
    {
@@ -689,13 +692,13 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
             GST_ERROR("gst_westeros_sink_soc_paused_to_playing: gst_westeros_sink_soc_start_video failed");
          }
 
-         if ( sink->soc.stoppedForServerPlaySpeed )
+         if ( sink->soc.stoppedForPlaySpeedChange )
          {
             NEXUS_VideoDecoderSettings settings;
             NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
             settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
             NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
-            sink->soc.stoppedForServerPlaySpeed= FALSE;
+            sink->soc.stoppedForPlaySpeedChange= FALSE;
          }
       }
       else
@@ -770,7 +773,8 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    sink->videoStarted= FALSE;
    sink->soc.presentationStarted= FALSE;
    sink->soc.serverPlaySpeed= 1.0;
-   sink->soc.stoppedForServerPlaySpeed= FALSE;
+   sink->soc.clientPlaySpeed= 1.0;
+   sink->soc.stoppedForPlaySpeedChange= FALSE;
    UNLOCK( sink );
    
    return TRUE;
@@ -833,6 +837,11 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 {
    unsigned int pts45k= (unsigned int)( pts / 2 );
    NEXUS_SimpleVideoDecoder_SetStartPts( sink->soc.videoDecoder, pts45k );
+
+   if ( sink->soc.clientPlaySpeed != sink->playbackRate && sink->soc.serverPlaySpeed == 1.0 )
+   {
+      updateClientPlaySpeed(sink, sink->playbackRate);
+   }
 }
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
@@ -1393,7 +1402,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
          sink->soc.frameCount++;
          sink->soc.noFrameCount= 0;
       }
-      else
+      else if (videoStatus.queueDepth == 0)
       {
          noFrame= TRUE;
       }
@@ -1622,5 +1631,53 @@ static long long getCurrentTimeMillis(void)
    return utcCurrentTimeMillis;
 }
 
+static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed )
+{
+   NEXUS_VideoDecoderTrickState trickState;
+   NEXUS_VideoDecoderSettings settings;
 
+   if ( clientPlaySpeed < 0 )
+   {
+       GST_WARNING_OBJECT(sink, "Ignoring negative play speed");
+       return;
+   }
 
+   sink->soc.clientPlaySpeed= clientPlaySpeed;
+
+   if (!sink->soc.videoPlaying)
+   {
+       sink->videoStarted= FALSE;
+       sink->soc.presentationStarted= FALSE;
+       sink->soc.frameCount= 0;
+       sink->soc.stoppedForPlaySpeedChange= TRUE;
+
+       NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
+       settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eHoldUntilTsmLock;
+       NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+       NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
+   }
+
+   NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+   trickState.rate= NEXUS_NORMAL_DECODE_RATE * clientPlaySpeed;
+
+   if ( clientPlaySpeed <= 1.0 )
+   {
+       trickState.topFieldOnly= false;
+       trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+   }
+   else
+   if ( (clientPlaySpeed > 1.0) && (clientPlaySpeed <= 4.0) )
+   {
+       trickState.topFieldOnly= true;
+       trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+   }
+   else
+   {
+       trickState.topFieldOnly= true;
+       trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
+   }
+
+   NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+
+   GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
+}
