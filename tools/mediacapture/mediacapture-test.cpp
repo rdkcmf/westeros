@@ -50,19 +50,67 @@ void showUsage()
 
 static rtError captureCallback(int /*argc*/, rtValue const* argv, rtValue* /*result*/, void* /*argp*/)
 {
-  rtString s = argv[0].toString();
-  const char *str= s.cString();
-  
-  printf("%s\n", str);
-  if (
-       (strncmp( "failure", str, 7 ) == 0) ||
-       (strncmp( "success", str, 7 ) == 0) ||
-       (strncmp( "complete", str, 8 ) == 0)
-     )
-  {
-     gCaptureComplete= true;
-     gSrcObjActive= 0;
-  }
+   rtString s = argv[0].toString();
+   bool resultHandled= false;
+   bool releaseObj= false;
+   const char *str= s.cString();
+   char pipelineName[64];
+
+   int len= strlen(str);
+
+   if ( (len >= 7) && !strncmp( "started", str, 7 ) )
+   {
+      if ( sscanf( str, "started: (%[^)])", &pipelineName ) == 1 )
+      {
+         printf("started: pipeline (%s)\n", pipelineName);
+         resultHandled= true;
+      }
+   }
+   else
+   if ( (len >= 8) && !strncmp( "progress", str, 8 ) )
+   {
+      long long bytes, totalBytes;
+
+      if ( sscanf( str, "progress: (%[^)]) bytes %lld total bytes %lld", &pipelineName, &bytes, &totalBytes ) == 3 )
+      {
+         printf("progress: pipeline (%s) bytes %lld total bytes %lld\n", pipelineName, bytes, totalBytes );
+         resultHandled= true;
+      }
+   }
+   else
+   if ( (len >= 8) && !strncmp( "complete", str, 8 ) )
+   {
+      long long totalBytes, duration;
+
+      if (sscanf( str, "complete: (%[^)]) bytes %lld duration %lld ms", &pipelineName, &totalBytes, &duration ) == 3 )
+      {
+         printf("completed: pipeline (%s) bytes %lld duration %lld\n", pipelineName, totalBytes, duration);
+         resultHandled= true;
+         releaseObj= true;
+      }
+   }
+   else
+   if ( (len >= 7) && !strncmp( "failure", str, 7 ) )
+   {
+      if ( sscanf( str, "failure: (%[^)])", &pipelineName ) == 1 )
+      {
+         printf("failure: pipeline(%s) : %s\n", pipelineName, str);
+         resultHandled= true;
+         releaseObj= true;
+      }
+   }
+
+   if ( !resultHandled )
+   {
+      printf("error; %s\n", str);
+      releaseObj= true;
+   }
+
+   if ( releaseObj )
+   {
+      gCaptureComplete= true;
+      gSrcObjActive= 0;
+   }
 
   return RT_OK;
 }
