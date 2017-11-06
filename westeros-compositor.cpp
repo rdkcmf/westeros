@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 #include <memory.h>
 #include <assert.h>
 #include <errno.h>
@@ -96,6 +97,8 @@
 
 #define WST_EVENT_QUEUE_SIZE (64)
 
+#define VPCBRIDGE_SIGNAL (INT_MIN)
+
 typedef void* (*PFNGETDEVICEBUFFERFROMRESOURCE)( struct wl_resource *resource );
 typedef bool (*PFNREMOTEBEGIN)( struct wl_display *dspsrc, struct wl_display *dspdst );
 typedef void (*PFNREMOTEEND)( struct wl_display *dspsrc, struct wl_display *dspdst );
@@ -167,6 +170,16 @@ typedef struct _WstVpcSurface
    int hwY;
    int hwWidth;
    int hwHeight;
+
+   bool useHWPathVpcBridge;
+   int xTransVpcBridge;
+   int yTransVpcBridge;
+   int xScaleNumVpcBridge;
+   int xScaleDenomVpcBridge;
+   int yScaleNumVpcBridge;
+   int yScaleDenomVpcBridge;
+   int outputWidthVpcBridge;
+   int outputHeightVpcBridge;
 } WstVpcSurface;
 
 typedef struct _WstKeyboard
@@ -281,6 +294,7 @@ typedef struct _WstSurface
    struct wl_resource *attachedBufferResource;
    int attachedX;
    int attachedY;
+   bool vpcBridgeSignal;
    
    struct wl_list frameCallbackList;
    
@@ -339,6 +353,7 @@ typedef struct _WstCompositor
    bool isRepeater;
    bool isEmbedded;
    bool mustInitRendererModule;
+   bool hasVpcBridge;
    const char *nestedDisplayName;
    unsigned int nestedWidth;
    unsigned int nestedHeight;
@@ -1079,6 +1094,16 @@ bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded )
       pthread_mutex_lock( &ctx->mutex );
       
       ctx->isEmbedded= isEmbedded;
+
+      if ( ctx->isEmbedded )
+      {
+         char *var= getenv("WESTEROS_VPC_BRIDGE");
+         if ( var )
+         {
+            ctx->nestedDisplayName= strdup(var);
+            ctx->hasVpcBridge= true;
+         }
+      }
                
       pthread_mutex_unlock( &ctx->mutex );
             
@@ -1087,6 +1112,53 @@ bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded )
 
 exit:
    
+   return result;
+}
+
+/**
+ * WstCompositorSetVpcBridge
+ *
+ * Specify if the embedded compositor instance should establish a VPC
+ * (Video Path Control) bridge with another compositor instance.  A
+ * VPC bridge will allow control over video path and positioning to be
+ * extended to higher level compositors from a nested ebedded compositor.
+ */
+bool WstCompositorSetVpcBridge( WstCompositor *ctx, char *displayName )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      if ( ctx->running )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Cannot set VPC bridge while compositor is running" );
+         goto exit;
+      }
+
+      if ( !ctx->isEmbedded )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Error.  Cannot set VPC bridge on non-embedded compositor" );
+         goto exit;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->hasVpcBridge= (displayName != 0);
+
+      if ( ctx->hasVpcBridge )
+      {
+         ctx->nestedDisplayName= strdup(displayName);
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
+   }
+
+exit:
+
    return result;
 }
 
@@ -1566,6 +1638,31 @@ bool WstCompositorGetIsEmbedded( WstCompositor *ctx )
    }
    
    return isEmbedded;
+}
+
+/**
+ * WstCompositorGetVpcBridge
+ *
+ * Determine the display, if any, with which this embedded compistor instance
+ * will establish a VPC (Video Path Control) bridge.
+ */
+const char* WstCompositorSetVpcBridge( WstCompositor *ctx )
+{
+   const char *displayName= 0;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( ctx->hasVpcBridge )
+      {
+         displayName= ctx->nestedDisplayName;
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return displayName;
 }
 
 void WstCompositorGetOutputSize( WstCompositor *ctx, unsigned int *width, unsigned int *height )
@@ -2946,12 +3043,16 @@ static void* wstCompositorThread( void *arg )
    }
    DEBUG("wl_display=%p displayName=%s", ctx->display, ctx->displayName );
 
-   if ( ctx->isNested )
+   if ( ctx->isNested || ctx->hasVpcBridge )
    {
       int width= ctx->nestedWidth;
       int height= ctx->nestedHeight;
       
-      if ( ctx->isRepeater )
+      if ( ctx->hasVpcBridge )
+      {
+         INFO("embedded compositor %s will bridge vpc to display %s", ctx->displayName, ctx->nestedDisplayName);
+      }
+      if ( ctx->isRepeater || ctx->hasVpcBridge )
       {
          width= 0;
          height= 0;
@@ -4436,6 +4537,10 @@ static void wstISurfaceAttach(struct wl_client *client,
       surface->attachedX= sx;
       surface->attachedY= sy;
    }
+   else
+   {
+      surface->vpcBridgeSignal= ((sx == VPCBRIDGE_SIGNAL) && (sy == VPCBRIDGE_SIGNAL));
+   }
 }
 
 static void wstISurfaceDamage(struct wl_client *client,
@@ -4674,17 +4779,33 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
       else
       {
          WstRendererSurfaceCommit( surface->renderer, surface->surface, surface->attachedBufferResource );
+         if ( surface->compositor->hasVpcBridge && surface->vpcSurface && surface->surfaceNested )
+         {
+            WstNestedConnectionAttachAndCommit( surface->compositor->nc,
+                                                surface->surfaceNested,
+                                                0, // null buffer
+                                                VPCBRIDGE_SIGNAL,
+                                                VPCBRIDGE_SIGNAL,
+                                                0, //width
+                                                0  //height
+                                              );
+         }
       }      
    }
    else
    {
+      int attachX, attachY;
+
+      attachX= surface->vpcBridgeSignal ? VPCBRIDGE_SIGNAL : 0;
+      attachY= surface->vpcBridgeSignal ? VPCBRIDGE_SIGNAL : 0;
+
       if ( surface->compositor->isRepeater )
       {
          WstNestedConnectionAttachAndCommit( surface->compositor->nc,
                                              surface->surfaceNested,
                                              0, // null buffer
-                                             0,
-                                             0,
+                                             attachX,
+                                             attachY,
                                              0, //width
                                              0  //height
                                            );
@@ -4692,12 +4813,23 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
       else
       {
          WstRendererSurfaceCommit( surface->renderer, surface->surface, 0 );
+         if ( surface->compositor->hasVpcBridge && surface->vpcSurface && surface->surfaceNested )
+         {
+            WstNestedConnectionAttachAndCommit( surface->compositor->nc,
+                                                surface->surfaceNested,
+                                                0, // null buffer
+                                                attachX,
+                                                attachY,
+                                                0, //width
+                                                0  //height
+                                              );
+         }
       }
    }
 
    if ( surface->vpcSurface && surface->vpcSurface->pathTransitionPending )
    {
-      if ( (committedBufferResource && !surface->vpcSurface->useHWPathNext) ||
+      if ( ((committedBufferResource || surface->vpcBridgeSignal) && !surface->vpcSurface->useHWPathNext) ||
            (!committedBufferResource && surface->vpcSurface->useHWPathNext) )
       {
          surface->vpcSurface->useHWPath= surface->vpcSurface->useHWPathNext;
@@ -5961,7 +6093,14 @@ static void wstDefaultNestedVpcVideoPathChange( void *userData, struct wl_surfac
          WstVpcSurface *vpcSurface= surface->vpcSurface;
          if ( vpcSurface )
          {
-            wl_vpc_surface_send_video_path_change( vpcSurface->resource, newVideoPath ); 
+            if ( ctx->hasVpcBridge )
+            {
+               vpcSurface->useHWPathVpcBridge= (newVideoPath == WL_VPC_SURFACE_PATHWAY_HARDWARE);
+            }
+            else
+            {
+               wl_vpc_surface_send_video_path_change( vpcSurface->resource, newVideoPath );
+            }
          }
          break;
       }
@@ -5981,6 +6120,7 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
 {
    WstCompositor *ctx= (WstCompositor*)userData;
    WstSurface *surface= 0;
+   bool needRepaint= false;
    
    for( int i= 0; i < ctx->surfaces.size(); ++i )
    {
@@ -5990,18 +6130,37 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
          WstVpcSurface *vpcSurface= surface->vpcSurface;
          if ( vpcSurface )
          {
-            wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
-                                                    x_translation,
-                                                    y_translation,
-                                                    x_scale_num,
-                                                    x_scale_denom,
-                                                    y_scale_num,
-                                                    y_scale_denom,
-                                                    output_width,
-                                                    output_height );
+            if ( ctx->hasVpcBridge )
+            {
+               vpcSurface->xTransVpcBridge= x_translation;
+               vpcSurface->yTransVpcBridge= y_translation;
+               vpcSurface->xScaleNumVpcBridge= x_scale_num;
+               vpcSurface->xScaleDenomVpcBridge= x_scale_denom;
+               vpcSurface->yScaleNumVpcBridge= y_scale_num;
+               vpcSurface->yScaleDenomVpcBridge= y_scale_denom;
+               vpcSurface->outputWidthVpcBridge= output_width;
+               vpcSurface->outputHeightVpcBridge= output_height;
+               needRepaint= true;
+            }
+            else
+            {
+               wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
+                                                       x_translation,
+                                                       y_translation,
+                                                       x_scale_num,
+                                                       x_scale_denom,
+                                                       y_scale_num,
+                                                       y_scale_denom,
+                                                       output_width,
+                                                       output_height );
+            }
          }
          break;
       }
+   }
+   if ( needRepaint )
+   {
+      wstCompositorScheduleRepaint( ctx );
    }
 }                                                 
 
@@ -6349,7 +6508,7 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
                client= wl_resource_get_client( resource );
                if ( client )
                {
-                  DEBUG("wstProcessKeyEvent: move focus to client %p based on resource %p\n", client, resource);
+                  DEBUG("wstISeatGetKeyboard: move focus to client %p based on resource %p", client, resource);
                   wstKeyboardMoveFocusToClient( keyboard, client );
                }
             }
@@ -6524,6 +6683,13 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    vpcSurface->hwY= 0;
    vpcSurface->hwWidth= vpcSurface->outputWidth;
    vpcSurface->hwHeight= vpcSurface->outputHeight;
+   vpcSurface->useHWPathVpcBridge= true;
+   vpcSurface->xScaleNumVpcBridge= 1;
+   vpcSurface->xScaleDenomVpcBridge= 1;
+   vpcSurface->yScaleNumVpcBridge= 1;
+   vpcSurface->yScaleDenomVpcBridge= 1;
+   vpcSurface->outputWidthVpcBridge= DEFAULT_OUTPUT_WIDTH;
+   vpcSurface->outputHeightVpcBridge= DEFAULT_OUTPUT_HEIGHT;
    pthread_mutex_lock( &surface->compositor->mutex );
    surface->compositor->vpcSurfaces.push_back( vpcSurface );
    pthread_mutex_unlock( &surface->compositor->mutex );
@@ -6537,10 +6703,17 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    
    surface->vpcSurface= vpcSurface;
    
-   if ( surface->compositor->isRepeater )
+   if ( surface->compositor->isRepeater || surface->compositor->hasVpcBridge )
    {
-      vpcSurface->vpcSurfaceNested= WstNestedConnectionGetVpcSurface( surface->compositor->nc,
-                                                                      surface->surfaceNested );
+      if ( surface->compositor->hasVpcBridge && !surface->surfaceNested )
+      {
+         surface->surfaceNested= WstNestedConnectionCreateSurface( surface->compositor->nc );
+      }
+      if ( surface->surfaceNested )
+      {
+         vpcSurface->vpcSurfaceNested= WstNestedConnectionGetVpcSurface( surface->compositor->nc,
+                                                                         surface->surfaceNested );
+      }
    }
    wstCompositorScheduleRepaint( surface->compositor );
 }
@@ -6730,33 +6903,43 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
       WstVpcSurface *vpcSurface= (*it);
       WstRect rect;
 
-      if ( useHWPath != vpcSurface->useHWPath )
+      bool useHWPathEffective= (useHWPath && vpcSurface->useHWPathVpcBridge);
+      int scaleXNumEffective= (int)scaleXNum*((double)vpcSurface->xScaleNumVpcBridge/(double)vpcSurface->xScaleDenomVpcBridge);
+      int scaleXDenomEffective= scaleXDenom;
+      int scaleYNumEffective= (int)scaleYNum*((double)vpcSurface->yScaleNumVpcBridge/(double)vpcSurface->yScaleDenomVpcBridge);
+      int scaleYDenomEffective= scaleYDenom;
+      int transXEffective= (int)(transX*(double)vpcSurface->xScaleNumVpcBridge/(double)vpcSurface->xScaleDenomVpcBridge) + vpcSurface->xTransVpcBridge;
+      int transYEffective= (int)(transY*(double)vpcSurface->yScaleNumVpcBridge/(double)vpcSurface->yScaleDenomVpcBridge) + vpcSurface->yTransVpcBridge;
+      int outputWidthEffective= outputWidth*vpcSurface->outputWidthVpcBridge/DEFAULT_OUTPUT_WIDTH;
+      int outputHeightEffective= outputHeight*vpcSurface->outputHeightVpcBridge/DEFAULT_OUTPUT_HEIGHT;
+
+      if ( useHWPathEffective != vpcSurface->useHWPath )
       {
-         DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPath );
-         vpcSurface->useHWPathNext= useHWPath;
+         DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPathEffective );
+         vpcSurface->useHWPathNext= useHWPathEffective;
          vpcSurface->pathTransitionPending= true;
          wl_vpc_surface_send_video_path_change( vpcSurface->resource,
-                                                useHWPath ? WL_VPC_SURFACE_PATHWAY_HARDWARE
-                                                          : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
+                                                useHWPathEffective ? WL_VPC_SURFACE_PATHWAY_HARDWARE
+                                                                   : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
       }
 
-      if ( (transX != vpcSurface->xTrans) ||
-           (transY != vpcSurface->yTrans) ||
-           (scaleXNum != vpcSurface->xScaleNum) ||
-           (scaleXDenom != vpcSurface->xScaleDenom) ||
-           (scaleYNum != vpcSurface->yScaleNum) ||
-           (scaleYDenom != vpcSurface->yScaleDenom) ||
-           (outputWidth != vpcSurface->outputWidth) ||
-           (outputHeight != vpcSurface->outputHeight) )
+      if ( (transXEffective != vpcSurface->xTrans) ||
+           (transYEffective != vpcSurface->yTrans) ||
+           (scaleXNumEffective != vpcSurface->xScaleNum) ||
+           (scaleXDenomEffective != vpcSurface->xScaleDenom) ||
+           (scaleYNumEffective != vpcSurface->yScaleNum) ||
+           (scaleYDenomEffective != vpcSurface->yScaleDenom) ||
+           (outputWidthEffective != vpcSurface->outputWidth) ||
+           (outputHeightEffective != vpcSurface->outputHeight) )
       {
-         vpcSurface->xTrans= transX;
-         vpcSurface->yTrans= transY;
-         vpcSurface->xScaleNum= scaleXNum;
-         vpcSurface->xScaleDenom= scaleXDenom;
-         vpcSurface->yScaleNum= scaleYNum;
-         vpcSurface->yScaleDenom= scaleYDenom;
-         vpcSurface->outputWidth= outputWidth;
-         vpcSurface->outputHeight= outputHeight;
+         vpcSurface->xTrans= transXEffective;
+         vpcSurface->yTrans= transYEffective;
+         vpcSurface->xScaleNum= scaleXNumEffective;
+         vpcSurface->xScaleDenom= scaleXDenomEffective;
+         vpcSurface->yScaleNum= scaleYNumEffective;
+         vpcSurface->yScaleDenom= scaleYDenomEffective;
+         vpcSurface->outputWidth= outputWidthEffective;
+         vpcSurface->outputHeight= outputHeightEffective;
          
          wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
                                                  vpcSurface->xTrans,
@@ -6807,6 +6990,10 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
          else
          {
             rects.push_back(rect);
+         }
+         if ( ctx->hasVpcBridge && (vpcSurface->vpcSurfaceNested) )
+         {
+            wl_vpc_surface_set_geometry( vpcSurface->vpcSurfaceNested, rect.x, rect.y, rect.width, rect.height );
          }
       }
       else if ( !vpcSurface->sizeOverride )
@@ -7192,7 +7379,7 @@ static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface )
 
          if ( !clientHasListeners && !wl_list_empty(&keyboard->focusResourceList) )
          {
-            DEBUG("Don't move focus to client with no listeners\n");
+            DEBUG("Don't move focus to client with no listeners");
             return;
          }
       }

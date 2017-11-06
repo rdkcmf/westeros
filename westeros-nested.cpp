@@ -976,7 +976,7 @@ void WstNestedConnectionAttachAndCommit( WstNestedConnection *nc,
 {
    if ( nc )
    {
-      wl_surface_attach( surface, buffer, 0, 0 );
+      wl_surface_attach( surface, buffer, x, y );
       wl_surface_damage( surface, x, y, width, height);
       wl_surface_commit( surface );
       wl_display_flush( nc->display );      
