@@ -38,7 +38,11 @@
 #define USE_PAGEFLIP
 #define DEFAULT_CARD "/dev/dri/card0"
 #define DEFAULT_MODE_WIDTH (1280)
+#ifndef WESTEROS_PLATFORM_QEMUX86
 #define DEFAULT_MODE_HEIGHT (720)
+#else
+#define DEFAULT_MODE_HEIGHT (1024)
+#endif
 
 typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
 typedef EGLSurface (*PREALEGLCREATEWINDOWSURFACE)(EGLDisplay, 
