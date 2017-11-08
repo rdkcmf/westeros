@@ -382,6 +382,7 @@ typedef struct _WstCompositor
    
    bool running;
    bool compositorReady;
+   bool compositorAborted;
    bool compositorThreadStarted;
    pthread_t compositorThreadId;
    
@@ -796,7 +797,7 @@ void WstCompositorDestroy( WstCompositor *ctx )
 {
    if ( ctx )
    {
-      if ( ctx->running )
+      if ( ctx->running || ctx->compositorThreadStarted )
       {
          WstCompositorStop( ctx );
       }
@@ -2146,13 +2147,14 @@ bool WstCompositorStart( WstCompositor *ctx )
       if ( !ctx->isNested )
       {
          // Setup key map
-         result= wstInitializeKeymap( ctx );
-         if ( !result )
+         if ( !wstInitializeKeymap( ctx ) )
          {
             pthread_mutex_unlock( &ctx->mutex );
             goto exit;      
          }
       }
+
+      ctx->compositorAborted= false;
       
       rc= pthread_create( &ctx->compositorThreadId, NULL, wstCompositorThread, ctx );
       if ( rc )
@@ -2165,16 +2167,26 @@ bool WstCompositorStart( WstCompositor *ctx )
 
       pthread_mutex_unlock( &ctx->mutex );
       
-      for( int i= 0; i < 500; ++i )
+      INFO("waiting for compositor %s to start...", ctx->displayName);
+      for( ; ; )
       {
-         bool ready;
-         
+         bool ready, aborted;
+
          pthread_mutex_lock( &ctx->mutex );
          ready= ctx->compositorReady;
+         aborted= ctx->compositorAborted;
          pthread_mutex_unlock( &ctx->mutex );
          
-         if ( ready )
+         if ( ready || aborted )
          {
+            if ( ready )
+            {
+               INFO("compositor %s is started", ctx->displayName);
+            }
+            if ( aborted )
+            {
+               INFO("start of compositor %s has failed", ctx->displayName);
+            }
             break;
          }
          
@@ -2205,7 +2217,7 @@ void WstCompositorStop( WstCompositor *ctx )
    {
       pthread_mutex_lock( &ctx->mutex );
 
-      if ( ctx->running )
+      if ( ctx->running || ctx->compositorThreadStarted )
       {
          ctx->running= false;
 
@@ -2945,6 +2957,7 @@ static void* wstCompositorThread( void *arg )
    int rc;
    struct wl_display *display= 0;
    struct wl_event_loop *loop= 0;
+   bool startupAborted= true;
    int argc;
    char arg0[MAX_NESTED_NAME_LEN+1];
    char arg1[MAX_NESTED_NAME_LEN+1];
@@ -3033,13 +3046,13 @@ static void* wstCompositorThread( void *arg )
    }
    else
    {
-     const char *name= wl_display_add_socket_auto(ctx->display);
-     if ( !name )
-     {
-        ERROR("unable to create socket");
-        goto exit;
-     }
-     ctx->displayName= strdup(name);
+      const char *name= wl_display_add_socket_auto(ctx->display);
+      if ( !name )
+      {
+         ERROR("unable to create socket");
+         goto exit;
+      }
+      ctx->displayName= strdup(name);
    }
    DEBUG("wl_display=%p displayName=%s", ctx->display, ctx->displayName );
 
@@ -3161,6 +3174,7 @@ static void* wstCompositorThread( void *arg )
       }
    }
    
+   startupAborted= false;
    ctx->compositorReady= true;   
    ctx->needRepaint= true;
 
@@ -3212,11 +3226,14 @@ exit:
       }
    }
 
+   if ( startupAborted )
+   {
+      ctx->compositorAborted= true;
+   }
+
    ctx->compositorReady= false;
      
    DEBUG("display: %s terminating...", ctx->displayName );
-   
-   ctx->compositorThreadStarted= false;
 
    if ( ctx->displayTimer )
    {
