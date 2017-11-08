@@ -129,7 +129,7 @@ static std::map<int,AppCtx*> g_appCtxMap= std::map<int,AppCtx*>();
 static void signalHandler(int signum)
 {
    printf("signalHandler: signum %d\n", signum);
-	g_running= false;
+   g_running= false;
 }
 
 static void showUsage()
@@ -401,9 +401,9 @@ static GLuint createShader(AppCtx *appCtx, GLenum shaderType, const char *shader
 static void createFBO( AppCtx *appCtx )
 {
    GLenum statusFBO;
-	GLuint frag, vert;
-	GLuint program;
-	GLint statusShader;
+   GLuint frag, vert;
+   GLuint program;
+   GLint statusShader;
 
    appCtx->fboWidth= appCtx->outputWidth;
    appCtx->fboHeight= appCtx->outputHeight;
@@ -435,28 +435,28 @@ static void createFBO( AppCtx *appCtx )
    glBindFramebuffer( GL_FRAMEBUFFER, 0 );   
 
 
-	frag= createShader(appCtx, GL_FRAGMENT_SHADER, fragShaderText);
-	vert= createShader(appCtx, GL_VERTEX_SHADER, vertexShaderText);
+   frag= createShader(appCtx, GL_FRAGMENT_SHADER, fragShaderText);
+   vert= createShader(appCtx, GL_VERTEX_SHADER, vertexShaderText);
 
-	program= glCreateProgram();
-	glAttachShader(program, frag);
-	glAttachShader(program, vert);
+   program= glCreateProgram();
+   glAttachShader(program, frag);
+   glAttachShader(program, vert);
 
    appCtx->fboPosLoc= 0;
    appCtx->fboUVLoc= 1;
    glBindAttribLocation(program, appCtx->fboPosLoc, "pos");
    glBindAttribLocation(program, appCtx->fboUVLoc, "uv");
    
-	glLinkProgram(program);
+   glLinkProgram(program);
 
-	glGetProgramiv(program, GL_LINK_STATUS, &statusShader);
-	if (!statusShader) 
-	{
-		char log[1000];
-		GLsizei len;
-		glGetProgramInfoLog(program, 1000, &len, log);
-		fprintf(stderr, "Error: linking:\n%*s\n", len, log);
-	}
+   glGetProgramiv(program, GL_LINK_STATUS, &statusShader);
+   if (!statusShader)
+   {
+      char log[1000];
+      GLsizei len;
+      glGetProgramInfoLog(program, 1000, &len, log);
+      fprintf(stderr, "Error: linking:\n%*s\n", len, log);
+   }
 
    appCtx->fboResLoc= glGetUniformLocation(program,"u_resolution");
    appCtx->fboMatrixLoc= glGetUniformLocation(program,"amymatrix");
@@ -561,10 +561,10 @@ static void drawFBO ( AppCtx *appCtx )
       
    const float verts[4][2] = 
    {
-      { float(x), float(y) },
-      { float(x+w), float(y) },
-      { float(x), float(y+h) },
-      { float(x+w), float(y+h) }
+      { x, y },
+      { x+w, y },
+      { x,  y+h },
+      { x+w, y+h }
    };
  
    const float uv[4][2] = 
@@ -1944,7 +1944,7 @@ void compositorDispatch( WstCompositor *wctx, void *userData )
 int main( int argc, char** argv)
 {
    int nRC= 0;
-	struct sigaction sigint;
+   struct sigaction sigint;
    const char *rendererModule= 0;
    const char *displayName= 0;
    const char *nestedDisplayName= 0;
@@ -2206,10 +2206,10 @@ int main( int argc, char** argv)
          g_running= true;
          if ( !(error= !WstCompositorStart( wctx )) )
          {
-	         sigint.sa_handler = signalHandler;
-	         sigemptyset(&sigint.sa_mask);
-	         sigint.sa_flags = SA_RESETHAND;
-	         sigaction(SIGINT, &sigint, NULL);
+            sigint.sa_handler = signalHandler;
+            sigemptyset(&sigint.sa_mask);
+            sigint.sa_flags = SA_RESETHAND;
+            sigaction(SIGINT, &sigint, NULL);
 
             while( g_running )
             {
