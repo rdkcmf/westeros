@@ -476,7 +476,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->currentPTS= 0;
    sink->position= 0;
    sink->positionSegmentStart= 0;
-   sink->prevPositionSegmentStart= 0;
+   sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
    sink->segmentNumber= 0;
    sink->queryPositionFromPeer= FALSE;
 
@@ -975,6 +975,8 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          sink->position= 0;
          sink->flushStarted= TRUE;
          sink->currentPTS= 0;
+         sink->positionSegmentStart= 0;
+         sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
          UNLOCK( sink );
          gst_westeros_sink_soc_flush( sink );
          passToDefault= TRUE;
