@@ -97,6 +97,7 @@ static void shellSurfaceId(void *data,
    }
    else
    {
+      wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
       z= wl_fixed_from_double(sink->zorder);
       wl_simple_shell_set_zorder( sink->shell, sink->surfaceId, z);
       op= wl_fixed_from_double(sink->opacity);
@@ -104,7 +105,7 @@ static void shellSurfaceId(void *data,
       wl_simple_shell_get_status( sink->shell, sink->surfaceId );
    }
    wl_display_flush(sink->display);
-}                           
+}
 
 static void shellSurfaceCreated(void *data,
                                 struct wl_simple_shell *wl_simple_shell,
@@ -260,7 +261,6 @@ static void registryHandleGlobal(void *data,
       printf("westeros-sink: registry: vpc %p\n", (void*)sink->vpc);
       wl_proxy_set_queue((struct wl_proxy*)sink->vpc, sink->queue);
    }
-   
    gst_westeros_sink_soc_registryHandleGlobal( sink, registry, id, interface, version );
 
    wl_display_flush(sink->display);
@@ -366,7 +366,6 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
    gstbasesink_class->unlock_stop= GST_DEBUG_FUNCPTR (gst_westeros_sink_unlock_stop);
    gstbasesink_class->render= GST_DEBUG_FUNCPTR (gst_westeros_sink_render);
    gstbasesink_class->preroll= GST_DEBUG_FUNCPTR (gst_westeros_sink_preroll);   
-
    g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_WINDOW_SET,
        g_param_spec_string ("window_set", "window set",
            "Window Set Format: x,y,width,height",
@@ -419,7 +418,6 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    {
       sink->defaultQueryFunc= gst_pad_query_default;
    }
-
 
    gst_pad_set_event_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_event));
    gst_pad_set_link_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_sink_link));
@@ -500,7 +498,6 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
       {
          sink->display= wl_display_connect(NULL);
       }
-
       if ( sink->display )
       {
          sink->queue= wl_display_create_queue(sink->display);
@@ -512,11 +509,10 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
                wl_proxy_set_queue((struct wl_proxy*)sink->registry, sink->queue);
                wl_registry_add_listener(sink->registry, &registryListener, sink);   
                wl_display_roundtrip_queue(sink->display,sink->queue);
-               
+
                sink->surface= wl_compositor_create_surface(sink->compositor);
                printf("gst_westeros_sink_init: surface=%p\n", (void*)sink->surface);
                wl_proxy_set_queue((struct wl_proxy*)sink->surface, sink->queue);
-               
                wl_display_flush( sink->display );
             }
             else
@@ -646,9 +642,9 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
                   wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
                }
             }
-
             if ( sink->shell && sink->surfaceId )
             {
+                  wl_simple_shell_set_geometry( sink->shell, sink->surfaceId,sink->windowX, sink->windowY,sink->windowWidth, sink->windowHeight );
                if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
                {
                   wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
@@ -735,7 +731,6 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          sink->position= 0;         
          sink->eosDetected= FALSE;
          sink->eosEventSeen= FALSE;
-
          if ( sink->vpc && sink->surface )
          {
             sink->vpcSurface= wl_vpc_get_vpc_surface( sink->vpc, sink->surface );
@@ -760,7 +755,6 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             GST_ERROR("gst_westeros_sink: null_to_ready: can't create vpc surface: vpc %p surface %p\n",
                       sink->vpc, sink->surface);
          }
-
          if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
          {
             result= GST_STATE_CHANGE_FAILURE;

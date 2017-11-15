@@ -1,0 +1,12 @@
+#westeros video sink
+
+Plugin Name : westerossink
+
+# To get the plugin details do
+       gst-inspect-1.0 westerossink 
+
+# To  test plugin,
+       gst-launch-1.0 videotestsrc ! westerossink
+       gst-launch-1.0 playbin uri=file://<sample file location> video-sink=westerossink
+
+
