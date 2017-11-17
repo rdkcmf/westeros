@@ -65,7 +65,6 @@ class rtMediaCaptureObject;
 #define POST_TIMEOUT (4000)
 #define POST_CHUNK_SIZE (16*1024)
 #define EMIT_BUFFER_SIZE (12*POST_CHUNK_SIZE)
-#define PROGRESS_INTERVAL (2000000)
 
 #define min( a, b ) ( ((a) <= (b)) ? (a) : (b) )
 #define max( a, b ) ( ((a) >= (b)) ? (a) : (b) )
@@ -137,6 +136,8 @@ typedef struct _MediaCapContext
    int nextAudioStreamId;
    #ifdef MEDIACAPTURE_USE_RTREMOTE
    pthread_t apiThreadId;
+   bool reportProgress;
+   long long progressInterval;
    bool apiThreadStarted;
    bool apiThreadStopRequested;
    rtRemoteEnvironment *rtEnv;
@@ -1978,7 +1979,7 @@ static size_t postReadCallback(char *buffer, size_t size, size_t nitems, void *u
 
          ctx->totalBytesPosted += offset;
          long long intervalBytes= ctx->totalBytesPosted-ctx->lastReportedPostedBytes;
-         if ( intervalBytes >= PROGRESS_INTERVAL )
+         if ( ctx->reportProgress && (intervalBytes >= ctx->progressInterval) )
          {
             if ( ctx->apiObj.ptr() )
             {
@@ -3184,6 +3185,8 @@ void* MediaCaptureCreateContext( GstElement *element )
 {
    MediaCapContext *ctx= 0;
    const char *env;
+   bool reportProgress= false;
+   int progressInterval= 0;
 
    env= getenv("MEDIACAPTURE_DEBUG");
    if ( env )
@@ -3193,6 +3196,17 @@ void* MediaCaptureCreateContext( GstElement *element )
       if ( level > 10 ) level= 10;
       gDebugLevel= level;
       ERROR("setting log level to %d", gDebugLevel);
+   }
+
+   env= getenv("MEDIACAPTURE_REPORT_PROGRESS");
+   if ( env )
+   {
+      progressInterval= atoi(env);
+      if ( progressInterval > 0 )
+      {
+         reportProgress= true;
+         INFO("setting progress interval to %d", progressInterval);
+      }
    }
 
    INFO("MediaCaptureCreateContext: enter");
@@ -3208,6 +3222,8 @@ void* MediaCaptureCreateContext( GstElement *element )
       ctx->nextAudioStreamId= 0xD0;
       ctx->videoPid= -1;
       ctx->curlfd= -1;
+      ctx->reportProgress= reportProgress;
+      ctx->progressInterval= progressInterval*1000000LL;
 
       initCRCTable();
 
