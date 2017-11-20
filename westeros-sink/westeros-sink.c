@@ -644,7 +644,7 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
             }
             if ( sink->shell && sink->surfaceId )
             {
-                  wl_simple_shell_set_geometry( sink->shell, sink->surfaceId,sink->windowX, sink->windowY,sink->windowWidth, sink->windowHeight );
+               wl_simple_shell_set_geometry( sink->shell, sink->surfaceId,sink->windowX, sink->windowY,sink->windowWidth, sink->windowHeight );
                if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
                {
                   wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);

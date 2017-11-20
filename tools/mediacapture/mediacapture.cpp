@@ -185,6 +185,7 @@ static long long getCurrentTimeMillis(void);
 static void releaseSourceResources( SrcInfo *si );
 static void freeSource(MediaCapContext *ctx, SrcInfo *si);
 static void freeSources(MediaCapContext *ctx);
+static void emitPipelineGraph(MediaCapContext *ctx, GstElement *src);
 static void findSources(MediaCapContext *ctx);
 static void prepareForCapture( MediaCapContext *ctx );
 static void captureProbeDestroy( gpointer userData );
@@ -1264,6 +1265,82 @@ static void freeSources(MediaCapContext *ctx)
    DEBUG("freeSources: exit");
 }
 
+static void emitPipelineGraph(MediaCapContext *ctx, GstElement *src)
+{
+   GstElement *element= src;
+
+   GstIterator *iterPad= gst_element_iterate_src_pads( element );
+   if ( iterPad )
+   {
+      GValue itemPad= G_VALUE_INIT;
+      while( gst_iterator_next( iterPad, &itemPad ) == GST_ITERATOR_OK )
+      {
+         GstPad *pad= (GstPad*)g_value_get_object( &itemPad );
+         if ( pad )
+         {
+            while( GST_IS_PROXY_PAD(pad) )
+            {
+               GstProxyPad *internalPad= gst_proxy_pad_get_internal(GST_PROXY_PAD(pad));
+               if ( internalPad )
+               {
+                  pad= GST_PAD(internalPad);
+                  gst_object_unref(internalPad);
+               }
+            }
+            GstPad *peerPad= gst_pad_get_peer(pad);
+            if ( peerPad )
+            {
+               while ( GST_IS_PROXY_PAD(peerPad) )
+               {
+                  GstProxyPad *internalPad= gst_proxy_pad_get_internal(GST_PROXY_PAD(peerPad));
+                  if ( internalPad )
+                  {
+                     peerPad= gst_pad_get_peer(GST_PAD(internalPad));
+                     gst_object_unref(internalPad);
+                  }
+               }
+               if ( peerPad )
+               {
+                  GstElement *peerElement= gst_pad_get_parent_element(peerPad);
+                  if ( peerElement )
+                  {
+                     INFO("pipeline graph: element name (%s) connected to (%s)", gst_element_get_name(element), gst_element_get_name(peerElement));
+
+                     if ( GST_IS_BIN(peerElement) )
+                     {
+                        GstElement *binElement;
+                        GstIterator *iterElement= gst_bin_iterate_elements( GST_BIN(peerElement) );
+                        if ( iterElement )
+                        {
+                           GValue itemElement= G_VALUE_INIT;
+                           while( gst_iterator_next( iterElement, &itemElement ) == GST_ITERATOR_OK )
+                           {
+                              binElement= (GstElement*)g_value_get_object( &itemElement );
+                              if ( binElement )
+                              {
+                                 emitPipelineGraph( ctx, binElement );
+                              }
+                              g_value_reset( &itemElement );
+                           }
+                           gst_iterator_free(iterElement);
+                        }
+                     }
+                     else
+                     {
+                        emitPipelineGraph( ctx, peerElement );
+                     }
+                     gst_object_unref(peerElement);
+                  }
+               }
+               gst_object_unref(peerPad);
+            }
+         }
+         g_value_reset( &itemPad );
+      }
+      gst_iterator_free(iterPad);
+   }
+}
+
 static void findSources(MediaCapContext *ctx)
 {
    GstElement *pipeline= 0;
@@ -2209,6 +2286,8 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
             ctx->needEmitPCR= true;
          }
 
+         bool graphPipeline= (getenv("MEDIACAPTURE_GRAPH_PIPELINE") != 0);
+
          // Add non-video probe
          for ( std::vector<SrcInfo*>::iterator it= ctx->srcList.begin();
                it != ctx->srcList.end();
@@ -2218,6 +2297,10 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
 
             if ( !si->isVideo )
             {
+               if ( graphPipeline )
+               {
+                  emitPipelineGraph( ctx, si->element );
+               }
                si->bufferCount= 0;
                si->firstPTS= -1LL;
                si->accumFirstPTS= -1LL;
@@ -2242,6 +2325,10 @@ static void startCapture( MediaCapContext *ctx, bool toFile, const char *dest, i
 
             if ( si->isVideo )
             {
+               if ( graphPipeline )
+               {
+                  emitPipelineGraph( ctx, si->element );
+               }
                si->bufferCount= 0;
                si->firstPTS= -1LL;
                si->accumFirstPTS= -1LL;
