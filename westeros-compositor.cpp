@@ -1511,11 +1511,8 @@ void WstCompositorResolutionChangeEnd( WstCompositor *ctx, int width, int height
    DEBUG("WstCompositorResolutionChangeEnd: (%d x %d)", width, height);
    if ( ctx )
    {
-      if ( ctx->renderer && ctx->renderer->resolutionChangeEnd )
-      {
-         WstCompositorSetOutputSize( ctx, width, height );
-         ctx->outputSizeChanged= true;
-      }
+      WstCompositorSetOutputSize( ctx, width, height );
+      ctx->outputSizeChanged= true;
 
       pthread_mutex_lock( &ctx->mutex );
 

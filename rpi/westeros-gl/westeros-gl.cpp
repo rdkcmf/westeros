@@ -54,7 +54,6 @@ typedef struct _WstGLCtx
   int displayWidth;
   int displayHeight;
   DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
-  DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
 } WstGLCtx;
 
 static int ctxCount= 0;
@@ -114,7 +113,6 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
          int displayId;
          uint32_t width, height;
          DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
-         DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
 
          displayId= DISPMANX_ID_MAIN_LCD;         
          int32_t result= graphics_get_display_size( displayId,
@@ -135,21 +133,11 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
             goto exit;         
          }
          printf("WstGLCreateNativeWindow: dispmanDisplay %p\n", dispmanDisplay );
-         
-         dispmanUpdate= vc_dispmanx_update_start( 0 );
-         if ( dispmanUpdate == DISPMANX_NO_HANDLE )
-         {
-            printf("WstGLCreateNativeWindow: vc_dispmanx_update_start failed for display %d\n", displayId );
-            vc_dispmanx_display_close( dispmanDisplay );
-            goto exit;         
-         }      
-         printf("WstGLCreateNativeWindow: dispmanUpdate %p\n", dispmanUpdate );
 
          ctx->displayId= displayId;
          ctx->displayWidth= width;
          ctx->displayHeight= height;
          ctx->dispmanDisplay= dispmanDisplay;
-         ctx->dispmanUpdate= dispmanUpdate;
       }
 
       if ( ctx->dispmanDisplay )
@@ -157,7 +145,16 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
          VC_RECT_T destRect;
          VC_RECT_T srcRect;
          DISPMANX_ELEMENT_HANDLE_T dispmanElement;
+         DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
          EGL_DISPMANX_WINDOW_T *nw;
+
+         dispmanUpdate= vc_dispmanx_update_start( 0 );
+         if ( dispmanUpdate == DISPMANX_NO_HANDLE )
+         {
+            printf("WstGLCreateNativeWindow: vc_dispmanx_update_start failed\n" );
+            goto exit;
+         }
+         printf("WstGLCreateNativeWindow: dispmanUpdate %p\n", dispmanUpdate );
       
          nw= (EGL_DISPMANX_WINDOW_T *)calloc( 1, sizeof(EGL_DISPMANX_WINDOW_T) );
          if ( nw )
@@ -174,7 +171,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
             srcRect.width= (width<<16);
             srcRect.height= (height<<16);
             
-            dispmanElement= vc_dispmanx_element_add( ctx->dispmanUpdate,
+            dispmanElement= vc_dispmanx_element_add( dispmanUpdate,
                                                      ctx->dispmanDisplay,
                                                      0, //layer
                                                      &destRect,
@@ -195,7 +192,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
                 
                 nativeWindow= (void*)nw;
          
-                vc_dispmanx_update_submit_sync( ctx->dispmanUpdate );
+                vc_dispmanx_update_submit_sync( dispmanUpdate );
              }                                                                            
          }
       }
@@ -215,13 +212,23 @@ void WstGLDestroyNativeWindow( WstGLCtx *ctx, void *nativeWindow )
    if ( ctx )
    {
       EGL_DISPMANX_WINDOW_T *nw;
+      DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
       DISPMANX_ELEMENT_HANDLE_T dispmanElement;
 
       nw= (EGL_DISPMANX_WINDOW_T*)nativeWindow;
       if ( nw )
       {
-         vc_dispmanx_element_remove( ctx->dispmanUpdate,
-                                     nw->element );
+         dispmanUpdate= vc_dispmanx_update_start( 0 );
+         if ( dispmanUpdate == DISPMANX_NO_HANDLE )
+         {
+            printf("WstGLDestroyNativeWindow: vc_dispmanx_update_start failed\n" );
+         }
+         else
+         {
+            printf("WstGLDestroyNativeWindow: dispmanUpdate %p\n", dispmanUpdate );
+            vc_dispmanx_element_remove( dispmanUpdate,
+                                        nw->element );
+         }
                                      
          free( nw );
       }
