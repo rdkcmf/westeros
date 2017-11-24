@@ -121,6 +121,7 @@ typedef struct _AppCtx
    int glutWindowId;
    #endif
    void *nativeWindow;
+   bool dirty;
 } AppCtx;
 
 static bool g_running= false;
@@ -1321,27 +1322,6 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
       
       if ( appCtx->isEmbedded )
       {
-         EGLDisplay eglDisplay;
-         EGLint major, minor;
-         EGLBoolean b;
-         eglDisplay= eglGetDisplay( EGL_DEFAULT_DISPLAY );
-         if ( eglDisplay != EGL_NO_DISPLAY )
-         {
-            b= eglInitialize( eglDisplay, &major, &minor );
-            if ( b )
-            {
-               printf("eglInitiialize: major: %d minor: %d\n", major, minor );
-            }
-            else
-            {
-               printf("unable to initialize EGL display\n" );
-            }
-         }
-         else
-         {
-            printf("unable to open default EGL display\n");
-         }
-
          appCtx->matrix[0]= 1.0f;
          appCtx->matrix[5]= 1.0f;
          appCtx->matrix[10]= 1.0f;
@@ -1670,6 +1650,13 @@ void compositorTerminated( WstCompositor *wctx, void *userData )
 }
 
 void compositorInvalidate( WstCompositor *wctx, void *userData )
+{
+   AppCtx *appCtx= (AppCtx*)userData;
+
+   appCtx->dirty= true;
+}
+
+void draw( WstCompositor *wctx, void *userData )
 {
    AppCtx *appCtx= (AppCtx*)userData;
 
@@ -2202,7 +2189,13 @@ int main( int argc, char** argv)
          {
             printf("error starting application infrastructure, continuing but expect trouble\n" );
          }
-      
+
+         if ( appCtx->isEmbedded )
+         {
+            setupEGL( appCtx );
+            createFBO( appCtx );
+         }
+
          g_running= true;
          if ( !(error= !WstCompositorStart( wctx )) )
          {
@@ -2214,6 +2207,12 @@ int main( int argc, char** argv)
             while( g_running )
             {
                usleep( 10000 );
+
+               if ( appCtx->dirty )
+               {
+                  appCtx->dirty= false;
+                  draw( wctx, appCtx );
+               }
             }
             
             WstCompositorStop( wctx );

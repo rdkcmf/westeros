@@ -465,6 +465,7 @@ typedef struct _WstCompositor
 } WstCompositor;
 
 static const char* wstGetNextNestedDisplayName(void);
+static bool wstCompositorCreateRenderer( WstCompositor *ctx );
 static void wstCompositorReleaseResources( WstCompositor *ctx );
 static void* wstCompositorThread( void *arg );
 static long long wstGetCurrentTimeMillis(void);
@@ -2178,6 +2179,19 @@ bool WstCompositorStart( WstCompositor *ctx )
          {
             if ( ready )
             {
+               pthread_mutex_lock( &ctx->mutex );
+               if ( ctx->isEmbedded )
+               {
+                  if ( !wstCompositorCreateRenderer( ctx ) )
+                  {
+                     sprintf( ctx->lastErrorDetail,
+                              "Error.  Failed to initialize render module" );
+                     pthread_mutex_unlock( &ctx->mutex );
+                     goto exit;
+                  }
+               }
+               pthread_mutex_unlock( &ctx->mutex );
+
                INFO("compositor %s is started", ctx->displayName);
             }
             if ( aborted )
@@ -2955,12 +2969,6 @@ static void* wstCompositorThread( void *arg )
    struct wl_display *display= 0;
    struct wl_event_loop *loop= 0;
    bool startupAborted= true;
-   int argc;
-   char arg0[MAX_NESTED_NAME_LEN+1];
-   char arg1[MAX_NESTED_NAME_LEN+1];
-   char arg2[MAX_NESTED_NAME_LEN+1];
-   char arg3[MAX_NESTED_NAME_LEN+1];
-   char *argv[4]= { arg0, arg1, arg2, arg3 };
 
    ctx->compositorThreadStarted= true;
 
@@ -3080,22 +3088,6 @@ static void* wstCompositorThread( void *arg )
       }
       
       ctx->ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
-
-      argc= 4;
-      strcpy( arg0, "--width" );
-      sprintf( arg1, "%u", ctx->outputWidth );
-      strcpy( arg2, "--height" );
-      sprintf( arg3, "%u", ctx->outputHeight );
-   }
-   else
-   {
-      argc= 0;
-      if ( ctx->nativeWindow )
-      {
-         argc += 2;
-         strcpy( arg0, "--nativeWindow" );
-         sprintf( arg1, "%p", ctx->nativeWindow );
-      }
    }
 
    if ( ctx->isRepeater && !ctx->mustInitRendererModule )
@@ -3117,11 +3109,13 @@ static void* wstCompositorThread( void *arg )
    }
    else
    {
-      ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->display, ctx->nc );
-      if ( !ctx->renderer )
+      if ( !ctx->isEmbedded )
       {
-         ERROR("unable to initialize renderer module");
-         goto exit;
+         if ( !wstCompositorCreateRenderer( ctx ) )
+         {
+            ERROR("unable to initialize renderer module");
+            goto exit;
+         }
       }
    }
 
@@ -3245,6 +3239,58 @@ exit:
    }
 
    return NULL;
+}
+
+static bool wstCompositorCreateRenderer( WstCompositor *ctx )
+{
+   bool result= false;
+   int argc;
+   char arg0[MAX_NESTED_NAME_LEN+1];
+   char arg1[MAX_NESTED_NAME_LEN+1];
+   char arg2[MAX_NESTED_NAME_LEN+1];
+   char arg3[MAX_NESTED_NAME_LEN+1];
+   char *argv[4]= { arg0, arg1, arg2, arg3 };
+
+   if ( ctx->isNested || ctx->hasVpcBridge )
+   {
+      int width= ctx->nestedWidth;
+      int height= ctx->nestedHeight;
+
+      if ( ctx->isRepeater || ctx->hasVpcBridge )
+      {
+         width= 0;
+         height= 0;
+      }
+
+      argc= 4;
+      strcpy( arg0, "--width" );
+      sprintf( arg1, "%u", ctx->outputWidth );
+      strcpy( arg2, "--height" );
+      sprintf( arg3, "%u", ctx->outputHeight );
+   }
+   else
+   {
+      argc= 0;
+      if ( ctx->nativeWindow )
+      {
+         argc += 2;
+         strcpy( arg0, "--nativeWindow" );
+         sprintf( arg1, "%p", ctx->nativeWindow );
+      }
+   }
+
+   ctx->renderer= WstRendererCreate( ctx->rendererModule, argc, (char **)argv, ctx->display, ctx->nc );
+   if ( !ctx->renderer )
+   {
+      ERROR("unable to initialize renderer module");
+      goto exit;
+   }
+
+   result= true;
+
+exit:
+
+   return result;
 }
 
 static void wstCompositorReleaseResources( WstCompositor *ctx )

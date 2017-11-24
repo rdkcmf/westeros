@@ -205,6 +205,8 @@ bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater );
  * its scene when WstCompositorComposeEmbedded is called.  An embedded
  * compositor should use libwesteros_render_embedded.so.0 as its
  * renderer module (or some other module that supports embedded composition).
+ * Note that multi-threaded applications that use embedded composition must
+ * call WstCompositorStart and WstCompositorComposeEmbedded on the same thread.
  */
 bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded );
 
