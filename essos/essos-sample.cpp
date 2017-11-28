@@ -63,7 +63,7 @@ static long long currentTimeMillis(void)
 static void signalHandler(int signum)
 {
    printf("signalHandler: signum %d\n", signum);
-	gRunning= false;
+   gRunning= false;
 }
 
 static void terminated( void * )
@@ -236,24 +236,24 @@ int main( int argc, char **argv )
 }
 
 static const char *vert_shader_text=
-	"uniform mat4 xform;\n"
-	"uniform vec4 offset;\n"
-	"attribute vec4 pos;\n"
-	"attribute vec4 color;\n"
-	"varying vec4 v_color;\n"
-	"void main()\n"
-	"{\n"
-	"  gl_Position= xform * pos + offset;\n"
-	"  v_color= color;\n"
-	"}\n";
+   "uniform mat4 xform;\n"
+   "uniform vec4 offset;\n"
+   "attribute vec4 pos;\n"
+   "attribute vec4 color;\n"
+   "varying vec4 v_color;\n"
+   "void main()\n"
+   "{\n"
+   "  gl_Position= xform * pos + offset;\n"
+   "  v_color= color;\n"
+   "}\n";
 
 static const char *frag_shader_text=
-	"precision mediump float;\n"
-	"varying vec4 v_color;\n"
-	"void main()\n"
-	"{\n"
-	"  gl_FragColor= v_color;\n"
-	"}\n";
+   "precision mediump float;\n"
+   "varying vec4 v_color;\n"
+   "void main()\n"
+   "{\n"
+   "  gl_FragColor= v_color;\n"
+   "}\n";
 
 static GLuint createShader(GLenum shaderType, const char *shaderSource )
 {
@@ -261,7 +261,7 @@ static GLuint createShader(GLenum shaderType, const char *shaderSource )
    GLint shaderStatus;
    GLsizei length;
    char logText[1000];
-   
+
    shader= glCreateShader( shaderType );
    if ( shader )
    {
@@ -277,50 +277,50 @@ static GLuint createShader(GLenum shaderType, const char *shaderSource )
                 logText );
       }
    }
-   
+
    return shader;
 }
 
 static bool setupGL(void)
 {
    bool result= false;
-	GLuint frag, vert;
-	GLint status;
+   GLuint frag, vert;
+   GLint status;
 
-	gFrag= createShader(GL_FRAGMENT_SHADER, frag_shader_text);
-	gVert= createShader(GL_VERTEX_SHADER, vert_shader_text);
+   gFrag= createShader(GL_FRAGMENT_SHADER, frag_shader_text);
+   gVert= createShader(GL_VERTEX_SHADER, vert_shader_text);
 
-	gProg= glCreateProgram();
-	glAttachShader(gProg, gFrag);
-	glAttachShader(gProg, gVert);
-	glLinkProgram(gProg);
+   gProg= glCreateProgram();
+   glAttachShader(gProg, gFrag);
+   glAttachShader(gProg, gVert);
+   glLinkProgram(gProg);
 
-	glGetProgramiv(gProg, GL_LINK_STATUS, &status);
-	if (!status) 
-	{
-		char log[1000];
-		GLsizei len;
-		glGetProgramInfoLog(gProg, 1000, &len, log);
-		fprintf(stderr, "Error: linking:\n%*s\n", len, log);
-		goto exit;
-	}
+   glGetProgramiv(gProg, GL_LINK_STATUS, &status);
+   if (!status)
+   {
+      char log[1000];
+      GLsizei len;
+      glGetProgramInfoLog(gProg, 1000, &len, log);
+      fprintf(stderr, "Error: linking:\n%*s\n", len, log);
+      goto exit;
+   }
 
-	glUseProgram(gProg);
+   glUseProgram(gProg);
 
-	gPos= 0;
-	gColor= 1;
+   gPos= 0;
+   gColor= 1;
 
-	glBindAttribLocation(gProg, gPos, "pos");
-	glBindAttribLocation(gProg, gColor, "color");
-	glLinkProgram(gProg);
+   glBindAttribLocation(gProg, gPos, "pos");
+   glBindAttribLocation(gProg, gColor, "color");
+   glLinkProgram(gProg);
 
-	gOffset= glGetUniformLocation(gProg, "offset");
-	gXform= glGetUniformLocation(gProg, "xform");
+   gOffset= glGetUniformLocation(gProg, "offset");
+   gXform= glGetUniformLocation(gProg, "xform");
 
    gStartTime= currentTimeMillis();
-		
+
 exit:
-   return result;		
+   return result;
 }
 
 static bool renderGL(void)

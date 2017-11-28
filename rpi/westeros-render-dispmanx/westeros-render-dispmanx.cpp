@@ -943,6 +943,21 @@ static void wstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<W
    renderer->needHolePunch= true;
 }
 
+static void wstRendererResolutionChangeBegin( WstRenderer *renderer )
+{
+  // Nothing to do
+}
+
+static void wstRendererResolutionChangeEnd( WstRenderer *renderer )
+{
+   WstRendererDMX *rendererDMX= (WstRendererDMX*)renderer->renderer;
+   if ( rendererDMX )
+   {
+      // Update output size
+      rendererDMX->outputWidth= renderer->outputWidth;
+      rendererDMX->outputHeight= renderer->outputHeight;
+   }
+}
 
 extern "C" {
 
@@ -993,6 +1008,8 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
       renderer->delegateUpdateScene= wstRendererDelegateUpdateScene;
+      renderer->resolutionChangeBegin= wstRendererResolutionChangeBegin;
+      renderer->resolutionChangeEnd= wstRendererResolutionChangeEnd;
    }
    else
    {

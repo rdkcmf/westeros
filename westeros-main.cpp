@@ -562,10 +562,10 @@ static void drawFBO ( AppCtx *appCtx )
       
    const float verts[4][2] = 
    {
-      { x, y },
-      { x+w, y },
-      { x,  y+h },
-      { x+w, y+h }
+      { float(x), float(y) },
+      { float(x+w), float(y) },
+      { float(x),  float(y+h) },
+      { float(x+w), float(y+h) }
    };
  
    const float uv[4][2] = 

@@ -76,6 +76,7 @@ typedef struct _EssCtx
    bool isRunning;
    char lastErrorDetail[ESS_MAX_ERROR_DETAIL];
 
+   bool haveMode;
    int planeWidth;
    int planeHeight;
    int waylandFd;
@@ -443,6 +444,7 @@ bool EssContextSetInitialWindowSize( EssCtx *ctx, int width, int height )
          goto exit;
       }
 
+      ctx->haveMode= true;
       ctx->planeWidth= width;
       ctx->planeHeight= height;
 
@@ -789,7 +791,8 @@ void EssContextUpdateDisplay( EssCtx *ctx )
 {
    if ( ctx )
    {
-      if ( (ctx->eglDisplay != EGL_NO_DISPLAY) &&
+      if ( ctx->haveMode &&
+           (ctx->eglDisplay != EGL_NO_DISPLAY) &&
            (ctx->eglSurfaceWindow != EGL_NO_SURFACE) )
       {
          eglSwapBuffers( ctx->eglDisplay, ctx->eglSurfaceWindow );
@@ -821,6 +824,7 @@ static bool essPlatformInit( EssCtx *ctx )
    else
    {
       #ifdef HAVE_WESTEROS
+      ctx->haveMode= true;
       result= essPlatformInitDirect( ctx );
       #endif
    }
@@ -1446,7 +1450,7 @@ static const struct wl_pointer_listener essPointerListener = {
 
 static void essSeatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
 {
-	EssCtx *ctx= (EssCtx*)data;
+   EssCtx *ctx= (EssCtx*)data;
 
    DEBUG("essSeatCapabilities: seat %p caps: %X\n", seat, capabilities );
    
@@ -1503,17 +1507,21 @@ static void essOutputGeometry( void *data, struct wl_output *output, int32_t x, 
 static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
                         int32_t width, int32_t height, int32_t refresh )
 {
-	EssCtx *ctx= (EssCtx*)data;
+   EssCtx *ctx= (EssCtx*)data;
 
    DEBUG("essOutputMode: outputMode: mode %d(%d) (%dx%d)\n", flags, WL_OUTPUT_MODE_CURRENT, width, height);
    if ( flags & WL_OUTPUT_MODE_CURRENT )
    {
+      ctx->haveMode= true;
       if ( (width != ctx->planeWidth) || (height != ctx->planeHeight) )
       {
          ctx->planeWidth= width;
          ctx->planeHeight= height;
-         
-         wl_egl_window_resize( ctx->wleglwindow, width, height, 0, 0 );
+
+         if ( ctx->wleglwindow )
+         {
+            wl_egl_window_resize( ctx->wleglwindow, width, height, 0, 0 );
+         }
       }
    }
 }
@@ -1540,10 +1548,10 @@ static const struct wl_output_listener essOutputListener = {
 
 static void essRegistryHandleGlobal(void *data, 
                                     struct wl_registry *registry, uint32_t id,
-		                              const char *interface, uint32_t version)
+                                    const char *interface, uint32_t version)
 {
-	EssCtx *ctx= (EssCtx*)data;
-	int len;
+   EssCtx *ctx= (EssCtx*)data;
+   int len;
 
    DEBUG("essRegistryHandleGlobal: id %d interface (%s) version %d\n", id, interface, version );
 
@@ -1555,7 +1563,7 @@ static void essRegistryHandleGlobal(void *data,
    else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
       ctx->wlseat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
       DEBUG("essRegistryHandleGlobal: wlseat %p\n", ctx->wlseat);
-		wl_seat_add_listener(ctx->wlseat, &essSeatListener, ctx);
+      wl_seat_add_listener(ctx->wlseat, &essSeatListener, ctx);
    }
    else if ( (len==9) && !strncmp(interface, "wl_output", len) ) {
       ctx->wloutput= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
@@ -1563,10 +1571,10 @@ static void essRegistryHandleGlobal(void *data,
       wl_output_add_listener(ctx->wloutput, &essOutputListener, ctx);
    }
 }
-		                              
+
 static void essRegistryHandleGlobalRemove(void *data, 
                                           struct wl_registry *registry,
-			                                 uint32_t name)
+                                          uint32_t name)
 {
    ESS_UNUSED(data);
    ESS_UNUSED(registry);
@@ -1575,8 +1583,8 @@ static void essRegistryHandleGlobalRemove(void *data,
 
 static const struct wl_registry_listener essRegistryListener = 
 {
-	essRegistryHandleGlobal,
-	essRegistryHandleGlobalRemove
+   essRegistryHandleGlobal,
+   essRegistryHandleGlobalRemove
 };
 
 static bool essPlatformInitWayland( EssCtx *ctx )
@@ -1681,7 +1689,7 @@ static void essInitInputWayland( EssCtx *ctx )
       #ifdef HAVE_WAYLAND
       if ( ctx->wlseat )
       {
-   		wl_seat_add_listener(ctx->wlseat, &essSeatListener, ctx);
+         wl_seat_add_listener(ctx->wlseat, &essSeatListener, ctx);
          wl_display_roundtrip(ctx->wldisplay);
       }
       #endif
