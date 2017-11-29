@@ -667,7 +667,10 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
 
    if ( sink->vpcSurface )
    {
-       wl_vpc_surface_set_decoder_handle(sink->vpcSurface, sink->soc.videoDecoder);
+       uint64_t decoderHandle = sink->soc.videoDecoder;
+       uint32_t decoderHandleHi = (uint32_t)(decoderHandle >> 32);
+       uint32_t decoderHandleLo = (uint32_t)(decoderHandle & 0xffffffff);
+       wl_vpc_surface_set_decoder_handle(sink->vpcSurface, decoderHandleHi, decoderHandleLo);
    }
 
    return TRUE;
