@@ -37,6 +37,9 @@ typedef struct _AppCtx
    GstElement *westerossink;
    GstBus *bus;
    GMainLoop *loop;
+   bool haveMode;
+   int outputWidth;
+   int outputHeight;
 } AppCtx;
 
 static void showUsage()
@@ -84,12 +87,16 @@ static void outputHandleMode( void *data,
    
    if ( flags & WL_OUTPUT_MODE_CURRENT )
    {
+      ctx->haveMode= true;
+      ctx->outputWidth= width;
+      ctx->outputHeight= height;
+
       printf("outputMode: %dx%d flags %X\n", width, height, flags);
    
       if ( ctx->westerossink )
       {
          sprintf( work, "%d,%d,%d,%d", 0, 0, width, height );
-         g_object_set(G_OBJECT(ctx->westerossink), "window-set", work, NULL );      
+         g_object_set(G_OBJECT(ctx->westerossink), "window-set", work, NULL );
       }
    }
 }
@@ -219,7 +226,14 @@ bool createPipeline( AppCtx *ctx )
    gst_object_ref( ctx->westerossink );
    
    g_object_set(G_OBJECT(ctx->player), "video-sink", ctx->westerossink, NULL );
-   
+
+   if ( ctx->haveMode )
+   {
+      char work[32];
+      sprintf( work, "%d,%d,%d,%d", 0, 0, ctx->outputWidth, ctx->outputHeight );
+      g_object_set(G_OBJECT(ctx->westerossink), "window-set", work, NULL );
+   }
+
    if ( !gst_bin_add( GST_BIN(ctx->pipeline), ctx->player) )
    {
       printf("Error: unable to add playbin to pipeline\n");
