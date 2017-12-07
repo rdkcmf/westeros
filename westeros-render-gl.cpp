@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <memory.h>
 #include <assert.h>
+#include <sys/time.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -251,6 +252,8 @@ static void wstRendererGLShaderDraw( WstShader *shader,
                                       GLuint textureId, GLuint textureUVId,
                                       int count, const float* vc, const float* txc );
 
+static bool emitFPS= false;
+
 static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
 {
    WstRendererGL *rendererGL= 0;
@@ -258,6 +261,11 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
    rendererGL= (WstRendererGL*)calloc(1, sizeof(WstRendererGL) );
    if ( rendererGL )
    {
+      if ( getenv("WESTEROS_RENDER_GL_FPS" ) )
+      {
+         emitFPS= true;
+      }
+
       rendererGL->outputWidth= renderer->outputWidth;
       rendererGL->outputHeight= renderer->outputHeight;
 
@@ -1497,6 +1505,25 @@ static void wstRendererTerm( WstRenderer *renderer )
 static void wstRendererUpdateScene( WstRenderer *renderer )
 {
    WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
+
+   if ( emitFPS )
+   {
+      static int frameCount= 0;
+      static long long lastReportTime= -1LL;
+      struct timeval tv;
+      long long now;
+      gettimeofday(&tv,0);
+      now= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+      ++frameCount;
+      if ( lastReportTime == -1LL ) lastReportTime= now;
+      if ( now-lastReportTime > 5000 )
+      {
+         double fps= ((double)frameCount*1000)/((double)(now-lastReportTime));
+         printf("westeros-render-gl: fps %f\n", fps);
+         lastReportTime= now;
+         frameCount= 0;
+      }
+   }
 
    if ( rendererGL->eglSurface == EGL_NO_SURFACE ) return;
 
