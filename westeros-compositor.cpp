@@ -4311,7 +4311,14 @@ static void wstSurfaceDestroy( WstSurface *surface )
    // Release any attached buffer
    if ( surface->attachedBufferResource )
    {
-      wl_buffer_send_release( surface->attachedBufferResource );
+      struct wl_client *client= wl_resource_get_client( surface->attachedBufferResource );
+      for( std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin(); it != ctx->clientInfoMap.end(); ++it )
+      {
+         if ( it->first == client )
+         {
+            wl_buffer_send_release( surface->attachedBufferResource );
+         }
+      }
       surface->attachedBufferResource= 0;
    }
 
@@ -4902,12 +4909,6 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
    }
 
    wstCompositorScheduleRepaint( surface->compositor );
-
-   if ( surface->attachedBufferResource )
-   {      
-      wl_buffer_send_release( surface->attachedBufferResource );
-      surface->attachedBufferResource= 0;
-   }
 
    pthread_mutex_unlock( &surface->compositor->mutex );
 }
@@ -7664,9 +7665,8 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
          if ( pointer->pointerSurface )
          {
             wstPointerUpdatePosition( pointer );
+            wstCompositorScheduleRepaint( compositor );
          }
-         
-         wstCompositorScheduleRepaint( compositor );
       }
    }
 }

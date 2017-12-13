@@ -84,7 +84,6 @@ typedef struct _WstRendererDMX
    std::vector<WstRenderSurface*> surfaces;
    
    DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
-   bool updateInProgress;
 
    EGLDisplay eglDisplay;
    bool haveWaylandEGL;
@@ -512,13 +511,6 @@ static void wstRendererTerm( WstRenderer *renderer )
    }
 }
 
-static void wstRendererUpdateComplete( DISPMANX_UPDATE_HANDLE_T dispmanUpdate, void *userData )
-{
-   WstRendererDMX *rendererDMX= (WstRendererDMX*)userData;
-   
-   rendererDMX->updateInProgress= false;
-}
-
 static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, std::vector<WstRect> *rects )
 {
    WstRenderSurface *surface;
@@ -526,15 +518,12 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
    DISPMANX_UPDATE_HANDLE_T dispmanUpdate;
    WstRect rect;
 
-   if ( !rendererDMX->updateInProgress )
    {
       dispmanUpdate= vc_dispmanx_update_start( 0 );
       if ( dispmanUpdate != DISPMANX_NO_HANDLE )
       {
          float scalex, scaley, transx, transy;
          
-         rendererDMX->updateInProgress= true;
-
          if ( matrix )
          {
             scalex= renderer->matrix[0];
@@ -554,6 +543,7 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
          {
             surface= (*it);
             
+            bool update= surface->dirty|surface->flip;
             if ( surface->flip )
             {
                surface->flip= false;
@@ -685,7 +675,7 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
                   }
                }
                 
-               if ( dispmanElement != DISPMANX_NO_HANDLE )
+               if ( update && (dispmanElement != DISPMANX_NO_HANDLE) )
                {
                   vc_dispmanx_element_change_source( dispmanUpdate, dispmanElement, surface->resource[surface->front].resource );
                }
@@ -697,7 +687,7 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
             }
          }
          
-         vc_dispmanx_update_submit( dispmanUpdate, wstRendererUpdateComplete, rendererDMX );
+         vc_dispmanx_update_submit_sync( dispmanUpdate );
       }
    }
 }
