@@ -292,6 +292,7 @@ typedef struct _WstSurface
    int refCount;
    
    struct wl_resource *attachedBufferResource;
+   struct wl_resource *detachedBufferResource;
    int attachedX;
    int attachedY;
    bool vpcBridgeSignal;
@@ -474,6 +475,7 @@ static void wstCompositorProcessEvents( WstCompositor *ctx );
 static void wstCompositorComposeFrame( WstCompositor *ctx, uint32_t frameTime );
 static int wstCompositorDisplayTimeOut( void *data );
 static void wstCompositorScheduleRepaint( WstCompositor *ctx );
+static void wstCompositorReleaseDetachedBuffers( WstCompositor *ctx );
 static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
 static bool wstShmInit( WstCompositor *ctx );
 static void wstShmTerm( WstCompositor *ctx );
@@ -2044,6 +2046,8 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
          }
          
          WstRendererUpdateScene( ctx->renderer );
+
+         wstCompositorReleaseDetachedBuffers( ctx );
 
          if ( !(hints & WstHints_holePunch) )
          {
@@ -3621,6 +3625,7 @@ static void wstCompositorComposeFrame( WstCompositor *ctx, uint32_t frameTime )
    if ( !ctx->isEmbedded && !ctx->isRepeater )
    {
       WstRendererUpdateScene( ctx->renderer );
+      wstCompositorReleaseDetachedBuffers( ctx );
    }
    
    for( std::map<struct wl_resource*, WstSurfaceInfo*>::iterator it= ctx->surfaceInfoMap.begin(); it != ctx->surfaceInfoMap.end(); ++it )
@@ -3698,6 +3703,21 @@ static void wstCompositorScheduleRepaint( WstCompositor *ctx )
       if ( ctx->allowImmediateRepaint )
       {
          wl_event_source_timer_update( ctx->displayTimer, 1 );
+      }
+   }
+}
+
+static void wstCompositorReleaseDetachedBuffers( WstCompositor *ctx )
+{
+   for ( std::vector<WstSurface*>::iterator it= ctx->surfaces.begin();
+         it != ctx->surfaces.end();
+         ++it )
+   {
+      WstSurface *surface= (*it);
+      if ( surface->detachedBufferResource )
+      {
+         wl_buffer_send_release( surface->detachedBufferResource );
+         surface->detachedBufferResource= 0;
       }
    }
 }
@@ -4309,17 +4329,22 @@ static void wstSurfaceDestroy( WstSurface *surface )
       return;
 
    // Release any attached buffer
-   if ( surface->attachedBufferResource )
+   if ( surface->attachedBufferResource || surface->attachedBufferResource )
    {
-      struct wl_client *client= wl_resource_get_client( surface->attachedBufferResource );
+      struct wl_resource *resource= surface->attachedBufferResource ? surface->attachedBufferResource : surface->detachedBufferResource;
+      struct wl_client *client= wl_resource_get_client( resource );
       for( std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin(); it != ctx->clientInfoMap.end(); ++it )
       {
          if ( it->first == client )
          {
-            wl_buffer_send_release( surface->attachedBufferResource );
+            if ( surface->detachedBufferResource )
+               wl_buffer_send_release( surface->detachedBufferResource );
+            if ( surface->attachedBufferResource )
+               wl_buffer_send_release( surface->attachedBufferResource );
          }
       }
       surface->attachedBufferResource= 0;
+      surface->detachedBufferResource= 0;
    }
 
    // Remove from keyboard focus
@@ -4592,11 +4617,12 @@ static void wstISurfaceAttach(struct wl_client *client,
 
    if ( surface->attachedBufferResource != bufferResource )
    {
-      if ( surface->attachedBufferResource )
+      if ( surface->detachedBufferResource )
       {
-         wl_buffer_send_release( surface->attachedBufferResource );
-         surface->attachedBufferResource= 0;
+         wl_buffer_send_release( surface->detachedBufferResource );
       }
+      surface->detachedBufferResource= surface->attachedBufferResource;
+      surface->attachedBufferResource= 0;
    }
    if ( bufferResource )
    {
