@@ -1305,14 +1305,6 @@ static void processFrame( GstWesterosSink *sink )
             }
             if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
             {
-               gint64 calculatedPosition = GST_MSECOND * sink->currentPTS / 90LL;
-               gint64 calculatedFirstPtsPosition = GST_MSECOND * sink->firstPTS / 90LL;
-               if (calculatedPosition < sink->positionSegmentStart ||
-                   calculatedFirstPtsPosition < sink->positionSegmentStart) {
-                  GST_INFO("calculatedPosition %lld or calculatedFirstPtsPosition %lld is less than sink->positionSegmentStart %lld", calculatedPosition, calculatedFirstPtsPosition, sink->positionSegmentStart);
-                  UNLOCK(sink);
-                  return;
-               }
                if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
                {
                   // If we have hit a discontinuity that doesn't look like rollover, then
@@ -1411,14 +1403,6 @@ static void updateVideoStatus( GstWesterosSink *sink )
          }
          if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
          {
-            gint64 calculatedPosition = GST_MSECOND * sink->currentPTS / 90LL;
-            gint64 calculatedFirstPtsPosition = GST_MSECOND * sink->firstPTS / 90LL;
-            if (calculatedPosition < sink->positionSegmentStart ||
-                calculatedFirstPtsPosition < sink->positionSegmentStart) {
-               GST_INFO("calculatedPosition %lld or calculatedFirstPtsPosition %lld is less than sink->positionSegmentStart %lld", calculatedPosition, calculatedFirstPtsPosition, sink->positionSegmentStart);
-               UNLOCK(sink);
-               return;
-            }
             if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
             {
                // If we have hit a discontinuity that doesn't look like rollover, then
