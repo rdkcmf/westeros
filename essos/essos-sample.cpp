@@ -216,9 +216,9 @@ int main( int argc, char **argv )
             gRunning= true;
             while( gRunning )
             {
-               EssContextRunEventLoopOnce( ctx );
                renderGL();
                EssContextUpdateDisplay( ctx );
+               EssContextRunEventLoopOnce( ctx );
             }
          }
       }
