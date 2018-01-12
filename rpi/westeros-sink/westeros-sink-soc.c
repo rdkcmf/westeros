@@ -56,6 +56,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 
 static OMX_ERRORTYPE omxComponentSetState( GstWesterosSink *sink, OMX_HANDLETYPE hComp, OMX_STATETYPE state );
 static void flushComponents( GstWesterosSink *sink );
+static void resetClock( GstWesterosSink *sink );
 static void transitionToRenderer( GstWesterosSink *sink, WstOmxComponent *rend );
 static bool setupEGL( GstWesterosSink *sink );
 static void termEGL( GstWesterosSink *sink );
@@ -67,11 +68,14 @@ static void destroyImage( GstWesterosSink *sink );
 static void drawImage( GstWesterosSink *sink );
 static void processFrame( GstWesterosSink *sink, GstBuffer *buffer );
 static gpointer captureThread(gpointer data);
+static gboolean gst_westeros_sink_soc_query_element( GstElement *element, GstQuery *query );
 
 extern "C"
 {
 struct wl_display *khrn_platform_get_wl_display();
 }
+
+static gboolean (*queryOrg)(GstElement *element, GstQuery *query)= 0;
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -87,7 +91,10 @@ static const struct wl_sb_listener sbListener = {
 
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
 {
-   WESTEROS_UNUSED(klass);   
+   GstElementClass *gstelement_class= (GstElementClass *) klass;
+
+   queryOrg= gstelement_class->query;
+   gstelement_class->query= gst_westeros_sink_soc_query_element;
 }
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
@@ -1729,39 +1736,8 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
 
 void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 {
-   OMX_ERRORTYPE omxerr;
-   OMX_TIME_CONFIG_CLOCKSTATETYPE clockState;
-
-   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_set_startPTS: pts %lld", pts );
-
-   memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
-   clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
-   clockState.nVersion.nVersion= OMX_VERSION;
-   clockState.eState= OMX_TIME_ClockStateStopped;
-   clockState.nOffset.nLowPart=(PREROLL_OFFSET&0xFFFFFFFF);
-   clockState.nOffset.nHighPart=((PREROLL_OFFSET>>32)&0xFFFFFFFF);
-   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_set_startPTS: calling OMX_SetConifg for clock state");
-   omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
-   if ( omxerr != OMX_ErrorNone )
-   {
-      GST_ERROR("gst_westeros_sink_soc_set_startPTS: OMX_SetConfig for clock state: omxerr %x", omxerr );
-   }
-
-   flushComponents( sink );
-
-   memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
-   clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
-   clockState.nVersion.nVersion= OMX_VERSION;
-   clockState.eState= OMX_TIME_ClockStateWaitingForStartTime;
-   clockState.nWaitMask= OMX_CLOCKPORT0;
-   clockState.nOffset.nLowPart=(PREROLL_OFFSET&0xFFFFFFFF);
-   clockState.nOffset.nHighPart=((PREROLL_OFFSET>>32)&0xFFFFFFFF);
-   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_set_startPTS: calling OMX_SetConifg for clock state");
-   omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
-   if ( omxerr != OMX_ErrorNone )
-   {
-      GST_ERROR("gst_westeros_sink_soc_set_startPTS: OMX_SetConfig for clock state: omxerr %x", omxerr );
-   }
+   WESTEROS_UNUSED(sink);
+   WESTEROS_UNUSED(pts);
 }
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
@@ -1914,6 +1890,8 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_flush: post sem to wake up render");
    sem_post( &sink->soc.semInputBuffers );
    UNLOCK_SOC(sink);
+   flushComponents( sink );
+   resetClock( sink );
 }
 
 gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
@@ -2090,6 +2068,41 @@ static void flushComponents( GstWesterosSink *sink )
    }
 
    sink->soc.firstBuffer= true;
+}
+
+static void resetClock( GstWesterosSink *sink )
+{
+   OMX_ERRORTYPE omxerr;
+   OMX_TIME_CONFIG_CLOCKSTATETYPE clockState;
+
+   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_reset_clock" );
+
+   memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
+   clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
+   clockState.nVersion.nVersion= OMX_VERSION;
+   clockState.eState= OMX_TIME_ClockStateStopped;
+   clockState.nOffset.nLowPart=(PREROLL_OFFSET&0xFFFFFFFF);
+   clockState.nOffset.nHighPart=((PREROLL_OFFSET>>32)&0xFFFFFFFF);
+   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_reset_clock: calling OMX_SetConifg for clock state");
+   omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
+   if ( omxerr != OMX_ErrorNone )
+   {
+      GST_ERROR("gst_westeros_sink_soc_reset_clock: OMX_SetConfig for clock state: omxerr %x", omxerr );
+   }
+
+   memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
+   clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
+   clockState.nVersion.nVersion= OMX_VERSION;
+   clockState.eState= OMX_TIME_ClockStateWaitingForStartTime;
+   clockState.nWaitMask= OMX_CLOCKPORT0;
+   clockState.nOffset.nLowPart=(PREROLL_OFFSET&0xFFFFFFFF);
+   clockState.nOffset.nHighPart=((PREROLL_OFFSET>>32)&0xFFFFFFFF);
+   GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_reset_clock: calling OMX_SetConifg for clock state");
+   omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
+   if ( omxerr != OMX_ErrorNone )
+   {
+      GST_ERROR("gst_westeros_sink_soc_reset_clock:: OMX_SetConfig for clock state: omxerr %x", omxerr );
+   }
 }
 
 void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
@@ -2844,7 +2857,6 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
       nanoTime= GST_BUFFER_PTS(buffer);
 
       LOCK(sink);
-      sink->position= nanoTime;
       windowChange= sink->windowChange;
       if ( windowChange )
       {
@@ -2979,6 +2991,7 @@ static gpointer captureThread(gpointer data)
    return NULL;
 }
 
+// For soc specfic pad query
 gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
 {
    WESTEROS_UNUSED(sink);
@@ -2987,6 +3000,63 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
 
    //TBD
 
+   return result;
+}
+
+// For soc specific element query
+static gboolean gst_westeros_sink_soc_query_element( GstElement *element, GstQuery *query )
+{
+   gboolean result = FALSE;
+   GstWesterosSink *sink= GST_WESTEROS_SINK(element);
+
+   switch (GST_QUERY_TYPE(query))
+   {
+      case GST_QUERY_POSITION:
+         if ( sink->soc.playingVideo )
+         {
+            OMX_ERRORTYPE omxerr;
+            OMX_TIME_CONFIG_CLOCKSTATETYPE clockState;
+
+            memset( &clockState, 0, sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE) );
+            clockState.nSize= sizeof(OMX_TIME_CONFIG_CLOCKSTATETYPE);
+            clockState.nVersion.nVersion= OMX_VERSION;
+            GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_query_element: calling OMX_GetConifg for clock state");
+            omxerr= OMX_GetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeClockState, &clockState );
+            if ( (omxerr == OMX_ErrorNone) && (clockState.eState == OMX_TIME_ClockStateRunning) )
+            {
+               OMX_TIME_CONFIG_TIMESTAMPTYPE timeStamp;
+
+               memset( &timeStamp, 0, sizeof(OMX_TIME_CONFIG_TIMESTAMPTYPE) );
+               timeStamp.nSize= sizeof(OMX_TIME_CONFIG_TIMESTAMPTYPE);
+               timeStamp.nVersion.nVersion= OMX_VERSION;
+               timeStamp.nPortIndex= sink->soc.clock.otherOutPort;
+               GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_query_element: calling OMX_GetConifg for timeStamp");
+               omxerr= OMX_GetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeCurrentMediaTime, &timeStamp );
+               if ( omxerr == OMX_ErrorNone )
+               {
+                  gint64 position= (((gint64)(timeStamp.nTimestamp.nLowPart)) + (((gint64)timeStamp.nTimestamp.nHighPart)<<32))*1000LL;
+                  LOCK( sink );
+                  sink->position= position;
+                  UNLOCK( sink );
+               }
+               else
+               {
+                  GST_ERROR("gst_westeros_sink_soc_query_element: OMX_GetConfig for timeStamp: omxerr %d", omxerr );
+               }
+            }
+            else
+            {
+               GST_ERROR("gst_westeros_sink_soc_query_element: OMX_GetConfig for clockState: omxerr %d", omxerr );
+            }
+         }
+         break;
+       default:
+         break;
+   }
+   if ( queryOrg )
+   {
+      result= queryOrg( element, query );
+   }
    return result;
 }
 
