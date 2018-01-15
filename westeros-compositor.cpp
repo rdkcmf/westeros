@@ -4328,8 +4328,8 @@ static void wstSurfaceDestroy( WstSurface *surface )
    if (--surface->refCount > 0)
       return;
 
-   // Release any attached buffer
-   if ( surface->attachedBufferResource || surface->attachedBufferResource )
+   // Release any attached or detached buffer
+   if ( surface->attachedBufferResource || surface->detachedBufferResource )
    {
       struct wl_resource *resource= surface->attachedBufferResource ? surface->attachedBufferResource : surface->detachedBufferResource;
       struct wl_client *client= wl_resource_get_client( resource );
