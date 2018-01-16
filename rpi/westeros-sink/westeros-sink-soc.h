@@ -45,6 +45,10 @@
       "parsed=(boolean) true, " \
       "alignment=(string) au, " \
       "stream-format=(string) byte-stream, " \
+      "width=(int) [1,MAX], " "height=(int) [1,MAX] ; " \
+      "video/mpeg, " \
+      "parsed=(boolean) true, " \
+      "systemstream = (boolean) false, " \
       "width=(int) [1,MAX], " "height=(int) [1,MAX]" 
 
 typedef void (*BcmHostInit_t)(void);
@@ -55,6 +59,12 @@ typedef OMX_ERRORTYPE (*OMX_Deinit_t)(void);
 typedef OMX_ERRORTYPE (*OMX_GetHandle_t)(OMX_HANDLETYPE *handle, OMX_STRING name, OMX_PTR data, OMX_CALLBACKTYPE *callbacks);
 typedef OMX_ERRORTYPE (*OMX_FreeHandle_t)(OMX_HANDLETYPE handle);
 typedef OMX_ERRORTYPE (*OMX_SetupTunnel_t)(OMX_HANDLETYPE output, OMX_U32 outport, OMX_HANDLETYPE input, OMX_U32 inport );
+
+typedef enum __codec_id
+{
+   MPEG2=0,
+   AVC
+}codecId;
 
 typedef struct _OMX_AsyncResult
 {
@@ -123,7 +133,8 @@ struct _GstWesterosSinkSoc
    bool bcmHostIsInit;
    BcmHostInit_t bcm_host_init;
    BcmHostDeinit_t bcm_host_deinit;
-   
+
+   codecId dec_id;
    void *moduleOpenMax;
    bool omxIsInit;
    OMX_Init_t OMX_Init;

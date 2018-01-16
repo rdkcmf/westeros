@@ -160,6 +160,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoOutputChanged= true;
    sink->soc.frameWidth= 0;
    sink->soc.frameHeight= 0;
+   sink->soc.dec_id= AVC;
    #ifdef USE_GLES2
    sink->soc.progId= 0;
    sink->soc.vertId= 0;
@@ -1215,7 +1216,15 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    videoPortFormat.nSize= sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE);
    videoPortFormat.nVersion.nVersion= OMX_VERSION;
    videoPortFormat.nPortIndex= sink->soc.vidDec.vidInPort;
-   videoPortFormat.eCompressionFormat= OMX_VIDEO_CodingAVC;
+   if (sink->soc.dec_id == MPEG2)
+   {
+      videoPortFormat.eCompressionFormat= OMX_VIDEO_CodingMPEG2;
+   }
+   else if (sink->soc.dec_id == AVC)
+   {
+      videoPortFormat.eCompressionFormat= OMX_VIDEO_CodingAVC;
+   }
+
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_ready_to_paused: calling OMX_SetParamter for vidDec inPort format %d", 
                     videoPortFormat.eCompressionFormat );
    omxerr= OMX_SetParameter( sink->soc.vidDec.hComp, OMX_IndexParamVideoPortFormat, &videoPortFormat);
@@ -1731,6 +1740,13 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
       mime= gst_structure_get_name(structure);
       if (strcmp("video/x-h264", mime) == 0)
       {
+         sink->soc.dec_id = AVC;
+         result= TRUE;
+      }
+      else if (strcmp("video/mpeg", mime) == 0)
+      {
+         GST_LOG("Requires proper mpeg2 license from rpi in order to play mpeg2 video files");
+         sink->soc.dec_id = MPEG2;
          result= TRUE;
       }
       else
