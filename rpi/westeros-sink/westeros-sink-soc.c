@@ -1626,6 +1626,14 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
 
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_ready_to_null: enter");
 
+   if ( sink->surface && sink->display )
+   {
+      wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
+      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+      wl_surface_commit( sink->surface );
+      wl_display_flush( sink->display );
+   }
+
    sink->soc.playingVideo= false;
 
    if ( sink->soc.eglRend.isOpen )
@@ -2201,15 +2209,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       // Send a buffer to compositor to update hole punch geometry
       if ( sink->soc.sb )
       {
-         struct wl_buffer *buff;
-         
-         buff= wl_sb_create_buffer( sink->soc.sb, 
-                                    0,
-                                    sink->windowWidth, 
-                                    sink->windowHeight, 
-                                    sink->windowWidth*4, 
-                                    WL_SB_FORMAT_ARGB8888 );
-         wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
+         wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
          wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
          wl_surface_commit( sink->surface );
       }
