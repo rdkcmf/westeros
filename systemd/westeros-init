@@ -17,10 +17,15 @@
 if test -z "$XDG_RUNTIME_DIR"; then
     export XDG_RUNTIME_DIR="/run"
 fi
-if ! test -d "$XDG_RUNTIME_DIR"; then
-    mkdir --parents $XDG_RUNTIME_DIR
-    chmod 0700 $XDG_RUNTIME_DIR
-fi
+
+waitfordir=60
+while [ ! -d $XDG_RUNTIME_DIR -a $waitfordir -gt 0 ];
+do
+    sleep 1
+    echo "waiting XDG_RUNTIME_DIR mount while $waitfordir > 0 "
+    waitfordir=$((waitfordir-1))
+done
+    echo 'XDG_RUNTIME_DIR mounted' 
 
 if test -z "$WAYLAND_DISPLAY"; then
     export WAYLAND_DISPLAY=wayland-0
