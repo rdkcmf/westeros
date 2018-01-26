@@ -539,9 +539,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
 static void gst_westeros_sink_term(GstWesterosSink *sink)
 {
    sink->initialized= FALSE;
-   
-   gst_westeros_sink_soc_term( sink );
-   
+
    if ( sink->vpc )
    {
       wl_vpc_destroy( sink->vpc );
@@ -552,6 +550,14 @@ static void gst_westeros_sink_term(GstWesterosSink *sink)
       wl_surface_destroy( sink->surface );
       sink->surface= 0;
    }
+   if ( sink->display && sink->queue )
+   {
+      wl_display_flush(sink->display);
+      wl_display_roundtrip_queue(sink->display, sink->queue);
+   }
+
+   gst_westeros_sink_soc_term( sink );
+
    if ( sink->compositor )
    {
       wl_compositor_destroy( sink->compositor );
