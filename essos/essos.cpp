@@ -1095,6 +1095,7 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
                                                                        0,
                                                                        width,
                                                                        height );
+#ifndef WESTEROS_PLATFORM_QEMUX86
          if ( !ctx->nativeWindow )
          {
             sprintf( ctx->lastErrorDetail,
@@ -1102,7 +1103,7 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
             pthread_mutex_unlock( &ctx->mutex );
             goto exit;
          }
-
+#endif
          result= true;
          #endif
       }
