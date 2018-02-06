@@ -185,6 +185,29 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                               G_TYPE_POINTER );
 }
 
+#include <dlfcn.h>
+typedef unsigned int (*GETSTCINFO)( NEXUS_SimpleStcChannelHandle stc );
+bool checkIndependentVideoClock( GstWesterosSink *sink )
+{
+   bool independentClock= false;
+   void *module= dlopen( "libbrcmsystemclock.so", RTLD_NOW );
+   if ( module )
+   {
+      GETSTCINFO getSTCInfo= (GETSTCINFO)dlsym( module, "gst_brcm_system_clock_get_stc_channel_info" );
+      if ( getSTCInfo )
+      {
+         unsigned int count= (*getSTCInfo)( sink->soc.stcChannel );
+         if ( count < 2 )
+         {
+            independentClock= true;
+         }
+      }
+      dlclose( module );
+   }
+   GST_INFO_OBJECT(sink, "independent video clock: %d", independentClock);
+   return independentClock;
+}
+
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 {
    gboolean result= FALSE;
@@ -693,6 +716,15 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
          if ( !gst_westeros_sink_soc_start_video( sink ) )
          {
             GST_ERROR("gst_westeros_sink_soc_paused_to_playing: gst_westeros_sink_soc_start_video failed");
+         }
+
+         if ( checkIndependentVideoClock( sink ) )
+         {
+            NEXUS_VideoDecoderTrickState trickState;
+            NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+            trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
+            NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+            GST_INFO_OBJECT(sink, "disable TsmMode");
          }
 
          if ( sink->soc.stoppedForPlaySpeedChange )
