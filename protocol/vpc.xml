@@ -94,11 +94,6 @@
       <arg name="height" type="int"/>
     </request>
 
-    <request name="set_decoder_handle">
-    <arg name="decoderHandleHi" type="uint"/>
-    <arg name="decoderHandleLo" type="uint"/>
-    </request>
-
   </interface>
 
 </protocol>

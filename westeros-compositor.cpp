@@ -377,9 +377,6 @@ typedef struct _WstCompositor
    WstHidePointerCallback hidePointerCB;
    void *clientStatusUserData;
    WstClientStatus clientStatusCB;
-   void *decoderHandleUserData;
-   WstDecodeHandlerCallback decoderHandleCB;
-
    
    bool running;
    bool compositorReady;
@@ -719,7 +716,6 @@ static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource);
 static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface );
 static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resource *resource,
                                        int32_t x, int32_t y, int32_t width, int32_t height );
-static void wstIVpcSurfaceSetDecoderHandle(struct wl_client *client, struct wl_resource *resource, uint32_t decoderHandleHi, uint32_t decoderHandleLo);
 static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects );
 static bool wstInitializeKeymap( WstCompositor *ctx );
 static void wstTerminateKeymap( WstCompositor *ctx );
@@ -1810,28 +1806,6 @@ exit:
 
    return result;   
 }
-
-bool WstCompositorSetDecoderHandleCallback( WstCompositor *ctx, WstDecodeHandlerCallback cb, void *userData )
-{
-    bool result= false;
-
-    if ( ctx )
-    {
-        pthread_mutex_lock( &ctx->mutex );
-
-        ctx->decoderHandleUserData= userData;
-        ctx->decoderHandleCB= cb;
-
-        pthread_mutex_unlock( &ctx->mutex );
-
-        result= true;
-    }
-
-exit:
-
-    return result;
-}
-
 
 bool WstCompositorSetHidePointerCallback( WstCompositor *ctx, WstHidePointerCallback cb, void *userData )
 {
@@ -3848,8 +3822,7 @@ static const struct wl_vpc_interface vpc_interface_impl=
 
 static const struct wl_vpc_surface_interface vpc_surface_interface= 
 {
-   wstIVpcSurfaceSetGeometry,
-   wstIVpcSurfaceSetDecoderHandle
+   wstIVpcSurfaceSetGeometry
 };
 
 static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
@@ -6892,33 +6865,6 @@ static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resou
          }
       }
    }
-}
-
-static void wstIVpcSurfaceSetDecoderHandle(struct wl_client *client, struct wl_resource *resource, uint32_t decoderHandleHi, uint32_t decoderHandleLo)
-{
-    WESTEROS_UNUSED(client);
-    WstVpcSurface *vpcSurface= (WstVpcSurface*)wl_resource_get_user_data(resource);
-
-    if ( vpcSurface )
-    {
-        WstSurface *surface= vpcSurface->surface;
-        if ( surface )
-        {
-            if ( vpcSurface->vpcSurfaceNested )
-            {
-                wl_vpc_surface_set_decoder_handle(vpcSurface->vpcSurfaceNested, decoderHandleHi, decoderHandleLo);
-            }
-            else
-            {
-                WstCompositor *ctx= surface->compositor;
-                if ( ctx->decoderHandleCB )
-                {
-                    uint64_t decoderHandle=(uint64_t) decoderHandleHi << 32 | decoderHandleLo;
-                    ctx->decoderHandleCB( ctx, ctx->decoderHandleUserData,decoderHandle);
-                }
-            }
-        }
-    }
 }
 
 static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rects )
