@@ -652,6 +652,7 @@ static void wstIXdgShellSurfaceUnSetFullscreen( struct wl_client *client,
 static void wstIXdgShellSurfaceSetMinimized( struct wl_client *client,
                                              struct wl_resource *resource );
 static void wstXdgSurfaceSendConfigure( WstCompositor *ctx, WstSurface *surface, uint32_t state );
+static void wstDefaultNestedConnectionStarted( void *userData );
 static void wstDefaultNestedConnectionEnded( void *userData );
 static void wstDefaultNestedOutputHandleGeometry( void *userData, int32_t x, int32_t y, int32_t mmWidth,
                                                   int32_t mmHeight, int32_t subPixel, const char *make, 
@@ -3064,8 +3065,6 @@ static void* wstCompositorThread( void *arg )
          ERROR( "Unable to create nested connection to display %s", ctx->nestedDisplayName );
          goto exit;
       }
-      
-      ctx->ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
    }
 
    if ( ctx->isRepeater && !ctx->mustInitRendererModule )
@@ -3094,15 +3093,6 @@ static void* wstCompositorThread( void *arg )
             ERROR("unable to initialize renderer module");
             goto exit;
          }
-      }
-   }
-
-   if ( ctx->remoteBegin && ctx->ncDisplay )
-   {
-      if ( !ctx->remoteBegin( ctx->display, ctx->ncDisplay ) )
-      {
-         ERROR("remoteBegin failure");
-         goto exit;
       }
    }
 
@@ -5712,6 +5702,22 @@ static void wstXdgSurfaceSendConfigure( WstCompositor *ctx, WstSurface *surface,
    wl_array_release( &states );               
 }
 
+static void wstDefaultNestedConnectionStarted( void *userData )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   ctx->ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
+
+   if ( ctx->remoteBegin && ctx->ncDisplay )
+   {
+      if ( !ctx->remoteBegin( ctx->display, ctx->ncDisplay ) )
+      {
+         ERROR("remoteBegin failure");
+         ctx->canRemoteClone= false;
+      }
+   }
+}
+
 static void wstDefaultNestedConnectionEnded( void *userData )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -6227,6 +6233,7 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
 static void wstSetDefaultNestedListener( WstCompositor *ctx )
 {
    ctx->nestedListenerUserData= ctx;
+   ctx->nestedListener.connectionStarted= wstDefaultNestedConnectionStarted;
    ctx->nestedListener.connectionEnded= wstDefaultNestedConnectionEnded;
    ctx->nestedListener.outputHandleGeometry= wstDefaultNestedOutputHandleGeometry;
    ctx->nestedListener.outputHandleMode= wstDefaultNestedOutputHandleMode;

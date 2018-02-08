@@ -27,6 +27,7 @@
 typedef struct _WstCompositor WstCompositor;
 typedef struct _WstNestedConnection WstNestedConnection;
 
+typedef void (*WSTCallbackConnectionStarted)( void *userData );
 typedef void (*WSTCallbackConnectionEnded)( void *userData );
 typedef void (*WSTCallbackOutputHandleGeometry)( void *userData, int32_t x, int32_t y, int32_t mmWidth, int32_t mmHeight,
                                                  int32_t subPixel, const char *make, const char *model, int32_t transform );
@@ -63,6 +64,7 @@ typedef void (*WSTCallbackVpcVideoXformChange)( void *userData,
 
 typedef struct _WstNestedConnectionListener
 {
+   WSTCallbackConnectionStarted connectionStarted;
    WSTCallbackConnectionEnded connectionEnded;
    WSTCallbackOutputHandleGeometry outputHandleGeometry;
    WSTCallbackOutputHandleMode outputHandleMode;

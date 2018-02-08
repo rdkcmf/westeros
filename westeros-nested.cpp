@@ -574,7 +574,12 @@ static void* wstNestedThread( void *data )
    WstNestedConnection *nc= (WstNestedConnection*)data;
    
    nc->started= true;
-   
+
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->connectionStarted( nc->nestedListenerUserData );
+   }
+
    while ( !nc->stopRequested )
    {
       if ( wl_display_dispatch( nc->display ) == -1 )
