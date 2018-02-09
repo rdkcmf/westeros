@@ -298,6 +298,8 @@ typedef struct _WstSurface
    bool vpcBridgeSignal;
    
    struct wl_list frameCallbackList;
+   struct wl_listener attachedBufferDestroyListener;
+   struct wl_listener detachedBufferDestroyListener;
    
 } WstSurface;
 
@@ -2697,6 +2699,7 @@ static void sbReleaseBuffer(void *userData, struct wl_sb_buffer *buffer)
       struct wl_resource *resource= buffer->resource;
       if ( surface->attachedBufferResource == resource )
       {
+         wl_list_remove(&surface->attachedBufferDestroyListener.link);
          surface->attachedBufferResource= 0;
          break;
       }
@@ -3680,6 +3683,7 @@ static void wstCompositorReleaseDetachedBuffers( WstCompositor *ctx )
       WstSurface *surface= (*it);
       if ( surface->detachedBufferResource )
       {
+         wl_list_remove(&surface->detachedBufferDestroyListener.link);
          wl_buffer_send_release( surface->detachedBufferResource );
          surface->detachedBufferResource= 0;
       }
@@ -4204,6 +4208,18 @@ static void wstICompositorCreateRegion(struct wl_client *client, struct wl_resou
    wl_resource_set_implementation(region->resource, &region_interface, region, wstDestroyRegionCallback);
 }
 
+static void wstAttachedBufferDestroyCallback(struct wl_listener *listener, void *data )
+{
+   WstSurface *surface= wl_container_of(listener, surface, attachedBufferDestroyListener );
+   surface->attachedBufferResource= 0;
+}
+
+static void wstDetachedBufferDestroyCallback(struct wl_listener *listener, void *data )
+{
+   WstSurface *surface= wl_container_of(listener, surface, detachedBufferDestroyListener );
+   surface->detachedBufferResource= 0;
+}
+
 static void wstDestroySurfaceCallback(struct wl_resource *resource)
 {
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
@@ -4248,6 +4264,9 @@ static WstSurface* wstSurfaceCreate( WstCompositor *ctx)
       ctx->surfaceMap.insert( std::pair<int32_t,WstSurface*>( surface->surfaceId, surface ) );
 
       wl_list_init(&surface->frameCallbackList);
+
+      surface->attachedBufferDestroyListener.notify= wstAttachedBufferDestroyCallback;
+      surface->detachedBufferDestroyListener.notify= wstDetachedBufferDestroyCallback;
 
       surface->visible= true;
       surface->opacity= 1.0;
@@ -4294,17 +4313,15 @@ static void wstSurfaceDestroy( WstSurface *surface )
    // Release any attached or detached buffer
    if ( surface->attachedBufferResource || surface->detachedBufferResource )
    {
-      struct wl_resource *resource= surface->attachedBufferResource ? surface->attachedBufferResource : surface->detachedBufferResource;
-      struct wl_client *client= wl_resource_get_client( resource );
-      for( std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin(); it != ctx->clientInfoMap.end(); ++it )
+      if ( surface->detachedBufferResource )
       {
-         if ( it->first == client )
-         {
-            if ( surface->detachedBufferResource )
-               wl_buffer_send_release( surface->detachedBufferResource );
-            if ( surface->attachedBufferResource )
-               wl_buffer_send_release( surface->attachedBufferResource );
-         }
+         wl_list_remove(&surface->detachedBufferDestroyListener.link);
+         wl_buffer_send_release( surface->detachedBufferResource );
+      }
+      if ( surface->attachedBufferResource )
+      {
+         wl_list_remove(&surface->attachedBufferDestroyListener.link);
+         wl_buffer_send_release( surface->attachedBufferResource );
       }
       surface->attachedBufferResource= 0;
       surface->detachedBufferResource= 0;
@@ -4582,14 +4599,24 @@ static void wstISurfaceAttach(struct wl_client *client,
    {
       if ( surface->detachedBufferResource )
       {
+         wl_list_remove(&surface->detachedBufferDestroyListener.link);
          wl_buffer_send_release( surface->detachedBufferResource );
       }
+      if ( surface->attachedBufferResource )
+      {
+         wl_list_remove(&surface->attachedBufferDestroyListener.link);
+      }
       surface->detachedBufferResource= surface->attachedBufferResource;
+      if ( surface->detachedBufferResource )
+      {
+         wl_resource_add_destroy_listener( surface->detachedBufferResource, &surface->detachedBufferDestroyListener );
+      }
       surface->attachedBufferResource= 0;
    }
    if ( bufferResource )
    {
       surface->attachedBufferResource= bufferResource;
+      wl_resource_add_destroy_listener( surface->attachedBufferResource, &surface->attachedBufferDestroyListener );
       surface->attachedX= sx;
       surface->attachedY= sy;
    }
@@ -4743,6 +4770,7 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                                                            0,
                                                            bufferWidth,
                                                            bufferHeight );
+                  wl_list_remove(&surface->attachedBufferDestroyListener.link);
                   surface->attachedBufferResource= 0;
                }
             }
@@ -4819,6 +4847,7 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                                                       bufferWidth, 
                                                       bufferHeight );
 
+                  wl_list_remove(&surface->attachedBufferDestroyListener.link);
                   surface->attachedBufferResource= 0;
                }
             }
