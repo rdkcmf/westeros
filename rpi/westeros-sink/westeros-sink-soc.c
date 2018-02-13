@@ -1802,6 +1802,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
          sink->soc.frameWidth= portDef.format.video.nFrameWidth;
          sink->soc.frameHeight= portDef.format.video.nFrameHeight;
+         sink->srcWidth= portDef.format.video.nFrameWidth;
+         sink->srcHeight= portDef.format.video.nFrameHeight;
          printf("gst_westeros_sink_soc_render: video frame size (%d x %d)\n", sink->soc.frameWidth, sink->soc.frameHeight );
 
          if ( sink->soc.tunnelActiveVidSched )

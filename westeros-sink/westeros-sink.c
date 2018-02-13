@@ -41,7 +41,9 @@ enum
   PROP_0,
   PROP_WINDOW_SET,
   PROP_ZORDER,
-  PROP_OPACITY
+  PROP_OPACITY,
+  PROP_VIDEO_WIDTH,
+  PROP_VIDEO_HEIGHT
 };
 
 #ifdef USE_GST1
@@ -386,6 +388,16 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
            "opacity from 0.0 (transparent) to 1.0 (opaque)",
            0.0, 1.0, 1.0, G_PARAM_WRITABLE));
 
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_VIDEO_WIDTH,
+       g_param_spec_int ("video_width", "video_width",
+           "current video frame width",
+           0, G_MAXINT32, 0, G_PARAM_READABLE));
+
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_VIDEO_HEIGHT,
+       g_param_spec_int ("video_height", "video_height",
+           "current video frame height",
+           0, G_MAXINT32, 0, G_PARAM_READABLE));
+
 #ifdef USE_GST1
   GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug, "westerossink", 0, "westerossink element");
 
@@ -440,8 +452,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->flushStarted= FALSE;
    sink->rejectPrerollBuffers= FALSE;
    
-   sink->srcWidth= 1280;
-   sink->srcHeight= 720;
+   sink->srcWidth= 0;
+   sink->srcHeight= 0;
    sink->maxWidth= 0;
    sink->maxHeight= 0;
 
@@ -659,10 +671,7 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
                   
                   wl_display_flush( sink->display );
                }
-            }            
-                    
-            sink->srcWidth= sink->windowWidth;
-            sink->srcHeight= sink->windowHeight;
+            }
          }
 
          g_strfreev(parts);
@@ -706,7 +715,17 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
    WESTEROS_UNUSED(sink);
     
    switch (prop_id) 
-   {      
+   {
+      case PROP_VIDEO_WIDTH:
+         LOCK(sink);
+         g_value_set_int(value, sink->srcWidth);
+         UNLOCK(sink);
+         break;
+      case PROP_VIDEO_HEIGHT:
+         LOCK(sink);
+         g_value_set_int(value, sink->srcHeight);
+         UNLOCK(sink);
+         break;
       default:
          gst_westeros_sink_soc_get_property(object, prop_id, value, pspec);
          break;

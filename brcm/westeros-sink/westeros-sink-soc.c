@@ -979,9 +979,6 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
    gboolean result= TRUE;
    NEXUS_SurfaceCreateSettings videoSurfaceCreateSettings;
 
-   if ( sink->srcWidth < 16 ) sink->srcWidth= 16;
-   if ( sink->srcHeight < 16 ) sink->srcHeight= 16;
-   
    if ( (sink->soc.captureWidth != sink->soc.captureWidthNext) || (sink->soc.captureHeight != sink->soc.captureHeightNext) )
    {
       int i;
@@ -1449,6 +1446,8 @@ static void updateVideoStatus( GstWesterosSink *sink )
       {
          noFrame= TRUE;
       }
+      sink->srcWidth= videoStatus.source.width;
+      sink->srcHeight= videoStatus.source.height;
       UNLOCK( sink );
    }
 
