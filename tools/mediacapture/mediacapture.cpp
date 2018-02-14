@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <map>
 #include <vector>
 
 #include <curl/curl.h>
@@ -41,6 +42,9 @@
 
 // Uncomment to auto start capture based on the prescence of a trigger file
 //#define MEDIACAPTURE_USE_TRIGGER_FILE
+
+// Uncomment to enable consumption tracking
+#define MEDIACAPTURE_CONSUMPTION
 
 #ifdef MEDIACAPTURE_USE_RTREMOTE
 #include <rtRemote.h>
@@ -70,6 +74,16 @@ class rtMediaCaptureObject;
 #define max( a, b ) ( ((a) >= (b)) ? (a) : (b) )
 
 typedef struct _MediaCapContext MediaCapContext;
+
+#ifdef MEDIACAPTURE_USE_RTREMOTE
+typedef struct _RemoteNotification
+{
+   rtObjectRef server;
+   rtFunctionRef func;
+   const char *msg;
+   rtString arg;
+} RemoteNotification;
+#endif
 
 typedef struct _SrcInfo
 {
@@ -143,6 +157,12 @@ typedef struct _MediaCapContext
    rtRemoteEnvironment *rtEnv;
    rtObjectRef apiObj;
    char rtName[32];
+   pthread_t ntfyThreadId;
+   bool ntfyThreadStarted;
+   bool ntfyThreadStopRequested;
+   pthread_cond_t ntfyNotEmptyCond;
+   pthread_mutex_t ntfyNotEmptyMutex;
+   std::vector<RemoteNotification> notifications;
    #endif
    char *emitBuffer;
    int emitCapacity;
@@ -182,6 +202,10 @@ static void generateSPSandPPS( MediaCapContext *ctx, SrcInfo *si );
 static void updateAudioAACPESHeader( MediaCapContext *ctx, SrcInfo *si, int bufferSize );
 static void generateAudioAACPESHeader( MediaCapContext *ctx, SrcInfo *si );
 static long long getCurrentTimeMillis(void);
+#ifdef MEDIACAPTURE_USE_RTREMOTE
+static void sendNotification( MediaCapContext *ctx, rtObjectRef server, const char *msg, rtString arg );
+static void sendNotification( MediaCapContext *ctx, rtFunctionRef func, rtString arg );
+#endif
 static void releaseSourceResources( SrcInfo *si );
 static void freeSource(MediaCapContext *ctx, SrcInfo *si);
 static void freeSources(MediaCapContext *ctx);
@@ -239,6 +263,11 @@ static bool gIsPrimaryStatusKnown= false;
 static bool gIsPrimary= false;
 static rtObjectRef gServerObj;
 static std::vector<MediaCapContext*> gContextList= std::vector<MediaCapContext*>();
+#endif
+static std::map<GstElement*,MediaCapContext*> gElementMap= std::map<GstElement*,MediaCapContext*>();
+#ifdef MEDIACAPTURE_CONSUMPTION
+static int gElementRefCount= 0;
+static GstStateChangeReturn (*gOrgChangeState) (GstElement *element, GstStateChange transition)= 0;
 #endif
 
 static void iprintf( int level, const char *fmt, ... )
@@ -574,7 +603,6 @@ void rtMediaCaptureObject::reportCaptureStart()
 
 void rtMediaCaptureObject::reportCaptureProgress( long long bytes, long long totalBytes )
 {
-   rtError rc;
    if ( m_func.ptr() )
    {
       if ( !m_ctx->captureToFile )
@@ -585,11 +613,7 @@ void rtMediaCaptureObject::reportCaptureProgress( long long bytes, long long tot
          snprintf( work, sizeof(work), "progress: (%s) bytes %lld total bytes %lld", m_ctx->rtName, bytes, totalBytes);
          result.append(work);
 
-         rc= m_func.send(result);
-         if ( rc != RT_OK )
-         {
-            ERROR("rtMediaCaptureObject::reportCaptureProgress: send rc %d", rc);
-         }
+         sendNotification( m_ctx, m_func, result );
       }
    }
 }
@@ -681,6 +705,13 @@ static void unregisterRtRemote( MediaCapContext *ctx )
    {
       rtError rc;
 
+      if ( gServerObj.ptr() )
+      {
+         rtString pipeLineName= ctx->rtName;
+         rc= gServerObj.send( "unregisterPipeline", pipeLineName );
+         INFO("registerRtRemote: unregister pipeline (%s) rc %d", ctx->rtName, rc);
+      }
+
       if ( !isPrimaryRtRemoteUser() )
       {
          if ( ctx->apiObj )
@@ -699,13 +730,6 @@ static void unregisterRtRemote( MediaCapContext *ctx )
             rtRemoteShutdown(ctx->rtEnv);
             ctx->rtEnv= 0;
          }
-      }
-
-      if ( gServerObj.ptr() )
-      {
-         rtString pipeLineName= ctx->rtName;
-         rc= gServerObj.send( "unregisterPipeline", pipeLineName );
-         INFO("registerRtRemote: unregister pipeline (%s) rc %d", ctx->rtName, rc); 
       }
    }
    DEBUG("unregisterRtRemote: exit");
@@ -780,6 +804,153 @@ static void destroyRtRemoteAPI( MediaCapContext *ctx )
       }
    }
    DEBUG("destroyRtRemoteAPI: exit");
+}
+
+static void* notifyThread( void *arg )
+{
+   MediaCapContext *ctx= (MediaCapContext*)arg;
+   RemoteNotification notification;
+   bool haveNotify= false;
+
+   INFO("notifyThread: enter");
+   ctx->ntfyThreadStarted= true;
+   for( ; ; )
+   {
+      if ( ctx->ntfyThreadStopRequested )
+      {
+         break;
+      }
+
+      pthread_mutex_lock( &ctx->ntfyNotEmptyMutex );
+      if ( ctx->notifications.size() == 0 )
+      {
+         pthread_cond_wait( &ctx->ntfyNotEmptyCond, &ctx->ntfyNotEmptyMutex );
+      }
+      if ( !ctx->ntfyThreadStopRequested )
+      {
+         if ( ctx->notifications.size() )
+         {
+            haveNotify= true;
+            notification= ctx->notifications[0];
+            ctx->notifications.erase( ctx->notifications.begin() );
+         }
+      }
+      pthread_mutex_unlock( &ctx->ntfyNotEmptyMutex );
+
+      if ( haveNotify )
+      {
+         rtError rc;
+         int retries= 1;
+         if ( notification.server && notification.server.ptr() )
+         {
+            rc= notification.server.send( notification.msg, notification.arg );
+            while ( (rc == RT_ERROR_TIMEOUT) && (retries-- > 0) )
+            {
+               rc= notification.server.send( notification.msg, notification.arg );
+            }
+            notification.server= 0;
+         }
+         else
+         if ( notification.func && notification.func.ptr() )
+         {
+            rc= notification.func.send( notification.arg );
+            while ( (rc == RT_ERROR_TIMEOUT) && (retries-- > 0) )
+            {
+               rc= notification.func.send( notification.arg );
+            }
+            notification.func= 0;
+         }
+         haveNotify= false;
+      }
+   }
+   ctx->notifications.clear();
+   ctx->ntfyThreadStarted= false;
+   INFO("notifyThread: exit");
+}
+
+static void createNotify( MediaCapContext *ctx )
+{
+   if ( ctx )
+   {
+      int rc;
+
+      pthread_mutex_init( &ctx->ntfyNotEmptyMutex, 0 );
+      pthread_cond_init( &ctx->ntfyNotEmptyCond, 0 );
+
+      INFO("createNotify: before pthread_create: ntfyThreadId %d", ctx->ntfyThreadId);
+      rc= pthread_create( &ctx->ntfyThreadId, NULL, notifyThread, ctx );
+      INFO("createNotify: after pthread_create: ntfyThreadId %d", ctx->ntfyThreadId);
+      if ( rc )
+      {
+         ERROR("createNotify failed to start ntfyThread");
+      }
+   }
+}
+
+static void destroyNotify( MediaCapContext *ctx )
+{
+   DEBUG("destroyNotify: enter");
+   if ( ctx )
+   {
+      if ( ctx->ntfyThreadStarted )
+      {
+         int waitCount= 10;
+         int pendingItems;
+         while( waitCount-- > 0 )
+         {
+            pthread_mutex_lock( &ctx->ntfyNotEmptyMutex );
+            pendingItems= ctx->notifications.size();
+            pthread_mutex_unlock( &ctx->ntfyNotEmptyMutex );
+            if ( pendingItems == 0 )
+            {
+               break;
+            }
+            usleep(1000);
+         }
+
+         ctx->ntfyThreadStopRequested= true;
+
+         pthread_mutex_lock( &ctx->ntfyNotEmptyMutex );
+         pthread_cond_signal( &ctx->ntfyNotEmptyCond );
+         pthread_mutex_unlock( &ctx->ntfyNotEmptyMutex );
+
+         pthread_join( ctx->ntfyThreadId, NULL );
+
+         pthread_mutex_destroy( &ctx->ntfyNotEmptyMutex );
+         pthread_cond_destroy( &ctx->ntfyNotEmptyCond );
+      }
+   }
+   DEBUG("destroyNotify: exit");
+}
+
+static void sendNotification( MediaCapContext *ctx, rtObjectRef server, const char *msg, rtString arg )
+{
+   RemoteNotification notification;
+
+   notification.server= server;
+   notification.func= 0;
+   notification.msg= msg;
+   notification.arg= arg;
+
+   pthread_mutex_lock( &ctx->ntfyNotEmptyMutex );
+   ctx->notifications.push_back( notification );
+   pthread_cond_signal( &ctx->ntfyNotEmptyCond );
+   pthread_mutex_unlock( &ctx->ntfyNotEmptyMutex );
+}
+
+static void sendNotification( MediaCapContext *ctx, rtFunctionRef func, rtString arg )
+{
+   RemoteNotification notification;
+
+   notification.server= 0;
+   notification.func= func;
+   notification.msg= 0;
+   notification.arg= arg;
+
+   pthread_mutex_lock( &ctx->ntfyNotEmptyMutex );
+   ctx->notifications.push_back( notification );
+   pthread_cond_signal( &ctx->ntfyNotEmptyCond );
+   pthread_mutex_unlock( &ctx->ntfyNotEmptyMutex );
 }
 #endif
 
@@ -1340,6 +1511,44 @@ static void emitPipelineGraph(MediaCapContext *ctx, GstElement *src)
       gst_iterator_free(iterPad);
    }
 }
+
+#ifdef MEDIACAPTURE_CONSUMPTION
+static GstStateChangeReturn elementChangeState(GstElement *element, GstStateChange transition)
+{
+   MediaCapContext *ctx= 0;
+   GstStateChangeReturn result= GST_STATE_CHANGE_FAILURE;
+
+   DEBUG("change state from %s to %s\n",
+         gst_element_state_get_name (GST_STATE_TRANSITION_CURRENT (transition)),
+         gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
+
+   pthread_mutex_lock( &gMutex );
+   std::map<GstElement*,MediaCapContext*>::iterator iter= gElementMap.find( element );
+   if ( iter != gElementMap.end() )
+   {
+      ctx= iter->second;
+   }
+   pthread_mutex_unlock( &gMutex );
+
+   result= gOrgChangeState( element, transition );
+
+   if ( ctx && (result == GST_STATE_CHANGE_SUCCESS))
+   {
+      if ( transition == GST_STATE_CHANGE_PAUSED_TO_PLAYING )
+      {
+         rtString pipeLineName= ctx->rtName;
+         sendNotification( ctx, gServerObj, "pipelineMediaStart", pipeLineName );
+      }
+      else if ( transition == GST_STATE_CHANGE_PLAYING_TO_PAUSED )
+      {
+         rtString pipeLineName= ctx->rtName;
+         sendNotification( ctx, gServerObj, "pipelineMediaStop", pipeLineName );
+      }
+   }
+
+   return result;
+}
+#endif
 
 static void findSources(MediaCapContext *ctx)
 {
@@ -3320,8 +3529,25 @@ void* MediaCaptureCreateContext( GstElement *element )
 
       findSources( ctx );
 
+      #ifdef MEDIACAPTURE_CONSUMPTION
+      GstElementClass *klass= GST_ELEMENT_GET_CLASS(element);
+      if ( klass )
+      {
+         pthread_mutex_lock( &gMutex );
+         if ( !gOrgChangeState )
+         {
+            gOrgChangeState= klass->change_state;
+            klass->change_state= elementChangeState;
+         }
+         ++gElementRefCount;
+         gElementMap.insert( std::pair<GstElement*,MediaCapContext*>(element,ctx) );
+         pthread_mutex_unlock( &gMutex );
+      }
+      #endif
+
       #ifdef MEDIACAPTURE_USE_RTREMOTE
       createRtRemoteAPI( ctx );
+      createNotify( ctx );
       #else      
       #ifdef MEDIACAPTURE_USE_TRIGGER_FILE
       {
@@ -3382,10 +3608,31 @@ void MediaCaptureDestroyContext( void *context )
          free( ctx->pmtPacket );
       }
 
+      #ifdef MEDIACAPTURE_CONSUMPTION
+      pthread_mutex_lock( &gMutex );
+      --gElementRefCount;
+      if ( gElementRefCount == 0 )
+      {
+         GstElementClass *klass= GST_ELEMENT_GET_CLASS(ctx->element);
+         if ( klass )
+         {
+            klass->change_state= gOrgChangeState;
+         }
+         gOrgChangeState= 0;
+      }
+      std::map<GstElement*,MediaCapContext*>::iterator it= gElementMap.find( ctx->element );
+      if ( it != gElementMap.end() )
+      {
+         gElementMap.erase( it );
+      }
+      pthread_mutex_unlock( &gMutex );
+      #endif
+
       pthread_mutex_destroy( &ctx->mutex );
 
       #ifdef MEDIACAPTURE_USE_RTREMOTE
       destroyRtRemoteAPI( ctx );
+      destroyNotify( ctx );
       #endif
 
       free( ctx );

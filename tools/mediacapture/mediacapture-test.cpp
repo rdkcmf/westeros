@@ -346,6 +346,82 @@ static void displayPipelineList(rtRemoteEnvironment *env, rtObjectRef &registry)
    printf("}\n");
 }
 
+static void displayMediaConsumptionInfo(rtRemoteEnvironment *env, rtObjectRef &registry)
+{
+   rtError rc;
+   rtString info;
+   int count;
+
+   pthread_mutex_lock( &gMutex );
+
+   rc= registry.sendReturns("getMediaConsumption", info );
+   if ( rc == RT_OK )
+   {
+      std::vector<std::string> records;
+      char *l= strdup( info.cString() );
+      if ( l )
+      {
+         char *item;
+
+         records.clear();
+
+         item= strtok( l, ",");
+         if ( item )
+         {
+            count= atoi(item);
+            if ( count > 0 )
+            {
+               int i= 0;
+               do
+               {
+                  item= strtok( NULL, ",");
+                  if ( item )
+                  {
+                     records.push_back(item);
+                  }
+                  ++i;
+               }
+               while( item && (i < count) );
+            }
+         }
+
+         free(l);
+      }
+
+      printf("mediaconsumption info\n{\n");
+      for( int i= 0; i < count; ++i)
+      {
+         printf("  %s\n", records[i].c_str());
+      }
+      printf("}\n");
+   }
+   else
+   {
+      printf("error: unable to get media consumption info from registry: %d\n", rc);
+   }
+
+   pthread_mutex_unlock( &gMutex );
+}
+
+static void clearMediaConsumptionInfo(rtRemoteEnvironment *env, rtObjectRef &registry)
+{
+   rtError rc;
+
+   pthread_mutex_lock( &gMutex );
+
+   rc= registry.send("clearMediaConsumption" );
+   if ( rc == RT_OK )
+   {
+      printf("media consumption info cleared\n");
+   }
+   else
+   {
+      printf("error: unable to clear media consumption info from registry: %d\n", rc);
+   }
+
+   pthread_mutex_unlock( &gMutex );
+}
+
 static void listActions()
 {
    printf("=======================================\n");
@@ -353,6 +429,8 @@ static void listActions()
    printf(" 0 - 9 to capture from that source\n");
    printf(" s to stop any active capture\n");
    printf(" l to list available sources\n");
+   printf(" i to list media consumption info\n");
+   printf(" c to clear media consumption info\n");
    printf(" q to exit\n");
    printf("---------------------------------------\n");
 }
@@ -478,6 +556,12 @@ int main( int argc, const char **argv )
                         break;
                      case 'l':
                         displayPipelineList(env, registry);
+                        break;
+                     case 'i':
+                        displayMediaConsumptionInfo(env, registry);
+                        break;
+                     case 'c':
+                        clearMediaConsumptionInfo(env, registry);
                         break;
                      case 'q':
                         gRunning= false;

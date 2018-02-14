@@ -27,6 +27,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #include <string>
 #include <vector>
@@ -34,11 +35,24 @@
 static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
 static std::vector<std::string> gAvailablePipelines= std::vector<std::string>();
 static bool gRunning= false;
+static std::vector<std::string> gMediaConsumptionInfo;
+static unsigned long long gMediaConsumptionOrdinal= 0;
 
 static void signalHandler(int signum)
 {
    printf("signalHandler: signum %d\n", signum);
 	gRunning= false;
+}
+
+static long long getCurrentTimeMillis(void)
+{
+   struct timeval tv;
+   long long utcCurrentTimeMillis;
+
+   gettimeofday(&tv,0);
+   utcCurrentTimeMillis= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+
+   return utcCurrentTimeMillis;
 }
 
 class rtCaptureRegistryObject : public rtObject
@@ -53,10 +67,18 @@ class rtCaptureRegistryObject : public rtObject
      rtMethod1ArgAndNoReturn("registerPipeline", registerPipeline, rtString);
      rtMethod1ArgAndNoReturn("unregisterPipeline", unregisterPipeline, rtString);
      rtMethodNoArgAndReturn("getAvailablePipelines", getAvailablePipelines, rtString);
+     rtMethod1ArgAndNoReturn("pipelineMediaStart", pipelineMediaStart, rtString);
+     rtMethod1ArgAndNoReturn("pipelineMediaStop", pipelineMediaStop, rtString);
+     rtMethodNoArgAndReturn("getMediaConsumption", getMediaConsumption, rtString);
+     rtMethodNoArgAndNoReturn("clearMediaConsumption", clearMediaConsumption);
 
      rtError registerPipeline( rtString pipelineName );
      rtError unregisterPipeline( rtString pipelineName );
      rtError getAvailablePipelines( rtString &result );
+     rtError pipelineMediaStart( rtString pipelineName );
+     rtError pipelineMediaStop( rtString pipelineName );
+     rtError getMediaConsumption( rtString &result );
+     rtError clearMediaConsumption( void );
 
      void validateAvailablePipelines();
 
@@ -66,6 +88,10 @@ rtDefineObject(rtCaptureRegistryObject, rtObject);
 rtDefineMethod(rtCaptureRegistryObject, registerPipeline);
 rtDefineMethod(rtCaptureRegistryObject, unregisterPipeline);
 rtDefineMethod(rtCaptureRegistryObject, getAvailablePipelines);
+rtDefineMethod(rtCaptureRegistryObject, pipelineMediaStart);
+rtDefineMethod(rtCaptureRegistryObject, pipelineMediaStop);
+rtDefineMethod(rtCaptureRegistryObject, getMediaConsumption);
+rtDefineMethod(rtCaptureRegistryObject, clearMediaConsumption);
 
 rtError rtCaptureRegistryObject::registerPipeline( rtString pipelineName )
 {
@@ -135,6 +161,70 @@ rtError rtCaptureRegistryObject::getAvailablePipelines( rtString &result )
       result.append(str.c_str());
       ++i;
    }
+   pthread_mutex_unlock( &gMutex );
+
+   return RT_OK;
+}
+
+rtError rtCaptureRegistryObject::pipelineMediaStart( rtString pipelineName )
+{
+   char work[128];
+   std::string str;
+   long long now= getCurrentTimeMillis();
+
+   pthread_mutex_lock( &gMutex );
+   sprintf(work,"%llu %s %llu start", gMediaConsumptionOrdinal++, pipelineName.cString(), now);
+   str.append( work );
+   gMediaConsumptionInfo.push_back( str );
+   pthread_mutex_unlock( &gMutex );
+
+   return RT_OK;
+}
+
+rtError rtCaptureRegistryObject::pipelineMediaStop( rtString pipelineName )
+{
+   char work[128];
+   std::string str;
+   long long now= getCurrentTimeMillis();
+
+   pthread_mutex_lock( &gMutex );
+   sprintf(work,"%llu %s %llu stop", gMediaConsumptionOrdinal++, pipelineName.cString(), now);
+   str.append( work );
+   gMediaConsumptionInfo.push_back( str );
+   pthread_mutex_unlock( &gMutex );
+
+   return RT_OK;
+}
+
+rtError rtCaptureRegistryObject::getMediaConsumption( rtString &result )
+{
+   int i;
+   char work[16];
+
+   result= "";
+
+   pthread_mutex_lock( &gMutex );
+   snprintf( work, sizeof(work), "%d", gMediaConsumptionInfo.size() );
+   result.append(work);
+   i= 0;
+   for ( std::vector<std::string>::iterator it= gMediaConsumptionInfo.begin();
+         it != gMediaConsumptionInfo.end();
+         ++it )
+   {
+      std::string str= (*it);
+      result.append(",");
+      result.append(str.c_str());
+      ++i;
+   }
+   pthread_mutex_unlock( &gMutex );
+
+   return RT_OK;
+}
+
+rtError rtCaptureRegistryObject::clearMediaConsumption( void )
+{
+   pthread_mutex_lock( &gMutex );
+   gMediaConsumptionInfo.clear();
    pthread_mutex_unlock( &gMutex );
 
    return RT_OK;
