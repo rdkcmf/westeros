@@ -4595,6 +4595,7 @@ static void wstISurfaceAttach(struct wl_client *client,
 {
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
 
+   pthread_mutex_lock( &surface->compositor->mutex );
    if ( surface->attachedBufferResource != bufferResource )
    {
       if ( surface->detachedBufferResource )
@@ -4624,6 +4625,7 @@ static void wstISurfaceAttach(struct wl_client *client,
    {
       surface->vpcBridgeSignal= ((sx == VPCBRIDGE_SIGNAL) && (sy == VPCBRIDGE_SIGNAL));
    }
+   pthread_mutex_unlock( &surface->compositor->mutex );
 }
 
 static void wstISurfaceDamage(struct wl_client *client,
