@@ -1312,14 +1312,21 @@ static void processFrame( GstWesterosSink *sink )
             sink->currentPTS= ((gint64)captureStatus.pts)*2LL;
             if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
-               if ( sink->currentPTS == 0 )
+               if ( sink->startPTS )
                {
-                  gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
-                  sink->firstPTS= newPts;
+                  if ( sink->currentPTS == 0 )
+                  {
+                     gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
+                     sink->firstPTS= newPts;
+                  }
+                  else
+                  {
+                     sink->firstPTS= sink->currentPTS;
+                  }
                }
                else
                {
-                  sink->firstPTS= sink->currentPTS;
+                  sink->firstPTS= sink->startPTS;
                }
                sink->prevPositionSegmentStart = sink->positionSegmentStart;
                GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
@@ -1410,14 +1417,21 @@ static void updateVideoStatus( GstWesterosSink *sink )
          sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
          if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
          {
-            if ( sink->currentPTS == 0 )
+            if ( sink->startPTS )
             {
-               gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
-               sink->firstPTS= newPts;
+               if ( sink->currentPTS == 0 )
+               {
+                  gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
+                  sink->firstPTS= newPts;
+               }
+               else
+               {
+                  sink->firstPTS= sink->currentPTS;
+               }
             }
             else
             {
-               sink->firstPTS= sink->currentPTS;
+               sink->firstPTS= sink->startPTS;
             }
             sink->prevPositionSegmentStart = sink->positionSegmentStart;
             GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
