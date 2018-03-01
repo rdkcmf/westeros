@@ -406,6 +406,8 @@ typedef struct _WstCompositor
    WstShm *shm;   
    WstNestedConnection *nc;
    struct wl_display *ncDisplay;
+   pthread_mutex_t ncStartedMutex;
+   pthread_cond_t ncStartedCond;
    void *nestedListenerUserData;
    WstNestedConnectionListener nestedListener;
    bool hasEmbeddedMaster;
@@ -1014,7 +1016,7 @@ exit:
 bool WstCompositorSetIsNested( WstCompositor *ctx, bool isNested )
 {
    bool result= false;
-   
+
    if ( ctx )
    {
       if ( ctx->running )
@@ -3043,33 +3045,6 @@ static void* wstCompositorThread( void *arg )
    }
    DEBUG("wl_display=%p displayName=%s", ctx->display, ctx->displayName );
 
-   if ( ctx->isNested || ctx->hasVpcBridge )
-   {
-      int width= ctx->nestedWidth;
-      int height= ctx->nestedHeight;
-      
-      if ( ctx->hasVpcBridge )
-      {
-         INFO("embedded compositor %s will bridge vpc to display %s", ctx->displayName, ctx->nestedDisplayName);
-      }
-      if ( ctx->isRepeater || ctx->hasVpcBridge )
-      {
-         width= 0;
-         height= 0;
-      }
-      ctx->nc= WstNestedConnectionCreate( ctx, 
-                                          ctx->nestedDisplayName, 
-                                          width, 
-                                          height,
-                                          &ctx->nestedListener,
-                                          ctx );
-      if ( !ctx->nc )
-      {
-         ERROR( "Unable to create nested connection to display %s", ctx->nestedDisplayName );
-         goto exit;
-      }
-   }
-
    if ( ctx->isRepeater && !ctx->mustInitRendererModule )
    {
       #if defined (WESTEROS_HAVE_WAYLAND_EGL)
@@ -3097,6 +3072,48 @@ static void* wstCompositorThread( void *arg )
             goto exit;
          }
       }
+   }
+
+   if ( ctx->isNested || ctx->hasVpcBridge )
+   {
+      int width= ctx->nestedWidth;
+      int height= ctx->nestedHeight;
+
+      if ( ctx->hasVpcBridge )
+      {
+         INFO("embedded compositor %s will bridge vpc to display %s", ctx->displayName, ctx->nestedDisplayName);
+      }
+      if ( ctx->isRepeater || ctx->hasVpcBridge )
+      {
+         width= 0;
+         height= 0;
+      }
+      pthread_mutex_init( &ctx->ncStartedMutex, 0);
+      pthread_cond_init( &ctx->ncStartedCond, 0);
+      pthread_mutex_lock( &ctx->ncStartedMutex );
+      ctx->nc= WstNestedConnectionCreate( ctx,
+                                          ctx->nestedDisplayName,
+                                          width,
+                                          height,
+                                          &ctx->nestedListener,
+                                          ctx );
+      if ( !ctx->nc )
+      {
+         ERROR( "Unable to create nested connection to display %s", ctx->nestedDisplayName );
+         pthread_mutex_unlock( &ctx->ncStartedMutex );
+         pthread_mutex_destroy( &ctx->ncStartedMutex );
+         pthread_cond_destroy( &ctx->ncStartedCond );
+         goto exit;
+      }
+      INFO("waiting for nested connection to start");
+      while( !ctx->ncDisplay )
+      {
+         pthread_cond_wait( &ctx->ncStartedCond, &ctx->ncStartedMutex );
+      }
+      pthread_mutex_unlock( &ctx->ncStartedMutex );
+      pthread_mutex_destroy( &ctx->ncStartedMutex );
+      pthread_cond_destroy( &ctx->ncStartedCond );
+      INFO("nested connection started");
    }
 
    #ifdef ENABLE_SBPROTOCOL
@@ -5736,17 +5753,27 @@ static void wstXdgSurfaceSendConfigure( WstCompositor *ctx, WstSurface *surface,
 static void wstDefaultNestedConnectionStarted( void *userData )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
+   struct wl_display *ncDisplay;
 
-   ctx->ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
+   ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
 
-   if ( ctx->remoteBegin && ctx->ncDisplay )
+   if ( ctx->remoteBegin && ncDisplay )
    {
-      if ( !ctx->remoteBegin( ctx->display, ctx->ncDisplay ) )
+      if ( !ctx->remoteBegin( ctx->display, ncDisplay ) )
       {
          ERROR("remoteBegin failure");
          ctx->canRemoteClone= false;
       }
    }
+
+   pthread_mutex_lock( &ctx->ncStartedMutex );
+
+   ctx->ncDisplay= ncDisplay;
+
+   INFO("signal start of nested connection");
+
+   pthread_cond_signal( &ctx->ncStartedCond );
+   pthread_mutex_unlock( &ctx->ncStartedMutex );
 }
 
 static void wstDefaultNestedConnectionEnded( void *userData )
