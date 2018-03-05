@@ -5755,6 +5755,8 @@ static void wstDefaultNestedConnectionStarted( void *userData )
    WstCompositor *ctx= (WstCompositor*)userData;
    struct wl_display *ncDisplay;
 
+   pthread_mutex_lock( &ctx->ncStartedMutex );
+
    ncDisplay= WstNestedConnectionGetDisplay( ctx->nc );
 
    if ( ctx->remoteBegin && ncDisplay )
@@ -5765,8 +5767,6 @@ static void wstDefaultNestedConnectionStarted( void *userData )
          ctx->canRemoteClone= false;
       }
    }
-
-   pthread_mutex_lock( &ctx->ncStartedMutex );
 
    ctx->ncDisplay= ncDisplay;
 
