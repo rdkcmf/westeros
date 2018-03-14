@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/time.h>
 
 #include "westeros-sink.h"
@@ -190,7 +191,11 @@ typedef unsigned int (*GETSTCINFO)( NEXUS_SimpleStcChannelHandle stc );
 bool checkIndependentVideoClock( GstWesterosSink *sink )
 {
    bool independentClock= false;
-   void *module= dlopen( "libbrcmsystemclock.so", RTLD_NOW );
+   void *module= dlopen( "libbrcmgstutil.so", RTLD_NOW );
+   if (!module)
+   {
+       module= dlopen( "libbrcmsystemclock.so", RTLD_NOW );
+   }
    if ( module )
    {
       GETSTCINFO getSTCInfo= (GETSTCINFO)dlsym( module, "gst_brcm_system_clock_get_stc_channel_info" );
