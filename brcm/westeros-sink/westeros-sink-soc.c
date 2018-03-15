@@ -1317,21 +1317,14 @@ static void processFrame( GstWesterosSink *sink )
             sink->currentPTS= ((gint64)captureStatus.pts)*2LL;
             if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
-               if ( sink->startPTS )
+               if ( sink->currentPTS == 0 )
                {
-                  if ( sink->currentPTS == 0 )
-                  {
-                     gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
-                     sink->firstPTS= newPts;
-                  }
-                  else
-                  {
-                     sink->firstPTS= sink->currentPTS;
-                  }
+                  gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
+                  sink->firstPTS= newPts;
                }
                else
                {
-                  sink->firstPTS= sink->startPTS;
+                  sink->firstPTS= sink->currentPTS;
                }
                sink->prevPositionSegmentStart = sink->positionSegmentStart;
                GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
@@ -1406,23 +1399,25 @@ static void updateVideoStatus( GstWesterosSink *sink )
    gboolean noFrame= FALSE;
    gboolean eosDetected= FALSE;
    gboolean videoPlaying= FALSE;
+   gboolean flushStarted= FALSE;
    guint64 prevPTS;
 
    LOCK( sink );
    eosDetected= sink->eosDetected;
    videoPlaying= sink->soc.videoPlaying;
+   flushStarted= sink->flushStarted;
    UNLOCK( sink );
    
-   if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
+   if ( videoPlaying && !flushStarted )
    {
-      LOCK( sink );
-      if ( videoStatus.firstPtsPassed && (sink->currentPTS/2 != videoStatus.pts) )
+      if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
       {
-         prevPTS= sink->currentPTS;
-         sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
-         if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
+         LOCK( sink );
+         if ( videoStatus.firstPtsPassed && (sink->currentPTS/2 != videoStatus.pts) )
          {
-            if ( sink->startPTS )
+            prevPTS= sink->currentPTS;
+            sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
+            if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
                if ( sink->currentPTS == 0 )
                {
@@ -1433,41 +1428,37 @@ static void updateVideoStatus( GstWesterosSink *sink )
                {
                   sink->firstPTS= sink->currentPTS;
                }
+               sink->prevPositionSegmentStart = sink->positionSegmentStart;
+               GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
             }
-            else
+            if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
             {
-               sink->firstPTS= sink->startPTS;
+               if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
+               {
+                  // If we have hit a discontinuity that doesn't look like rollover, then
+                  // treat this as the case of looping a short clip.  Adjust our firstPTS
+                  // to keep our running time correct.
+                  sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
+               }
+               sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
             }
-            sink->prevPositionSegmentStart = sink->positionSegmentStart;
-            GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
-         }
-         if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
-         {
-            if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
+
+            if (sink->soc.frameCount == 0)
             {
-               // If we have hit a discontinuity that doesn't look like rollover, then
-               // treat this as the case of looping a short clip.  Adjust our firstPTS
-               // to keep our running time correct.
-               sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
+                g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
             }
-            sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
-         }
 
-         if (sink->soc.frameCount == 0)
+            sink->soc.frameCount++;
+            sink->soc.noFrameCount= 0;
+         }
+         else if (videoStatus.queueDepth == 0)
          {
-             g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+            noFrame= TRUE;
          }
-
-         sink->soc.frameCount++;
-         sink->soc.noFrameCount= 0;
+         sink->srcWidth= videoStatus.source.width;
+         sink->srcHeight= videoStatus.source.height;
+         UNLOCK( sink );
       }
-      else if (videoStatus.queueDepth == 0)
-      {
-         noFrame= TRUE;
-      }
-      sink->srcWidth= videoStatus.source.width;
-      sink->srcHeight= videoStatus.source.height;
-      UNLOCK( sink );
    }
 
    if ( noFrame && !eosDetected && videoPlaying )
