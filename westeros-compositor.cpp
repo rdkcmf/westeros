@@ -4633,8 +4633,11 @@ static void wstISurfaceAttach(struct wl_client *client,
    }
    if ( bufferResource )
    {
-      surface->attachedBufferResource= bufferResource;
-      wl_resource_add_destroy_listener( surface->attachedBufferResource, &surface->attachedBufferDestroyListener );
+      if ( surface->attachedBufferResource != bufferResource )
+      {
+         surface->attachedBufferResource= bufferResource;
+         wl_resource_add_destroy_listener( surface->attachedBufferResource, &surface->attachedBufferDestroyListener );
+      }
       surface->attachedX= sx;
       surface->attachedY= sy;
    }
