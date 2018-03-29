@@ -736,6 +736,16 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
       else
       {
          sink->videoStarted= TRUE;
+         if ( sink->soc.stcChannel )
+         {
+            NEXUS_Error rc;
+            rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, FALSE);
+            GST_DEBUG("NEXUS_SimpleStcChannel_Freeze FALSE ");
+            if ( rc != NEXUS_SUCCESS )
+            {
+                GST_ERROR("gst_westeros_sink_soc_paused_to_playing: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+            }
+         }
       }
       UNLOCK( sink );
    }
