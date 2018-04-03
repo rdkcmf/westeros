@@ -37,6 +37,9 @@ typedef struct _AppCtx
    GstElement *westerossink;
    GstBus *bus;
    GMainLoop *loop;
+   guint timerId;
+   bool useSecureVideo;
+   const char *videoRectOverride;
    bool haveMode;
    int outputWidth;
    int outputHeight;
@@ -48,6 +51,9 @@ static void showUsage()
    printf(" westeros_player [options] <uri>\n" );
    printf("  uri - URI of video asset to play\n" );
    printf("where [options] are:\n" );
+   printf("  -r x,y,w,h : video rect\n" );
+   printf("  -p : emit position logs\n" );
+   printf("  -s : secure video\n" );
    printf("  -? : show usage\n" );
    printf("\n" );   
 }
@@ -93,7 +99,7 @@ static void outputHandleMode( void *data,
 
       printf("outputMode: %dx%d flags %X\n", width, height, flags);
    
-      if ( ctx->westerossink )
+      if ( ctx->westerossink && !ctx->videoRectOverride )
       {
          sprintf( work, "%d,%d,%d,%d", 0, 0, width, height );
          g_object_set(G_OBJECT(ctx->westerossink), "window-set", work, NULL );
@@ -224,10 +230,19 @@ bool createPipeline( AppCtx *ctx )
       goto exit;
    }
    gst_object_ref( ctx->westerossink );
-   
+
+   if ( ctx->useSecureVideo )
+   {
+      g_object_set(G_OBJECT(ctx->westerossink), "secure-video", TRUE, NULL );
+   }
+
    g_object_set(G_OBJECT(ctx->player), "video-sink", ctx->westerossink, NULL );
 
-   if ( ctx->haveMode )
+   if ( ctx->videoRectOverride )
+   {
+      g_object_set(G_OBJECT(ctx->westerossink), "window-set", ctx->videoRectOverride, NULL );
+   }
+   else if ( ctx->haveMode )
    {
       char work[32];
       sprintf( work, "%d,%d,%d,%d", 0, 0, ctx->outputWidth, ctx->outputHeight );
@@ -287,11 +302,28 @@ static void signalHandler(int signum)
 	}
 }
 
+gboolean timerTimeout( gpointer userData )
+{
+   AppCtx *ctx= (AppCtx*)userData;
+
+   if ( ctx->pipeline )
+   {
+      gint64 pos= 0;
+      if ( gst_element_query_position( ctx->pipeline, GST_FORMAT_TIME, &pos ) )
+      {
+         printf("westeros_player: pos: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(pos));
+      }
+   }
+}
+
 int main( int argc, char **argv )
 {
    int result= -1;
    int argidx;
    const char *uri= 0;
+   bool emitPosition= false;
+   bool useSecureVideo= false;
+   const char *videoRect= 0;
    AppCtx *ctx= 0;
    struct sigaction sigint;
    
@@ -310,6 +342,18 @@ int main( int argc, char **argv )
       {
          switch( argv[argidx][1] )
          {
+            case 'r':
+               if ( argidx+1 < argc )
+               {
+                  videoRect= argv[++argidx];
+               }
+               break;
+            case 'p':
+               emitPosition= true;
+               break;
+            case 's':
+               useSecureVideo= true;
+               break;
             case '?':
                showUsage();
                goto exit;
@@ -348,7 +392,10 @@ int main( int argc, char **argv )
       printf("Error: unable to allocate application context\n");
       goto exit;
    }
-   
+
+   ctx->useSecureVideo= useSecureVideo;
+   ctx->videoRectOverride= videoRect;
+
    ctx->display= wl_display_connect( NULL );
    if ( !ctx->display )
    {
@@ -373,6 +420,11 @@ int main( int argc, char **argv )
       
       if ( ctx->loop )
       {
+         if ( emitPosition )
+         {
+            ctx->timerId= g_timeout_add( 1000, timerTimeout, ctx );
+         }
+
          g_object_set(G_OBJECT(ctx->player), "uri", uri, NULL );
          
          if ( GST_STATE_CHANGE_FAILURE != gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
@@ -385,6 +437,12 @@ int main( int argc, char **argv )
             g_ctx= ctx;
 
             g_main_loop_run( ctx->loop );
+         }
+
+         if ( ctx->timerId )
+         {
+            g_source_remove( ctx->timerId );
+            ctx->timerId= 0;
          }
       }
       else
