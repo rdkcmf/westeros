@@ -47,6 +47,8 @@ struct _GstWesterosSinkSoc
    int surfaceClientId;
    NEXUS_SurfaceClientHandle surfaceClient;
    NEXUS_SurfaceClientHandle videoWindow;
+
+   gboolean usePip;
    
    unsigned int connectId;
 
@@ -55,6 +57,10 @@ struct _GstWesterosSinkSoc
 
    NEXUS_SimpleStcChannelHandle stcChannel;
    NEXUS_PidChannelHandle videoPidChannel;
+
+   gboolean haveResources;
+   long long timeResourcesLost;
+   gint64 positionResourcesLost;
 
    int codec;
    gboolean quitCaptureThread;

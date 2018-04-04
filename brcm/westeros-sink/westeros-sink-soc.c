@@ -34,6 +34,8 @@
 #define EOS_DETECT_DELAY_AT_START (10000000)
 #define DEFAULT_CAPTURE_WIDTH (1280)
 #define DEFAULT_CAPTURE_HEIGHT (720)
+#define MAX_PIP_WIDTH (640)
+#define MAX_PIP_HEIGHT (360)
 
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
@@ -49,6 +51,10 @@ enum
   PROP_ZOOM_MODE,
   PROP_SERVER_PLAY_SPEED,
   PROP_CAPTURE_SIZE
+  #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
+  ,
+  PROP_PIP
+  #endif
   #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
   ,
   PROP_SECURE_VIDEO
@@ -143,6 +149,13 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
            "Capture Size Format: width,height",
            NULL, G_PARAM_WRITABLE));
 
+   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
+   g_object_class_install_property (gobject_class, PROP_PIP,
+     g_param_spec_boolean ("pip",
+                           "use pip window",
+                           "true: use pip window, false: use main window", FALSE, G_PARAM_READWRITE));
+   #endif
+
    #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
    g_object_class_install_property (gobject_class, PROP_SECURE_VIDEO,
      g_param_spec_boolean ("secure-video",
@@ -213,6 +226,24 @@ bool checkIndependentVideoClock( GstWesterosSink *sink )
    return independentClock;
 }
 
+void resourceChangedCallback( void *context, int param )
+{
+   NEXUS_Error rc;
+   GstWesterosSink *sink= (GstWesterosSink*)context;
+   NEXUS_SimpleVideoDecoderClientStatus clientStatus;
+   rc= NEXUS_SimpleVideoDecoder_GetClientStatus( sink->soc.videoDecoder, &clientStatus );
+   if ( rc == NEXUS_SUCCESS )
+   {
+      sink->soc.haveResources= clientStatus.enabled;
+      GST_INFO_OBJECT(sink, "haveResources: %d", sink->soc.haveResources);
+      if ( !sink->soc.haveResources )
+      {
+         sink->soc.timeResourcesLost= getCurrentTimeMillis();
+         sink->soc.positionResourcesLost= sink->position;
+      }
+   }
+}
+
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 {
    gboolean result= FALSE;
@@ -228,6 +259,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    {
       sink->soc.captureSurface[i]= NULL;
    }
+   sink->soc.usePip= FALSE;
    sink->soc.connectId= 0;
    sink->soc.quitCaptureThread= TRUE;
    sink->soc.captureThread= NULL;
@@ -248,6 +280,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
    sink->soc.videoPlaying= FALSE;
+   sink->soc.haveResources= FALSE;
+   sink->soc.timeResourcesLost= 0;
+   sink->soc.positionResourcesLost= 0;
    #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
    sink->soc.secureVideo= FALSE;
    #endif
@@ -283,6 +318,13 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
             sink->maxWidth= 1920;
             sink->maxHeight= 1080;
          }
+
+         NEXUS_SimpleVideoDecoderClientSettings settings;
+         NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &settings);
+         settings.resourceChanged.callback= resourceChangedCallback;
+         settings.resourceChanged.context= sink;
+         settings.resourceChanged.param= 0;;
+         NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &settings);
 
          result= TRUE;
       }
@@ -490,6 +532,14 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             g_strfreev(parts);
             break;
          }
+      #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
+      case PROP_PIP:
+         {
+            sink->soc.usePip= g_value_get_boolean(value);
+            printf("gst_westeros_sink_set_property set pip (%d)\n", sink->soc.usePip);
+            break;
+         }
+      #endif
       #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
       case PROP_SECURE_VIDEO:
          {
@@ -559,6 +609,11 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
       case PROP_SERVER_PLAY_SPEED:
          g_value_set_float(value, sink->soc.serverPlaySpeed);
          break;
+      #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
+      case PROP_PIP:
+         g_value_set_boolean(value, sink->soc.usePip);
+         break;
+      #endif
       #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
       case PROP_SECURE_VIDEO:
          g_value_set_boolean(value, sink->soc.secureVideo);
@@ -623,10 +678,13 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
    if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
    {
       printf("westerossink: supports 4K\n");
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 3840;
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 2160;
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.colorDepth= 10;
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.feeder.colorDepth= 10;
+      if ( !sink->soc.usePip )
+      {
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 3840;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 2160;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.colorDepth= 10;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.feeder.colorDepth= 10;
+      }
    }
    else
    {
@@ -636,6 +694,13 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
    #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
    }
    #endif
+   if ( sink->soc.usePip )
+   {
+      // We are using PIP window. Restrict size.
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_ePip;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= MAX_PIP_WIDTH;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= MAX_PIP_HEIGHT;
+   }
    rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
    if ( rc == NEXUS_SUCCESS )
    {
@@ -665,6 +730,11 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
       NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
       NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+
+      if ( sink->soc.usePip )
+      {
+         gst_westeros_sink_soc_update_video_position( sink );
+      }
 
       result= TRUE;
    }
@@ -940,6 +1010,11 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    startSettings.displayEnabled= true;
    startSettings.maxWidth= sink->maxWidth;
    startSettings.maxHeight= sink->maxHeight;
+   if ( sink->soc.usePip )
+   {
+      startSettings.maxWidth= MAX_PIP_HEIGHT;
+      startSettings.maxHeight= MAX_PIP_WIDTH;
+   }
 
    rc= NEXUS_SimpleVideoDecoder_SetStcChannel(sink->soc.videoDecoder, sink->soc.stcChannel);
    if ( rc != NEXUS_SUCCESS )
@@ -1423,6 +1498,13 @@ static void updateVideoStatus( GstWesterosSink *sink )
       if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
       {
          LOCK( sink );
+         if ( !sink->soc.haveResources )
+         {
+            long long now= getCurrentTimeMillis();
+            gint64 elapsed= (gint64)(now-sink->soc.timeResourcesLost);
+            sink->position= sink->soc.positionResourcesLost+elapsed*1000000ULL;
+         }
+         else
          if ( videoStatus.firstPtsPassed && (sink->currentPTS/2 != videoStatus.pts) )
          {
             prevPTS= sink->currentPTS;
@@ -1529,6 +1611,18 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       vClientSettings.composition.position.y= sink->soc.videoY;
       vClientSettings.composition.position.width= sink->soc.videoWidth;
       vClientSettings.composition.position.height= sink->soc.videoHeight;
+      if ( sink->soc.usePip )
+      {
+         // Restrict PIP window size
+         if ( sink->soc.videoWidth > MAX_PIP_WIDTH )
+         {
+            vClientSettings.composition.position.width= MAX_PIP_WIDTH;
+         }
+         if ( sink->soc.videoHeight > MAX_PIP_HEIGHT )
+         {
+            vClientSettings.composition.position.height= MAX_PIP_HEIGHT;
+         }
+      }
       NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
 
       // Send a buffer to compositor to update hole punch geometry

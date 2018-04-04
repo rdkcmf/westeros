@@ -38,6 +38,7 @@ typedef struct _AppCtx
    GstBus *bus;
    GMainLoop *loop;
    guint timerId;
+   bool usePip;
    bool useSecureVideo;
    const char *videoRectOverride;
    bool haveMode;
@@ -52,6 +53,7 @@ static void showUsage()
    printf("  uri - URI of video asset to play\n" );
    printf("where [options] are:\n" );
    printf("  -r x,y,w,h : video rect\n" );
+   printf("  -P : use PIP window\n" );
    printf("  -p : emit position logs\n" );
    printf("  -s : secure video\n" );
    printf("  -? : show usage\n" );
@@ -231,6 +233,11 @@ bool createPipeline( AppCtx *ctx )
    }
    gst_object_ref( ctx->westerossink );
 
+   if ( ctx->usePip )
+   {
+      g_object_set(G_OBJECT(ctx->westerossink), "pip", TRUE, NULL );
+   }
+
    if ( ctx->useSecureVideo )
    {
       g_object_set(G_OBJECT(ctx->westerossink), "secure-video", TRUE, NULL );
@@ -321,6 +328,7 @@ int main( int argc, char **argv )
    int result= -1;
    int argidx;
    const char *uri= 0;
+   bool usePip= false;
    bool emitPosition= false;
    bool useSecureVideo= false;
    const char *videoRect= 0;
@@ -347,6 +355,9 @@ int main( int argc, char **argv )
                {
                   videoRect= argv[++argidx];
                }
+               break;
+            case 'P':
+               usePip= true;
                break;
             case 'p':
                emitPosition= true;
@@ -393,6 +404,7 @@ int main( int argc, char **argv )
       goto exit;
    }
 
+   ctx->usePip= usePip;
    ctx->useSecureVideo= useSecureVideo;
    ctx->videoRectOverride= videoRect;
 
