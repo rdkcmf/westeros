@@ -36,6 +36,7 @@
 #define DEFAULT_CAPTURE_HEIGHT (720)
 #define MAX_PIP_WIDTH (640)
 #define MAX_PIP_HEIGHT (360)
+#define DEFAULT_LATENCY_TARGET (100)
 
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
@@ -50,6 +51,8 @@ enum
   PROP_WINDOW_SHOW,
   PROP_ZOOM_MODE,
   PROP_SERVER_PLAY_SPEED,
+  PROP_LOW_DELAY,
+  PROP_LATENCY_TARGET,
   PROP_CAPTURE_SIZE
   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
   ,
@@ -148,6 +151,17 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
        g_param_spec_string ("capture_size", "capture size",
            "Capture Size Format: width,height",
            NULL, G_PARAM_WRITABLE));
+
+   g_object_class_install_property (gobject_class, PROP_LOW_DELAY,
+     g_param_spec_boolean ("low-delay",
+                           "low delay",
+                           "Control low delay mode", FALSE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_LATENCY_TARGET,
+     g_param_spec_int ("latency-target",
+                       "latency target",
+                       "Target latency in ms (use with low-delay)",
+                       1, 2000, DEFAULT_LATENCY_TARGET, G_PARAM_READWRITE ));
 
    #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
    g_object_class_install_property (gobject_class, PROP_PIP,
@@ -260,6 +274,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       sink->soc.captureSurface[i]= NULL;
    }
    sink->soc.usePip= FALSE;
+   sink->soc.useLowDelay= FALSE;
+   sink->soc.latencyTarget= DEFAULT_LATENCY_TARGET;
    sink->soc.connectId= 0;
    sink->soc.quitCaptureThread= TRUE;
    sink->soc.captureThread= NULL;
@@ -509,6 +525,12 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
          }
          break;
+      case PROP_LOW_DELAY:
+         sink->soc.useLowDelay= g_value_get_boolean(value);
+         break;
+      case PROP_LATENCY_TARGET:
+         sink->soc.latencyTarget= g_value_get_int(value);
+         break;
       case PROP_CAPTURE_SIZE:
          {
             const gchar *str= g_value_get_string(value);
@@ -608,6 +630,12 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_SERVER_PLAY_SPEED:
          g_value_set_float(value, sink->soc.serverPlaySpeed);
+         break;
+      case PROP_LOW_DELAY:
+         g_value_set_boolean(value, sink->soc.useLowDelay);
+         break;
+      case PROP_LATENCY_TARGET:
+         g_value_set_int(value, sink->soc.latencyTarget);
          break;
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
@@ -725,6 +753,12 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       ext_settings.dataReadyCallback.callback= NULL;
       ext_settings.dataReadyCallback.context= NULL;
       ext_settings.zeroDelayOutputMode= false;
+      if ( sink->soc.useLowDelay )
+      {
+         ext_settings.lowLatencySettings.mode= NEXUS_VideoDecoderLowLatencyMode_eAverage;
+         ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
+         printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
+      }
       ext_settings.treatIFrameAsRap= true;
       ext_settings.ignoreNumReorderFramesEqZero= true;
 
@@ -1663,7 +1697,24 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
 
                rv = TRUE;
             }
+            else if (!strcasecmp(struct_name, "get_current_pts"))
+            {
+               g_value_init(&val, G_TYPE_POINTER);
+               g_value_set_pointer(&val, (gpointer)(sink->currentPTS/2));
 
+               gst_structure_set_value(query_structure, "current_pts", &val);
+
+               rv = TRUE;
+            }
+            else if (!strcasecmp(struct_name, "get_first_pts"))
+            {
+               g_value_init(&val, G_TYPE_POINTER);
+               g_value_set_pointer(&val, (gpointer)(sink->firstPTS/2));
+
+               gst_structure_set_value(query_structure, "first_pts", &val);
+
+               rv = TRUE;
+            }
          }
          break;
 

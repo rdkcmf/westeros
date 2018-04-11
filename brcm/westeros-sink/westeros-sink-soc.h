@@ -49,6 +49,8 @@ struct _GstWesterosSinkSoc
    NEXUS_SurfaceClientHandle videoWindow;
 
    gboolean usePip;
+   gboolean useLowDelay;
+   gint latencyTarget;
    
    unsigned int connectId;
 
