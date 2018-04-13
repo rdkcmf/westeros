@@ -1819,6 +1819,12 @@ static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec)
          nexusVideoCodec= NEXUS_VideoCodec_eVp8;
          break;
 
+#if (NEXUS_PLATFORM_VERSION_MAJOR>15)
+      case bvideo_codec_vp9:
+        nexusVideoCodec= NEXUS_VideoCodec_eVp9;
+        break;
+#endif
+
       default:                
          nexusVideoCodec= NEXUS_VideoCodec_eUnknown;
          break;
