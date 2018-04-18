@@ -1024,6 +1024,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             GstFormat segmentFormat;
             gdouble appliedRate = 1.0;
             gdouble playbackRate= 1.0;
+            gboolean playbackRateChanged= FALSE;
 
             #ifdef USE_GST1
             const GstSegment *dataSegment;
@@ -1045,6 +1046,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
 
             
             LOCK( sink );
+            playbackRateChanged= sink->playbackRate != playbackRate;
             sink->currentSegment = dataSegment;
             sink->flushStarted= FALSE;
             sink->playbackRate= playbackRate;
@@ -1056,7 +1058,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             
             if ( 
                  (segmentFormat == GST_FORMAT_TIME) && 
-                 ( (segmentStart != 0) || (sink->startPTS != 0) )
+                 ( (segmentStart != 0) || (sink->startPTS != 0) || playbackRateChanged )
                ) 
             {
                sink->segmentNumber++;
