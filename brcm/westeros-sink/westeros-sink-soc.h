@@ -71,6 +71,7 @@ struct _GstWesterosSinkSoc
    int captureCount;
    int frameCount;
    int noFrameCount;
+   guint32 numDecoded;
    gboolean captureEnabled;
    gboolean videoPlaying;
 

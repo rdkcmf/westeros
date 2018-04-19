@@ -281,6 +281,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.captureThread= NULL;
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
+   sink->soc.numDecoded= 0;
    sink->soc.noFrameCount= 0;
    sink->soc.sb= 0;
    sink->soc.activeBuffers= 0;
@@ -921,6 +922,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
+   sink->soc.numDecoded= 0;
    UNLOCK( sink );
    
    return TRUE;
@@ -1002,6 +1004,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    LOCK(sink);
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
+   sink->soc.numDecoded= 0;
    sink->soc.noFrameCount= 0;
    sink->soc.presentationStarted= FALSE;
    UNLOCK(sink);
@@ -1085,7 +1088,10 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    }
  
    sink->videoStarted= TRUE;
-   
+
+   if ( sink->soc.clientPlaySpeed != sink->playbackRate  && sink->soc.serverPlaySpeed == 1.0 )
+       updateClientPlaySpeed(sink, sink->playbackRate);
+
    result= TRUE;
 
 exit:
@@ -1539,8 +1545,9 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->position= sink->soc.positionResourcesLost+elapsed*1000000ULL;
          }
          else
-         if ( videoStatus.firstPtsPassed && (sink->currentPTS/2 != videoStatus.pts) )
+         if ( (videoStatus.firstPtsPassed || videoStatus.numDecoded > sink->soc.numDecoded) && (sink->currentPTS/2 != videoStatus.pts) )
          {
+            sink->soc.numDecoded= videoStatus.numDecoded;
             prevPTS= sink->currentPTS;
             sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
             if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
@@ -1849,6 +1856,9 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
    NEXUS_VideoDecoderTrickState trickState;
    NEXUS_VideoDecoderSettings settings;
 
+   if ( !sink->videoStarted )
+       return;
+
    if ( clientPlaySpeed < 0 )
    {
        GST_WARNING_OBJECT(sink, "Ignoring negative play speed");
@@ -1890,7 +1900,13 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
        trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
    }
 
-   NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
-
-   GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
+   NEXUS_Error rc = NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+   if ( NEXUS_SUCCESS != rc )
+   {
+       GST_ERROR_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_SetTrickState: %d", (int)rc);
+   }
+   else
+   {
+       GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
+   }
 }
