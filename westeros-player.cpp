@@ -40,6 +40,8 @@ typedef struct _AppCtx
    guint timerId;
    bool usePip;
    bool useSecureVideo;
+   gfloat rate;
+   bool needToSetRate;
    const char *videoRectOverride;
    bool haveMode;
    int outputWidth;
@@ -56,6 +58,7 @@ static void showUsage()
    printf("  -P : use PIP window\n" );
    printf("  -p : emit position logs\n" );
    printf("  -s : secure video\n" );
+   printf("  -R <rate> : play with rate\n" );
    printf("  -? : show usage\n" );
    printf("\n" );   
 }
@@ -162,12 +165,72 @@ static const struct wl_registry_listener registryListener =
 	registryHandleGlobalRemove
 };
 
+gboolean stateChangeTimerTimeout( gpointer userData )
+{
+   AppCtx *ctx= (AppCtx*)userData;
+
+   if ( ctx->pipeline )
+   {
+      GstState stateCurrent, statePending;
+
+      gst_element_get_state( ctx->pipeline, &stateCurrent, &statePending, 0 );
+
+      if ( (stateCurrent == GST_STATE_PAUSED) && (statePending == GST_STATE_VOID_PENDING) )
+      {
+         if ( !gst_element_seek( ctx->pipeline,
+                                 ctx->rate,
+                                 GST_FORMAT_TIME,
+                                 GST_SEEK_FLAG_FLUSH,
+                                 GST_SEEK_TYPE_SET, //start type
+                                 0, //start
+                                 GST_SEEK_TYPE_NONE, //stop type
+                                 GST_CLOCK_TIME_NONE //stop
+                                ) )
+         {
+            g_print("Error: unable to set rate\n");
+            g_main_loop_quit( ctx->loop );
+         }
+         else
+         {
+            g_object_set( ctx->player, "mute", TRUE, NULL );
+
+            if ( GST_STATE_CHANGE_FAILURE == gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
+            {
+               g_print("Error: unable to move to PLAYING\n");
+               g_main_loop_quit( ctx->loop );
+            }
+         }
+      }
+      else
+      {
+         return G_SOURCE_CONTINUE;
+      }
+   }
+
+   return G_SOURCE_REMOVE;
+}
+
 static gboolean busCallback(GstBus *bus, GstMessage *message, gpointer data)
 {
    AppCtx *ctx= (AppCtx*)data;
    
    switch ( GST_MESSAGE_TYPE(message) ) 
    {
+      case GST_MESSAGE_STATE_CHANGED:
+         {
+            GstState oldState, newState, pendingState;
+            gst_message_parse_state_changed( message, &oldState, &newState, &pendingState );
+            if ( (oldState == GST_STATE_READY) &&
+                 (newState == GST_STATE_PAUSED) &&
+                 (pendingState == GST_STATE_VOID_PENDING) &&
+                 ctx->needToSetRate  )
+            {
+               ctx->needToSetRate= false;
+
+               g_timeout_add( 500, stateChangeTimerTimeout, ctx );
+            }
+         }
+         break;
       case GST_MESSAGE_ERROR: 
          {
             GError *error;
@@ -309,7 +372,7 @@ static void signalHandler(int signum)
 	}
 }
 
-gboolean timerTimeout( gpointer userData )
+gboolean progressTimerTimeout( gpointer userData )
 {
    AppCtx *ctx= (AppCtx*)userData;
 
@@ -321,6 +384,7 @@ gboolean timerTimeout( gpointer userData )
          printf("westeros_player: pos: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(pos));
       }
    }
+   return G_SOURCE_CONTINUE;
 }
 
 int main( int argc, char **argv )
@@ -331,6 +395,7 @@ int main( int argc, char **argv )
    bool usePip= false;
    bool emitPosition= false;
    bool useSecureVideo= false;
+   gfloat rate= 1.0f;
    const char *videoRect= 0;
    AppCtx *ctx= 0;
    struct sigaction sigint;
@@ -364,6 +429,16 @@ int main( int argc, char **argv )
                break;
             case 's':
                useSecureVideo= true;
+               break;
+            case 'R':
+               if ( argidx+1 < argc )
+               {
+                  float r= atof( argv[++argidx] );
+                  if ( r > 0.0 )
+                  {
+                     rate= r;
+                  }
+               }
                break;
             case '?':
                showUsage();
@@ -407,6 +482,11 @@ int main( int argc, char **argv )
    ctx->usePip= usePip;
    ctx->useSecureVideo= useSecureVideo;
    ctx->videoRectOverride= videoRect;
+   ctx->rate= rate;
+   if ( rate != 1.0f )
+   {
+      ctx->needToSetRate= true;
+   }
 
    ctx->display= wl_display_connect( NULL );
    if ( !ctx->display )
@@ -434,12 +514,12 @@ int main( int argc, char **argv )
       {
          if ( emitPosition )
          {
-            ctx->timerId= g_timeout_add( 1000, timerTimeout, ctx );
+            ctx->timerId= g_timeout_add( 1000, progressTimerTimeout, ctx );
          }
 
          g_object_set(G_OBJECT(ctx->player), "uri", uri, NULL );
          
-         if ( GST_STATE_CHANGE_FAILURE != gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
+         if ( GST_STATE_CHANGE_FAILURE != gst_element_set_state(ctx->pipeline, ctx->needToSetRate ? GST_STATE_PAUSED : GST_STATE_PLAYING) )
          {
             sigint.sa_handler = signalHandler;
             sigemptyset(&sigint.sa_mask);

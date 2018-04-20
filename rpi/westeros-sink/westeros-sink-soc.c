@@ -1341,7 +1341,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
    memset( &clockScale, 0, sizeof(OMX_TIME_CONFIG_SCALETYPE) );
    clockScale.nSize= sizeof(OMX_TIME_CONFIG_SCALETYPE);
    clockScale.nVersion.nVersion= OMX_VERSION;
-   clockScale.xScale= (1<<16);
+   clockScale.xScale= (sink->playbackRate*0x10000);
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_paused_to_playing: calling OMX_SetConifg for clock scale");
    omxerr= OMX_SetConfig( sink->soc.clock.hComp, OMX_IndexConfigTimeScale, &clockScale );
    if ( omxerr != OMX_ErrorNone )
