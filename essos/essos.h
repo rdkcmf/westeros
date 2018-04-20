@@ -226,6 +226,20 @@ bool EssContextSetPointerListener( EssCtx *ctx, void *userData, EssPointerListen
 bool EssContextSetTerminateListener( EssCtx *ctx, void *userData, EssTerminateListener *listener );
 
 /**
+ * EssContextSetKeyRepeatInitialDelay
+ *
+ * Set the initial delay in milliseconds when a key is pressed until repeats start.
+ */
+ bool EssContextSetKeyRepeatInitialDelay( EssCtx *ctx, int delay );
+
+/**
+ * EssContextSetKeyRepeatPeriod
+ *
+ * Set the period in milliseconds between key repeats.
+ */
+ bool EssContextSetKeyRepeatPeriod( EssCtx *ctx, int period );
+
+/**
  * EssContextStart
  *
  * Start an application context running.  Context initialization will be performed by this call

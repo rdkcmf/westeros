@@ -53,6 +53,8 @@
 #define ESS_MAX_ERROR_DETAIL (512)
 #define DEFAULT_PLANE_WIDTH (1280)
 #define DEFAULT_PLANE_HEIGHT (720)
+#define DEFAULT_KEY_REPEAT_DELAY (500)
+#define DEFAULT_KEY_REPEAT_PERIOD (100)
 
 #define INT_FATAL(FORMAT, ...)      printf("Essos Fatal: " FORMAT "\n", ##__VA_ARGS__)
 #define INT_ERROR(FORMAT, ...)      printf("Essos Error: " FORMAT "\n", ##__VA_ARGS__)
@@ -88,6 +90,13 @@ typedef struct _EssCtx
 
    int pointerX;
    int pointerY;
+
+   long long lastKeyTime;
+   int lastKeyCode;
+   bool keyPressed;
+   bool keyRepeating;
+   int keyRepeatInitialDelay;
+   int keyRepeatPeriod;
 
    void *keyListenerUserData;
    EssKeyListener *keyListener;
@@ -202,6 +211,9 @@ EssCtx* EssContextCreate()
       ctx->watchFd= -1;
       ctx->waylandFd= -1;
       ctx->eventLoopPeriodMS= 16;
+
+      ctx->keyRepeatInitialDelay= DEFAULT_KEY_REPEAT_DELAY;
+      ctx->keyRepeatPeriod= DEFAULT_KEY_REPEAT_PERIOD;
 
       ctx->displayType= EGL_DEFAULT_DISPLAY;
       ctx->eglDisplay= EGL_NO_DISPLAY;
@@ -651,10 +663,47 @@ bool EssContextSetTerminateListener( EssCtx *ctx, void *userData, EssTerminateLi
    return result;
 }
 
-bool EssContextStart( EssCtx *ctx )
+
+bool EssContextSetKeyRepeatInitialDelay( EssCtx *ctx, int delay )
 {
    bool result= false;
                   
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->keyRepeatInitialDelay= delay;
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
+
+bool EssContextSetKeyRepeatPeriod( EssCtx *ctx, int period )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->keyRepeatPeriod= period;
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
+
+bool EssContextStart( EssCtx *ctx )
+{
+   bool result= false;
+
    if ( ctx )
    {
       pthread_mutex_lock( &ctx->mutex );
@@ -1129,6 +1178,21 @@ static void essRunEventLoopOnce( EssCtx *ctx )
          essProcessInputDevices( ctx );
          #endif
       }
+
+      if ( ctx->keyPressed )
+      {
+         long long now= essGetCurrentTimeMillis();
+         long long diff= now-ctx->lastKeyTime;
+         if (
+              (ctx->keyRepeating && (diff >= ctx->keyRepeatPeriod)) ||
+              (!ctx->keyRepeating && (diff >= ctx->keyRepeatInitialDelay))
+            )
+         {
+            ctx->lastKeyTime= now;
+            ctx->keyRepeating= true;
+            essProcessKeyPressed( ctx, ctx->lastKeyCode );
+         }
+      }
    }
 }
 
@@ -1290,10 +1354,15 @@ static void essKeyboardKey( void *data, struct wl_keyboard *keyboard, uint32_t s
       default:
          if ( state == WL_KEYBOARD_KEY_STATE_PRESSED )
          {
+            ctx->lastKeyTime= essGetCurrentTimeMillis();
+            ctx->lastKeyCode= key;
+            ctx->keyPressed= true;
+            ctx->keyRepeating= false;
             essProcessKeyPressed( ctx, key );
          }
          else if ( state == WL_KEYBOARD_KEY_STATE_RELEASED )
          {
+            ctx->keyPressed= false;
             essProcessKeyReleased( ctx, key );
          }
          break;
@@ -1983,13 +2052,19 @@ static void essProcessInputDevices( EssCtx *ctx )
                            default:
                               {
                                  int keyCode= e.code;
+                                 long long timeMillis= e.time.tv_sec*1000LL+e.time.tv_usec/1000LL;
 
                                  switch ( e.value )
                                  {
                                     case 0:
+                                       ctx->keyPressed= false;
                                        essProcessKeyReleased( ctx, keyCode );
                                        break;
                                     case 1:
+                                       ctx->lastKeyTime= timeMillis;
+                                       ctx->lastKeyCode= keyCode;
+                                       ctx->keyPressed= true;
+                                       ctx->keyRepeating= false;
                                        essProcessKeyPressed( ctx, keyCode );
                                        break;
                                     default:
