@@ -1722,6 +1722,33 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
 
                rv = TRUE;
             }
+            else if (!strcasecmp(struct_name, "get_video_playback_quality"))
+            {
+                NEXUS_Error rc;
+                NEXUS_VideoDecoderStatus videoStatus;
+                if ( sink->soc.videoDecoder )
+                {
+                    rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus );
+                    if ( NEXUS_SUCCESS != rc )
+                    {
+                        GST_WARNING_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+                    }
+                    else
+                    {
+                        g_value_init(&val, G_TYPE_UINT);
+
+                        g_value_set_uint(&val, videoStatus.numDecoded);
+                        gst_structure_set_value(query_structure, "total", &val);
+
+                        g_value_set_uint(&val, videoStatus.numDecodeDrops + videoStatus.numDisplayDrops);
+                        gst_structure_set_value(query_structure, "dropped", &val);
+
+                        g_value_set_uint(&val, videoStatus.numDecodeErrors + videoStatus.numDisplayErrors);
+                        gst_structure_set_value(query_structure, "corrupted", &val);
+                    }
+                }
+                rv = TRUE;
+            }
          }
          break;
 
