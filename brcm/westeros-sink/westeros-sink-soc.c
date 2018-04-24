@@ -740,6 +740,9 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
       NEXUS_SimpleVideoDecoder_GetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
 
+      #if (NEXUS_PLATFORM_VERSION_MAJOR > 16) || ((NEXUS_PLATFORM_VERSION_MAJOR == 16) && (NEXUS_PLATFORM_VERSION_MINOR > 3))
+      settings.scanMode= NEXUS_VideoDecoderScanMode_e1080p;
+      #endif
       // Don't enable zeroDelayOutputMode since this combined with
       // NEXUS_VideoDecoderTimestampMode_eDisplay will cause the capture
       // to omit all out of order frames (ie. all B-Frames)
