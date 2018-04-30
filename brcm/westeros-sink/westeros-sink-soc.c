@@ -1051,6 +1051,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    startSettings.settings.timestampMode= NEXUS_VideoDecoderTimestampMode_eDisplay;                
    startSettings.settings.prerollRate= 1;
    startSettings.displayEnabled= true;
+   startSettings.smoothResolutionChange= TRUE;
    startSettings.maxWidth= sink->maxWidth;
    startSettings.maxHeight= sink->maxHeight;
    if ( sink->soc.usePip )
