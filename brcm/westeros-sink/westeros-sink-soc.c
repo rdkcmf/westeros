@@ -37,6 +37,7 @@
 #define MAX_PIP_WIDTH (640)
 #define MAX_PIP_HEIGHT (360)
 #define DEFAULT_LATENCY_TARGET (100)
+#define MAX_ZORDER (100)
 
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
@@ -53,7 +54,9 @@ enum
   PROP_SERVER_PLAY_SPEED,
   PROP_LOW_DELAY,
   PROP_LATENCY_TARGET,
-  PROP_CAPTURE_SIZE
+  PROP_CAPTURE_SIZE,
+  PROP_HIDE_VIDEO_DURING_CAPTURE,
+  PROP_CAMERA_LATENCY
   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
   ,
   PROP_PIP
@@ -162,6 +165,16 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                        "latency target",
                        "Target latency in ms (use with low-delay)",
                        1, 2000, DEFAULT_LATENCY_TARGET, G_PARAM_READWRITE ));
+
+   g_object_class_install_property (gobject_class, PROP_HIDE_VIDEO_DURING_CAPTURE,
+     g_param_spec_boolean ("hide-video-during-capture",
+                           "hide video window during video capture to graphics",
+                           "true: hide video, false: don't hide video", TRUE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_CAMERA_LATENCY,
+     g_param_spec_boolean ("camera-latency",
+                           "low latency camera mode",
+                           "configure for low latency mode suitable for cameras", FALSE, G_PARAM_READWRITE));
 
    #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
    g_object_class_install_property (gobject_class, PROP_PIP,
@@ -273,7 +286,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    {
       sink->soc.captureSurface[i]= NULL;
    }
+   sink->soc.hideVideoDuringCapture= TRUE;
    sink->soc.usePip= FALSE;
+   sink->soc.useCameraLatency= FALSE;
    sink->soc.useLowDelay= FALSE;
    sink->soc.latencyTarget= DEFAULT_LATENCY_TARGET;
    sink->soc.connectId= 0;
@@ -555,6 +570,16 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             g_strfreev(parts);
             break;
          }
+      case PROP_HIDE_VIDEO_DURING_CAPTURE:
+         {
+            sink->soc.hideVideoDuringCapture= g_value_get_boolean(value);
+            break;
+         }
+      case PROP_CAMERA_LATENCY:
+         {
+            sink->soc.useCameraLatency= g_value_get_boolean(value);
+            break;
+         }
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
          {
@@ -637,6 +662,12 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_LATENCY_TARGET:
          g_value_set_int(value, sink->soc.latencyTarget);
+         break;
+      case PROP_HIDE_VIDEO_DURING_CAPTURE:
+         g_value_set_boolean(value, sink->soc.hideVideoDuringCapture);
+         break;
+      case PROP_CAMERA_LATENCY:
+         g_value_set_boolean(value, sink->soc.useCameraLatency);
          break;
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
@@ -763,6 +794,16 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
          ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
          printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
       }
+      if ( sink->soc.useCameraLatency )
+      {
+         NEXUS_VideoDecoderTrickState trickState;
+         NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+         trickState.rate= 2000;
+         NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+         ext_settings.zeroDelayOutputMode= true;
+         ext_settings.ignoreDpbOutputDelaySyntax= true;
+         printf("westerossink: using camera mode\n");
+      }
       ext_settings.treatIFrameAsRap= true;
       ext_settings.ignoreNumReorderFramesEqZero= true;
 
@@ -773,6 +814,11 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       {
          gst_westeros_sink_soc_update_video_position( sink );
       }
+
+      NEXUS_SurfaceClientSettings vClientSettings;
+      NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+      vClientSettings.composition.zorder= sink->zorder*MAX_ZORDER;
+      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
 
       result= TRUE;
    }
@@ -1350,6 +1396,18 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
           GST_ERROR("Error NEXUS_SimpleVideoDecoder_StartCapture: %d", (int)rc);
       }
       sink->soc.captureEnabled= TRUE;
+
+      if ( sink->soc.hideVideoDuringCapture )
+      {
+         /* Move HW path video off screen.  The natural inclination would be to suppress
+          * its presentation by setting captureSettings.displayEnable to false, but doing
+          * so seems to cause HW path video to never present again when capture is disabled.
+          * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
+          */
+         NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+         vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
+         NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+      }
    }
    else if ( !useGfxPath && sink->soc.captureEnabled )
    {

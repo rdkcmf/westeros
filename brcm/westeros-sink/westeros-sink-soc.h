@@ -48,6 +48,8 @@ struct _GstWesterosSinkSoc
    NEXUS_SurfaceClientHandle surfaceClient;
    NEXUS_SurfaceClientHandle videoWindow;
 
+   gboolean hideVideoDuringCapture;
+   gboolean useCameraLatency;
    gboolean usePip;
    gboolean useLowDelay;
    gint latencyTarget;

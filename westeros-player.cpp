@@ -39,8 +39,12 @@ typedef struct _AppCtx
    GMainLoop *loop;
    guint timerId;
    bool usePip;
+   bool useCameraLatency;
+   bool useLowDelay;
+   int latencyTarget;
    bool useSecureVideo;
    gfloat rate;
+   gfloat zorder;
    bool needToSetRate;
    const char *videoRectOverride;
    bool haveMode;
@@ -56,9 +60,13 @@ static void showUsage()
    printf("where [options] are:\n" );
    printf("  -r x,y,w,h : video rect\n" );
    printf("  -P : use PIP window\n" );
+   printf("  -C : use camera latency mode\n" );
+   printf("  -l : use low-delay\n" );
+   printf("  -L <target> : use latency target <target> (in ms)\n" );
    printf("  -p : emit position logs\n" );
    printf("  -s : secure video\n" );
    printf("  -R <rate> : play with rate\n" );
+   printf("  -z <zorder> : video z-order, 0.0 - 1.0\n");
    printf("  -? : show usage\n" );
    printf("\n" );   
 }
@@ -301,10 +309,26 @@ bool createPipeline( AppCtx *ctx )
       g_object_set(G_OBJECT(ctx->westerossink), "pip", TRUE, NULL );
    }
 
+   if ( ctx->useCameraLatency )
+   {
+      g_object_set(G_OBJECT(ctx->westerossink), "camera-latency", TRUE, NULL );
+   }
+
+   if ( ctx->useLowDelay )
+   {
+      g_object_set(G_OBJECT(ctx->westerossink), "low-delay", TRUE, NULL );
+      if ( ctx->latencyTarget )
+      {
+         g_object_set(G_OBJECT(ctx->westerossink), "latency-target", ctx->latencyTarget, NULL );
+      }
+   }
+
    if ( ctx->useSecureVideo )
    {
       g_object_set(G_OBJECT(ctx->westerossink), "secure-video", TRUE, NULL );
    }
+
+   g_object_set(G_OBJECT(ctx->westerossink), "zorder", ctx->zorder, NULL );
 
    g_object_set(G_OBJECT(ctx->player), "video-sink", ctx->westerossink, NULL );
 
@@ -393,9 +417,13 @@ int main( int argc, char **argv )
    int argidx;
    const char *uri= 0;
    bool usePip= false;
+   bool useCameraLatency= false;
+   bool useLowDelay= false;
+   int latencyTarget= 0;
    bool emitPosition= false;
    bool useSecureVideo= false;
    gfloat rate= 1.0f;
+   gfloat zorder= 0.0f;
    const char *videoRect= 0;
    AppCtx *ctx= 0;
    struct sigaction sigint;
@@ -424,6 +452,22 @@ int main( int argc, char **argv )
             case 'P':
                usePip= true;
                break;
+            case 'C':
+               useCameraLatency= true;
+               break;
+            case 'l':
+               useLowDelay= true;
+               break;
+            case 'L':
+               if ( argidx+1 < argc )
+               {
+                  int t= atoi( argv[++argidx] );
+                  if ( (t > 0) && (t <= 2000) )
+                  {
+                     latencyTarget= t;
+                  }
+               }
+               break;
             case 'p':
                emitPosition= true;
                break;
@@ -437,6 +481,16 @@ int main( int argc, char **argv )
                   if ( r > 0.0 )
                   {
                      rate= r;
+                  }
+               }
+               break;
+            case 'z':
+               if ( argidx+1 < argc )
+               {
+                  float z= atof( argv[++argidx] );
+                  if ( z >= 0.0 )
+                  {
+                     zorder= z;
                   }
                }
                break;
@@ -480,9 +534,13 @@ int main( int argc, char **argv )
    }
 
    ctx->usePip= usePip;
+   ctx->useCameraLatency= useCameraLatency;
+   ctx->useLowDelay= useLowDelay;
+   ctx->latencyTarget= latencyTarget;
    ctx->useSecureVideo= useSecureVideo;
    ctx->videoRectOverride= videoRect;
    ctx->rate= rate;
+   ctx->zorder= zorder;
    if ( rate != 1.0f )
    {
       ctx->needToSetRate= true;
