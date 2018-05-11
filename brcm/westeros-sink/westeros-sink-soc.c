@@ -815,10 +815,10 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
          gst_westeros_sink_soc_update_video_position( sink );
       }
 
-      NEXUS_SurfaceClientSettings vClientSettings;
-      NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-      vClientSettings.composition.zorder= sink->zorder*MAX_ZORDER;
-      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+      NEXUS_SurfaceComposition composition;
+      NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+      composition.zorder= sink->zorder*MAX_ZORDER;
+      NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
 
       result= TRUE;
    }
