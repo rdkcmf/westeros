@@ -2026,8 +2026,6 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
          
          WstRendererUpdateScene( ctx->renderer );
 
-         wstCompositorReleaseDetachedBuffers( ctx );
-
          if ( !(hints & WstHints_holePunch) )
          {
             if ( ctx->renderer->rects.size() )
