@@ -70,6 +70,7 @@ typedef struct _AppCtx
 {
    WstCompositor *wctx;
    bool isEmbedded;
+   bool useFBO;
    float matrix[16];
    float alpha;
    int x, y, width, height;
@@ -151,6 +152,7 @@ static void showUsage()
    #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
    printf("  --animate : enable animation (scale, rotate, translate) (use with --embedded)\n" );
    printf("  --animate2 : enable animation (size, translate) (use with --embedded)\n");
+   printf("  --noFBO : renders without FBO (use with --embedded)\n" );
    #if defined (WESTEROS_PLATFORM_EMBEDDED)
    printf("  --enableCursor : display default pointer cursor\n" );
    #endif
@@ -401,6 +403,8 @@ static GLuint createShader(AppCtx *appCtx, GLenum shaderType, const char *shader
 
 static void createFBO( AppCtx *appCtx )
 {
+   if ( !appCtx->useFBO ) return;
+
    GLenum statusFBO;
    GLuint frag, vert;
    GLuint program;
@@ -471,6 +475,8 @@ static void createFBO( AppCtx *appCtx )
 
 static void destroyFBO( AppCtx *appCtx )
 {
+   if ( !appCtx->useFBO ) return;
+
    if ( appCtx->fboVert )
    {
       glDeleteShader( appCtx->fboVert );
@@ -506,6 +512,8 @@ static void destroyFBO( AppCtx *appCtx )
 static void resizeFBO( AppCtx *appCtx, int width, int height )
 {
    GLenum statusFBO;
+
+   if ( !appCtx->useFBO ) return;
 
    if ( appCtx->fboId )
    {
@@ -1282,6 +1290,8 @@ AppCtx* initApp()
       appCtx->nativeWindow= getNativeWindow( appCtx );
       printf("nativeWindow= %p\n", appCtx->nativeWindow );
       #endif
+
+      appCtx->useFBO= true;
    }
 
 exit:   
@@ -1684,7 +1694,10 @@ void draw( WstCompositor *wctx, void *userData )
       glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
       glClear( GL_COLOR_BUFFER_BIT );
 
-      glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+      if ( appCtx->useFBO )
+      {
+         glBindFramebuffer( GL_FRAMEBUFFER, appCtx->fboId );
+      }
 
       GLfloat priorColor[4];
       glGetFloatv( GL_COLOR_CLEAR_VALUE, priorColor );
@@ -1705,7 +1718,10 @@ void draw( WstCompositor *wctx, void *userData )
                                     &needHolePunch,
                                     appCtx->rects );
 
-      glBindFramebuffer( GL_FRAMEBUFFER, 0 );
+      if ( appCtx->useFBO )
+      {
+         glBindFramebuffer( GL_FRAMEBUFFER, 0 );
+      }
 
       if ( needHolePunch )
       {
@@ -1737,7 +1753,10 @@ void draw( WstCompositor *wctx, void *userData )
          }
       }
 
-      drawFBO( appCtx );
+      if ( appCtx->useFBO )
+      {
+         drawFBO( appCtx );
+      }
 
       glClearColor( priorColor[0], priorColor[1], priorColor[2], priorColor[3] );
       
@@ -1761,7 +1780,17 @@ void draw( WstCompositor *wctx, void *userData )
 int animationStart( AppCtx *appCtx )
 {
    int hints= WstHints_none;
-   
+
+   if ( appCtx->useFBO )
+   {
+      hints |= WstHints_fboTarget;
+   }
+   else
+   {
+     hints |= WstHints_applyTransform;
+     hints |= WstHints_holePunch;
+   }
+
    appCtx->animationRunning= true;
    switch( appCtx->animationType )
    {
@@ -1775,7 +1804,6 @@ int animationStart( AppCtx *appCtx )
          appCtx->startTransX= appCtx->transX;
          appCtx->targetTransY= (appCtx->targetTransY == 0 ? 340 : 0);
          appCtx->startTransY= appCtx->transY;
-         hints= WstHints_none;
          break;
       case 2:
          appCtx->animationStartTime= getCurrentTimeMillis();
@@ -1786,7 +1814,7 @@ int animationStart( AppCtx *appCtx )
          appCtx->startTransX= appCtx->transX;
          appCtx->targetTransY= (appCtx->targetTransY == 0 ? 180 : 0);
          appCtx->startTransY= appCtx->transY;
-         hints= WstHints_noRotation;
+         hints |= WstHints_noRotation;
          break;
    }
    
@@ -1796,6 +1824,16 @@ int animationStart( AppCtx *appCtx )
 int animationEnd( AppCtx *appCtx )
 {
    int hints= WstHints_none;
+
+   if ( appCtx->useFBO )
+   {
+      hints |= WstHints_fboTarget;
+   }
+   else
+   {
+     hints |= WstHints_applyTransform;
+     hints |= WstHints_holePunch;
+   }
 
    appCtx->animationRunning= false;
 
@@ -1822,7 +1860,7 @@ int animationEnd( AppCtx *appCtx )
    appCtx->matrix[12]= appCtx->transX;
    appCtx->matrix[13]= appCtx->transY;
 
-   hints= WstHints_noRotation;
+   hints |= WstHints_noRotation;
    appCtx->tickCount= 0;
    
    return hints;
@@ -1896,7 +1934,7 @@ void compositorDispatch( WstCompositor *wctx, void *userData )
             tick= appCtx->tickCount % 600;
             if ( tick < 599 )
             {
-               hints= WstHints_noRotation;
+               hints= appCtx->hints;
             }
             else
             {
@@ -2122,6 +2160,11 @@ int main( int argc, char** argv)
       {
          appCtx->enableAnimation= true;
          appCtx->animationType= 2;
+      }
+      else
+      if ( (len == 7) && !strncmp( argv[i], "--noFBO", len) )
+      {
+         appCtx->useFBO= false;
       }
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       else
