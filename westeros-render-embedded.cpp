@@ -21,6 +21,7 @@
 #include <memory.h>
 #include <assert.h>
 #include <dlfcn.h>
+#include <sys/time.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -153,6 +154,8 @@ typedef struct _WstShader
 } WstShader;
 
 static char message[1024];
+static bool emitFPS= false;
+
 
 static WstShader* wstRendererEMBCreateShader( bool yuv )
 {
@@ -467,6 +470,11 @@ static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer )
    rendererEMB= (WstRendererEMB*)calloc(1, sizeof(WstRendererEMB) );
    if ( rendererEMB )
    {
+      if ( getenv("WESTEROS_RENDER_EMBEDDED_FPS" ) )
+      {
+         emitFPS= true;
+      }
+
       rendererEMB->outputWidth= renderer->outputWidth;
       rendererEMB->outputHeight= renderer->outputHeight;
       
@@ -1362,6 +1370,25 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
    WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
    GLuint program;
 
+   if ( emitFPS )
+   {
+      static int frameCount= 0;
+      static long long lastReportTime= -1LL;
+      struct timeval tv;
+      long long now;
+      gettimeofday(&tv,0);
+      now= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+      ++frameCount;
+      if ( lastReportTime == -1LL ) lastReportTime= now;
+      if ( now-lastReportTime > 5000 )
+      {
+         double fps= ((double)frameCount*1000)/((double)(now-lastReportTime));
+         printf("westeros-render-embedded: fps %f\n", fps);
+         lastReportTime= now;
+         frameCount= 0;
+      }
+   }
+
    wstRendererProcessDeadTextures( rendererEMB );
    
    if ( renderer->fastHint && rendererEMB->rendererFast && !rendererEMB->fastPathActive )
@@ -1457,9 +1484,20 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
    }
 
    glUseProgram( program );
-   
-   glFlush();
-   glFinish();
+
+   #if defined (WESTEROS_PLATFORM_NEXUS )
+   {
+      static bool needFinish= (getenv("WAYLAND_EGL_BNXS_ZEROCOPY") == NULL);
+      // The calls to glFlush/glFinish are not required except on the Broadcom Nexus platform
+      // when older versions of wayland-egl-bnxs are being used.  This code will be removed
+      // in the near future.
+      if ( needFinish )
+      {
+         glFlush();
+         glFinish();
+      }
+   }
+   #endif
 }
 
 static WstRenderSurface* wstRendererSurfaceCreate( WstRenderer *renderer )
