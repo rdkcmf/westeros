@@ -1612,7 +1612,7 @@ static void renderGL( AppCtx *ctx )
    static const uint32_t speed_div = 5;
    EGLint rect[4];
 
-   glViewport( 0, 0, ctx->surfaceWidth, ctx->surfaceHeight );
+   glViewport( 0, 0, ctx->planeWidth, ctx->planeHeight );
    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
    glClear(GL_COLOR_BUFFER_BIT);
 

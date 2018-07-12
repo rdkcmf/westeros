@@ -1349,6 +1349,15 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
          appCtx->animationRunning= false;
          appCtx->scale= 1.0;
          appCtx->targetScale= 1.0;
+         if ( appCtx->useFBO )
+         {
+            appCtx->hints |= WstHints_fboTarget;
+         }
+         else
+         {
+            appCtx->hints |= WstHints_applyTransform;
+            appCtx->hints |= WstHints_holePunch;
+         }
       }
       
       result= true;
