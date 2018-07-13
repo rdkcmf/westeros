@@ -19,10 +19,10 @@
 
 SUBDIRS = 
 AM_CPPFLAGS = -pthread -Wall -DEMU -I./
-plugin_LTLIBRARIES = libgstwesterossinkbin.la
-libgstwesterossinkbin_la_SOURCES =  westeros-sink.c  westeros-sink-soc.c
-libgstwesterossinkbin_la_CFLAGS =  $(GST_CFLAGS) $(WAYLAND_CLIENT_CFLAGS) $(WAYLAND_SERVER_CFLAGS)
-libgstwesterossinkbin_la_LDFLAGS = $(GST_LIBS) 
-libgstwesterossinkbin_la_LIBADD = -lwayland-client -lgstvideo-1.0 -lgstreamer-1.0 -lgstbase-1.0 -lwesteros_simplebuffer_client -lwesteros_simpleshell_client -lwesteros_compositor -lgstvideo-1.0 -ldl -lEGL
-libgstwesterossinkbin_la_LDFLAGS += -module -avoid-version
-libgstwesterossinkbin_la_LIBTOOLFLAGS = --tag=disable-static
+plugin_LTLIBRARIES = libgstwesterossink.la
+libgstwesterossink_la_SOURCES =  westeros-sink.c  westeros-sink-soc.c
+libgstwesterossink_la_CFLAGS =  $(GST_CFLAGS) $(WAYLAND_CLIENT_CFLAGS) $(WAYLAND_SERVER_CFLAGS)
+libgstwesterossink_la_LDFLAGS = $(GST_LIBS) 
+libgstwesterossink_la_LIBADD = -lwayland-client -lgstvideo-1.0 -lgstreamer-1.0 -lgstbase-1.0 -lwesteros_simplebuffer_client -lwesteros_simpleshell_client -lwesteros_compositor -lgstvideo-1.0 -ldl -lEGL
+libgstwesterossink_la_LDFLAGS += -module -avoid-version
+libgstwesterossink_la_LIBTOOLFLAGS = --tag=disable-static
