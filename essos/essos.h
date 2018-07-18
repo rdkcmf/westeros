@@ -121,6 +121,14 @@ bool EssContextSetUseDirect( EssCtx *ctx, bool useWayland );
 bool EssContextGetUseDirect( EssCtx *ctx );
 
 /**
+ * EssContextSetName
+ *
+ * Establish name of the application context.  This must be called
+ * before initializing or starting the application
+ */
+bool EssContextSetName( EssCtx *ctx, const char *name );
+
+/**
  * EssContextSetEGLSurfaceAttributes
  *
  * Specifies a set of EGL surface attributes to be used when creating
@@ -256,12 +264,30 @@ bool EssContextStart( EssCtx *ctx );
 void EssContextStop( EssCtx *ctx );
 
 /**
+ * EssContextSetDisplaySize
+ *
+ * Used to inform Essos of the display size for  a direct EGL application,  For a Wayland application
+ * the source of the display size is the compositor and this call will be ignored,
+ */
+bool EssContextSetDisplaySize( EssCtx *ctx, int width, int height );
+
+/**
  * EssContextGetDisplaySize
  *
  * Returns the width and height of the display.  For a Wayland app this will be
  * the dimensions of the wl_output of the Wayland display the application is connected to,
  */
 bool EssContextGetDisplaySize( EssCtx *ctx, int *width, int *height );
+
+/**
+ * EssContextSetWindowPosition
+ *
+ * Sets the window position.  For a Wayland application, this will
+ * set the window position if the the application is not a fullscreen
+ * application (ie. connected to a Westeros embedded compositor).  For a
+ * direct Linux application this call will be ignored.
+ */
+bool EssContextSetWindowPosition( EssCtx *ctx, int x, int y );
 
 /**
  * EssContextRunEventLoopOnce

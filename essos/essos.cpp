@@ -47,6 +47,7 @@
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include "simpleshell-client-protocol.h"
 #endif
 
 #define ESS_UNUSED(x) ((void)x)
@@ -81,6 +82,14 @@ typedef struct _EssCtx
    bool haveMode;
    int planeWidth;
    int planeHeight;
+   int windowX;
+   int windowY;
+   int windowWidth;
+   int windowHeight;
+   bool pendingGeometryChange;
+   bool fullScreen;
+   const char *appName;
+   uint32_t appSurfaceId;
    int waylandFd;
    pollfd wlPollFd;
    int notifyFd;
@@ -129,6 +138,7 @@ typedef struct _EssCtx
    struct wl_pointer *wlpointer;
    struct wl_touch *wltouch;
    struct wl_surface *wlsurface;
+   struct wl_simple_shell *shell;
    struct wl_egl_window *wleglwindow;
 
    struct xkb_context *xkbCtx;
@@ -207,6 +217,8 @@ EssCtx* EssContextCreate()
 
       ctx->planeWidth= DEFAULT_PLANE_WIDTH;
       ctx->planeHeight= DEFAULT_PLANE_HEIGHT;
+      ctx->windowWidth= DEFAULT_PLANE_WIDTH;
+      ctx->windowHeight= DEFAULT_PLANE_HEIGHT;
       ctx->notifyFd= -1;
       ctx->watchFd= -1;
       ctx->waylandFd= -1;
@@ -241,6 +253,11 @@ void EssContextDestroy( EssCtx *ctx )
       }
 
       essPlatformTerm( ctx );
+
+      if ( ctx->appName )
+      {
+         free( (char*)ctx->appName );
+      }
 
       pthread_mutex_destroy( &ctx->mutex );
       
@@ -359,6 +376,42 @@ bool EssContextGetUseDirect( EssCtx *ctx )
    return !EssContextGetUseWayland( ctx );
 }
 
+bool EssContextSetName( EssCtx *ctx, const char *name )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( ctx->isInitialized )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Can't change application name when already initialized" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+
+      if ( !name )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Invalid parameter: name is null" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+
+      ctx->appName= strdup(name);;
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
+   }
+
+exit:
+
+   return result;
+}
+
 bool EssContextSetEGLSurfaceAttributes( EssCtx *ctx, EGLint *attrs, EGLint size )
 {
    bool result= false;
@@ -457,10 +510,12 @@ bool EssContextSetInitialWindowSize( EssCtx *ctx, int width, int height )
       }
 
       ctx->haveMode= true;
-      ctx->planeWidth= width;
-      ctx->planeHeight= height;
+      ctx->windowWidth= width;
+      ctx->windowHeight= height;
 
       pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
    }
 
 exit:   
@@ -487,6 +542,8 @@ bool EssContextSetSwapInterval( EssCtx *ctx, EGLint swapInterval )
       ctx->eglSwapInterval= swapInterval;
 
       pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
    }
 
 exit:   
@@ -552,6 +609,8 @@ bool EssContextGetEGLDisplayType( EssCtx *ctx, NativeDisplayType *displayType )
       *displayType= ctx->displayType;
 
       pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
    }
 
 exit:
@@ -775,6 +834,43 @@ void EssContextStop( EssCtx *ctx )
    }
 }
 
+bool EssContextSetDisplaySize( EssCtx *ctx, int width, int height )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( !ctx->isInitialized )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Must initialize before setting display size" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+
+      if ( ctx->isWayland )
+      {
+         // ignore
+      }
+      else
+      {
+         ctx->haveMode= true;
+         ctx->planeWidth= width;
+         ctx->planeHeight= height;
+      }
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+exit:
+
+   return result;
+}
+
 bool EssContextGetDisplaySize( EssCtx *ctx, int *width, int *height )
 {
    bool result= false;
@@ -798,6 +894,50 @@ bool EssContextGetDisplaySize( EssCtx *ctx, int *width, int *height )
       if ( height )
       {
          *height= ctx->planeHeight;
+      }
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+exit:
+
+   return result;
+}
+
+bool EssContextSetWindowPosition( EssCtx *ctx, int x, int y )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->windowX= x;
+      ctx->windowY= y;
+
+      if ( ctx->isWayland )
+      {
+         #ifdef HAVE_WAYLAND
+         if ( ctx->shell && ctx->appSurfaceId )
+         {
+            if ( !ctx->fullScreen )
+            {
+               wl_simple_shell_set_geometry( ctx->shell, ctx->appSurfaceId,
+                                             ctx->windowX, ctx->windowY,
+                                             ctx->windowWidth, ctx->windowHeight );
+            }
+         }
+         else
+         {
+            ctx->pendingGeometryChange= true;
+         }
+         #endif
+      }
+      else
+      {
+         // ignore
       }
 
       result= true;
@@ -1017,7 +1157,7 @@ static bool essEGLInit( EssCtx *ctx )
    }
    DEBUG("essEGLInit: eglContext %p\n", ctx->eglContext );
 
-   if ( !essCreateNativeWindow( ctx, ctx->planeWidth, ctx->planeHeight ) )
+   if ( !essCreateNativeWindow( ctx, ctx->windowWidth, ctx->windowHeight ) )
    {
       goto exit;
    }
@@ -1562,16 +1702,27 @@ static void essOutputGeometry( void *data, struct wl_output *output, int32_t x, 
                                int32_t physical_width, int32_t physical_height, int32_t subpixel,
                                const char *make, const char *model, int32_t transform )
 {
-   ESS_UNUSED(data);
    ESS_UNUSED(output);
    ESS_UNUSED(x);
    ESS_UNUSED(y);
    ESS_UNUSED(physical_width);
    ESS_UNUSED(physical_height);
    ESS_UNUSED(subpixel);
-   ESS_UNUSED(make);
-   ESS_UNUSED(model);
    ESS_UNUSED(transform);
+
+   EssCtx *ctx= (EssCtx*)data;
+   if ( data && make && model )
+   {
+      int lenMake= strlen(make);
+      int lenModel= strlen(model);
+      if (
+           ((lenMake == 8) && !strncmp( make, "Westeros", lenMake) ) &&
+           ((lenModel == 17) && !strncmp( model, "Westeros-embedded", lenModel) )
+         )
+      {
+         ctx->fullScreen= true;
+      }
+   }
 }
 
 static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
@@ -1588,7 +1739,7 @@ static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
          ctx->planeWidth= width;
          ctx->planeHeight= height;
 
-         if ( ctx->wleglwindow )
+         if ( ctx->fullScreen && ctx->wleglwindow )
          {
             wl_egl_window_resize( ctx->wleglwindow, width, height, 0, 0 );
          }
@@ -1616,6 +1767,99 @@ static const struct wl_output_listener essOutputListener = {
    essOutputScale
 };
 
+static void essShellSurfaceId(void *data,
+                           struct wl_simple_shell *wl_simple_shell,
+                           struct wl_surface *surface,
+                           uint32_t surfaceId)
+{
+   EssCtx *ctx= (EssCtx*)data;
+   char name[32];
+
+   DEBUG("shell: surface created: %p id %x\n", surface, surfaceId);
+   ctx->appSurfaceId= surfaceId;
+   if ( ctx->appName )
+   {
+      wl_simple_shell_set_name( ctx->shell, surfaceId, ctx->appName );
+   }
+   else
+   {
+      sprintf( name, "essos-app-%x", surfaceId );
+      wl_simple_shell_set_name( ctx->shell, surfaceId, name );
+   }
+   if ( ctx->pendingGeometryChange )
+   {
+      ctx->pendingGeometryChange= false;
+      if ( !ctx->fullScreen )
+      {
+         wl_simple_shell_set_geometry( ctx->shell, ctx->appSurfaceId,
+                                       ctx->windowX, ctx->windowY,
+                                       ctx->windowWidth, ctx->windowHeight );
+      }
+   }
+}
+
+static void essShellSurfaceCreated(void *data,
+                                struct wl_simple_shell *wl_simple_shell,
+                                uint32_t surfaceId,
+                                const char *name)
+{
+   ESS_UNUSED(data);
+   ESS_UNUSED(wl_simple_shell);
+   ESS_UNUSED(name);
+}
+
+static void essShellSurfaceDestroyed(void *data,
+                                  struct wl_simple_shell *wl_simple_shell,
+                                  uint32_t surfaceId,
+                                  const char *name)
+{
+   ESS_UNUSED(data);
+   ESS_UNUSED(wl_simple_shell);
+   ESS_UNUSED(surfaceId);
+   ESS_UNUSED(name);
+}
+
+static void essShellSurfaceStatus(void *data,
+                               struct wl_simple_shell *wl_simple_shell,
+                               uint32_t surfaceId,
+                               const char *name,
+                               uint32_t visible,
+                               int32_t x,
+                               int32_t y,
+                               int32_t width,
+                               int32_t height,
+                               wl_fixed_t opacity,
+                               wl_fixed_t zorder)
+{
+   ESS_UNUSED(data);
+   ESS_UNUSED(wl_simple_shell);
+   ESS_UNUSED(surfaceId);
+   ESS_UNUSED(name);
+   ESS_UNUSED(visible);
+   ESS_UNUSED(x);
+   ESS_UNUSED(y);
+   ESS_UNUSED(width);
+   ESS_UNUSED(height);
+   ESS_UNUSED(opacity);
+   ESS_UNUSED(zorder);
+}
+
+static void essShellGetSurfacesDone(void *data,
+                                 struct wl_simple_shell *wl_simple_shell)
+{
+   ESS_UNUSED(data);
+   ESS_UNUSED(wl_simple_shell);
+}
+
+static const struct wl_simple_shell_listener shellListener =
+{
+   essShellSurfaceId,
+   essShellSurfaceCreated,
+   essShellSurfaceDestroyed,
+   essShellSurfaceStatus,
+   essShellGetSurfacesDone
+};
+
 static void essRegistryHandleGlobal(void *data, 
                                     struct wl_registry *registry, uint32_t id,
                                     const char *interface, uint32_t version)
@@ -1639,6 +1883,11 @@ static void essRegistryHandleGlobal(void *data,
       ctx->wloutput= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
       DEBUG("essRegistryHandleGlobal: wloutput %p\n", ctx->wloutput);
       wl_output_add_listener(ctx->wloutput, &essOutputListener, ctx);
+   }
+   else if ( (len==15) && !strncmp(interface, "wl_simple_shell", len) ) {
+      ctx->shell= (struct wl_simple_shell*)wl_registry_bind(registry, id, &wl_simple_shell_interface, 1);
+      DEBUG("shell %p\n", ctx->shell );
+      wl_simple_shell_add_listener(ctx->shell, &shellListener, ctx);
    }
 }
 

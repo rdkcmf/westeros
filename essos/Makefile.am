@@ -42,7 +42,7 @@ endif
 endif
 
 libessos_la_CXXFLAGS += -DHAVE_WESTEROS $(WESTEROS_CFLAGS)
-libessos_la_LDFLAGS += -lwesteros_gl
+libessos_la_LDFLAGS += -lwesteros_gl -lwesteros_simpleshell_client
 
 essos_sample_SOURCES = essos-sample.cpp
 essos_sample_LDFLAGS = $(AM_FLAGS) -lessos -lGLESv2
