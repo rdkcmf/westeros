@@ -1284,7 +1284,7 @@ static void updateAudioAACPESHeader( MediaCapContext *ctx, SrcInfo *si, int buff
    {
       unsigned char *pesHdr= si->audioPESHdr;
       pesHdr[3]= ((pesHdr[3] & 0xFC) | (((7 + bufferSize) & 0x1800) >> 11));
-      pesHdr[4]= (((7 + bufferSize) & 0x1FF8) >> 3);
+      pesHdr[4]= (((7 + bufferSize) & 0x7F8) >> 3);
       pesHdr[5]= ((pesHdr[5] & 0x1F) | (((7 + bufferSize) & 0x07) << 5));
    }
 }
