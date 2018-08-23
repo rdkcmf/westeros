@@ -1797,6 +1797,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          {
             GST_ERROR("gst_westeros_sink_soc_render: "
                       "OMX_GetParameter for OMX_PARAM_PORTDEFINITIONTYPE for vidDec output port %d failed: %x", sink->soc.vidDec.vidOutPort, omxerr);
+            UNLOCK(sink);
             goto exit;
          }
 
@@ -1812,12 +1813,6 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             if ( omxerr != OMX_ErrorNone )
             {
                GST_ERROR("gst_westeros_sink_soc_render: OMX_SendCommand for rend setState OMX_StateIdle: omxerr %x", omxerr );
-            }
-
-            omxerr= omxSendCommandSync( sink, sink->soc.vidSched.hComp, OMX_CommandStateSet, OMX_StateIdle, NULL );
-            if ( omxerr != OMX_ErrorNone )
-            {
-               GST_ERROR("gst_westeros_sink_soc_render: OMX_SendCommand for vidSched setState OMX_StateIdle: omxerr %x", omxerr );
             }
 
             sink->soc.tunnelActiveVidSched= false;
