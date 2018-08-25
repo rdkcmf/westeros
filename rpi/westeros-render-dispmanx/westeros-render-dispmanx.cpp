@@ -576,20 +576,20 @@ static void wstRendererUpdateSceneXform( WstRenderer *renderer, float *matrix, s
                   dispmanElement= surface->element= DISPMANX_NO_HANDLE;
                }
 
+               rect.x= (renderer->outputX+surface->x)*scalex+(transx-renderer->outputX);
+               rect.y= (renderer->outputY+surface->y)*scaley+(transy-renderer->outputY);
+               rect.width= surface->width*scalex;
+               rect.height= surface->height*scaley;
+
+               if ( rects )
+               {
+                  rects->push_back( rect );
+               }
+
                if ( dispmanElement == DISPMANX_NO_HANDLE )
                {
                   int sx, sy, sw, sh;
                   int dx, dy, dw, dh;
-
-                  rect.x= (renderer->outputX+surface->x)*scalex+(transx-renderer->outputX);
-                  rect.y= (renderer->outputY+surface->y)*scaley+(transy-renderer->outputY);
-                  rect.width= surface->width*scalex;
-                  rect.height= surface->height*scaley;
-
-                  if ( rects )
-                  {
-                     rects->push_back( rect );
-                  }
                   
                   sx= sy= 0;
                   dx= rect.x;
