@@ -173,7 +173,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
             
             dispmanElement= vc_dispmanx_element_add( dispmanUpdate,
                                                      ctx->dispmanDisplay,
-                                                     0, //layer
+                                                     110, //layer
                                                      &destRect,
                                                      0, //src
                                                      &srcRect,
