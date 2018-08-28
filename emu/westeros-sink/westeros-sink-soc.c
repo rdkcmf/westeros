@@ -30,9 +30,20 @@
 #include <stdbool.h>
 #include "westeros-sink.h"
 
+
+enum
+{
+   SIGNAL_FIRSTFRAME,
+   MAX_SIGNAL
+};
+
+static guint g_signals[MAX_SIGNAL]= {0};
+
 #define SIZE 1024
 #define SHM_FILE_PATH "/tmp/westeros-shm"
 
+
+static void processFrame( GstWesterosSink *sink );
 static void gst_westeros_buffer_pool_finalize (GObject * object);
 #ifdef USE_GST1
 static gboolean gst_westeros_soc_sink_event(GstPad *pad, GstObject *parent, GstEvent *event);
@@ -162,6 +173,18 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
    gstbasesink_class->propose_allocation = GST_DEBUG_FUNCPTR (gst_westeros_sink_propose_allocation);
    gstbasesink_class->set_caps = GST_DEBUG_FUNCPTR (gst_westeros_sink_set_caps);
    gstbasesink_class->get_caps = GST_DEBUG_FUNCPTR (gst_westeros_video_sink_get_caps);
+
+   g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
+                                               G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                               (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                               0,    // class offset
+                                               NULL, // accumulator
+                                               NULL, // accu data
+                                               g_cclosure_marshal_VOID__UINT_POINTER,
+                                               G_TYPE_NONE,
+                                               2,
+                                               G_TYPE_UINT,
+                                               G_TYPE_POINTER );
 
 
 }
@@ -449,6 +472,7 @@ gboolean gst_westeros_sink_soc_init(GstBaseSink *base_sink)
    {
       sink->soc.width = sink->srcWidth;
       sink->soc.height= sink->srcHeight;
+      sink->soc.frameCount= 0;
       sink->soc.geometrySet = false;
       gst_pad_set_event_function(GST_BASE_SINK_PAD(sink), GST_DEBUG_FUNCPTR(gst_westeros_soc_sink_event));
       return TRUE;
@@ -532,6 +556,9 @@ void gst_westeros_sink_soc_render(GstBaseSink *base_sink, GstBuffer *gst_buffer)
    wl_display_dispatch_queue_pending (sink->display,sink->queue);
    wl_display_flush( sink->display );
    wl_display_roundtrip_queue(sink->display,sink->queue);
+
+
+   processFrame( sink );
    if (gst_buffer != to_render)
       gst_buffer_unref (to_render);
    return GST_FLOW_OK;
@@ -825,3 +852,14 @@ static void gst_westeros_buffer_pool_init (GstWesterosBufferPool * pool)
 {
 }
 
+static void processFrame( GstWesterosSink *sink )
+{
+    if( sink )
+    {
+        if(sink->soc.frameCount == 0)
+	g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+        sink->soc.frameCount++;
+    }
+}
+
+	

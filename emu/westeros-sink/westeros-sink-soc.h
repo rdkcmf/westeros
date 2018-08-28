@@ -123,6 +123,7 @@ struct _GstWesterosSinkSoc
    uint32_t format;
    int width;
    int height;
+   int frameCount;
    bool geometrySet;
 };
 
