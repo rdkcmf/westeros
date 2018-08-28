@@ -4119,7 +4119,9 @@ static void wstCompositorBind( struct wl_client *client, void *data, uint32_t ve
 static void wstDestroyCompositorCallback(struct wl_resource *resource)
 {
    WstCompositor *ctx= (WstCompositor*)wl_resource_get_user_data(resource);
-   
+   if ( !ctx || !ctx->compositorReady )
+      return;
+
    int pid= 0;
    struct wl_client *client= wl_resource_get_client(resource);
    wl_client_get_credentials( client, &pid, NULL, NULL );
