@@ -116,6 +116,7 @@ struct _GstWesterosSinkSoc
    bool videoOutputChanged;
    int frameWidth;
    int frameHeight;
+   int frameCount;
    #ifdef USE_GLES2
    float matrix[16];
    GLuint vertId;

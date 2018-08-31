@@ -54,6 +54,14 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
+enum
+{
+   SIGNAL_FIRSTFRAME,
+   MAX_SIGNAL
+};
+
+static guint g_signals[MAX_SIGNAL]= {0};
+
 static OMX_ERRORTYPE omxComponentSetState( GstWesterosSink *sink, OMX_HANDLETYPE hComp, OMX_STATETYPE state );
 static void flushComponents( GstWesterosSink *sink );
 static void resetClock( GstWesterosSink *sink );
@@ -95,6 +103,16 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
 
    queryOrg= gstelement_class->query;
    gstelement_class->query= gst_westeros_sink_soc_query_element;
+   g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
+                                               G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),                                                                                          (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                               0,    // class offset
+                                               NULL, // accumulator
+                                               NULL, // accu data
+                                               g_cclosure_marshal_VOID__UINT_POINTER,
+                                               G_TYPE_NONE,
+                                               2,
+                                               G_TYPE_UINT,
+                                               G_TYPE_POINTER );
 }
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
@@ -160,6 +178,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoOutputChanged= true;
    sink->soc.frameWidth= 0;
    sink->soc.frameHeight= 0;
+   sink->soc.frameCount= 0;
    sink->soc.dec_id= AVC;
    #ifdef USE_GLES2
    sink->soc.progId= 0;
@@ -2856,6 +2875,10 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
    unsigned char *inData;
    bool windowChange;
    gint64 nanoTime;
+
+   if(sink->soc.frameCount == 0)
+   g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+   sink->soc.frameCount++;
 
    if ( sink->soc.playingVideo && !sink->flushStarted )
    {
