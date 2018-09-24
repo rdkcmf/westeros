@@ -2372,7 +2372,7 @@ bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
       }
 
       i= (cmd ? strlen(cmd) : 0);
-      if ( !cmd || (i > 255) )
+      if ( !cmd || (i > 1024) )
       {
          sprintf( ctx->lastErrorDetail,
                   "Bad argument.  cmd (%p len %d) rejected", cmd, i );
