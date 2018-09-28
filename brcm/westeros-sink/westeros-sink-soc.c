@@ -962,6 +962,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
       UNLOCK( sink );
       g_thread_join( sink->soc.captureThread );  
       LOCK( sink );
+      sink->soc.captureThread= NULL;
    }
 
    if ( sink->videoStarted )
