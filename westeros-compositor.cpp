@@ -3218,12 +3218,6 @@ exit:
       ctx->displayTimer= 0;
    }
       
-   if ( ctx->simpleShell )
-   {
-      WstSimpleShellUninit( ctx->simpleShell );
-      ctx->simpleShell= 0;
-   }
-
    return NULL;
 }
 
@@ -3281,6 +3275,17 @@ exit:
 
 static void wstCompositorReleaseResources( WstCompositor *ctx )
 {
+   if ( ctx->display )
+   {
+      wl_display_flush_clients(ctx->display);
+   }
+
+   if ( ctx->simpleShell )
+   {
+      WstSimpleShellUninit( ctx->simpleShell );
+      ctx->simpleShell= 0;
+   }
+
    #ifdef ENABLE_SBPROTOCOL
    if ( ctx->sb )
    {
@@ -3336,7 +3341,6 @@ static void wstCompositorReleaseResources( WstCompositor *ctx )
    
    if ( ctx->display )
    {
-      wl_display_flush_clients(ctx->display);
       wl_display_destroy(ctx->display);
       ctx->display= 0;      
    }
