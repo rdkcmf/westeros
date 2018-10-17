@@ -271,6 +271,89 @@ void resourceChangedCallback( void *context, int param )
    }
 }
 
+#if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
+static void streamChangedCallback(void * context, int param)
+{
+   GstWesterosSink *sink= (GstWesterosSink*) context;
+   NEXUS_SimpleVideoDecoderHandle decoderHandle = sink->soc.videoDecoder;
+   NEXUS_VideoDecoderStreamInformation streamInfo;
+   BSTD_UNUSED(param);
+
+   NEXUS_SimpleVideoDecoder_GetStreamInformation(decoderHandle, &streamInfo);
+   switch (streamInfo.dynamicMetadataType)
+   {
+      case NEXUS_VideoDecoderDynamicRangeMetadataType_eDolbyVision:
+         GST_WARNING("Dolby Vision content decoding begins.\n");
+         break;
+      case NEXUS_VideoDecoderDynamicRangeMetadataType_eTechnicolorPrime:
+         GST_WARNING(" Technicolor Prime content decoding begins.\n");
+         break;
+      case NEXUS_VideoDecoderDynamicRangeMetadataType_eNone:
+      default:
+         switch (streamInfo.eotf)
+         {
+            /*
+             * eHdr represents gamma-based HDR, which is not used by anyone.
+             * The enum value is deprecated and assigned to eInvalid now
+             */
+            case NEXUS_VideoEotf_eHdr10:
+               GST_WARNING(" HDR content decoding begins.\n");
+               break;
+            case NEXUS_VideoEotf_eHlg:
+               GST_WARNING(" HLG content decoding begins.\n");
+               break;
+            default:
+               break;
+         }
+         break;
+   }
+
+   GST_INFO("\nNEXUS_SimpleVideoDecoder_GetStreamInformation\n \
+   \tvalid=%d \n \
+   \tsourceHorizontalSize=%d \n \
+   \tsourceHorizontalSizesourceVerticalSize=%d \n \
+   \tsourceVerticalSizecodedSourceHorizontalSize=%d \n \
+   \tcodedSourceHorizontalSizecodedSourceVerticalSize=%d \n \
+   \tcodedSourceVerticalSizedisplayHorizontalSize=%d \n \
+   \tdisplayHorizontalSizedisplayVerticalSize=%d \n \
+   \tdisplayVerticalSizeaspectRatio=%d \n \
+   \taspectRatiosampleAspectRatioX=%d \n \
+   \tsampleAspectRatioXsampleAspectRatioY=%d \n \
+   \tsampleAspectRatioYframeRate=%d \n \
+   \tframeRateframeProgressive=%d \n \
+   \tframeProgressivestreamProgressive=%d \n \
+   \tstreamProgressivehorizontalPanScan=%d \n \
+   \thorizontalPanScanverticalPanScan=%d \n \
+   \tverticalPanScanlowDelayFlag=%d \n \
+   \tlowDelayFlagfixedFrameRateFlag=%d \n \
+   \tdynamicMetadataTypeeotf=%d " \
+   , streamInfo.valid \
+   , streamInfo.sourceHorizontalSize \
+   , streamInfo.sourceVerticalSize \
+   , streamInfo.codedSourceHorizontalSize \
+   , streamInfo.codedSourceVerticalSize \
+   , streamInfo.displayHorizontalSize \
+   , streamInfo.displayVerticalSize \
+   , streamInfo.aspectRatio \
+   , streamInfo.sampleAspectRatioX \
+   , streamInfo.sampleAspectRatioY \
+   , streamInfo.frameRate \
+   , streamInfo.frameProgressive \
+   , streamInfo.streamProgressive \
+   , streamInfo.horizontalPanScan \
+   , streamInfo.verticalPanScan \
+   , streamInfo.lowDelayFlag \
+   , streamInfo.fixedFrameRateFlag \
+   , streamInfo.eotf);
+#if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
+   GST_INFO("\tfixedFrameRateFlagdynamicMetadataType=%d", streamInfo.dynamicMetadataType);
+#endif
+#if (NEXUS_PLATFORM_VERSION_MAJOR > 16) || ((NEXUS_PLATFORM_VERSION_MAJOR == 16) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
+   GST_INFO("\teotfcolorDepth=%d", streamInfo.colorDepth);
+#endif
+}
+#endif
+
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 {
    gboolean result= FALSE;
@@ -785,6 +868,10 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       settings.firstPtsPassed.context= sink;
       settings.ptsError.callback= ptsErrorCallback;
       settings.ptsError.context= sink;
+      #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
+      settings.streamChanged.callback= streamChangedCallback;
+      settings.streamChanged.context= sink;
+      #endif
       ext_settings.dataReadyCallback.callback= NULL;
       ext_settings.dataReadyCallback.context= NULL;
       ext_settings.zeroDelayOutputMode= false;
