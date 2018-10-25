@@ -37,12 +37,6 @@
 // Defaulting Page flip usage as pageflipping error is addressed
 #define USE_PAGEFLIP
 #define DEFAULT_CARD "/dev/dri/card0"
-#define DEFAULT_MODE_WIDTH (1280)
-#ifndef WESTEROS_PLATFORM_QEMUX86
-#define DEFAULT_MODE_HEIGHT (720)
-#else
-#define DEFAULT_MODE_HEIGHT (1024)
-#endif
 
 typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
 typedef EGLSurface (*PREALEGLCREATEWINDOWSURFACE)(EGLDisplay, 
@@ -319,6 +313,32 @@ void WstGLTerm( WstGLCtx *ctx )
    }
 }
 
+static drmModeModeInfo* get_drm_mode ( drmModeConnector *conn, int width, int height )
+{
+   int i;
+   if ( conn == NULL )
+   {
+       printf("westeros_gl:%s: connector is NULL, please setup DRM\n");
+       return NULL;
+   }
+
+   /* List all reported display modes and find a mode match with size */
+   for( i= 0; i < conn->count_modes; ++i )
+   {
+      if ( (conn->modes[i].hdisplay == width) &&
+           (conn->modes[i].vdisplay == height) &&
+           (conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
+      {
+         printf("westeros_gl:%s: mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x\n",
+             __FUNCTION__, i, conn->modes[i].hdisplay, conn->modes[i].vdisplay,
+             conn->modes[i].vrefresh, conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
+         return &conn->modes[i];
+      }
+   }
+   //Default is highest resolution
+   return &conn->modes[0];
+}
+
 void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int height ) 
 {
    void *nativeWindow= 0;
@@ -328,6 +348,14 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
    {
      ctx->drmSetup= setupDRM( ctx );
    }
+   // On creating native window, taking the width & height
+   // to determine the DRM mode
+   if ( ctx->modeInfo &&
+      ( ctx->modeInfo->hdisplay != width || ctx->modeInfo->vdisplay != height ) ) {
+     ctx->modeInfo = get_drm_mode( ctx->drmConnector, width, height );
+     g_wstCtx->modeSet = false;
+   }
+
    if ( ctx->drmSetup )
    {
       nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
@@ -766,12 +794,6 @@ static bool setupDRM( WstGLCtx *ctx )
    {
       printf("westeros_gl: setupDrm: mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x\n", i, conn->modes[i].hdisplay, conn->modes[i].vdisplay, 
              conn->modes[i].vrefresh, conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
-      if ( (conn->modes[i].hdisplay == DEFAULT_MODE_WIDTH) && 
-           (conn->modes[i].vdisplay == DEFAULT_MODE_HEIGHT) && 
-           (conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
-      {       
-         mi= i;
-      }       
    }
    printf("westeros_gl: choosing mode: %d\n", mi );
    ctx->modeInfo= &conn->modes[mi];

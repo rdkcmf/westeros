@@ -58,6 +58,9 @@
 
 #include "westeros-compositor.h"
 
+#define DEFAULT_OUTPUT_WIDTH (1280)
+#define DEFAULT_OUTPUT_HEIGHT (720)
+
 typedef struct _InputCtx
 {
    bool started;
@@ -1304,6 +1307,8 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
    
    if ( appCtx )
    {
+      appCtx->outputWidth= appCtx->width;
+      appCtx->outputHeight= appCtx->height;
       appCtx->wctx= wctx;
       
       #if !defined (WESTEROS_PLATFORM_EMBEDDED)
@@ -1338,8 +1343,8 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
          appCtx->matrix[15]= 1.0f;
          appCtx->x= 0;
          appCtx->y= 0;
-         appCtx->width= 1280;
-         appCtx->height= 720;
+         appCtx->width= DEFAULT_OUTPUT_WIDTH;
+         appCtx->height= DEFAULT_OUTPUT_HEIGHT;
          appCtx->outputWidth= appCtx->width;
          appCtx->outputHeight= appCtx->height;
          
@@ -2227,6 +2232,12 @@ int main( int argc, char** argv)
             goto exit;
          }
       }
+      else {
+         width  = DEFAULT_OUTPUT_WIDTH;
+         height = DEFAULT_OUTPUT_HEIGHT;
+      }
+      appCtx->width  = width;
+      appCtx->height = height;
 
       if ( !rendererModule && !repeater )
       {
@@ -2255,6 +2266,12 @@ int main( int argc, char** argv)
             sigemptyset(&sigint.sa_mask);
             sigint.sa_flags = SA_RESETHAND;
             sigaction(SIGINT, &sigint, NULL);
+
+            printf("[westeros]: setting compositor output size to %dx%d\n", appCtx->outputWidth, appCtx->outputHeight);
+            if ( !WstCompositorGetIsNested( wctx ) ) {
+                WstCompositorResolutionChangeBegin(wctx);
+                WstCompositorResolutionChangeEnd  (wctx, appCtx->outputWidth, appCtx->outputHeight);
+            }
 
             while( g_running )
             {
