@@ -18,6 +18,7 @@
 #
 
 AUTOMAKE_OPTIONS = subdir-objects
+ACLOCAL_AMFLAGS = -I .
 
 lib_LTLIBRARIES = libessos.la
 
