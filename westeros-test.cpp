@@ -463,6 +463,74 @@ static const struct wl_pointer_listener pointerListener = {
    pointerAxis
 };
 
+static void touchHandleDown( void *data, struct wl_touch *touch,
+                             uint32_t serial, uint32_t time, struct wl_surface *surface,
+                             int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   UNUSED(touch);
+   UNUSED(serial);
+   UNUSED(surface);
+   AppCtx *ctx= (AppCtx*)data;
+
+   int x, y;
+
+   x= wl_fixed_to_int( sx );
+   y= wl_fixed_to_int( sy );
+
+   if ( ctx->verboseLog )
+   {
+      printf("touch down id %x (%d,%d) time %u\n", id, x, y, time);
+   }
+}
+
+static void touchHandleUp( void *data, struct wl_touch *touch,
+                           uint32_t serial, uint32_t time, int32_t id )
+{
+   UNUSED(touch);
+   UNUSED(serial);
+   AppCtx *ctx= (AppCtx*)data;
+
+   if ( ctx->verboseLog )
+   {
+      printf("touch up id %x time %u\n", id, time);
+   }
+}
+
+static void touchHandleMotion( void *data, struct wl_touch *touch,
+                               uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   UNUSED(touch);
+   AppCtx *ctx= (AppCtx*)data;
+
+   int x, y;
+
+   x= wl_fixed_to_int( sx );
+   y= wl_fixed_to_int( sy );
+
+   if ( ctx->verboseLog )
+   {
+      printf("touch motion id %x (%d,%d) time %u\n", id, x, y, time);
+   }
+}
+
+static void touchHandleFrame( void *data, struct wl_touch *touch )
+{
+   UNUSED(touch);
+   AppCtx *ctx= (AppCtx*)data;
+
+   if ( ctx->verboseLog )
+   {
+      printf("touch frame\n");
+   }
+}
+
+static const struct wl_touch_listener touchListener= {
+   touchHandleDown,
+   touchHandleUp,
+   touchHandleMotion,
+   touchHandleFrame
+};
+
 static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
 {
    AppCtx *ctx = (AppCtx*)data;
@@ -488,6 +556,7 @@ static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabil
       printf("  seat has touch\n");
       ctx->touch= wl_seat_get_touch( ctx->seat );
       printf("  touch %p\n", ctx->touch );
+      wl_touch_add_listener( ctx->touch, &touchListener, ctx );
    }   
 }
 
@@ -928,6 +997,7 @@ static void showUsage()
    printf("  --display <name> : wayland display to connect to\n" );
    printf("  --noframe : don't pace rendering with frame requests\n" );
    printf("  --noanimate : don't use animation\n" );
+   printf("  --verbose : verbose logging\n" );
    printf("  -? : show usage\n" );
    printf("\n" );
 }

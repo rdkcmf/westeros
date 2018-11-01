@@ -117,6 +117,10 @@ typedef enum _WstEventType
    WstEventType_pointerLeave,
    WstEventType_pointerMove,
    WstEventType_pointerButton,
+   WstEventType_touchDown,
+   WstEventType_touchUp,
+   WstEventType_touchMotion,
+   WstEventType_touchFrame,
    WstEventType_resolutionChangeBegin,
    WstEventType_resolutionChangeEnd
 } WstEventType;
@@ -213,6 +217,14 @@ typedef struct _WstPointer
    int32_t pointerY;
 } WstPointer;
 
+typedef struct _WstTouch
+{
+   WstSeat *seat;
+   struct wl_list resourceList;
+   struct wl_list focusResourceList;
+   WstSurface *focus;
+} WstTouch;
+
 typedef struct _WstSeat
 {
    WstCompositor *compositor;
@@ -223,6 +235,7 @@ typedef struct _WstSeat
    
    WstKeyboard *keyboard;
    WstPointer *pointer;
+   WstTouch *touch;
 } WstSeat;
 
 typedef struct _WstShm WstShm;
@@ -418,6 +431,8 @@ typedef struct _WstCompositor
    WstKeyboardNestedListener *keyboardNestedListener;
    void *pointerNestedListenerUserData;
    WstPointerNestedListener *pointerNestedListener;
+   void *touchNestedListenerUserData;
+   WstTouchNestedListener *touchNestedListener;
 
    struct wl_display *display;
    #ifdef ENABLE_SBPROTOCOL
@@ -503,6 +518,7 @@ static bool wstSurfaceSetRole( WstSurface *surface, const char *roleName,
                                struct wl_resource *errorResource, uint32_t errorCode );
 static void wstSurfaceInsertSurface( WstCompositor *ctx, WstSurface *surface );
 static WstSurface* wstGetSurfaceFromSurfaceId( WstCompositor *ctx, int32_t surfaceId );
+static WstSurface* wstGetSurfaceFromPoint( WstCompositor *ctx, int x, int y );
 static WstSurfaceInfo* wstGetSurfaceInfo( WstCompositor *ctx, struct wl_resource *resource );
 static void wstUpdateClientInfo( WstCompositor *ctx, struct wl_client *client, struct wl_resource *resource );
 static void wstISurfaceDestroy(struct wl_client *client, struct wl_resource *resource);
@@ -677,6 +693,10 @@ static void wstDefaultNestedPointerHandleLeave( void *userData, struct wl_surfac
 static void wstDefaultNestedPointerHandleMotion( void *userData, uint32_t time, wl_fixed_t sx, wl_fixed_t sy );
 static void wstDefaultNestedPointerHandleButton( void *userData, uint32_t time, uint32_t button, uint32_t state );
 static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
+static void wstDefaultNestedTouchHandleDown( void *userData, struct wl_surface *surfaceNested, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy );
+static void wstDefaultNestedTouchHandleUp( void *userData, uint32_t time, int32_t id );
+static void wstDefaultNestedTouchHandleMotion( void *userData, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy );
+static void wstDefaultNestedTouchHandleFrame( void *userData );
 static void wstDefaultNestedShmFormat( void *userData, uint32_t format );
 static void wstDefaultNestedVpcVideoPathChange( void *userData, struct wl_surface *surfaceNested, uint32_t newVideoPath );
 static void wstDefaultNestedVpcVideoXformChange( void *userData,
@@ -714,6 +734,7 @@ static void wstIPointerSetCursor( struct wl_client *client,
                                   int32_t hotspot_x,
                                   int32_t hotspot_y );                                  
 static void wstIPointerRelease( struct wl_client *client, struct wl_resource *resource );
+static void wstITouchRelease( struct wl_client *client, struct wl_resource *resource );
 static void wstVpcBind( struct wl_client *client, void *data, uint32_t version, uint32_t id);
 static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *resource, 
                                   uint32_t id, struct wl_resource *surfaceResource);
@@ -738,6 +759,12 @@ static void wstPointerSetPointer( WstPointer *pointer, WstSurface *surface );
 static void wstPointerUpdatePosition( WstPointer *pointer );
 static void wstPointerSetFocus( WstPointer *pointer, WstSurface *surface, wl_fixed_t x, wl_fixed_t y );
 static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *client );
+static void wstProcessTouchDownEvent( WstTouch *touch, uint32_t time, int id, int x, int y, struct wl_surface *surfaceNested );
+static void wstProcessTouchUpEvent( WstTouch *touch, uint32_t time, int id );
+static void wstProcessTouchMotionEvent( WstTouch *touch, uint32_t time, int id, int x, int y );
+static void wstProcessTouchFrameEvent( WstTouch *touch );
+static void wstTouchCheckFocus( WstTouch *pointer, int32_t x, int32_t y );
+static void wstTouchMoveFocusToClient( WstTouch *touch, struct wl_client *client );
 static void wstRemoveTempFile( int fd );
 static void wstPruneOrphanFiles( WstCompositor *ctx );
 static bool wstInitializeDefaultCursor( WstCompositor *compositor, 
@@ -2348,6 +2375,69 @@ void WstCompositorPointerButtonEvent( WstCompositor *ctx, unsigned int button, u
    }
 }
 
+void WstCompositorTouchEvent( WstCompositor *ctx, WstTouchSet *touchSet )
+{
+   if ( ctx )
+   {
+      bool queuedEvents= false;
+      uint32_t time= (uint32_t)wstGetCurrentTimeMillis();
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      int eventIndex= ctx->eventIndex;
+
+      for( int i= 0; i < WST_MAX_TOUCH; ++i )
+      {
+         if ( touchSet->touch[i].valid )
+         {
+            if ( touchSet->touch[i].starting )
+            {
+               ctx->eventQueue[eventIndex].type= WstEventType_touchDown;
+               ctx->eventQueue[eventIndex].v1= time;
+               ctx->eventQueue[eventIndex].v2= touchSet->touch[i].id;
+               ctx->eventQueue[eventIndex].v3= touchSet->touch[i].x;
+               ctx->eventQueue[eventIndex].v4= touchSet->touch[i].y;
+               ctx->eventQueue[eventIndex].p1= 0;
+               ++eventIndex;
+               assert( eventIndex < WST_EVENT_QUEUE_SIZE );
+               queuedEvents= true;
+            }
+            else if ( touchSet->touch[i].stopping )
+            {
+               ctx->eventQueue[eventIndex].type= WstEventType_touchUp;
+               ctx->eventQueue[eventIndex].v1= time;
+               ctx->eventQueue[eventIndex].v2= touchSet->touch[i].id;
+               ++eventIndex;
+               assert( eventIndex < WST_EVENT_QUEUE_SIZE );
+               queuedEvents= true;
+            }
+            else if ( touchSet->touch[i].moved )
+            {
+               ctx->eventQueue[eventIndex].type= WstEventType_touchMotion;
+               ctx->eventQueue[eventIndex].v1= time;
+               ctx->eventQueue[eventIndex].v2= touchSet->touch[i].id;
+               ctx->eventQueue[eventIndex].v3= touchSet->touch[i].x;
+               ctx->eventQueue[eventIndex].v4= touchSet->touch[i].y;
+               ++eventIndex;
+               assert( eventIndex < WST_EVENT_QUEUE_SIZE );
+               queuedEvents= true;
+            }
+         }
+      }
+
+      if ( queuedEvents )
+      {
+         ctx->eventQueue[eventIndex].type= WstEventType_touchFrame;
+         ++eventIndex;
+         assert( eventIndex < WST_EVENT_QUEUE_SIZE );
+      }
+
+      ctx->eventIndex= eventIndex;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+}
+
 bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd )
 {
    bool result= false;
@@ -3062,7 +3152,7 @@ static void* wstCompositorThread( void *arg )
    }
    else
    {
-      if ( !ctx->isEmbedded )
+      if ( !ctx->isEmbedded && (!ctx->isNested || (ctx->isRepeater && ctx->mustInitRendererModule)) )
       {
          if ( !wstCompositorCreateRenderer( ctx ) )
          {
@@ -3112,6 +3202,15 @@ static void* wstCompositorThread( void *arg )
       pthread_mutex_destroy( &ctx->ncStartedMutex );
       pthread_cond_destroy( &ctx->ncStartedCond );
       INFO("nested connection started");
+   }
+
+   if ( ctx->isNested && !ctx->isRepeater && !ctx->isEmbedded )
+   {
+      if ( !wstCompositorCreateRenderer( ctx ) )
+      {
+         ERROR("unable to initialize renderer module");
+         goto exit;
+      }
    }
 
    #ifdef ENABLE_SBPROTOCOL
@@ -3569,6 +3668,56 @@ static void wstCompositorProcessEvents( WstCompositor *ctx )
                }
             }
             break;
+         case WstEventType_touchDown:
+            {
+               WstTouch *touch= ctx->seat->touch;
+               if ( touch )
+               {
+                  wstProcessTouchDownEvent( touch,
+                                            ctx->eventQueue[i].v1, //time
+                                            ctx->eventQueue[i].v2, //id
+                                            ctx->eventQueue[i].v3, //x
+                                            ctx->eventQueue[i].v4, //y
+                                            (struct wl_surface*)ctx->eventQueue[i].p1  //surfaceNested
+                                          );
+               }
+            }
+            break;
+         case WstEventType_touchUp:
+            {
+               WstTouch *touch= ctx->seat->touch;
+               if ( touch )
+               {
+                  wstProcessTouchUpEvent( touch,
+                                          ctx->eventQueue[i].v1, //time
+                                          ctx->eventQueue[i].v2  //id
+                                          );
+               }
+            }
+            break;
+         case WstEventType_touchMotion:
+            {
+               WstTouch *touch= ctx->seat->touch;
+               if ( touch )
+               {
+                  wstProcessTouchMotionEvent( touch,
+                                              ctx->eventQueue[i].v1, //time
+                                              ctx->eventQueue[i].v2, //id
+                                              ctx->eventQueue[i].v3, //x
+                                              ctx->eventQueue[i].v4  //y
+                                            );
+               }
+            }
+            break;
+         case WstEventType_touchFrame:
+            {
+               WstTouch *touch= ctx->seat->touch;
+               if ( touch )
+               {
+                  wstProcessTouchFrameEvent( touch );
+               }
+            }
+            break;
          case WstEventType_resolutionChangeBegin:
             {
                if ( ctx->renderer )
@@ -3826,6 +3975,11 @@ static const struct wl_pointer_interface pointer_interface=
 {
    wstIPointerSetCursor,
    wstIPointerRelease
+};
+
+static const struct wl_touch_interface touch_interface=
+{
+   wstITouchRelease
 };
 
 static const struct wl_vpc_interface vpc_interface_impl=
@@ -4365,6 +4519,13 @@ static void wstSurfaceDestroy( WstSurface *surface )
          wstPointerSetPointer( ctx->seat->pointer, 0 );
       }
    }
+
+   // Remove from touch focus
+   if ( ctx->seat->touch &&
+        (ctx->seat->touch->focus == surface) )
+   {
+      ctx->seat->touch->focus= 0;
+   }
    
    // Remove as pointer surface
    if ( ctx->seat->pointer &&
@@ -4537,6 +4698,78 @@ static WstSurface* wstGetSurfaceFromSurfaceId( WstCompositor *ctx, int32_t surfa
       surface= it->second;
    }
    
+   return surface;
+}
+
+static WstSurface* wstGetSurfaceFromPoint( WstCompositor *ctx, int x, int y )
+{
+   WstSurface *surface= 0;
+   int sx, sy, sw, sh;
+   wl_fixed_t xFixed, yFixed;
+   bool haveRoles= false;
+   WstSurface *surfaceNoRole= 0;
+
+   // Identify top-most surface containing the pointer position
+   for ( std::vector<WstSurface*>::reverse_iterator it= ctx->surfaces.rbegin();
+         it != ctx->surfaces.rend();
+         ++it )
+   {
+      surface= (*it);
+
+      WstRendererSurfaceGetGeometry( ctx->renderer, surface->surface, &sx, &sy, &sw, &sh );
+
+      // If this client is using surfaces with roles (eg xdg shell surfaces) then we only
+      // want to assign focus to surfaces with appropriate roles.  However, we take note of
+      // the best choice of surfaces with no role.  If we don't find a hit with a roled surface
+      // and there was no use of roles, then we set focus on the best hit with  a surface
+      // with no role.  This will happen if the client is a nested compositor instance.
+      if ( surface->roleName )
+      {
+         int len= strlen(surface->roleName );
+         if ( !((len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len )) )
+         {
+            haveRoles= true;
+         }
+      }
+
+      if ( (x >= sx) && (x < sx+sw) && (y >= sy) && (y < sy+sh) )
+      {
+         bool eligible= true;
+
+         if ( surface->roleName )
+         {
+            int len= strlen(surface->roleName );
+            if ( (len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len ) )
+            {
+               eligible= false;
+            }
+         }
+         else if ( surface->vpcSurface )
+         {
+            eligible= false;
+         }
+         else
+         {
+            if ( !surfaceNoRole )
+            {
+               surfaceNoRole= surface;
+            }
+            eligible= false;
+         }
+         if ( eligible )
+         {
+            break;
+         }
+      }
+
+      surface= 0;
+   }
+
+   if ( !surface && !haveRoles )
+   {
+      surface= surfaceNoRole;
+   }
+
    return surface;
 }
 
@@ -6196,6 +6429,122 @@ static void wstDefaultNestedPointerHandleAxis( void *userData, uint32_t time, ui
    }
 }
 
+static void wstDefaultNestedTouchHandleDown( void *userData, struct wl_surface *surfaceNested, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->touchNestedListener )
+      {
+         ctx->touchNestedListener->touchHandleDown( ctx->touchNestedListenerUserData,
+                                                    time, id, sx, sy );
+      }
+      else
+      {
+         int x, y;
+
+         x= wl_fixed_to_int( sx );
+         y= wl_fixed_to_int( sy );
+
+         pthread_mutex_lock( &ctx->mutex );
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_touchDown;
+         ctx->eventQueue[eventIndex].v1= time;
+         ctx->eventQueue[eventIndex].v2= id;
+         ctx->eventQueue[eventIndex].v3= x;
+         ctx->eventQueue[eventIndex].v4= y;
+         ctx->eventQueue[eventIndex].p1= surfaceNested;
+
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+}
+
+static void wstDefaultNestedTouchHandleUp( void *userData, uint32_t time, int32_t id )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->touchNestedListener )
+      {
+         ctx->touchNestedListener->touchHandleUp( ctx->touchNestedListenerUserData,
+                                                  time, id );
+      }
+      else
+      {
+         pthread_mutex_lock( &ctx->mutex );
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_touchUp;
+         ctx->eventQueue[eventIndex].v1= time;
+         ctx->eventQueue[eventIndex].v2= id;
+
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+}
+
+static void wstDefaultNestedTouchHandleMotion( void *userData, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->touchNestedListener )
+      {
+         ctx->touchNestedListener->touchHandleMotion( ctx->touchNestedListenerUserData,
+                                                      time, id, sx, sy );
+      }
+      else
+      {
+         int x, y;
+
+         x= wl_fixed_to_int( sx );
+         y= wl_fixed_to_int( sy );
+
+         pthread_mutex_lock( &ctx->mutex );
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_touchMotion;
+         ctx->eventQueue[eventIndex].v1= time;
+         ctx->eventQueue[eventIndex].v2= id;
+         ctx->eventQueue[eventIndex].v3= x;
+         ctx->eventQueue[eventIndex].v4= y;
+
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+}
+
+static void wstDefaultNestedTouchHandleFrame( void *userData )
+{
+   WstCompositor *ctx= (WstCompositor*)userData;
+
+   if ( ctx )
+   {
+      if ( ctx->touchNestedListener )
+      {
+         ctx->touchNestedListener->touchHandleFrame( ctx->touchNestedListenerUserData );
+      }
+      else
+      {
+         pthread_mutex_lock( &ctx->mutex );
+         int eventIndex= ctx->eventIndex;
+         ctx->eventQueue[eventIndex].type= WstEventType_touchFrame;
+
+         ++ctx->eventIndex;
+         assert( ctx->eventIndex < WST_EVENT_QUEUE_SIZE );
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+}
+
 static void wstDefaultNestedShmFormat( void *userData, uint32_t format )
 {
    WstCompositor *ctx= (WstCompositor*)userData;
@@ -6315,6 +6664,10 @@ static void wstSetDefaultNestedListener( WstCompositor *ctx )
    ctx->nestedListener.pointerHandleMotion= wstDefaultNestedPointerHandleMotion;
    ctx->nestedListener.pointerHandleButton= wstDefaultNestedPointerHandleButton;
    ctx->nestedListener.pointerHandleAxis= wstDefaultNestedPointerHandleAxis;
+   ctx->nestedListener.touchHandleDown= wstDefaultNestedTouchHandleDown;
+   ctx->nestedListener.touchHandleUp= wstDefaultNestedTouchHandleUp;
+   ctx->nestedListener.touchHandleMotion= wstDefaultNestedTouchHandleMotion;
+   ctx->nestedListener.touchHandleFrame= wstDefaultNestedTouchHandleFrame;
    ctx->nestedListener.shmFormat= wstDefaultNestedShmFormat;
    ctx->nestedListener.vpcVideoPathChange= wstDefaultNestedVpcVideoPathChange;
    ctx->nestedListener.vpcVideoXformChange= wstDefaultNestedVpcVideoXformChange;
@@ -6326,6 +6679,7 @@ static bool wstSeatInit( WstCompositor *ctx )
    WstSeat *seat= 0;
    WstKeyboard *keyboard= 0;
    WstPointer *pointer= 0;
+   WstTouch *touch= 0;
 
    // Create seat
    ctx->seat= (WstSeat*)calloc( 1, sizeof(WstSeat) );
@@ -6383,7 +6737,20 @@ static bool wstSeatInit( WstCompositor *ctx )
    pointer->seat= seat;
    wl_list_init( &pointer->resourceList );
    wl_list_init( &pointer->focusResourceList );
+
+   // Create touch
+   seat->touch= (WstTouch*)calloc( 1, sizeof(WstTouch) );
+   if ( !seat->touch )
+   {
+      ERROR("no memory to allocate touch");
+      goto exit;
+   }
    
+   touch= seat->touch;
+   touch->seat= seat;
+   wl_list_init( &touch->resourceList );
+   wl_list_init( &touch->focusResourceList );
+
    result= true;
    
 exit:
@@ -6490,6 +6857,10 @@ static void wstSeatBind( struct wl_client *client, void *data, uint32_t version,
    if ( seat->pointer )
    {
       caps |= WL_SEAT_CAPABILITY_POINTER;
+   }
+   if ( seat->touch )
+   {
+      caps |= WL_SEAT_CAPABILITY_TOUCH;
    }
    wl_seat_send_capabilities(resource, caps);
    if ( wl_resource_get_version(resource) >= WL_SEAT_NAME_SINCE_VERSION )
@@ -6651,15 +7022,31 @@ static void wstISeatGetKeyboard( struct wl_client *client, struct wl_resource *r
 
 static void wstISeatGetTouch( struct wl_client *client, struct wl_resource *resource, uint32_t id )
 {
-   WESTEROS_UNUSED(client);
-   WESTEROS_UNUSED(resource);
-   WESTEROS_UNUSED(id);
+   WstSeat *seat= (WstSeat*)wl_resource_get_user_data(resource);
+   WstTouch *touch= seat->touch;
+   struct wl_resource *resourceTch= 0;
+
+   if ( !touch )
+   {
+      return;
+   }
+
+   resourceTch= wl_resource_create( client,
+                                    &wl_touch_interface,
+                                    wl_resource_get_version(resource),
+                                    id );
+   if ( !resourceTch )
+   {
+      wl_client_post_no_memory(client);
+      return;
+   }
+
+   wl_list_insert( &touch->resourceList, wl_resource_get_link(resourceTch) );
    
-   // Not supporting for now.  We don't advertise touch capability so no client should
-   // make this request, but if they do an error will be reported
-   wl_resource_post_error( resource, 
-                           WL_DISPLAY_ERROR_INVALID_METHOD,
-                           "get_touch is not supported" );
+   wl_resource_set_implementation( resourceTch,
+                                   &touch_interface,
+                                   touch,
+                                   wstResourceUnBindCallback );
 }
 
 static void wstIKeyboardRelease( struct wl_client *client, struct wl_resource *resource )
@@ -6752,6 +7139,16 @@ static void wstIPointerRelease( struct wl_client *client, struct wl_resource *re
 
    WstPointer *pointer= (WstPointer*)wl_resource_get_user_data(resource);
    WstCompositor *compositor= pointer->seat->compositor;
+
+   wl_resource_destroy(resource);
+}
+
+static void wstITouchRelease( struct wl_client *client, struct wl_resource *resource )
+{
+   WESTEROS_UNUSED(client);
+
+   WstTouch *touch= (WstTouch*)wl_resource_get_user_data(resource);
+   WstCompositor *compositor= touch->seat->compositor;
 
    wl_resource_destroy(resource);
 }
@@ -7750,74 +8147,16 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
    if ( !compositor->isRepeater )
    {
       WstSurface *surface= 0;
-      int sx, sy, sw, sh;
-      wl_fixed_t xFixed, yFixed;
-      bool haveRoles= false;
-      WstSurface *surfaceNoRole= 0;
 
-      // Identify top-most surface containing the pointer position
-      for ( std::vector<WstSurface*>::reverse_iterator it= compositor->surfaces.rbegin(); 
-            it != compositor->surfaces.rend();
-            ++it )
-      {
-         surface= (*it);
-         
-         WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
-         
-         // If this client is using surfaces with roles (eg xdg shell surfaces) then we only
-         // want to assign focus to surfaces with appropriate roles.  However, we take note of
-         // the best choice of surfaces with no role.  If we don't find a hit with a roled surface
-         // and there was no use of roles, then we set focus on the best hit with  a surface
-         // with no role.  This will happen if the client is a nested compositor instance.
-         if ( surface->roleName )
-         {
-            int len= strlen(surface->roleName );
-            if ( !((len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len )) )
-            {
-               haveRoles= true;
-            }
-         }
-
-         if ( (x >= sx) && (x < sx+sw) && (y >= sy) && (y < sy+sh) )
-         {
-            bool eligible= true;
-            
-            if ( surface->roleName )
-            {
-               int len= strlen(surface->roleName );
-               if ( (len == 17) && !strncmp( surface->roleName, "wl_pointer-cursor", len ) )
-               {
-                  eligible= false;
-               } 
-            }
-            else if ( surface->vpcSurface )
-            {
-               eligible= false;
-            }
-            else
-            {
-               if ( !surfaceNoRole )
-               {
-                  surfaceNoRole= surface;
-               }
-               eligible= false;
-            }
-            if ( eligible )
-            {
-               break;
-            }
-         }
-         
-         surface= 0;
-      }
-      
-      if ( !surface && !haveRoles )
-      {
-         surface= surfaceNoRole;
-      }
+      surface= wstGetSurfaceFromPoint( compositor, x, y );
       
       if ( pointer->focus != surface )
       {
+         int sx, sy, sw, sh;
+         wl_fixed_t xFixed, yFixed;
+
+         WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
+
          xFixed= wl_fixed_from_int( x-sx );
          yFixed= wl_fixed_from_int( y-sy );
 
@@ -7934,6 +8273,177 @@ static void wstPointerMoveFocusToClient( WstPointer *pointer, struct wl_client *
       {
          wl_list_remove( wl_resource_get_link( resource ) );
          wl_list_insert( &pointer->focusResourceList, wl_resource_get_link(resource) );
+      }
+   }
+}
+
+static void wstProcessTouchDownEvent( WstTouch *touch, uint32_t time, int id, int x, int y, struct wl_surface *surfaceNested )
+{
+   WstCompositor *compositor= touch->seat->compositor;
+   uint32_t serial;
+   struct wl_resource *resource;
+   int sx, sy, sw, sh;
+
+   if ( compositor->isNested )
+   {
+      if ( compositor->seat )
+      {
+         if ( compositor->isRepeater )
+         {
+            WstSurface *surface= 0;
+
+            for( int i= 0; i < compositor->surfaces.size(); ++i )
+            {
+               if ( compositor->surfaces[i]->surfaceNested == surfaceNested )
+               {
+                  surface= compositor->surfaces[i];
+                  break;
+               }
+            }
+            if ( surface )
+            {
+               struct wl_client *surfaceClient;
+
+               touch->focus= surface;
+
+               surfaceClient= wl_resource_get_client( touch->focus->resource );
+               wstTouchMoveFocusToClient( touch, surfaceClient );
+            }
+         }
+         else
+         {
+            wstTouchCheckFocus( touch, x, y );
+         }
+      }
+   }
+   else
+   {
+      wstTouchCheckFocus( touch, x, y );
+   }
+
+   if ( touch->focus )
+   {
+      wl_fixed_t xFixed, yFixed;
+
+      if ( compositor->isRepeater )
+      {
+         sx= sy= 0;
+      }
+      else
+      {
+         WstRendererSurfaceGetGeometry( compositor->renderer, touch->focus->surface, &sx, &sy, &sw, &sh );
+      }
+
+      xFixed= wl_fixed_from_int( x-sx );
+      yFixed= wl_fixed_from_int( y-sy );
+
+      serial= wl_display_next_serial( compositor->display );
+      wl_resource_for_each( resource, &touch->focusResourceList )
+      {
+         wl_touch_send_down( resource, serial, time, touch->focus->resource, id, xFixed, yFixed );
+      }
+
+      WstKeyboard *keyboard= touch->seat->keyboard;
+      if ( keyboard )
+      {
+         wstKeyboardSetFocus( keyboard, touch->focus );
+      }
+   }
+}
+
+static void wstProcessTouchUpEvent( WstTouch *touch, uint32_t time, int id )
+{
+   WstCompositor *compositor= touch->seat->compositor;
+   uint32_t serial;
+   struct wl_resource *resource;
+
+   if ( touch->focus )
+   {
+      serial= wl_display_next_serial( compositor->display );
+      wl_resource_for_each( resource, &touch->focusResourceList )
+      {
+         wl_touch_send_up( resource, serial, time, id );
+      }
+   }
+}
+
+static void wstProcessTouchMotionEvent( WstTouch *touch, uint32_t time, int id, int x, int y )
+{
+   WstCompositor *compositor= touch->seat->compositor;
+   uint32_t serial;
+   struct wl_resource *resource;
+   int sx, sy, sw, sh;
+
+   if ( touch->focus )
+   {
+      wl_fixed_t xFixed, yFixed;
+
+      if ( compositor->isRepeater )
+      {
+         sx= sy= 0;
+      }
+      else
+      {
+         WstRendererSurfaceGetGeometry( compositor->renderer, touch->focus->surface, &sx, &sy, &sw, &sh );
+      }
+
+      xFixed= wl_fixed_from_int( x-sx );
+      yFixed= wl_fixed_from_int( y-sy );
+
+      wl_resource_for_each( resource, &touch->focusResourceList )
+      {
+         wl_touch_send_motion( resource, time, id, xFixed, yFixed );
+      }
+   }
+}
+
+static void wstProcessTouchFrameEvent( WstTouch *touch )
+{
+   WstCompositor *compositor= touch->seat->compositor;
+   struct wl_resource *resource;
+
+   if ( touch->focus )
+   {
+      wl_resource_for_each( resource, &touch->focusResourceList )
+      {
+         wl_touch_send_frame( resource );
+      }
+   }
+}
+
+static void wstTouchCheckFocus( WstTouch *touch, int32_t x, int32_t y )
+{
+   WstCompositor *compositor= touch->seat->compositor;
+   WstSurface *surface= 0;
+
+   surface= wstGetSurfaceFromPoint( compositor, x, y );
+   if ( surface )
+   {
+      touch->focus= surface;
+
+      if ( touch->focus )
+      {
+         struct wl_client *surfaceClient;
+         surfaceClient= wl_resource_get_client( touch->focus->resource );
+         wstTouchMoveFocusToClient( touch, surfaceClient );
+      }
+   }
+}
+
+static void wstTouchMoveFocusToClient( WstTouch *touch, struct wl_client *client )
+{
+   struct wl_resource *resource;
+   struct wl_resource *temp;
+
+   wl_list_insert_list( &touch->resourceList, &touch->focusResourceList );
+   wl_list_init( &touch->focusResourceList );
+
+   wl_resource_for_each_safe( resource, temp, &touch->resourceList )
+   {
+      if ( wl_resource_get_client( resource ) == client )
+      {
+         wl_list_remove( wl_resource_get_link( resource ) );
+         wl_list_insert( &touch->focusResourceList, wl_resource_get_link(resource) );
       }
    }
 }

@@ -71,6 +71,19 @@
 #define DEBUG(FORMAT, ...)          INT_DEBUG(FORMAT, ##__VA_ARGS__)
 #define TRACE(FORMAT, ...)          INT_TRACE(FORMAT, ##__VA_ARGS__)
 
+#define ESS_MAX_TOUCH (10)
+
+typedef struct _EssTouchInfo
+{
+   int id;
+   int x;
+   int y;
+   bool valid;
+   bool starting;
+   bool stopping;
+   bool moved;
+} EssTouchInfo;
+
 typedef struct _EssCtx
 {
    pthread_mutex_t mutex;
@@ -107,10 +120,14 @@ typedef struct _EssCtx
    int keyRepeatInitialDelay;
    int keyRepeatPeriod;
 
+   EssTouchInfo touch[ESS_MAX_TOUCH];
+
    void *keyListenerUserData;
    EssKeyListener *keyListener;
    void *pointerListenerUserData;
    EssPointerListener *pointerListener;
+   void *touchListenerUserData;
+   EssTouchListener *touchListener;
    void *terminateListenerUserData;
    EssTerminateListener *terminateListener;
 
@@ -168,6 +185,10 @@ static void essProcessKeyReleased( EssCtx *ctx, int linuxKeyCode );
 static void essProcessPointerMotion( EssCtx *ctx, int x, int y );
 static void essProcessPointerButtonPressed( EssCtx *ctx, int button );
 static void essProcessPointerButtonReleased( EssCtx *ctx, int button );
+static void essProcessTouchDown( EssCtx *ctx, int id, int x, int y );
+static void essProcessTouchUp( EssCtx *ctx, int id );
+static void essProcessTouchMotion( EssCtx *ctx, int id, int x, int y );
+static void essProcessTouchFrame( EssCtx *ctx );
 #ifdef HAVE_WAYLAND
 static bool essPlatformInitWayland( EssCtx *ctx );
 static void essPlatformTermWayland( EssCtx *ctx );
@@ -683,7 +704,6 @@ bool EssContextSetKeyListener( EssCtx *ctx, void *userData, EssKeyListener *list
    return result;
 }
 
-
 bool EssContextSetPointerListener( EssCtx *ctx, void *userData, EssPointerListener *listener )
 {
    bool result= false;
@@ -694,6 +714,25 @@ bool EssContextSetPointerListener( EssCtx *ctx, void *userData, EssPointerListen
 
       ctx->pointerListenerUserData= userData;
       ctx->pointerListener= listener;
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
+
+bool EssContextSetTouchListener( EssCtx *ctx, void *userData, EssTouchListener *listener )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->touchListenerUserData= userData;
+      ctx->touchListener= listener;
 
       result= true;
 
@@ -1047,7 +1086,7 @@ static bool essEGLInit( EssCtx *ctx )
    EGLint redSize, greenSize, blueSize, alphaSize, depthSize;
    int i;
    
-   DEBUG("essEGLInit: displayType %p\n", ctx->displayType);
+   DEBUG("essEGLInit: displayType %p", ctx->displayType);
    ctx->eglDisplay= eglGetDisplay( ctx->displayType );
    if ( ctx->eglDisplay == EGL_NO_DISPLAY )
    {
@@ -1126,7 +1165,7 @@ static bool essEGLInit( EssCtx *ctx )
       eglGetConfigAttrib( ctx->eglDisplay, eglConfigs[i], EGL_ALPHA_SIZE, &alphaSize );
       eglGetConfigAttrib( ctx->eglDisplay, eglConfigs[i], EGL_DEPTH_SIZE, &depthSize );
 
-      DEBUG("essEGLInit: config %d: red: %d green: %d blue: %d alpha: %d depth: %d\n",
+      DEBUG("essEGLInit: config %d: red: %d green: %d blue: %d alpha: %d depth: %d",
               i, redSize, greenSize, blueSize, alphaSize, depthSize );
       if ( (redSize == redSizeNeed) &&
            (greenSize == greenSizeNeed) &&
@@ -1134,7 +1173,7 @@ static bool essEGLInit( EssCtx *ctx )
            (alphaSize == alphaSizeNeed) &&
            (depthSize >= depthSizeNeed) )
       {
-         DEBUG( "essEGLInit: choosing config %d\n", i);
+         DEBUG( "essEGLInit: choosing config %d", i);
          break;
       }
    }
@@ -1155,13 +1194,13 @@ static bool essEGLInit( EssCtx *ctx )
                "Error: eglCreateContext failed: eglError %X\n", eglGetError() );
       goto exit;
    }
-   DEBUG("essEGLInit: eglContext %p\n", ctx->eglContext );
+   DEBUG("essEGLInit: eglContext %p", ctx->eglContext );
 
    if ( !essCreateNativeWindow( ctx, ctx->windowWidth, ctx->windowHeight ) )
    {
       goto exit;
    }
-   DEBUG("essEGLInit: nativeWindow %p\n", ctx->nativeWindow );
+   DEBUG("essEGLInit: nativeWindow %p", ctx->nativeWindow );
 
    ctx->eglSurfaceWindow= eglCreateWindowSurface( ctx->eglDisplay,
                                                   ctx->eglConfig,
@@ -1173,7 +1212,7 @@ static bool essEGLInit( EssCtx *ctx )
                "Error: eglCreateWindowSurface failed: eglError %X\n", eglGetError() );
       goto exit;
    }
-   DEBUG("essEGLInit: eglSurfaceWindow %p\n", ctx->eglSurfaceWindow );
+   DEBUG("essEGLInit: eglSurfaceWindow %p", ctx->eglSurfaceWindow );
 
    b= eglMakeCurrent( ctx->eglDisplay, ctx->eglSurfaceWindow, ctx->eglSurfaceWindow, ctx->eglContext );
    if ( !b )
@@ -1340,7 +1379,7 @@ static void essProcessKeyPressed( EssCtx *ctx, int linuxKeyCode )
 {
    if ( ctx )
    {
-      DEBUG("essProcessKeyPressed: key %d\n", linuxKeyCode);
+      DEBUG("essProcessKeyPressed: key %d", linuxKeyCode);
       if ( ctx->keyListener && ctx->keyListener->keyPressed )
       {
          ctx->keyListener->keyPressed( ctx->keyListenerUserData, linuxKeyCode );
@@ -1352,7 +1391,7 @@ static void essProcessKeyReleased( EssCtx *ctx, int linuxKeyCode )
 {
    if ( ctx )
    {
-      DEBUG("essProcessKeyReleased: key %d\n", linuxKeyCode);
+      DEBUG("essProcessKeyReleased: key %d", linuxKeyCode);
       if ( ctx->keyListener && ctx->keyListener->keyReleased )
       {
          ctx->keyListener->keyReleased( ctx->keyListenerUserData, linuxKeyCode );
@@ -1364,7 +1403,7 @@ static void essProcessPointerMotion( EssCtx *ctx, int x, int y )
 {
    if ( ctx )
    {
-      TRACE("essProcessKeyPointerMotion (%d, %d)\n", x, y );
+      TRACE("essProcessKeyPointerMotion (%d, %d)", x, y );
       ctx->pointerX= x;
       ctx->pointerY= y;
       if ( ctx->pointerListener && ctx->pointerListener->pointerMotion )
@@ -1378,7 +1417,7 @@ static void essProcessPointerButtonPressed( EssCtx *ctx, int button )
 {
    if ( ctx )
    {
-      DEBUG("essProcessKeyPointerPressed %d\n", button );
+      DEBUG("essProcessKeyPointerPressed %d", button );
       if ( ctx->pointerListener && ctx->pointerListener->pointerButtonPressed )
       {
          ctx->pointerListener->pointerButtonPressed( ctx->pointerListenerUserData, button, ctx->pointerX, ctx->pointerY );
@@ -1390,10 +1429,58 @@ static void essProcessPointerButtonReleased( EssCtx *ctx, int button )
 {
    if ( ctx )
    {
-      DEBUG("essos: essProcessKeyPointerReleased %d\n", button );
+      DEBUG("essos: essProcessKeyPointerReleased %d", button );
       if ( ctx->pointerListener && ctx->pointerListener->pointerButtonReleased )
       {
          ctx->pointerListener->pointerButtonReleased( ctx->pointerListenerUserData, button, ctx->pointerX, ctx->pointerY );
+      }
+   }
+}
+
+static void essProcessTouchDown( EssCtx *ctx, int id, int x, int y )
+{
+   if ( ctx )
+   {
+      DEBUG("essos: essProcessTouchDown id %d (%d,%d)", id, x, y );
+      if ( ctx->touchListener && ctx->touchListener->touchDown )
+      {
+         ctx->touchListener->touchDown( ctx->touchListenerUserData, id, x, y );
+      }
+   }
+}
+
+static void essProcessTouchUp( EssCtx *ctx, int id )
+{
+   if ( ctx )
+   {
+      DEBUG("essos: essProcessTouchUp id %d", id );
+      if ( ctx->touchListener && ctx->touchListener->touchUp )
+      {
+         ctx->touchListener->touchUp( ctx->touchListenerUserData, id );
+      }
+   }
+}
+
+static void essProcessTouchMotion( EssCtx *ctx, int id, int x, int y )
+{
+   if ( ctx )
+   {
+      DEBUG("essos: essProcessTouchMotion id %d (%d,%d)", id, x, y );
+      if ( ctx->touchListener && ctx->touchListener->touchMotion )
+      {
+         ctx->touchListener->touchMotion( ctx->touchListenerUserData, id, x, y );
+      }
+   }
+}
+
+static void essProcessTouchFrame( EssCtx *ctx )
+{
+   if ( ctx )
+   {
+      DEBUG("essos: essProcessTouchFrame" );
+      if ( ctx->touchListener && ctx->touchListener->touchFrame )
+      {
+         ctx->touchListener->touchFrame( ctx->touchListenerUserData );
       }
    }
 }
@@ -1414,7 +1501,7 @@ static void essKeyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_
          }
          else
          {
-            ERROR("essKeyboardKeymap: xkb_context_new failed\n");
+            ERROR("essKeyboardKeymap: xkb_context_new failed");
          }
          if ( ctx->xkbCtx )
          {
@@ -1426,7 +1513,7 @@ static void essKeyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_
             ctx->xkbKeymap= xkb_keymap_new_from_string( ctx->xkbCtx, (char*)map, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
             if ( !ctx->xkbKeymap )
             {
-               ERROR("essKeyboardKeymap: xkb_keymap_new_from_string failed\n");
+               ERROR("essKeyboardKeymap: xkb_keymap_new_from_string failed");
             }
             if ( ctx->xkbState )
             {
@@ -1436,7 +1523,7 @@ static void essKeyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_
             ctx->xkbState= xkb_state_new( ctx->xkbKeymap );
             if ( !ctx->xkbState )
             {
-               ERROR("essKeyboardKeymap: xkb_state_new failed\n");
+               ERROR("essKeyboardKeymap: xkb_state_new failed");
             }
             if ( ctx->xkbKeymap )
             {
@@ -1461,7 +1548,7 @@ static void essKeyboardEnter( void *data, struct wl_keyboard *keyboard, uint32_t
    ESS_UNUSED(serial);
    ESS_UNUSED(keys);
 
-   DEBUG("essKeyboardEnter: keyboard enter surface %p\n", surface );
+   DEBUG("essKeyboardEnter: keyboard enter surface %p", surface );
 }
 
 static void essKeyboardLeave( void *data, struct wl_keyboard *keyboard, uint32_t serial, struct wl_surface *surface )
@@ -1470,7 +1557,7 @@ static void essKeyboardLeave( void *data, struct wl_keyboard *keyboard, uint32_t
    ESS_UNUSED(keyboard);
    ESS_UNUSED(serial);
 
-   DEBUG("esKeyboardLeave: keyboard leave surface %p\n", surface );
+   DEBUG("esKeyboardLeave: keyboard leave surface %p", surface );
 }
 
 static void essKeyboardKey( void *data, struct wl_keyboard *keyboard, uint32_t serial,
@@ -1531,7 +1618,7 @@ static void essKeyboardModifiers( void *data, struct wl_keyboard *keyboard, uint
       int wasActive, nowActive, key;
 
       xkb_state_update_mask( ctx->xkbState, mods_depressed, mods_latched, mods_locked, 0, 0, group );
-      DEBUG("essKeyboardModifiers: mods_depressed %X mods locked %X\n", mods_depressed, mods_locked);
+      DEBUG("essKeyboardModifiers: mods_depressed %X mods locked %X", mods_depressed, mods_locked);
 
       wasActive= (ctx->modMask & (1<<ctx->modCaps));
       nowActive= (mods_locked & (1<<ctx->modCaps));
@@ -1600,7 +1687,7 @@ static void essPointerEnter( void* data, struct wl_pointer *pointer, uint32_t se
    x= wl_fixed_to_int( sx );
    y= wl_fixed_to_int( sy );
 
-   DEBUG("essPointerEnter: pointer enter surface %p (%d,%d)\n", surface, x, y );
+   DEBUG("essPointerEnter: pointer enter surface %p (%d,%d)", surface, x, y );
 }
 
 static void essPointerLeave( void* data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface )
@@ -1609,7 +1696,7 @@ static void essPointerLeave( void* data, struct wl_pointer *pointer, uint32_t se
    ESS_UNUSED(pointer);
    ESS_UNUSED(serial);
 
-   DEBUG("essPointerLeave: pointer leave surface %p\n", surface );
+   DEBUG("essPointerLeave: pointer leave surface %p", surface );
 }
 
 static void essPointerMotion( void *data, struct wl_pointer *pointer, uint32_t time, wl_fixed_t sx, wl_fixed_t sy )
@@ -1658,31 +1745,91 @@ static const struct wl_pointer_listener essPointerListener = {
    essPointerAxis
 };
 
+static void essTouchDown( void *data, struct wl_touch *touch,
+                          uint32_t serial, uint32_t time, struct wl_surface *surface,
+                          int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   ESS_UNUSED(touch);
+   ESS_UNUSED(serial);
+   ESS_UNUSED(time);
+   ESS_UNUSED(surface);
+   EssCtx *ctx= (EssCtx*)data;
+
+   int x, y;
+
+   x= wl_fixed_to_int( sx );
+   y= wl_fixed_to_int( sy );
+
+   essProcessTouchDown( ctx, id, x, y );
+}
+
+static void essTouchUp( void *data, struct wl_touch *touch,
+                        uint32_t serial, uint32_t time, int32_t id )
+{
+   ESS_UNUSED(touch);
+   ESS_UNUSED(serial);
+   ESS_UNUSED(time);
+   EssCtx *ctx= (EssCtx*)data;
+
+   essProcessTouchUp( ctx, id );
+}
+
+static void essTouchMotion( void *data, struct wl_touch *touch,
+                            uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   ESS_UNUSED(touch);
+   ESS_UNUSED(time);
+   EssCtx *ctx= (EssCtx*)data;
+
+   int x, y;
+
+   x= wl_fixed_to_int( sx );
+   y= wl_fixed_to_int( sy );
+
+   essProcessTouchMotion( ctx, id, x, y );
+}
+
+static void essTouchFrame( void *data, struct wl_touch *touch )
+{
+   ESS_UNUSED(touch);
+   EssCtx *ctx= (EssCtx*)data;
+
+   essProcessTouchFrame( ctx );
+}
+
+static const struct wl_touch_listener essTouchListener= {
+   essTouchDown,
+   essTouchUp,
+   essTouchMotion,
+   essTouchFrame
+};
+
 static void essSeatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
 {
    EssCtx *ctx= (EssCtx*)data;
 
-   DEBUG("essSeatCapabilities: seat %p caps: %X\n", seat, capabilities );
+   DEBUG("essSeatCapabilities: seat %p caps: %X", seat, capabilities );
    
    if ( capabilities & WL_SEAT_CAPABILITY_KEYBOARD )
    {
-      DEBUG("essSeatCapabilities:  seat has keyboard\n");
+      DEBUG("essSeatCapabilities:  seat has keyboard");
       ctx->wlkeyboard= wl_seat_get_keyboard( ctx->wlseat );
-      DEBUG("essSeatCapabilities:  keyboard %p\n", ctx->wlkeyboard );
+      DEBUG("essSeatCapabilities:  keyboard %p", ctx->wlkeyboard );
       wl_keyboard_add_listener( ctx->wlkeyboard, &essKeyboardListener, ctx );
    }
    if ( capabilities & WL_SEAT_CAPABILITY_POINTER )
    {
-      DEBUG("essSeatCapabilities:  seat has pointer\n");
+      DEBUG("essSeatCapabilities:  seat has pointer");
       ctx->wlpointer= wl_seat_get_pointer( ctx->wlseat );
-      DEBUG("essSeatCapabilities:  pointer %p\n", ctx->wlpointer );
+      DEBUG("essSeatCapabilities:  pointer %p", ctx->wlpointer );
       wl_pointer_add_listener( ctx->wlpointer, &essPointerListener, ctx );
    }
    if ( capabilities & WL_SEAT_CAPABILITY_TOUCH )
    {
-      DEBUG("essSeatCapabilities:  seat has touch\n");
+      DEBUG("essSeatCapabilities:  seat has touch");
       ctx->wltouch= wl_seat_get_touch( ctx->wlseat );
-      DEBUG("essSeatCapabilities:  touch %p\n", ctx->wltouch );
+      DEBUG("essSeatCapabilities:  touch %p", ctx->wltouch );
+      wl_touch_add_listener( ctx->wltouch, &essTouchListener, ctx );
    }   
 }
 
@@ -1730,7 +1877,7 @@ static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
 {
    EssCtx *ctx= (EssCtx*)data;
 
-   DEBUG("essOutputMode: outputMode: mode %d(%d) (%dx%d)\n", flags, WL_OUTPUT_MODE_CURRENT, width, height);
+   INFO("essOutputMode: outputMode: mode %d(%d) (%dx%d)", flags, WL_OUTPUT_MODE_CURRENT, width, height);
    if ( flags & WL_OUTPUT_MODE_CURRENT )
    {
       ctx->haveMode= true;
@@ -1775,7 +1922,7 @@ static void essShellSurfaceId(void *data,
    EssCtx *ctx= (EssCtx*)data;
    char name[32];
 
-   DEBUG("shell: surface created: %p id %x\n", surface, surfaceId);
+   DEBUG("shell: surface created: %p id %x", surface, surfaceId);
    ctx->appSurfaceId= surfaceId;
    if ( ctx->appName )
    {
@@ -1867,26 +2014,27 @@ static void essRegistryHandleGlobal(void *data,
    EssCtx *ctx= (EssCtx*)data;
    int len;
 
-   DEBUG("essRegistryHandleGlobal: id %d interface (%s) version %d\n", id, interface, version );
+   DEBUG("essRegistryHandleGlobal: id %d interface (%s) version %d", id, interface, version );
 
    len= strlen(interface);
    if ( (len==13) && !strncmp(interface, "wl_compositor", len) ) {
       ctx->wlcompositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
-      DEBUG("essRegistryHandleGlobal: wlcompositor %p\n", ctx->wlcompositor);
+      DEBUG("essRegistryHandleGlobal: wlcompositor %p", ctx->wlcompositor);
    } 
    else if ( (len==7) && !strncmp(interface, "wl_seat", len) ) {
       ctx->wlseat= (struct wl_seat*)wl_registry_bind(registry, id, &wl_seat_interface, 4);
-      DEBUG("essRegistryHandleGlobal: wlseat %p\n", ctx->wlseat);
+      DEBUG("essRegistryHandleGlobal: wlseat %p", ctx->wlseat);
       wl_seat_add_listener(ctx->wlseat, &essSeatListener, ctx);
    }
    else if ( (len==9) && !strncmp(interface, "wl_output", len) ) {
       ctx->wloutput= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
-      DEBUG("essRegistryHandleGlobal: wloutput %p\n", ctx->wloutput);
+      DEBUG("essRegistryHandleGlobal: wloutput %p", ctx->wloutput);
       wl_output_add_listener(ctx->wloutput, &essOutputListener, ctx);
+      wl_display_roundtrip(ctx->wldisplay);
    }
    else if ( (len==15) && !strncmp(interface, "wl_simple_shell", len) ) {
       ctx->shell= (struct wl_simple_shell*)wl_registry_bind(registry, id, &wl_simple_shell_interface, 1);
-      DEBUG("shell %p\n", ctx->shell );
+      DEBUG("shell %p", ctx->shell );
       wl_simple_shell_add_listener(ctx->shell, &shellListener, ctx);
    }
 }
@@ -1920,7 +2068,7 @@ static bool essPlatformInitWayland( EssCtx *ctx )
          goto exit;
       }
 
-      DEBUG("essPlatformInitWayland: wldisplay %p\n", ctx->wldisplay);
+      DEBUG("essPlatformInitWayland: wldisplay %p", ctx->wldisplay);
 
       ctx->wlregistry= wl_display_get_registry( ctx->wldisplay );
       if ( !ctx->wlregistry )
@@ -2062,7 +2210,7 @@ static bool essPlatformInitDirect( EssCtx *ctx )
                   "Error.  Failed to create a platform context" );
          goto exit;
       }
-      DEBUG("essPlatformInitDirect: glCtx %p\n", ctx->glCtx);
+      DEBUG("essPlatformInitDirect: glCtx %p", ctx->glCtx);
 
       ctx->displayType= EGL_DEFAULT_DISPLAY;
 
@@ -2105,19 +2253,19 @@ static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
          else
          {
             pollfd pfd;
-            DEBUG( "essOpenInputDevice: opened device %s : fd %d\n", devPathName, fd );
+            DEBUG( "essOpenInputDevice: opened device %s : fd %d", devPathName, fd );
             pfd.fd= fd;
             ctx->inputDeviceFds.push_back( pfd );
          }
       }
       else
       {
-         DEBUG("essOpenInputDevice: ignoring non character device %s\n", devPathName );
+         DEBUG("essOpenInputDevice: ignoring non character device %s", devPathName );
       }
    }
    else
    {
-      DEBUG( "essOpenInputDevice: error performing stat on device: %s\n", devPathName );
+      DEBUG( "essOpenInputDevice: error performing stat on device: %s", devPathName );
    }
    
    return fd;
@@ -2143,7 +2291,7 @@ static char *essGetInputDevice( EssCtx *ctx, const char *path, char *devName )
    
    if ( !stat(devicePathName, &buffer) )
    {
-      DEBUG( "essGetInputDevice: found %s\n", devicePathName );
+      DEBUG( "essGetInputDevice: found %s", devicePathName );
    }
    else
    {
@@ -2172,7 +2320,7 @@ static void essGetInputDevices( EssCtx *ctx )
                if (essOpenInputDevice( ctx, devPathName ) >= 0 )
                   free( devPathName );
                else
-                  ERROR("essos: could not open device %s\n", devPathName);
+                  ERROR("essos: could not open device %s", devPathName);
             }
          }
       }
@@ -2214,7 +2362,7 @@ static void essReleaseInputDevices( EssCtx *ctx )
    while( ctx->inputDeviceFds.size() > 0 )
    {
       pollfd pfd= ctx->inputDeviceFds[0];
-      DEBUG( "essos: closing device fd: %d\n", pfd.fd );
+      DEBUG( "essos: closing device fd: %d", pfd.fd );
       close( pfd.fd );
       ctx->inputDeviceFds.erase( ctx->inputDeviceFds.begin() );
    }
@@ -2230,6 +2378,9 @@ static void essProcessInputDevices( EssCtx *ctx )
    static int mouseAccel= 1;
    static int mouseX= 0;
    static int mouseY= 0;
+   static int currTouchSlot= 0;
+   static bool touchChanges= false;
+   static bool touchClean= false;
 
    deviceCount= ctx->inputDeviceFds.size();
 
@@ -2256,7 +2407,7 @@ static void essProcessInputDevices( EssCtx *ctx )
                   if ( (iev->len >= 5) && !strncmp( iev->name, "event", 5 ) )
                   {
                      // Re-discover devices
-                     DEBUG("essProcessInputDevices: inotify: mask %x (%s) wd %d (%d)\n", iev->mask, iev->name, iev->wd, ctx->watchFd );
+                     DEBUG("essProcessInputDevices: inotify: mask %x (%s) wd %d (%d)", iev->mask, iev->name, iev->wd, ctx->watchFd );
                      pollfd pfd= ctx->inputDeviceFds.back();
                      ctx->inputDeviceFds.pop_back();
                      essReleaseInputDevices( ctx );
@@ -2297,6 +2448,9 @@ static void essProcessInputDevices( EssCtx *ctx )
                                        break;
                                  }
                               }
+                              break;
+                           case BTN_TOUCH:
+                              // Ignore
                               break;
                            default:
                               {
@@ -2350,6 +2504,95 @@ static void essProcessInputDevices( EssCtx *ctx )
                               
                               mouseMoved= false;
                            }
+                           if ( touchChanges )
+                           {
+                              bool touchEvents= false;
+                              for( int i= 0; i < ESS_MAX_TOUCH; ++i )
+                              {
+                                 if ( ctx->touch[i].valid )
+                                 {
+                                    if ( ctx->touch[i].starting )
+                                    {
+                                       essProcessTouchDown( ctx, ctx->touch[i].id, ctx->touch[i].x, ctx->touch[i].y );
+                                       touchEvents= true;
+                                    }
+                                    else if ( ctx->touch[i].stopping )
+                                    {
+                                       essProcessTouchUp( ctx, ctx->touch[i].id );
+                                       touchEvents= true;
+                                    }
+                                    else if ( ctx->touch[i].moved )
+                                    {
+                                       essProcessTouchMotion( ctx, ctx->touch[i].id, ctx->touch[i].x, ctx->touch[i].y );
+                                       touchEvents= true;
+                                    }
+                                 }
+                              }
+
+                              if ( touchEvents )
+                              {
+                                 essProcessTouchFrame( ctx );
+                              }
+
+                              if ( touchClean )
+                              {
+                                 touchClean= false;
+                                 for( int i= 0; i < ESS_MAX_TOUCH; ++i )
+                                 {
+                                    ctx->touch[i].starting= false;
+                                    if ( ctx->touch[i].stopping )
+                                    {
+                                       ctx->touch[i].valid= false;
+                                       ctx->touch[i].stopping= false;
+                                       ctx->touch[i].id= -1;
+                                    }
+                                 }
+                              }
+                              touchChanges= false;
+                           }
+                        }
+                        break;
+                     case EV_ABS:
+                        switch( e.code )
+                        {
+                           case ABS_MT_SLOT:
+                              currTouchSlot= e.value;
+                              break;
+                           case ABS_MT_POSITION_X:
+                              if ( (currTouchSlot >= 0) && (currTouchSlot < ESS_MAX_TOUCH) )
+                              {
+                                 ctx->touch[currTouchSlot].x= e.value;
+                                 ctx->touch[currTouchSlot].moved= true;
+                                 touchChanges= true;
+                              }
+                              break;
+                           case ABS_MT_POSITION_Y:
+                              if ( (currTouchSlot >= 0) && (currTouchSlot < ESS_MAX_TOUCH) )
+                              {
+                                 ctx->touch[currTouchSlot].y= e.value;
+                                 ctx->touch[currTouchSlot].moved= true;
+                                 touchChanges= true;
+                              }
+                              break;
+                           case ABS_MT_TRACKING_ID:
+                              if ( (currTouchSlot >= 0) && (currTouchSlot < ESS_MAX_TOUCH) )
+                              {
+                                 ctx->touch[currTouchSlot].valid= true;
+                                 if ( e.value >= 0 )
+                                 {
+                                    ctx->touch[currTouchSlot].id= e.value;
+                                    ctx->touch[currTouchSlot].starting= true;
+                                 }
+                                 else
+                                 {
+                                    ctx->touch[currTouchSlot].stopping= true;
+                                 }
+                                 touchClean= true;
+                                 touchChanges= true;
+                              }
+                              break;
+                           default:
+                              break;
                         }
                         break;
                      default:

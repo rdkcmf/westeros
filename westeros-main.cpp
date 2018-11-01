@@ -64,6 +64,7 @@ typedef struct _InputCtx
    bool stopRequested;
    std::vector<pollfd> deviceFds;
    WstCompositor *wctx;
+   WstTouchSet touchSet;
 } InputCtx;
 
 typedef struct _AppCtx
@@ -755,6 +756,9 @@ void* inputThread( void *data )
    unsigned int outputWidth= 0, outputHeight= 0;
    bool mouseEnterSent= false;
    bool mouseMoved= false;
+   int currTouchSlot= 0;
+   bool touchChanges= false;
+   bool touchClean= false;
    int notifyFd= -1, watchFd=-1;
    char intfyEvent[512];
    pollfd pfd;
@@ -848,6 +852,9 @@ void* inputThread( void *data )
                                        WstCompositorPointerButtonEvent( inCtx->wctx, keyCode, keyState );
                                     }
                                  }
+                                 break;
+                              case BTN_TOUCH:
+                                 // Ignore
                                  break;
                               default:
                                  {
@@ -948,6 +955,68 @@ void* inputThread( void *data )
                                  
                                  mouseMoved= false;
                               }
+                              if ( touchChanges )
+                              {
+                                 WstCompositorTouchEvent( inCtx->wctx, &inCtx->touchSet );
+                                 if ( touchClean )
+                                 {
+                                    touchClean= false;
+                                    for( int i= 0; i < WST_MAX_TOUCH; ++i )
+                                    {
+                                       inCtx->touchSet.touch[i].starting= false;
+                                       if ( inCtx->touchSet.touch[i].stopping )
+                                       {
+                                          inCtx->touchSet.touch[i].valid= false;
+                                          inCtx->touchSet.touch[i].stopping= false;
+                                          inCtx->touchSet.touch[i].id= -1;
+                                       }
+                                    }
+                                 }
+                                 touchChanges= false;
+                              }
+                           }
+                           break;
+                        case EV_ABS:
+                           switch( e.code )
+                           {
+                              case ABS_MT_SLOT:
+                                 currTouchSlot= e.value;
+                                 break;
+                              case ABS_MT_POSITION_X:
+                                 if ( (currTouchSlot >= 0) && (currTouchSlot < WST_MAX_TOUCH) )
+                                 {
+                                    inCtx->touchSet.touch[currTouchSlot].x= e.value;
+                                    inCtx->touchSet.touch[currTouchSlot].moved= true;
+                                    touchChanges= true;
+                                 }
+                                 break;
+                              case ABS_MT_POSITION_Y:
+                                 if ( (currTouchSlot >= 0) && (currTouchSlot < WST_MAX_TOUCH) )
+                                 {
+                                    inCtx->touchSet.touch[currTouchSlot].y= e.value;
+                                    inCtx->touchSet.touch[currTouchSlot].moved= true;
+                                    touchChanges= true;
+                                 }
+                                 break;
+                              case ABS_MT_TRACKING_ID:
+                                 if ( (currTouchSlot >= 0) && (currTouchSlot < WST_MAX_TOUCH) )
+                                 {
+                                    inCtx->touchSet.touch[currTouchSlot].valid= true;
+                                    if ( e.value >= 0 )
+                                    {
+                                       inCtx->touchSet.touch[currTouchSlot].id= e.value;
+                                       inCtx->touchSet.touch[currTouchSlot].starting= true;
+                                    }
+                                    else
+                                    {
+                                       inCtx->touchSet.touch[currTouchSlot].stopping= true;
+                                    }
+                                    touchClean= true;
+                                    touchChanges= true;
+                                 }
+                                 break;
+                              default:
+                                 break;
                            }
                            break;
                         default:

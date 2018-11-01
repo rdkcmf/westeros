@@ -312,6 +312,59 @@ static const struct wl_pointer_listener pointerListener= {
    pointerHandleAxis
 };
 
+static void touchHandleDown( void *data, struct wl_touch *touch,
+                             uint32_t serial, uint32_t time, struct wl_surface *surface,
+                             int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->touchHandleDown( nc->nestedListenerUserData,
+                                           surface, time, id, sx, sy );
+   }
+}
+
+static void touchHandleUp( void *data, struct wl_touch *touch,
+                           uint32_t serial, uint32_t time, int32_t id )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->touchHandleUp( nc->nestedListenerUserData, time, id );
+   }
+}
+
+static void touchHandleMotion( void *data, struct wl_touch *touch,
+                               uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->touchHandleMotion( nc->nestedListenerUserData,
+                                             time, id, sx, sy );
+   }
+}
+
+static void touchHandleFrame( void *data, struct wl_touch *touch )
+{
+   WstNestedConnection *nc= (WstNestedConnection*)data;
+
+   if ( nc->nestedListener )
+   {
+      nc->nestedListener->touchHandleFrame( nc->nestedListenerUserData );
+   }
+}
+
+static const struct wl_touch_listener touchListener= {
+   touchHandleDown,
+   touchHandleUp,
+   touchHandleMotion,
+   touchHandleFrame
+};
+
 static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabilities )
 {
 	WstNestedConnection *nc = (WstNestedConnection*)data;
@@ -329,6 +382,7 @@ static void seatCapabilities( void *data, struct wl_seat *seat, uint32_t capabil
    if ( capabilities & WL_SEAT_CAPABILITY_TOUCH )
    {
       nc->touch= wl_seat_get_touch( nc->seat );
+      wl_touch_add_listener( nc->touch, &touchListener, nc );
    }   
    wl_display_roundtrip( nc->display );
 }

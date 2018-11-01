@@ -44,6 +44,13 @@ static int gRow=1;
 static int gCol=1;
 static long long gStartTime;
 static long long gCurrTime;
+static int gTouchCount= 0;
+static int gTouch1ID= -1;
+static int gTouch1X;
+static int gTouch1Y;
+static int gTouch2ID= -1;
+static int gTouch2X;
+static int gTouch2Y;
 
 static bool setupGL(void);
 static bool renderGL(void);
@@ -112,18 +119,22 @@ static EssKeyListener keyListener=
    keyReleased
 };
 
-static void pointerMotion( void *, int, int )
+static void setTrianglePosition( int x, int y )
 {
-}
+   int hborder, hcell, vborder, vcell;
+   int thx0, thx1, thx2, thy0, thy1, thy2;
 
-static void pointerButtonPressed( void *, int button, int x, int y )
-{
-   int thx0= gDisplayWidth * 160/1280;
-   int thx1= thx0 + 320;
-   int thx2= thx1 + 320;
-   int thy0= gDisplayHeight * 90/720;
-   int thy1= thy0 + 180;
-   int thy2= thy1 + 180;
+   hborder= gDisplayWidth/8;
+   vborder= gDisplayHeight/8;
+   hcell= gDisplayWidth/4;
+   vcell= gDisplayHeight/4;
+
+   thx0= hborder;
+   thx1= thx0 + hcell;
+   thx2= thx1 + hcell;
+   thy0= vborder;
+   thy1= thy0 + vcell;
+   thy2= thy1 + vcell;
 
    if ( x < thx1 ) 
       gCol= 0;
@@ -140,6 +151,15 @@ static void pointerButtonPressed( void *, int button, int x, int y )
       gRow= 2;
 }
 
+static void pointerMotion( void *, int, int )
+{
+}
+
+static void pointerButtonPressed( void *, int button, int x, int y )
+{
+   setTrianglePosition( x, y );
+}
+
 static void pointerButtonReleased( void *, int, int, int )
 {
 }
@@ -149,6 +169,73 @@ static EssPointerListener pointerListener=
    pointerMotion,
    pointerButtonPressed,
    pointerButtonReleased
+};
+
+static void touchDown( void *userData, int id, int x, int y )
+{
+   if ( gTouch1ID < 0 )
+   {
+      gTouchCount= 1;
+      gTouch1ID= id;
+      gTouch1X= x;
+      gTouch1Y= y;
+   }
+   else if  ( gTouch2ID < 0 )
+   {
+      gTouchCount= 2;
+      gTouch2ID= id;
+      gTouch2X= x;
+      gTouch2Y= y;
+   }
+}
+
+static void touchUp( void *userData, int id )
+{
+   if ( gTouch1ID == id )
+   {
+      --gTouchCount;
+      gTouch1ID= -1;
+   }
+   else if  ( gTouch2ID == id )
+   {
+      --gTouchCount;
+      gTouch2ID= -1;
+   }
+}
+
+static void touchMotion( void *userData, int id, int x, int y )
+{
+   if ( gTouch1ID == id )
+   {
+      gTouch1X= x;
+      gTouch1Y= y;
+   }
+   else if  ( gTouch2ID == id )
+   {
+      gTouch2X= x;
+      gTouch2Y= y;
+   }
+}
+
+static void touchFrame( void *userData )
+{
+   if ( gTouchCount == 1 )
+   {
+      setTrianglePosition( gTouch1X, gTouch1Y );
+   }
+   else if ( gTouchCount == 2 )
+   {
+      setTrianglePosition( gDisplayWidth/2, gDisplayHeight/2 );
+   }
+   gTouchCount= 0;
+}
+
+static EssTouchListener touchListener=
+{
+   touchDown,
+   touchUp,
+   touchMotion,
+   touchFrame
 };
 
 int main( int argc, char **argv )
@@ -190,6 +277,27 @@ int main( int argc, char **argv )
          error= true;
       }
 
+      if ( !EssContextSetTouchListener( ctx, 0, &touchListener ) )
+      {
+         error= true;
+      }
+
+      if ( !EssContextInit( ctx ) )
+      {
+         error= true;
+      }
+
+      if ( !EssContextGetDisplaySize( ctx, &gDisplayWidth, &gDisplayHeight ) )
+      {
+         error= true;
+      }
+      printf("display %dx%d\n", gDisplayWidth, gDisplayHeight);
+
+      if ( !EssContextSetInitialWindowSize( ctx, gDisplayWidth, gDisplayHeight) )
+      {
+         error= true;
+      }
+
       if ( !error )
       {
          struct sigaction sigint;
@@ -200,11 +308,6 @@ int main( int argc, char **argv )
          sigaction(SIGINT, &sigint, NULL);
 
          if ( !EssContextStart( ctx ) )
-         {
-            error= true;
-         }
-         else
-         if ( !EssContextGetDisplaySize( ctx, &gDisplayWidth, &gDisplayHeight ) )
          {
             error= true;
          }

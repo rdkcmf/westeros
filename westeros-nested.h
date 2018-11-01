@@ -48,6 +48,11 @@ typedef void (*WSTCallbackPointerHandleMotion)( void *userData, uint32_t time, w
 typedef void (*WSTCallbackPointerHandleButton)( void *userData, uint32_t time, uint32_t button, uint32_t state );
 typedef void (*WSTCallbackPointerHandleAxis)( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
 
+typedef void (*WSTCallbackTouchHandleDown)( void *userData, struct wl_surface *surface, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WSTCallbackTouchHandleUp)( void *userData, uint32_t time, int32_t id );
+typedef void (*WSTCallbackTouchHandleMotion)( void *userData, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WSTCallbackTouchHandleFrame)( void *userData );
+
 typedef void (*WSTCallbackShmFormat)( void *userData, uint32_t format );
 
 typedef void (*WSTCallbackVpcVideoPathChange)( void *userData, struct wl_surface *surface, uint32_t new_pathway );
@@ -81,6 +86,10 @@ typedef struct _WstNestedConnectionListener
    WSTCallbackPointerHandleMotion pointerHandleMotion;
    WSTCallbackPointerHandleButton pointerHandleButton;
    WSTCallbackPointerHandleAxis pointerHandleAxis;
+   WSTCallbackTouchHandleDown touchHandleDown;
+   WSTCallbackTouchHandleUp touchHandleUp;
+   WSTCallbackTouchHandleMotion touchHandleMotion;
+   WSTCallbackTouchHandleFrame touchHandleFrame;
    WSTCallbackShmFormat shmFormat;
    WSTCallbackVpcVideoPathChange vpcVideoPathChange;
    WSTCallbackVpcVideoXformChange vpcVideoXformChange;

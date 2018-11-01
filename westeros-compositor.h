@@ -44,6 +44,23 @@ typedef enum _WstPointer_buttonState
    WstPointer_buttonState_depressed
 } WstPointer_buttonState;
 
+typedef struct _WstTouchInfo
+{
+   int id;
+   int x;
+   int y;
+   bool valid;
+   bool starting;
+   bool stopping;
+   bool moved;
+} WstTouchInfo;
+
+#define WST_MAX_TOUCH (10)
+typedef struct _WstTouchSet
+{
+   WstTouchInfo touch[WST_MAX_TOUCH];
+} WstTouchSet;
+
 typedef enum _WstClient_status
 {
    WstClient_started,
@@ -79,6 +96,11 @@ typedef void (*WstPointerHandleMotionCallback)( void *userData, uint32_t time, w
 typedef void (*WstPointerHandleButtonCallback)( void *userData, uint32_t time, uint32_t button, uint32_t state );
 typedef void (*WstPointerHandleAxisCallback)( void *userData, uint32_t time, uint32_t axis, wl_fixed_t value );
 
+typedef void (*WstTouchHandleDownCallback)( void *userData, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WstTouchHandleUpCallback)( void *userData, uint32_t time, int32_t id );
+typedef void (*WstTouchHandleMotionCallback)( void *userData, uint32_t time, int32_t id, wl_fixed_t sx, wl_fixed_t sy );
+typedef void (*WstTouchHandleFrameCallback)( void *userData );
+
 
 typedef struct _WstOutputNestedListener
 {
@@ -107,6 +129,14 @@ typedef struct _WstPointerNestedListener
    WstPointerHandleButtonCallback pointerHandleButton;
    WstPointerHandleAxisCallback pointerHandleAxis;
 } WstPointerNestedListener;
+
+typedef struct _WstTouchNestedListener
+{
+   WstTouchHandleDownCallback touchHandleDown;
+   WstTouchHandleUpCallback touchHandleUp;
+   WstTouchHandleMotionCallback touchHandleMotion;
+   WstTouchHandleFrameCallback touchHandleFrame;
+} WstTouchNestedListener;
 
 /**
  * WestCompositorCreate
@@ -558,6 +588,13 @@ void WstCompositorPointerMoveEvent( WstCompositor *ctx, int x, int y );
  */
 void WstCompositorPointerButtonEvent( WstCompositor *ctx, unsigned int button, unsigned int buttonState );
 
+/**
+ * WstCompositorTouchEvent
+ *
+ * Pass a touch event to the compositor.  The compositor will route the event to an
+ * appropriate compositor client.
+ */
+void WstCompositorTouchEvent( WstCompositor *ctx, WstTouchSet *touchSet );
 
 /**
  * WstCompositorLaunchClient

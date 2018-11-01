@@ -31,12 +31,20 @@ typedef struct _EssKeyListener
    void (*keyReleased)( void *userData, unsigned int key ); 
 } EssKeyListener;
 
-typedef struct _ESSPointerListener
+typedef struct _EssPointerListener
 {
    void (*pointerMotion)( void *userData, int x, int y );
    void (*pointerButtonPressed)( void *userData, int button, int x, int y );
    void (*pointerButtonReleased)( void *userData, int button, int x, int y );
 } EssPointerListener;
+
+typedef struct _EssTouchListener
+{
+   void (*touchDown)( void *userData, int id, int x, int y );
+   void (*touchUp)( void *userData, int id );
+   void (*touchMotion)( void *userData, int id, int x, int y );
+   void (*touchFrame)( void *userData );
+} EssTouchListener;
 
 typedef struct _EssTerminateLisenter
 {
@@ -224,6 +232,13 @@ bool EssContextSetKeyListener( EssCtx *ctx, void *userData, EssKeyListener *list
  * Button codes are Linux codes defined by linux/input.h
  */
 bool EssContextSetPointerListener( EssCtx *ctx, void *userData, EssPointerListener *listener );
+
+/**
+ * EssContextSetTouchListener
+ *
+ * Set a touch listener (see EssTouchListener) to receive touch event callbacks.
+ */
+bool EssContextSetTouchListener( EssCtx *ctx, void *userData, EssTouchListener *listener );
 
 /**
  * EssContextSetTerminateListener
