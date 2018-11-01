@@ -46,6 +46,11 @@ typedef struct _EssTouchListener
    void (*touchFrame)( void *userData );
 } EssTouchListener;
 
+typedef struct _EssSettingsListener
+{
+   void (*displaySize)( void *userData, int width, int height );
+} EssSettingsListener;
+
 typedef struct _EssTerminateLisenter
 {
    void (*terminated)( void *userData );
@@ -239,6 +244,13 @@ bool EssContextSetPointerListener( EssCtx *ctx, void *userData, EssPointerListen
  * Set a touch listener (see EssTouchListener) to receive touch event callbacks.
  */
 bool EssContextSetTouchListener( EssCtx *ctx, void *userData, EssTouchListener *listener );
+
+/**
+ * EssContextSetSettingsListener
+ *
+ * Set a settings listener (see EssSettingsListener) to receive settings event callbacks.
+ */
+bool EssContextSetSettingsListener( EssCtx *ctx, void *userData, EssSettingsListener *listener );
 
 /**
  * EssContextSetTerminateListener

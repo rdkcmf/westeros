@@ -34,6 +34,7 @@ libwesteros_gl_la_includedir = $(includedir)
 libwesteros_gl_la_CXXFLAGS= $(AM_CFLAGS) -I=/usr/include/interface/vmcs_host/linux
 
 libwesteros_gl_la_LDFLAGS= \
+   -lpthread \
    $(AM_LDFLAGS)
 
 pkgconfigdir = $(libdir)/pkgconfig

@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <linux/input.h>
+#include <dlfcn.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sys/time.h>
@@ -128,6 +129,8 @@ typedef struct _EssCtx
    EssPointerListener *pointerListener;
    void *touchListenerUserData;
    EssTouchListener *touchListener;
+   void *settingsListenerUserData;
+   EssSettingsListener *settingsListener;
    void *terminateListenerUserData;
    EssTerminateListener *terminateListener;
 
@@ -733,6 +736,25 @@ bool EssContextSetTouchListener( EssCtx *ctx, void *userData, EssTouchListener *
 
       ctx->touchListenerUserData= userData;
       ctx->touchListener= listener;
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
+
+bool EssContextSetSettingsListener( EssCtx *ctx, void *userData, EssSettingsListener *listener )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->settingsListenerUserData= userData;
+      ctx->settingsListener= listener;
 
       result= true;
 
@@ -1890,6 +1912,11 @@ static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
          {
             wl_egl_window_resize( ctx->wleglwindow, width, height, 0, 0 );
          }
+
+         if ( ctx->settingsListener && ctx->settingsListener->displaySize )
+         {
+            ctx->settingsListener->displaySize( ctx->settingsListenerUserData, width, height );
+         }
       }
    }
 }
@@ -2197,6 +2224,24 @@ static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx )
 #endif
 
 #ifdef HAVE_WESTEROS
+extern "C"
+{
+   typedef void (*DisplaySizeCallback)( void *userData, int width, int height );
+   typedef bool (*AddDisplaySizeListener)( WstGLCtx *ctx, void *userData, DisplaySizeCallback listener );
+}
+
+void displaySizeCallback( void *userData, int width, int height )
+{
+   EssCtx *ctx= (EssCtx*)userData;
+   INFO("displaySizeCallback: display size %dx%d", width, height );
+   ctx->planeWidth= width;
+   ctx->planeHeight= height;
+   if ( ctx->settingsListener && ctx->settingsListener->displaySize )
+   {
+      ctx->settingsListener->displaySize( ctx->settingsListenerUserData, width, height );
+   }
+}
+
 static bool essPlatformInitDirect( EssCtx *ctx )
 {
    bool result= false;
@@ -2211,6 +2256,20 @@ static bool essPlatformInitDirect( EssCtx *ctx )
          goto exit;
       }
       DEBUG("essPlatformInitDirect: glCtx %p", ctx->glCtx);
+
+      {
+         void *module= dlopen( "libwesteros_gl.so.0.0.0", RTLD_NOW );
+         if ( module )
+         {
+            AddDisplaySizeListener addDisplaySizeListener= 0;
+            addDisplaySizeListener= (AddDisplaySizeListener)dlsym( module, "_WstGLAddDisplaySizeListener" );
+            if ( addDisplaySizeListener )
+            {
+               addDisplaySizeListener( ctx->glCtx, ctx, displaySizeCallback );
+            }
+            dlclose( module );
+         }
+      }
 
       ctx->displayType= EGL_DEFAULT_DISPLAY;
 
