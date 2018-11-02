@@ -1907,6 +1907,8 @@ static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
       {
          ctx->planeWidth= width;
          ctx->planeHeight= height;
+         ctx->windowWidth= width;
+         ctx->windowHeight= height;
 
          if ( ctx->fullScreen && ctx->wleglwindow )
          {
@@ -2236,6 +2238,8 @@ void displaySizeCallback( void *userData, int width, int height )
    INFO("displaySizeCallback: display size %dx%d", width, height );
    ctx->planeWidth= width;
    ctx->planeHeight= height;
+   ctx->windowWidth= width;
+   ctx->windowHeight= height;
    if ( ctx->settingsListener && ctx->settingsListener->displaySize )
    {
       ctx->settingsListener->displaySize( ctx->settingsListenerUserData, width, height );
