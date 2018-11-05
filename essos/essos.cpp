@@ -72,6 +72,7 @@
 #define DEBUG(FORMAT, ...)          INT_DEBUG(FORMAT, ##__VA_ARGS__)
 #define TRACE(FORMAT, ...)          INT_TRACE(FORMAT, ##__VA_ARGS__)
 
+#define ESS_INPUT_POLL_LIMIT (10)
 #define ESS_MAX_TOUCH (10)
 
 typedef struct _EssTouchInfo
@@ -2435,6 +2436,7 @@ static void essProcessInputDevices( EssCtx *ctx )
 {
    int deviceCount;
    int i, n;
+   int pollCnt= 0;
    input_event e;
    char intfyEvent[512];
    static bool mouseMoved= false;
@@ -2454,7 +2456,7 @@ static void essProcessInputDevices( EssCtx *ctx )
    }
 
    n= poll(&ctx->inputDeviceFds[0], deviceCount, 0);
-   if ( n >= 0 )
+   while ( n >= 0 )
    {
       for( i= 0; i < deviceCount; ++i )
       {
@@ -2665,6 +2667,12 @@ static void essProcessInputDevices( EssCtx *ctx )
             }
          }
       }
+
+      if ( ++pollCnt >= ESS_INPUT_POLL_LIMIT )
+      {
+         break;
+      }
+      n= poll(&ctx->inputDeviceFds[0], deviceCount, 0);
    }
 }
 #endif
