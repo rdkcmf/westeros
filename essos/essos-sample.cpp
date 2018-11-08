@@ -479,5 +479,6 @@ static bool renderGL(void)
    {
       printf( "renderGL: glGetError() = %X\n", err );
    }
+   return true;
 }
 
