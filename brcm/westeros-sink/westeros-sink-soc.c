@@ -620,6 +620,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
                   trickState.topFieldOnly= true;
                   trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
                }
+               trickState.rate= NEXUS_NORMAL_DECODE_RATE;
                NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
             }
          }
