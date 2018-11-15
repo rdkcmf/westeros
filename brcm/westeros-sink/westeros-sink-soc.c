@@ -280,6 +280,7 @@ static void streamChangedCallback(void * context, int param)
    BSTD_UNUSED(param);
 
    NEXUS_SimpleVideoDecoder_GetStreamInformation(decoderHandle, &streamInfo);
+   #if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
    switch (streamInfo.dynamicMetadataType)
    {
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eDolbyVision:
@@ -290,6 +291,7 @@ static void streamChangedCallback(void * context, int param)
          break;
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eNone:
       default:
+   #endif
          switch (streamInfo.eotf)
          {
             /*
@@ -305,8 +307,10 @@ static void streamChangedCallback(void * context, int param)
             default:
                break;
          }
+   #if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
          break;
    }
+   #endif
 
    GST_INFO("\nNEXUS_SimpleVideoDecoder_GetStreamInformation\n \
    \tvalid=%d \n \
