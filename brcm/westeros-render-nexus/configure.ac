@@ -45,6 +45,19 @@ AC_HEADER_STDBOOL
 WAYLAND_EGL_DETECTED=" "
 
 IARM_CFLAGS=" "
+NXCLIENT_LOCAL=" "
+AC_ARG_ENABLE([nxclient_local],
+        AS_HELP_STRING([--enable-nxclient_local],[enable local nxclient ]),
+        [
+          case "${enableval}" in
+           yes) NXCLIENT_LOCAL=true ;;
+           no) NXCLIENT_LOCAL=false ;;
+          *) AC_MSG_ERROR([bad value ${enableval} for --enable-nxclient_local ]) ;;
+           esac
+           ],
+         [echo "local nxclient is enable"])
+AM_CONDITIONAL([NXCLIENT_LOCAL], [test x$NXCLIENT_LOCAL = xtrue])
+AC_SUBST(NXCLIENT_LOCAL)
 
 # Checks for library functions.
 #Add the subdirectories to be considered for building.

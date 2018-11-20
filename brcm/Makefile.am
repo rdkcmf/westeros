@@ -47,7 +47,13 @@ libwesteros_gl_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    -lwayland-egl \
    -lpthread \
-   -lnexus
+   ${NEXUS_LD_LIBRARIES}
+
+if NXCLIENT_LOCAL
+libwesteros_gl_la_LDFLAGS += -lnxclient_local
+else
+libwesteros_gl_la_LDFLAGS += -lnxclient
+endif
 
 distcleancheck_listfiles = *-libtool
 
