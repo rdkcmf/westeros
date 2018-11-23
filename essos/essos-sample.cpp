@@ -238,6 +238,26 @@ static EssTouchListener touchListener=
    touchFrame
 };
 
+void displaySize( void *userData, int width, int height )
+{
+   EssCtx *ctx= (EssCtx*)userData;
+
+   if ( (gDisplayWidth != width) || (gDisplayHeight != height) )
+   {
+      printf("essos-sample: display size changed: %dx%d\n", width, height);
+
+      gDisplayWidth= width;
+      gDisplayHeight= height;
+
+      EssContextResizeWindow( ctx, width, height );
+   }
+}
+
+static EssSettingsListener settingsListener=
+{
+   displaySize
+};
+
 int main( int argc, char **argv )
 {
    int nRC= 0;
@@ -278,6 +298,11 @@ int main( int argc, char **argv )
       }
 
       if ( !EssContextSetTouchListener( ctx, 0, &touchListener ) )
+      {
+         error= true;
+      }
+
+      if ( !EssContextSetSettingsListener( ctx, ctx, &settingsListener ) )
       {
          error= true;
       }

@@ -222,8 +222,6 @@ bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
       {
          displayInfo->width= ctx->displayWidth;
          displayInfo->height= ctx->displayHeight;
-         displayInfo->rate= 0;
-         displayInfo->interlaced= false;
 
          result= true;
       }

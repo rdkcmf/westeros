@@ -149,6 +149,10 @@ typedef struct _EssCtx
    EGLSurface eglSurfaceWindow;
    EGLint eglSwapInterval;
 
+   bool resizePending;
+   int resizeWidth;
+   int resizeHeight;
+
    #ifdef HAVE_WAYLAND
    struct wl_display *wldisplay;
    struct wl_registry *wlregistry;
@@ -183,6 +187,7 @@ static bool essEGLInit( EssCtx *ctx );
 static void essEGLTerm( EssCtx *ctx );
 static void essInitInput( EssCtx *ctx );
 static bool essCreateNativeWindow( EssCtx *ctx, int width, int height );
+static bool essResize( EssCtx *ctx, int width, int height );
 static void essRunEventLoopOnce( EssCtx *ctx );
 static void essProcessKeyPressed( EssCtx *ctx, int linuxKeyCode );
 static void essProcessKeyReleased( EssCtx *ctx, int linuxKeyCode );
@@ -1012,6 +1017,24 @@ exit:
    return result;
 }
 
+bool EssContextResizeWindow( EssCtx *ctx, int width, int height )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      result= essResize( ctx, width, height );
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+exit:
+
+   return result;
+}
+
 void EssContextRunEventLoopOnce( EssCtx *ctx )
 {
    if ( ctx )
@@ -1364,6 +1387,80 @@ exit:
    return result;
 }
 
+static bool essResize( EssCtx *ctx, int width, int height )
+{
+   bool result= false;
+
+   INFO("essResize %dx%d", width, height);
+   if ( ctx->isWayland )
+   {
+      #ifdef HAVE_WAYLAND
+      if ( !ctx->fullScreen && ctx->wleglwindow )
+      {
+         wl_egl_window_resize( ctx->wleglwindow, width, height, 0, 0 );
+
+         result= true;
+      }
+      #endif
+   }
+   else
+   {
+      if ( ctx->eglDisplay != EGL_NO_DISPLAY )
+      {
+         eglMakeCurrent( ctx->eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT );
+
+         if ( ctx->eglSurfaceWindow != EGL_NO_SURFACE )
+         {
+            eglDestroySurface( ctx->eglDisplay, ctx->eglSurfaceWindow );
+            ctx->eglSurfaceWindow= EGL_NO_SURFACE;
+         }
+
+         if ( ctx->nativeWindow )
+         {
+            WstGLDestroyNativeWindow( ctx->glCtx, (void*)ctx->nativeWindow );
+            ctx->nativeWindow= 0;
+         }
+
+         if ( essCreateNativeWindow( ctx, width, height ) )
+         {
+            ctx->eglSurfaceWindow= eglCreateWindowSurface( ctx->eglDisplay,
+                                                           ctx->eglConfig,
+                                                           ctx->nativeWindow,
+                                                           NULL );
+            if ( ctx->eglSurfaceWindow != EGL_NO_SURFACE )
+            {
+               DEBUG("essResize: eglSurfaceWindow %p", ctx->eglSurfaceWindow );
+
+               if ( eglMakeCurrent( ctx->eglDisplay, ctx->eglSurfaceWindow, ctx->eglSurfaceWindow, ctx->eglContext ) )
+               {
+                  result= true;
+               }
+               else
+               {
+                  ERROR("Error: eglResize: eglMakeCurrent failed: eglError %X", eglGetError());
+               }
+            }
+            else
+            {
+               ERROR("Error: eglResize: eglCreateWindowSurface failed: eglError %X", eglGetError());
+            }
+         }
+         else
+         {
+            ERROR("Error: eglResize: essCreateNativeWindow failed");
+         }
+      }
+   }
+
+   if ( result )
+   {
+      ctx->windowWidth= width;
+      ctx->windowHeight= height;
+   }
+
+   return result;
+}
+
 static void essRunEventLoopOnce( EssCtx *ctx )
 {
    if ( ctx )
@@ -1393,6 +1490,17 @@ static void essRunEventLoopOnce( EssCtx *ctx )
             ctx->lastKeyTime= now;
             ctx->keyRepeating= true;
             essProcessKeyPressed( ctx, ctx->lastKeyCode );
+         }
+      }
+
+      if ( ctx->resizePending )
+      {
+         ctx->resizePending= false;
+         if ( ctx->settingsListener && ctx->settingsListener->displaySize )
+         {
+            pthread_mutex_unlock( &ctx->mutex );
+            ctx->settingsListener->displaySize( ctx->settingsListenerUserData, ctx->resizeWidth, ctx->resizeHeight );
+            pthread_mutex_lock( &ctx->mutex );
          }
       }
    }
@@ -2239,12 +2347,9 @@ void displaySizeCallback( void *userData, int width, int height )
    INFO("displaySizeCallback: display size %dx%d", width, height );
    ctx->planeWidth= width;
    ctx->planeHeight= height;
-   ctx->windowWidth= width;
-   ctx->windowHeight= height;
-   if ( ctx->settingsListener && ctx->settingsListener->displaySize )
-   {
-      ctx->settingsListener->displaySize( ctx->settingsListenerUserData, width, height );
-   }
+   ctx->resizePending= true;
+   ctx->resizeWidth= width;
+   ctx->resizeHeight= height;
 }
 
 static bool essPlatformInitDirect( EssCtx *ctx )
@@ -2289,6 +2394,11 @@ static void essPlatformTermDirect( EssCtx *ctx )
 {
    if ( ctx )
    {
+      if ( ctx->nativeWindow )
+      {
+         WstGLDestroyNativeWindow( ctx->glCtx, (void*)ctx->nativeWindow );
+         ctx->nativeWindow= 0;
+      }
       if ( ctx->glCtx )
       {
          WstGLTerm( ctx->glCtx );

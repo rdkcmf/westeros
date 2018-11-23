@@ -25,8 +25,6 @@ typedef struct _WstGLDisplayInfo
 {
    int width;
    int height;
-   int rate;
-   bool interlaced;
 } WstGLDisplayInfo;
 
 typedef void (*WstGLDisplaySizeCallback)( void *userData, int width, int height );

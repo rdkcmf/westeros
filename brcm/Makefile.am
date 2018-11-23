@@ -46,6 +46,7 @@ libwesteros_gl_la_CXXFLAGS= $(AM_CFLAGS)
 libwesteros_gl_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    -lwayland-egl \
+   -lpthread \
    -lnexus
 
 distcleancheck_listfiles = *-libtool

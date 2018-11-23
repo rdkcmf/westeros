@@ -310,11 +310,20 @@ bool EssContextGetDisplaySize( EssCtx *ctx, int *width, int *height );
  * EssContextSetWindowPosition
  *
  * Sets the window position.  For a Wayland application, this will
- * set the window position if the the application is not a fullscreen
+ * set the window position if the application is not a fullscreen
  * application (ie. connected to a Westeros embedded compositor).  For a
  * direct Linux application this call will be ignored.
  */
 bool EssContextSetWindowPosition( EssCtx *ctx, int x, int y );
+
+/**
+ * EssContextResizeWindow
+ *
+ * Set a new window size.  For a Wayland application, this will
+ * set the window sizee if the application is not a fullscreen
+ * application (ie. connecte to a Westeros embedded compositor).
+ */
+bool EssContextResizeWindow( EssCtx *ctx, int width, int height );
 
 /**
  * EssContextRunEventLoopOnce

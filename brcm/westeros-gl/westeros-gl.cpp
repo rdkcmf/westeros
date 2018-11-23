@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <memory.h>
+#include <pthread.h>
 
 #include "westeros-gl.h"
 
@@ -30,6 +31,8 @@
 #include "nexus_display.h"
 #include "default_nexus.h"
 #include "nxclient.h"
+
+#include <vector>
 
 /*
  * WstGLNativePixmap:
@@ -51,12 +54,93 @@ typedef struct _WstGLCtx
    BKNI_EventHandle gfxEvent;
 } WstGLCtx;
 
+typedef struct _WstGLDisplayCtx
+{
+   NxClient_AllocSettings allocSettings;
+   NxClient_AllocResults allocResults;
+   NEXUS_SurfaceClientHandle surfaceClient;
+   int displayWidth;
+   int displayHeight;
+} WstGLDisplayCtx;
+
+typedef struct _WstGLSizeCBInfo
+{
+   void *userData;
+   WstGLDisplaySizeCallback listener;
+   int width;
+   int height;
+} WstGLSizeCBInfo;
+
 static int ctxCount= 0;
+static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
+static WstGLDisplayCtx *gDisplayCtx= 0;
+static std::vector<WstGLSizeCBInfo> gSizeListeners;
 
 static void gfxCheckPoint( void *data, int unused )
 {
    BSTD_UNUSED(unused);
    BKNI_SetEvent((BKNI_EventHandle)data);
+}
+
+static void wstGLGetDisplaySize( void )
+{
+   NEXUS_Error rc= NEXUS_SUCCESS;
+   NEXUS_SurfaceClientStatus scStatus;
+
+   pthread_mutex_lock( &g_mutex );
+   if ( gDisplayCtx && gDisplayCtx->surfaceClient )
+   {
+      rc= NEXUS_SurfaceClient_GetStatus( gDisplayCtx->surfaceClient, &scStatus );
+      if ( rc == NEXUS_SUCCESS )
+      {
+         gDisplayCtx->displayWidth= scStatus.display.framebuffer.width;
+         gDisplayCtx->displayHeight= scStatus.display.framebuffer.height;
+         printf("WstGLGetDisplaySize: display %dx%d\n", gDisplayCtx->displayWidth, gDisplayCtx->displayHeight);
+      }
+   }
+   pthread_mutex_unlock( &g_mutex );
+}
+
+static void wstGLNotifySizeListeners( void )
+{
+   int width, height;
+   std::vector<WstGLSizeCBInfo> listeners;
+
+   pthread_mutex_lock( &g_mutex );
+   if ( gDisplayCtx )
+   {
+      width= gDisplayCtx->displayWidth;
+      height= gDisplayCtx->displayHeight;
+
+      for ( std::vector<WstGLSizeCBInfo>::iterator it= gSizeListeners.begin();
+            it != gSizeListeners.end();
+            ++it )
+      {
+         WstGLSizeCBInfo cbInfo= (*it);
+         if ( (width != cbInfo.width) || (height != cbInfo.height) )
+         {
+            (*it).width= width;
+            (*it).height= height;
+            listeners.push_back( cbInfo );
+         }
+      }
+   }
+   pthread_mutex_unlock( &g_mutex );
+
+   for ( std::vector<WstGLSizeCBInfo>::iterator it= listeners.begin();
+         it != listeners.end();
+         ++it )
+   {
+      WstGLSizeCBInfo cbInfo= (*it);
+      cbInfo.listener( cbInfo.userData, width, height );
+   }
+   listeners.clear();
+}
+
+static void displayStatusChangedCallback( void *context, int param )
+{
+   wstGLGetDisplaySize();
+   wstGLNotifySizeListeners();
 }
 
 WstGLCtx* WstGLInit()
@@ -68,14 +152,50 @@ WstGLCtx* WstGLInit()
    ctx= (WstGLCtx*)calloc( 1, sizeof(WstGLCtx) );
    if ( ctx )
    {
+      pthread_mutex_lock( &g_mutex );
       if ( ctxCount == 0 )
       {
          NxClient_GetDefaultJoinSettings( &joinSettings );
          snprintf( joinSettings.name, NXCLIENT_MAX_NAME, "%s", "westeros-gl");
          rc= NxClient_Join( &joinSettings );
          printf("WstGLInit: NxClient_Join rc=%X as %s\n", rc, joinSettings.name );
+
+         gDisplayCtx= (WstGLDisplayCtx*)calloc( 1, sizeof(WstGLDisplayCtx));
+         if ( gDisplayCtx )
+         {
+            NxClient_GetDefaultAllocSettings( &gDisplayCtx->allocSettings );
+            gDisplayCtx->allocSettings.surfaceClient= 1;
+            rc= NxClient_Alloc( &gDisplayCtx->allocSettings, &gDisplayCtx->allocResults );
+            if ( rc == NEXUS_SUCCESS )
+            {
+               gDisplayCtx->surfaceClient= NEXUS_SurfaceClient_Acquire(gDisplayCtx->allocResults.surfaceClient[0].id);
+               if ( gDisplayCtx->surfaceClient )
+               {
+                  NEXUS_SurfaceClientSettings settings;
+
+                  NEXUS_SurfaceClient_GetSettings( gDisplayCtx->surfaceClient, &settings );
+                  settings.displayStatusChanged.callback= displayStatusChangedCallback;
+                  settings.displayStatusChanged.context= gDisplayCtx;
+                  settings.displayStatusChanged.param= 0;
+                  rc= NEXUS_SurfaceClient_SetSettings( gDisplayCtx->surfaceClient, &settings );
+                  if ( rc != NEXUS_SUCCESS )
+                  {
+                     printf("WstGLInit: NEXUS_SurfaceClient_SetSettings failed: rc=%X\n", rc);
+                  }
+               }
+               else
+               {
+                  printf("WstGLInit: NEXUS_SurfaceClient_Acquire failed\n");
+               }
+            }
+            else
+            {
+               printf("WstGLInit: NxClient_Alloc rc=%X", rc);
+            }
+         }
       }
       ++ctxCount;
+      pthread_mutex_unlock( &g_mutex );
 
       NXPL_RegisterNexusDisplayPlatform( &ctx->nxplHandle, 0 );
       printf("WstGLInit: nxplHandle %x\n", ctx->nxplHandle );
@@ -99,6 +219,8 @@ WstGLCtx* WstGLInit()
          WstGLTerm( ctx );
          ctx= 0;
       }
+
+      wstGLGetDisplaySize();
    }
    
    return ctx;
@@ -124,16 +246,143 @@ void WstGLTerm( WstGLCtx *ctx )
          NXPL_UnregisterNexusDisplayPlatform( ctx->nxplHandle );
          ctx->nxplHandle= 0;
       }
+      pthread_mutex_lock( &g_mutex );
       if ( ctxCount > 0 )
       {
          --ctxCount;
          if ( ctxCount == 0 )
          {
+            if ( gDisplayCtx )
+            {
+               if ( gDisplayCtx->surfaceClient )
+               {
+                  NEXUS_SurfaceClient_Release( gDisplayCtx->surfaceClient );
+                  gDisplayCtx->surfaceClient= 0;
+               }
+               NxClient_Free(&gDisplayCtx->allocResults);
+               free( gDisplayCtx );
+            }
             NxClient_Uninit();
          }
       }
+      pthread_mutex_unlock( &g_mutex );
       free( ctx );
    }
+}
+
+#if defined(__cplusplus)
+extern "C"
+{
+bool _WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
+{
+   return WstGLGetDisplayInfo( ctx, displayInfo );
+}
+
+bool _WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener )
+{
+   return WstGLAddDisplaySizeListener( ctx, userData, listener );
+}
+
+bool _WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback listener )
+{
+   return WstGLRemoveDisplaySizeListener( ctx, listener );
+}
+}
+#endif
+
+bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
+{
+   bool result= false;
+
+   if ( ctx && displayInfo )
+   {
+      wstGLGetDisplaySize();
+
+      pthread_mutex_lock( &g_mutex );
+      if ( gDisplayCtx )
+      {
+         displayInfo->width= gDisplayCtx->displayWidth;
+         displayInfo->height= gDisplayCtx->displayHeight;
+
+         result= true;
+      }
+      pthread_mutex_unlock( &g_mutex );
+   }
+
+   return result;
+}
+
+bool WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener )
+{
+   bool result= false;
+   bool found= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &g_mutex );
+
+      for ( std::vector<WstGLSizeCBInfo>::iterator it= gSizeListeners.begin();
+            it != gSizeListeners.end();
+            ++it )
+      {
+         if ( (*it).listener == listener )
+         {
+            found= true;
+            break;
+         }
+      }
+      if ( !found )
+      {
+         WstGLSizeCBInfo newInfo;
+         newInfo.userData= userData;
+         newInfo.listener= listener;
+         newInfo.width= 0;
+         newInfo.height= 0;
+         gSizeListeners.push_back( newInfo );
+
+         result= true;
+      }
+
+      pthread_mutex_unlock( &g_mutex );
+   }
+
+   if ( result )
+   {
+      wstGLNotifySizeListeners();
+   }
+
+   return result;
+}
+
+bool WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback listener )
+{
+   bool result= false;
+   bool found= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &g_mutex );
+
+      for ( std::vector<WstGLSizeCBInfo>::iterator it= gSizeListeners.begin();
+            it != gSizeListeners.end();
+            ++it )
+      {
+         if ( (*it).listener == listener )
+         {
+            found= true;
+            gSizeListeners.erase( it );
+            break;
+         }
+      }
+      if ( found )
+      {
+         result= true;
+      }
+
+      pthread_mutex_unlock( &g_mutex );
+   }
+
+   return result;
 }
 
 /*
