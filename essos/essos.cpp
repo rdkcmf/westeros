@@ -55,6 +55,7 @@
 #define ESS_MAX_ERROR_DETAIL (512)
 #define DEFAULT_PLANE_WIDTH (1280)
 #define DEFAULT_PLANE_HEIGHT (720)
+#define DEFAULT_PLANE_SAFE_BORDER_PERCENT (5)
 #define DEFAULT_KEY_REPEAT_DELAY (500)
 #define DEFAULT_KEY_REPEAT_PERIOD (100)
 
@@ -97,6 +98,10 @@ typedef struct _EssCtx
    bool haveMode;
    int planeWidth;
    int planeHeight;
+   int planeSafeX;
+   int planeSafeY;
+   int planeSafeW;
+   int planeSafeH;
    int windowX;
    int windowY;
    int windowWidth;
@@ -186,6 +191,7 @@ static void essPlatformTerm( EssCtx *ctx );
 static bool essEGLInit( EssCtx *ctx );
 static void essEGLTerm( EssCtx *ctx );
 static void essInitInput( EssCtx *ctx );
+static void essSetDisplaySize( EssCtx *ctx, int width, int height, bool customSafe, int safeX, int safeY, int safeW, int safeH );
 static bool essCreateNativeWindow( EssCtx *ctx, int width, int height );
 static bool essResize( EssCtx *ctx, int width, int height );
 static void essRunEventLoopOnce( EssCtx *ctx );
@@ -245,8 +251,7 @@ EssCtx* EssContextCreate()
    {
       pthread_mutex_init( &ctx->mutex, 0 );
 
-      ctx->planeWidth= DEFAULT_PLANE_WIDTH;
-      ctx->planeHeight= DEFAULT_PLANE_HEIGHT;
+      essSetDisplaySize( ctx, DEFAULT_PLANE_WIDTH, DEFAULT_PLANE_HEIGHT, false, 0, 0, 0, 0);
       ctx->windowWidth= DEFAULT_PLANE_WIDTH;
       ctx->windowHeight= DEFAULT_PLANE_HEIGHT;
       ctx->notifyFd= -1;
@@ -924,8 +929,7 @@ bool EssContextSetDisplaySize( EssCtx *ctx, int width, int height )
       else
       {
          ctx->haveMode= true;
-         ctx->planeWidth= width;
-         ctx->planeHeight= height;
+         essSetDisplaySize( ctx, width, height, false, 0, 0, 0, 0);
       }
 
       result= true;
@@ -961,6 +965,49 @@ bool EssContextGetDisplaySize( EssCtx *ctx, int *width, int *height )
       if ( height )
       {
          *height= ctx->planeHeight;
+      }
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+exit:
+
+   return result;
+}
+
+bool EssContextGetDisplaySafeArea( EssCtx *ctx, int *x, int *y, int *width, int *height )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( !ctx->isInitialized )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Must initialize before querying display safe area" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+
+      if ( x )
+      {
+         *x= ctx->planeSafeX;
+      }
+      if ( y )
+      {
+         *y= ctx->planeSafeY;
+      }
+      if ( width )
+      {
+         *width= ctx->planeSafeW;
+      }
+      if ( height )
+      {
+         *height= ctx->planeSafeH;
       }
 
       result= true;
@@ -1329,6 +1376,26 @@ static void essInitInput( EssCtx *ctx )
    }
 }
 
+static void essSetDisplaySize( EssCtx *ctx, int width, int height, bool customSafe, int safeX, int safeY, int safeW, int safeH )
+{
+   ctx->planeWidth= width;
+   ctx->planeHeight= height;
+   if ( customSafe )
+   {
+      ctx->planeSafeX= safeX;
+      ctx->planeSafeY= safeY;
+      ctx->planeSafeW= safeW;
+      ctx->planeSafeH= safeH;
+   }
+   else
+   {
+      ctx->planeSafeX= width*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+      ctx->planeSafeY= height*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+      ctx->planeSafeW= width-2*ctx->planeSafeX;
+      ctx->planeSafeH= height-2*ctx->planeSafeY;
+   }
+}
+
 static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
 {
    bool result= false;
@@ -1496,11 +1563,22 @@ static void essRunEventLoopOnce( EssCtx *ctx )
       if ( ctx->resizePending )
       {
          ctx->resizePending= false;
-         if ( ctx->settingsListener && ctx->settingsListener->displaySize )
+         if ( ctx->settingsListener )
          {
-            pthread_mutex_unlock( &ctx->mutex );
-            ctx->settingsListener->displaySize( ctx->settingsListenerUserData, ctx->resizeWidth, ctx->resizeHeight );
-            pthread_mutex_lock( &ctx->mutex );
+            if ( ctx->settingsListener->displaySize )
+            {
+               pthread_mutex_unlock( &ctx->mutex );
+               ctx->settingsListener->displaySize( ctx->settingsListenerUserData, ctx->resizeWidth, ctx->resizeHeight );
+               pthread_mutex_lock( &ctx->mutex );
+            }
+            if ( ctx->settingsListener->displaySafeArea )
+            {
+               pthread_mutex_unlock( &ctx->mutex );
+               ctx->settingsListener->displaySafeArea( ctx->settingsListenerUserData,
+                                                       ctx->planeSafeX, ctx->planeSafeY,
+                                                       ctx->planeSafeW, ctx->planeSafeH );
+               pthread_mutex_lock( &ctx->mutex );
+            }
          }
       }
    }
@@ -2014,8 +2092,7 @@ static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
       ctx->haveMode= true;
       if ( (width != ctx->planeWidth) || (height != ctx->planeHeight) )
       {
-         ctx->planeWidth= width;
-         ctx->planeHeight= height;
+         essSetDisplaySize( ctx, width, height, false, 0, 0, 0, 0);
          ctx->windowWidth= width;
          ctx->windowHeight= height;
 
@@ -2024,9 +2101,18 @@ static void essOutputMode( void *data, struct wl_output *output, uint32_t flags,
             wl_egl_window_resize( ctx->wleglwindow, width, height, 0, 0 );
          }
 
-         if ( ctx->settingsListener && ctx->settingsListener->displaySize )
+         if ( ctx->settingsListener )
          {
-            ctx->settingsListener->displaySize( ctx->settingsListenerUserData, width, height );
+            if ( ctx->settingsListener->displaySize )
+            {
+               ctx->settingsListener->displaySize( ctx->settingsListenerUserData, width, height );
+            }
+            if ( ctx->settingsListener->displaySafeArea )
+            {
+               ctx->settingsListener->displaySafeArea( ctx->settingsListenerUserData,
+                                                       ctx->planeSafeX, ctx->planeSafeY,
+                                                       ctx->planeSafeW, ctx->planeSafeH );
+            }
          }
       }
    }
@@ -2339,14 +2425,30 @@ extern "C"
 {
    typedef void (*DisplaySizeCallback)( void *userData, int width, int height );
    typedef bool (*AddDisplaySizeListener)( WstGLCtx *ctx, void *userData, DisplaySizeCallback listener );
+   typedef bool (*GetDisplaySafeArea)( WstGLCtx *ctx, int *x, int *y, int *w, int *h );
 }
+
+static GetDisplaySafeArea gGetDisplaySafeArea= 0;
 
 void displaySizeCallback( void *userData, int width, int height )
 {
    EssCtx *ctx= (EssCtx*)userData;
+   int safex, safey, safew, safeh;
+   bool customSafe= false;
    INFO("displaySizeCallback: display size %dx%d", width, height );
-   ctx->planeWidth= width;
-   ctx->planeHeight= height;
+   if ( gGetDisplaySafeArea )
+   {
+      if ( gGetDisplaySafeArea( ctx->glCtx, &safex, &safey, &safew, &safeh ) )
+      {
+         INFO("displaySizeCallback: display safe (%d,%d,%d,%d)", safex, safey, safew, safeh );
+         customSafe= true;
+      }
+      else
+      {
+         ERROR("failure to get display safe area");
+      }
+   }
+   essSetDisplaySize( ctx, width, height, customSafe, safex, safey, safew, safeh);
    ctx->resizePending= true;
    ctx->resizeWidth= width;
    ctx->resizeHeight= height;
@@ -2373,6 +2475,7 @@ static bool essPlatformInitDirect( EssCtx *ctx )
          {
             AddDisplaySizeListener addDisplaySizeListener= 0;
             addDisplaySizeListener= (AddDisplaySizeListener)dlsym( module, "_WstGLAddDisplaySizeListener" );
+            gGetDisplaySafeArea= (GetDisplaySafeArea)dlsym( module, "_WstGLGetDisplaySafeArea" );
             if ( addDisplaySizeListener )
             {
                addDisplaySizeListener( ctx->glCtx, ctx, displaySizeCallback );

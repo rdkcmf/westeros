@@ -34,6 +34,8 @@
 
 #include <vector>
 
+#define DISPLAY_SAFE_BORDER_PERCENT (5)
+
 /*
  * WstGLNativePixmap:
  * Contains a Nexus surface / NXPL native pixmap pair
@@ -273,9 +275,15 @@ void WstGLTerm( WstGLCtx *ctx )
 #if defined(__cplusplus)
 extern "C"
 {
+#endif
 bool _WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
 {
    return WstGLGetDisplayInfo( ctx, displayInfo );
+}
+
+bool _WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h )
+{
+   return WstGLGetDisplaySafeArea( ctx, x, y, w, h );
 }
 
 bool _WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener )
@@ -287,6 +295,7 @@ bool _WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback li
 {
    return WstGLRemoveDisplaySizeListener( ctx, listener );
 }
+#if defined(__cplusplus)
 }
 #endif
 
@@ -304,9 +313,36 @@ bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
          displayInfo->width= gDisplayCtx->displayWidth;
          displayInfo->height= gDisplayCtx->displayHeight;
 
+         // Use the SMPTE ST 2046-1 5% safe area border
+         displayInfo->safeArea.x= displayInfo->width*DISPLAY_SAFE_BORDER_PERCENT/100;
+         displayInfo->safeArea.y= displayInfo->height*DISPLAY_SAFE_BORDER_PERCENT/100;
+         displayInfo->safeArea.w= displayInfo->width - 2*displayInfo->safeArea.x;
+         displayInfo->safeArea.h= displayInfo->height - 2*displayInfo->safeArea.y;
+
          result= true;
       }
       pthread_mutex_unlock( &g_mutex );
+   }
+
+   return result;
+}
+
+bool WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h )
+{
+   bool result= false;
+   WstGLDisplayInfo di;
+
+   if ( ctx && x && y && w && h )
+   {
+      if ( WstGLGetDisplayInfo( ctx, &di ) )
+      {
+         *x= di.safeArea.x;
+         *y= di.safeArea.y;
+         *w= di.safeArea.w;
+         *h= di.safeArea.h;
+
+         result= true;
+      }
    }
 
    return result;

@@ -30,6 +30,8 @@
 
 #include <vector>
 
+#define DISPLAY_SAFE_BORDER_PERCENT (5)
+
 /*
  * WstGLNativePixmap:
  */
@@ -61,6 +63,7 @@ static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
 static int gDispmanDisplay= 0;
 static int gDisplayWidth= 0;
 static int gDisplayHeight= 0;
+static bool gDisplayAllSafe= false;
 static std::vector<WstGLSizeCBInfo> gSizeListeners;
 
 static void wstGLNotifySizeListeners( void )
@@ -105,6 +108,7 @@ static bool wstGLSetupDisplay( WstGLCtx *ctx )
    {
       int displayId;
       uint32_t width, height;
+      TV_DISPLAY_STATE_T tvstate;
       DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
 
       displayId= DISPMANX_ID_MAIN_LCD;
@@ -120,6 +124,16 @@ static bool wstGLSetupDisplay( WstGLCtx *ctx )
       printf("wstGLSetupDisplay: display %d size %dx%d\n", displayId, width, height );
       gDisplayWidth= width;
       gDisplayHeight= height;
+
+      rc= vc_tv_get_display_state( &tvstate );
+      if ( rc == 0 )
+      {
+         if ( tvstate.state & VC_LCD_ATTACHED_DEFAULT )
+         {
+            printf("wstGLSetupDisplay: LCD\n");
+            gDisplayAllSafe= true;
+         }
+      }
 
       pthread_mutex_lock( &g_mutex );
       if ( !gDispmanDisplay )
@@ -191,9 +205,15 @@ void WstGLTerm( WstGLCtx *ctx )
 #if defined(__cplusplus)
 extern "C"
 {
+#endif
 bool _WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
 {
    return WstGLGetDisplayInfo( ctx, displayInfo );
+}
+
+bool _WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h )
+{
+   return WstGLGetDisplaySafeArea( ctx, x, y, w, h );
 }
 
 bool _WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener )
@@ -205,6 +225,7 @@ bool _WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback li
 {
    return WstGLRemoveDisplaySizeListener( ctx, listener );
 }
+#if defined(__cplusplus)
 }
 #endif
 
@@ -222,6 +243,43 @@ bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
       {
          displayInfo->width= ctx->displayWidth;
          displayInfo->height= ctx->displayHeight;
+
+         if ( gDisplayAllSafe )
+         {
+            // All pixels are visible
+            displayInfo->safeArea.x= 0;
+            displayInfo->safeArea.y= 0;
+            displayInfo->safeArea.w= ctx->displayWidth;
+            displayInfo->safeArea.h= ctx->displayHeight;
+         }
+         else
+         {
+            // Use the SMPTE ST 2046-1 5% safe area border
+            displayInfo->safeArea.x= ctx->displayWidth*DISPLAY_SAFE_BORDER_PERCENT/100;
+            displayInfo->safeArea.y= ctx->displayHeight*DISPLAY_SAFE_BORDER_PERCENT/100;
+            displayInfo->safeArea.w= ctx->displayWidth - 2*displayInfo->safeArea.x;
+            displayInfo->safeArea.h= ctx->displayHeight - 2*displayInfo->safeArea.y;
+         }
+         result= true;
+      }
+   }
+
+   return result;
+}
+
+bool WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h )
+{
+   bool result= false;
+   WstGLDisplayInfo di;
+
+   if ( ctx && x && y && w && h )
+   {
+      if ( WstGLGetDisplayInfo( ctx, &di ) )
+      {
+         *x= di.safeArea.x;
+         *y= di.safeArea.y;
+         *w= di.safeArea.w;
+         *h= di.safeArea.h;
 
          result= true;
       }

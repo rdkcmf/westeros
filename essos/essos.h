@@ -49,6 +49,7 @@ typedef struct _EssTouchListener
 typedef struct _EssSettingsListener
 {
    void (*displaySize)( void *userData, int width, int height );
+   void (*displaySafeArea)( void *userData, int x, int y, int width, int height );
 } EssSettingsListener;
 
 typedef struct _EssTerminateLisenter
@@ -307,6 +308,14 @@ bool EssContextSetDisplaySize( EssCtx *ctx, int width, int height );
 bool EssContextGetDisplaySize( EssCtx *ctx, int *width, int *height );
 
 /**
+ * EssContextGetDisplaySafeArea
+ *
+ * Returns a rectangle giving the display safe area.  This is the region of the display
+ * that is guaranteed to be visible to the user and not hidden by overscan.
+ */
+bool EssContextGetDisplaySafeArea( EssCtx *ctx, int *x, int *y, int *width, int *height );
+
+/**
  * EssContextSetWindowPosition
  *
  * Sets the window position.  For a Wayland application, this will
@@ -320,7 +329,7 @@ bool EssContextSetWindowPosition( EssCtx *ctx, int x, int y );
  * EssContextResizeWindow
  *
  * Set a new window size.  For a Wayland application, this will
- * set the window sizee if the application is not a fullscreen
+ * set the window size if the application is not a fullscreen
  * application (ie. connecte to a Westeros embedded compositor).
  */
 bool EssContextResizeWindow( EssCtx *ctx, int width, int height );
