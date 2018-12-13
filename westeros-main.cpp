@@ -807,6 +807,7 @@ void* inputThread( void *data )
                         getDevices( inCtx->deviceFds );
                         inCtx->deviceFds.push_back( pfd );
                         deviceCount= inCtx->deviceFds.size();
+                        break;
                      }
                   }
                }

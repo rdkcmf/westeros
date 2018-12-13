@@ -888,7 +888,7 @@ void EssContextStop( EssCtx *ctx )
       {
          if  (!ctx->isWayland )
          {
-            essMonitorInputDevicesLifecycleBegin( ctx );
+            essMonitorInputDevicesLifecycleEnd( ctx );
             essReleaseInputDevices( ctx );
          }
 
@@ -2626,7 +2626,7 @@ static void essMonitorInputDevicesLifecycleEnd( EssCtx *ctx )
       if ( ctx->watchFd >= 0 )
       {
          inotify_rm_watch( ctx->notifyFd, ctx->watchFd );
-         ctx->watchFd= 0;
+         ctx->watchFd= -1;
       }
       ctx->inputDeviceFds.pop_back();
       close( ctx->notifyFd );
@@ -2693,6 +2693,7 @@ static void essProcessInputDevices( EssCtx *ctx )
                      essGetInputDevices( ctx );
                      ctx->inputDeviceFds.push_back( pfd );
                      deviceCount= ctx->inputDeviceFds.size();
+                     break;
                   }
                }
             }
