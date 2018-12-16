@@ -797,7 +797,6 @@ void* inputThread( void *data )
                   if ( n >= sizeof(struct inotify_event) )
                   {
                      struct inotify_event *iev= (struct inotify_event*)intfyEvent;
-                     if ( (iev->len >= 5) && !strncmp( iev->name, "event", 5 ) )
                      {
                         // Re-discover devices                        
                         printf("inotify: mask %x (%s) wd %d (%d)\n", iev->mask, iev->name, iev->wd, watchFd );
