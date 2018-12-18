@@ -1909,14 +1909,17 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       processFrame( sink, buffer );
 
-      if ( wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
+      if ( sink->display )
       {
-         if ( sink->soc.rend == &sink->soc.eglRend )
+         if ( wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
          {
-            wl_display_flush(sink->display);
-            if ( !eosDetected )
+            if ( sink->soc.rend == &sink->soc.eglRend )
             {
-               wl_display_roundtrip_queue(sink->display,sink->queue);
+               wl_display_flush(sink->display);
+               if ( !eosDetected )
+               {
+                  wl_display_roundtrip_queue(sink->display,sink->queue);
+               }
             }
          }
       }
