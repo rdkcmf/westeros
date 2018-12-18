@@ -605,5 +605,20 @@ void WstCompositorTouchEvent( WstCompositor *ctx, WstTouchSet *touchSet );
  */
 bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd );
 
+/**
+ * WstCompositorFocusClientById
+ *
+ * Manually change the keyboard input focus to a client using it's id
+ */
+void WstCompositorFocusClientById( WstCompositor *ctx, const int id);
+
+/**
+ * WstCompositorFocusClientByName
+ *
+ * Manually change the keyboard input focus to a client using it's name. The name uniqueness is the responsibility of
+ * the client. The first hit will be returned.
+ */
+void WstCompositorFocusClientByName( WstCompositor *ctx, const char *name);
+
 #endif
 

@@ -2730,6 +2730,43 @@ exit:
    return result;
 }
 
+void WstCompositorFocusClientById( WstCompositor *ctx, const int id)
+{
+   WstKeyboard *keyboard= ctx->seat->keyboard;
+
+   if (keyboard != 0)
+   {
+      for (std::vector<WstSurface *>::iterator it = ctx->surfaces.begin(); it != ctx->surfaces.end(); ++it)
+      {
+         WstSurface *surface= (*it);
+
+         if (id == surface->surfaceId)
+         {
+            wstKeyboardSetFocus(keyboard, surface);
+            break;
+         }
+      }
+   }
+}
+
+void WstCompositorFocusClientByName( WstCompositor *ctx, const char *name)
+{
+   WstKeyboard *keyboard= ctx->seat->keyboard;
+
+   if (keyboard != 0)
+   {
+      for (std::vector<WstSurface *>::iterator it = ctx->surfaces.begin(); it != ctx->surfaces.end(); ++it)
+      {
+         WstSurface *surface= (*it);
+
+         if (::strcmp(name, surface->name) == 0)
+         {
+            wstKeyboardSetFocus(keyboard, surface);
+            break;
+         }
+      }
+   }
+}
 
 
 /*
