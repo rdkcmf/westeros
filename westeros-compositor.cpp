@@ -60,6 +60,8 @@
 #include "vpc-client-protocol.h"
 #include "vpc-server-protocol.h"
 
+#include "westeros-version.h"
+
 #define WST_MAX_ERROR_DETAIL (512)
 
 #define MAX_NESTED_NAME_LEN (32)
@@ -784,6 +786,8 @@ static int g_nextNestedId= 0;
 WstCompositor* WstCompositorCreate()
 {
    WstCompositor *ctx= 0;
+
+   INFO("westeros (core) vesrsion " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
    
    ctx= (WstCompositor*)calloc( 1, sizeof(WstCompositor) );
    if ( ctx )

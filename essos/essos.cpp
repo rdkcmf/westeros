@@ -51,6 +51,8 @@
 #include "simpleshell-client-protocol.h"
 #endif
 
+#include "westeros-version.h"
+
 #define ESS_UNUSED(x) ((void)x)
 #define ESS_MAX_ERROR_DETAIL (512)
 #define DEFAULT_PLANE_WIDTH (1280)
@@ -245,6 +247,8 @@ static EGLint gDefaultEGLCtxAttr[]=
 EssCtx* EssContextCreate()
 {
    EssCtx *ctx= 0;
+
+   INFO("westeros (essos) vesrsion " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
 
    ctx= (EssCtx*)calloc( 1, sizeof(EssCtx) );
    if ( ctx )

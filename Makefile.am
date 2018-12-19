@@ -134,6 +134,7 @@ libwesteros_compositor_la_SOURCES = \
    protocol/vpc-protocol.c
 libwesteros_compositor_la_include_HEADERS = \
    westeros-compositor.h \
+   westeros-version.h \
    westeros-render.h \
    protocol/vpc-client-protocol.h
 libwesteros_compositor_la_includedir = $(includedir)

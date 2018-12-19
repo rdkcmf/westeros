@@ -25,6 +25,8 @@
 
 #include "westeros-sink.h"
 
+#include "westeros-version.h"
+
 #define GST_PACKAGE_ORIGIN "http://gstreamer.net/"
 
 static GstStaticPadTemplate gst_westeros_sink_pad_template =
@@ -753,6 +755,8 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
    {
       case GST_STATE_CHANGE_NULL_TO_READY:
       {
+         printf("westeros (sink) vesrsion " WESTEROS_VERSION_FMT "\n", WESTEROS_VERSION );
+
          sink->position= 0;         
          sink->eosDetected= FALSE;
          sink->eosEventSeen= FALSE;
