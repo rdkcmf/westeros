@@ -352,7 +352,7 @@ unsigned int WstCompositorGetFrameRate( WstCompositor *ctx );
  * Obtain the name of the renderer module being used by
  * this compositor instance.  This can be called at any time.
  */
-const char *WstCompositorGetRenderModule( WstCompositor *ctx );
+const char *WstCompositorGetRendererModule( WstCompositor *ctx );
 
 /**
  * WstCompositorGetIsNested
