@@ -8193,10 +8193,13 @@ static void wstPointerCheckFocus( WstPointer *pointer, int32_t x, int32_t y )
       
       if ( pointer->focus != surface )
       {
-         int sx, sy, sw, sh;
+         int sx= 0, sy= 0, sw, sh;
          wl_fixed_t xFixed, yFixed;
 
-         WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
+         if ( surface )
+         {
+            WstRendererSurfaceGetGeometry( compositor->renderer, surface->surface, &sx, &sy, &sw, &sh );
+         }
 
          xFixed= wl_fixed_from_int( x-sx );
          yFixed= wl_fixed_from_int( y-sy );
