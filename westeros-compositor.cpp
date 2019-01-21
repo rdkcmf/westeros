@@ -1679,7 +1679,7 @@ bool WstCompositorGetIsEmbedded( WstCompositor *ctx )
  * Determine the display, if any, with which this embedded compistor instance
  * will establish a VPC (Video Path Control) bridge.
  */
-const char* WstCompositorSetVpcBridge( WstCompositor *ctx )
+const char* WstCompositorGetVpcBridge( WstCompositor *ctx )
 {
    const char *displayName= 0;
 
