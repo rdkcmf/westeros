@@ -1,0 +1,11 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: wayland-egl
+Description: Westeros UT EM wayland-egl
+Version: 1.1.1
+Requires: wayland-client
+Libs: -L${libdir} -lwayland-egl
+Cflags: -I${includedir}

@@ -1,0 +1,692 @@
+#
+# If not stated otherwise in this file or this component's Licenses.txt file the
+# following copyright and licenses apply:
+#
+# Copyright 2016 RDK Management
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+WID=$(shell pwd)/external/install
+XDGOPT ?= xdgv4
+
+all:  externals \
+      site \
+      westeros-protocols \
+      westeros-simpleshell \
+      westeros-simplebuffer \
+      westeros-soc \
+      westeros-core \
+      westeros-essos \
+      westeros-render-nexus \
+      westeros-soc-sink \
+      unit-test
+
+clean: init
+
+cleanall: initall
+
+setenv= \
+	export PATH=$(WID)/bin:$(PATH) && \
+	export LD_LIBRARY_PATH=$(WID)/lib && \
+	export PKG_CONFIG_PATH=$(WID)/lib/pkgconfig:$(WID)/share/pkgconfig && \
+	export PKG_CONFIG=$(WID)/bin/pkg-config &&  \
+	export ACLOCAL_PATH=$(WID)/share/aclocal && \
+	export ACLOCAL="aclocal -I $ACLOCAL_PATH"
+
+initall: init
+	rm -rf external
+   
+init:
+	cd protocol && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo && rm -f *.gcno
+	cd protocol/version4 && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo && rm -f *.gcno
+	cd protocol/version5 && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo && rm -f *.gcno
+	cd simplebuffer/protocol && rm -f *.h && rm -f *.c && rm -f *.gcno
+	cd simplebuffer && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
+	cd simpleshell/protocol && rm -f *.h && rm -f *.c && rm -f *.gcno
+	cd simpleshell && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
+	cd essos && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd brcm && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd brcm/westeros-render-nexus && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd brcm/westeros-sink && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda
+	rm -f *.o && rm -f *.lo && rm -f .libs/*
+	rm -f .brcm-em
+	rm -f external/install/include/vpc*.h	
+	
+externals: external \
+           external/.pkgconfig \
+           external/.libffi \
+           external/.libpcre \
+           external/.zlib \
+           external/.glib2.0 \
+           external/.pthread-stubs \
+           external/.xproto \
+           external/.xau \
+           external/.bison \
+           external/.expat \
+           external/.gettext-tools \
+           external/.flex \
+           external/.intltool \
+           external/.proto \
+           external/.macros \
+           external/.xkbconfig \
+           external/.libxcd \
+           external/.libxkbcommon \
+           external/.wayland \
+           external/.gstreamer \
+           external/.brcm-refsw
+	rm -f $(WID)/share/config.site
+
+external:
+	mkdir -p external
+	mkdir -p external/install
+	
+external/.pkgconfig:	
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/pkg-config && \
+	cd pkg-config && \
+	git checkout pkg-config-0.29 && \
+	./autogen.sh --prefix $(WID) --no-configure && \
+	./configure --prefix $(WID) --with-internal-glib && \
+	make && make install && \
+	cd .. && \
+	touch .pkgconfig
+
+external/.libffi:
+	$(call setenv) && \
+	cd external && \
+	mkdir libffi && \
+	cd libffi && \
+	wget http://sourceware.org/pub/libffi/libffi-3.2.1.tar.gz && \
+	tar xzvf libffi-3.2.1.tar.gz && \
+	cd libffi-3.2.1 && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .libffi
+
+external/.libpcre:
+	$(call setenv) && \
+	cd external && \
+	mkdir libpcre && \
+	cd libpcre && \
+	wget https://sourceforge.net/projects/pcre/files/pcre/8.39/pcre-8.39.tar.bz2 && \
+	tar xjvf pcre-8.39.tar.bz2 && \
+	cd pcre-8.39 && \
+	./configure --prefix $(WID) --enable-newline-is-lf --enable-rebuild-chartables --enable-utf --enable-unicode-properties --with-link-size=2 --with-match-limit=10000000 && \
+	make && make install && \
+	cd ../.. && \
+	touch .libpcre	
+
+external/.zlib:
+	$(call setenv) && \
+	cd external && \
+	mkdir zlib && \
+	cd zlib && \
+	wget http://www.zlib.net/zlib-1.2.11.tar.xz && \
+	tar xf zlib-1.2.11.tar.xz && \
+	cd zlib-1.2.11/ && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .zlib
+
+external/.glib2.0:
+	$(call setenv) && \
+	cd external && \
+	mkdir glib2.0 && \
+	cd glib2.0 && \
+	wget http://ftp.gnome.org/pub/gnome/sources/glib/2.58/glib-2.58.2.tar.xz && \
+	tar xf glib-2.58.2.tar.xz && \
+	cd glib-2.58.2/ && \
+	./autogen.sh --prefix $(WID) --enable-libmount=no && \
+	make && make install && \
+	cd ../.. && \
+	touch .glib2.0
+
+external/.pthread-stubs:
+	$(call setenv) && \
+	cd external && \
+	mkdir pthread-stubs && \
+	cd pthread-stubs && \
+	wget http://cgit.freedesktop.org/xcb/pthread-stubs/snapshot/pthread-stubs-0.3.tar.gz && \
+	tar xzvf pthread-stubs-0.3.tar.gz && \
+	cd pthread-stubs-0.3 && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .pthread-stubs
+
+external/.xproto:
+	$(call setenv) && \
+	cd external && \
+	mkdir xproto && \
+	cd xproto && \
+	wget http://www.x.org/archive/individual/proto/xproto-7.0.29.tar.bz2 && \
+	tar xjvf xproto-7.0.29.tar.bz2 && \
+	cd xproto-7.0.29/ && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .xproto
+
+external/.xau:
+	$(call setenv) && \
+	cd external && \
+	mkdir xau && \
+	cd xau && \
+	wget http://www.x.org/pub/individual/lib/libXau-1.0.8.tar.bz2 && \
+	tar xjvf libXau-1.0.8.tar.bz2 && \
+	cd libXau-1.0.8 && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .xau	
+
+external/.bison:
+	$(call setenv) && \
+	cd external && \
+	mkdir bison && \
+	cd bison && \
+	wget http://ftp.gnu.org/gnu/bison/bison-3.0.4.tar.xz && \
+	tar xf bison-3.0.4.tar.xz && \
+	cd bison-3.0.4/ && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .bison	
+
+external/.expat:
+	$(call setenv) && \
+	cd external && \
+	mkdir expat && \
+	cd expat && \
+	wget https://sourceforge.net/projects/expat/files/expat/2.2.0/expat-2.2.0.tar.bz2 && \
+	tar xjvf expat-2.2.0.tar.bz2 && \
+	cd expat-2.2.0/ && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .expat	
+
+external/.gettext-tools:
+	$(call setenv) && \
+	cd external && \
+	mkdir gettext-tools && \
+	cd gettext-tools && \
+	wget http://ftp.gnu.org/pub/gnu/gettext/gettext-0.19.5.1.tar.gz && \
+	tar xzvf gettext-0.19.5.1.tar.gz && \
+	cd gettext-0.19.5.1/ && \
+	./configure --prefix $(WID) --without-lispdir --disable-csharp --disable-libasprintf --disable-java --disable-native-java --disable-openmp --disable-acl --with-included-glib --without-emacs --without-cvs --without-git --with-included-libxml --with-included-libcroco --with-included-libunistring && \
+	make && make install && \
+	cd ../.. && \
+	touch .gettext-tools	
+
+external/.flex:
+	$(call setenv) && \
+	cd external && \
+	mkdir flex && \
+	cd flex && \
+	wget http://github.com/westes/flex/releases/download/v2.6.3/flex-2.6.3.tar.gz && \
+	tar xzvf flex-2.6.3.tar.gz && \
+	cd flex-2.6.3/ && \
+	./autogen.sh --prefix $(WID) && \
+	./configure --prefix $(WID) && make && make install && \
+	cd ../.. && \
+	touch .flex	
+
+external/.intltool:
+	$(call setenv) && \
+	cd external && \
+	mkdir intltool && \
+	cd intltool && \
+	wget https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/intltool/0.51.0-2/intltool_0.51.0.orig.tar.gz && \
+	tar xzvf intltool_0.51.0.orig.tar.gz && \
+	cd intltool-0.51.0 && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .intltool
+
+external/.proto:	
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/xcb/proto && \
+	cd proto && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .proto
+
+external/.macros:
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/xorg/util/macros && \
+	cd macros && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .macros
+
+external/.xkbconfig:
+	$(call setenv) && \
+	cd external && \
+	mkdir xkbconfig && \
+	cd xkbconfig && \
+	wget http://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-2.18.tar.bz2 && \
+	tar xjvf xkeyboard-config-2.18.tar.bz2 && \
+	cd xkeyboard-config-2.18 && \
+	./autogen.sh --prefix $(WID) --disable-runtime-deps && \
+	make && make install && \
+	cd ../.. && \
+	touch .xkbconfig
+
+external/.libxcd:
+	$(call setenv) && \
+	cd external && \
+	git clone git://anongit.freedesktop.org/xcb/libxcb && \
+	cd libxcb && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .libxcd
+	
+external/.libxkbcommon:
+	$(call setenv) && \
+	cd external && \
+	git clone git://github.com/xkbcommon/libxkbcommon && \
+	cd libxkbcommon && \
+	./autogen.sh --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .libxkbcommon
+
+external/.wayland:
+	$(call setenv) && \
+	cd external && \
+	mkdir wayland && \
+	cd wayland && \
+	wget http://wayland.freedesktop.org/releases/wayland-1.6.0.tar.xz && \
+	tar xf wayland-1.6.0.tar.xz && \
+	cd wayland-1.6.0 && \
+	./configure --prefix $(WID) --with-expat=$(WID) --disable-documentation && \
+	make && make install && \
+	cd ../.. && \
+	touch .wayland
+
+external/.gstreamer:
+	$(call setenv) && \
+	cd external && \
+	mkdir gstreamer1.0 && \
+	cd gstreamer1.0 && \
+	wget https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.10.4.tar.xz && \
+	tar xf gstreamer-1.10.4.tar.xz && \
+	cd gstreamer-1.10.4 && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .gstreamer
+
+external/.brcm-refsw:
+	cd external && \
+	mkdir brcm-refsw && \
+	cd brcm-refsw && \
+	wget https://nexus.teamccp.com/nexus/service/local/repositories/broadcom/content/components/sdk/refsw/17_3/refsw_release_unified_20170922/2.1/refsw_release_unified_20170922-2.1.tgz && \
+	mkdir temp && \
+	cd temp && \
+	tar xzvf ../refsw_release_unified_20170922-2.1.tgz && \
+	cd .. && \
+	mkdir include && \
+	cp temp/magnum/basemodules/chp/include/common/bchp.h include && \
+	cp temp/magnum/basemodules/chp/include/74295/rdb/a0/bchp_common.h include && \
+	cp temp/magnum/basemodules/chp/include/common/bchp_ver_types.h include && \
+	cp temp/magnum/basemodules/dbg/bdbg.h include && \
+	cp temp/magnum/basemodules/dbg/bdbg_app.h include && \
+	cp temp/magnum/basemodules/dbg/bdbg_priv.h include && \
+	cp temp/magnum/basemodules/err/berr.h include && \
+	cp temp/magnum/basemodules/kni/generic/bkni.h include && \
+	cp temp/magnum/basemodules/kni/generic/bkni_multi.h include && \
+	cp temp/magnum/commonutils/lst/blst_queue.h include && \
+	cp temp/magnum/commonutils/lst/blst_slist.h include && \
+	cp temp/magnum/portinginterface/grc/include/bm2mc_packet.h include && \
+	cp temp/BSEAV/lib/media/bmedia_types.h include && \
+	cp temp/magnum/basemodules/reg/breg_mem.h include && \
+	cp temp/magnum/basemodules/reg/breg_mem_opt.h include && \
+	cp temp/magnum/basemodules/reg/breg_mem_priv.h include && \
+	cp temp/magnum/basemodules/reg/breg_tracelog.h include && \
+	cp temp/magnum/basemodules/std/types/linuxuser/bstd_defs.h include && \
+	cp temp/magnum/basemodules/std/bstd.h include && \
+	cp temp/magnum/basemodules/std/bstd_file.h include && \
+	cp temp/nexus/base/include/linuxuser/config/bstd_cfg.h include && \
+	cp temp/BSEAV/lib/gpu/vc5/platform/nexus/default_nexus.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_amplifier.h include && \
+	cp temp/nexus/modules/audio/include/ape_raaga/nexus_audio_init.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_dac.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_decoder_types.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_dsp.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_dummy_output.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_mixer.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_output.h include && \
+	cp temp/nexus/modules/audio/include/nexus_audio_processing_types.h include && \
+	cp temp/nexus/modules/core/include/nexus_audio_types.h include && \
+	cp temp/nexus/base/include/public/nexus_base_os.h include && \
+	cp temp/nexus/base/include/public/nexus_base_types.h include && \
+	cp temp/nexus/base/include/public/nexus_base_types_client.h include && \
+	cp temp/nexus/modules/cec/include/nexus_cec.h include && \
+	cp temp/nexus/modules/display/include/nexus_ccir656_output.h include && \
+	cp temp/nexus/modules/display/include/nexus_component_output.h include && \
+	cp temp/nexus/modules/display/include/nexus_composite_output.h include && \
+	cp temp/nexus/modules/core/include/nexus_core_compat.h include && \
+	cp temp/nexus/modules/core/include/nexus_core_file_init.h include && \
+	cp temp/nexus/modules/core/include/nexus_core_priv.h include && \
+	cp temp/nexus/modules/display/include/nexus_display.h include && \
+	cp temp/nexus/modules/display/include/nexus_display_custom.h include && \
+	cp temp/nexus/modules/display/include/nexus_display_init.h include && \
+	cp temp/nexus/modules/display/include/nexus_display_types.h include && \
+	cp temp/nexus/modules/display/include/nexus_display_utils.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_analog.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_card.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_dvb_c2.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_dvb_t2.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_dvbt.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_isdbt.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_ofdm.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_ofdm_types.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_oob.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_qam.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_satellite.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_t2_types.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_vsb.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_frontend_upstream.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_ifd.h include && \
+	cp temp/nexus/modules/gpio/include/nexus_gpio.h include && \
+	cp temp/nexus/modules/graphics2d/include/nexus_graphics2d.h include && \
+	cp temp/nexus/modules/graphics2d/include/nexus_graphics2d_init.h include && \
+	cp temp/nexus/modules/display/include/nexus_hddvi_input.h include && \
+	cp temp/nexus/modules/hdmi_input/include/nexus_hdmi_input.h include && \
+	cp temp/nexus/modules/hdmi_input/include/nexus_hdmi_input_hdcp_types.h include && \
+	cp temp/nexus/modules/hdmi_output/include/nexus_hdmi_output.h include && \
+	cp temp/nexus/modules/hdmi_output/include/nexus_hdmi_output_control.h include && \
+	cp temp/nexus/modules/hdmi_output/include/nexus_hdmi_output_extra.h include && \
+	cp temp/nexus/modules/hdmi_output/include/nexus_hdmi_output_hdcp.h include && \
+	cp temp/nexus/modules/core/include/nexus_hdmi_types.h include && \
+	cp temp/nexus/modules/i2c/include/nexus_i2c.h include && \
+	cp temp/nexus/modules/audio/include/nexus_i2s_output.h include && \
+	cp temp/nexus/modules/transport/include/nexus_input_band.h include && \
+	cp temp/nexus/modules/core/include/nexus_memory.h include && \
+	cp temp/nexus/modules/display/include/nexus_picture_quality_types.h include && \
+	cp temp/nexus/modules/transport/include/nexus_pid_channel.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_client.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_generic_features_priv.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_common.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_common_version.h include && \
+	cp temp/nexus/platforms/97250/include/nexus_platform_features.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_init.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_memconfig.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_server.h include && \
+	cp temp/nexus/platforms/common/include/nexus_platform_standby.h include && \
+	cp temp/nexus/platforms/97250/include/nexus_platform_version.h include && \
+	cp temp/nexus/modules/pwm/include/nexus_pwm.h include && \
+	cp temp/nexus/modules/pwm/include/nexus_pwm_init.h include && \
+	cp temp/nexus/modules/transport/include/nexus_rave.h include && \
+	cp temp/nexus/modules/sage/include/nexus_sage_init.h include && \
+	cp temp/nexus/modules/sage/include/nexus_sage_types.h include && \
+	cp temp/nexus/modules/security/include/nexus_security_init.h include && \
+	cp temp/nexus/modules/security/include/nexus_security_datatypes.h include && \
+	cp temp/nexus/modules/core/include/nexus_security_types.h include && \
+	cp temp/nexus/modules/simple_decoder/include/nexus_simple_decoder_types.h include && \
+	cp temp/nexus/modules/simple_decoder/include/nexus_simple_stc_channel.h include && \
+	cp temp/nexus/modules/simple_decoder/include/nexus_simple_video_decoder.h include && \
+	cp temp/nexus/modules/smartcard/include/nexus_smartcard.h include && \
+	cp temp/nexus/modules/smartcard/include/nexus_smartcard_init.h include && \
+	cp temp/nexus/modules/audio/include/nexus_spdif_output.h include && \
+	cp temp/nexus/modules/hdmi_input/include/nexus_spdif_types.h include && \
+	cp temp/nexus/modules/spi/include/nexus_spi.h include && \
+	cp temp/nexus/modules/transport/include/nexus_stc_channel.h include && \
+	cp temp/nexus/modules/transport/include/nexus_stc_channel_types.h include && \
+	cp temp/nexus/modules/surface/include/nexus_striped_surface.h include && \
+	cp temp/nexus/modules/surface_compositor/include/nexus_surface_client.h include && \
+	cp temp/nexus/modules/surface_compositor/include/nexus_surface_compositor_types.h include && \
+	cp temp/nexus/modules/surface/include/nexus_surface.h include && \
+	cp temp/nexus/modules/surface/include/nexus_surface_init.h include && \
+	cp temp/nexus/modules/surface/include/nexus_surface_types.h include && \
+	cp temp/nexus/modules/display/include/nexus_svideo_output.h include && \
+	cp temp/nexus/modules/transport/include/nexus_timebase.h include && \
+	cp temp/nexus/modules/transport/include/nexus_transport_capabilities.h include && \
+	cp temp/nexus/modules/transport/include/nexus_transport_init.h include && \
+	cp temp/nexus/modules/transport/include/nexus_transport_wakeup.h include && \
+	cp temp/nexus/modules/core/include/nexus_types.h include && \
+	cp temp/nexus/modules/frontend/common/include/nexus_tuner.h include && \
+	cp temp/nexus/modules/display/include/nexus_vbi.h include && \
+	cp temp/nexus/modules/video_decoder/include/nexus_video_decoder.h include && \
+	cp temp/nexus/modules/video_decoder/include/nexus_video_decoder_extra.h include && \
+	cp temp/nexus/modules/video_decoder/include/nexus_video_decoder_init.h include && \
+	cp temp/nexus/modules/video_decoder/include/nexus_video_decoder_types.h include && \
+	cp temp/nexus/modules/video_decoder/include/nexus_video_decoder_userdata.h include && \
+	cp temp/nexus/modules/video_encoder/include/nexus_video_encoder_init.h include && \
+	cp temp/nexus/modules/video_encoder/include/nexus_video_encoder_types.h include && \
+	cp temp/nexus/modules/display/include/nexus_video_image_input.h include && \
+	cp temp/nexus/modules/core/include/nexus_video_types.h include && \
+	cp temp/nexus/nxclient/include/nxclient.h include && \
+	cp temp/nexus/nxclient/include/nxclient_global.h include && \
+	cp temp/nexus/nxclient/include/nxclient_standby.h include && \
+	rm refsw_release_unified_20170922-2.1.tgz && \
+	rm -rf temp && \
+	cd .. && \
+	touch .brcm-refsw
+
+site:
+	cp ../brcm-em/config.site $(WID)/share
+
+westeros-protocols: xdg-shell-v4 xdg-shell-v5 simpleshell simplebuffer
+
+xdg-shell-v4: protocol/version4/xdg-shell-server-protocol.h \
+              protocol/version4/xdg-shell-protocol.c
+
+protocol/version4/xdg-shell-server-protocol.h: protocol/version4/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+
+protocol/version4/xdg-shell-protocol.c: protocol/version4/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+
+xdg-shell-v5: protocol/version5/xdg-shell-server-protocol.h \
+              protocol/version5/xdg-shell-protocol.c
+
+protocol/version5/xdg-shell-server-protocol.h: protocol/version5/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+
+protocol/version5/xdg-shell-protocol.c: protocol/version5/xdg-shell.xml
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C protocol
+	
+simpleshell: simpleshell/protocol/simpleshell-client-protocol.h \
+             simpleshell/protocol/simpleshell-server-protocol.h \
+             simpleshell/protocol/simpleshell-protocol.c
+
+simpleshell/protocol/simpleshell-client-protocol.h:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+simpleshell/protocol/simpleshell-server-protocol.h:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+simpleshell/protocol/simpleshell-protocol.c:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+westeros-simpleshell: .simpleshell
+
+.simpleshell:
+	$(call setenv) && \
+	cd simpleshell && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .simpleshell
+
+simplebuffer: simplebuffer/protocol/simplebuffer-client-protocol.h \
+             simplebuffer/protocol/simplebuffer-server-protocol.h \
+             simplebuffer/protocol/simplebuffer-protocol.c
+
+simplebuffer/protocol/simplebuffer-client-protocol.h:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simplebuffer/protocol
+
+simplebuffer/protocol/simplebuffer-server-protocol.h:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simplebuffer/protocol
+
+simplebuffer/protocol/simplebuffer-protocol.c:
+	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	make -C simplebuffer/protocol
+
+westeros-simplebuffer: .simplebuffer
+
+.simplebuffer:
+	$(call setenv) && \
+	cd simplebuffer && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .simplebuffer
+
+.brcm-em:
+	mkdir -p $(WID)/usr/include && \
+	cp ../brcm-em/wayland-egl.pc $(WID)/share/pkgconfig && \
+	cp ../brcm-em/include/platform_app.inc $(WID)/usr/include && \
+	cp ../brcm-em/include/* $(WID)/include -r && \
+	cp ./external/brcm-refsw/include/* $(WID)/include -r && \
+	cd ../brcm-em/em && \
+	$(call setenv) && \
+	export SCANNER_TOOL=$(WID)/bin/wayland-scanner && \
+	make -C protocol && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd $(WID)/lib && \
+	rm -f libnxclient.so && ln -s libwesteros-ut-em.so.0.0.0 libnxclient.so && \
+	rm -f libnexus.so && ln -s libwesteros-ut-em.so.0.0.0 libnexus.so && \
+	rm -f libwayland-egl.so.0 && ln -s libwesteros-ut-em.so.0.0.0 libwayland-egl.so.0 && \
+	rm -f libwayland-egl.so && ln -s libwesteros-ut-em.so.0.0.0 libwayland-egl.so && \
+	rm -f libEGL.so && ln -s libwesteros-ut-em.so.0.0.0 libEGL.so && \
+	rm -f libGLESv2.so && ln -s libwesteros-ut-em.so.0.0.0 libGLESv2.so && \
+	cd ../../.. && \
+	touch .brcm-em
+
+westeros-soc: .brcm-em
+	$(call setenv) && \
+	cd brcm && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	export PKG_CONFIG_SYSROOT_DIR=$(WID) && \
+	make && make install
+
+westeros-core:
+	$(call setenv) && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test --enable-embedded=yes --enable-sbprotocol=yes --enable-essos=no && \
+	make && make install
+
+westeros-essos:
+	$(call setenv) && \
+	cd essos && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install
+
+westeros-render-nexus:
+	$(call setenv) && \
+	cd brcm/westeros-render-nexus && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	make && make install
+
+westeros-soc-sink:
+	$(call setenv) && \
+	cp westeros-sink/westeros-sink.c brcm/westeros-sink/westeros-sink.c && \
+	cp westeros-sink/westeros-sink.h brcm/westeros-sink/westeros-sink.h && \
+	cd brcm/westeros-sink && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) --enable-gstreamer1 && \
+	export PKG_CONFIG_SYSROOT_DIR=$(WID) && \
+	make && make install
+
+unit-test:
+	cd ../brcm-em && \
+	$(call setenv) && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	make && make install
+
+
