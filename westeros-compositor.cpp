@@ -1397,7 +1397,7 @@ bool WstCompositorSetDefaultCursor( WstCompositor *ctx, unsigned char *imgData,
 
       if ( ctx->dcClient )
       {
-         wl_client_destroy( ctx->dcClient );
+         kill( ctx->dcPid, 9 );
          ctx->dcClient= 0;
          ctx->dcPid= 0;
          ctx->dcDefaultCursor= false;
