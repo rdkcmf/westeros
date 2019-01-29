@@ -1913,6 +1913,7 @@ bool WstCompositorSetOutputNestedListener( WstCompositor *ctx, WstOutputNestedLi
       {
          sprintf( ctx->lastErrorDetail,
                   "Bad state.  Cannot set output nested listener while compositor is running" );
+         pthread_mutex_unlock( &ctx->mutex );
          goto exit;
       }      
 
