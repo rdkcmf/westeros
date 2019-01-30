@@ -7900,6 +7900,7 @@ static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface )
    {
       if ( surface )
       {
+         bool clientHasFocus= false;
          struct wl_resource *temp;
          surfaceClient= wl_resource_get_client( surface->resource );
          wl_resource_for_each_safe( resource, temp, &keyboard->focusResourceList )
@@ -7907,25 +7908,28 @@ static void wstKeyboardSetFocus( WstKeyboard *keyboard, WstSurface *surface )
             if ( wl_resource_get_client( resource ) == surfaceClient )
             {
                // Focus is already on client
+               clientHasFocus= true;
+            }
+         }
+
+         if ( !clientHasFocus )
+         {
+            // This is a workaround for apps that register keyboard listeners with one client
+            // and create surfaces with different client
+            bool clientHasListeners= false;
+            wl_resource_for_each_safe( resource, temp, &keyboard->resourceList )
+            {
+               if ( wl_resource_get_client( resource ) == surfaceClient )
+               {
+                  clientHasListeners= true;
+               }
+            }
+
+            if ( !clientHasListeners && !wl_list_empty(&keyboard->focusResourceList) )
+            {
+               DEBUG("Don't move focus to client with no listeners");
                return;
             }
-         }
-
-         // This is a workaround for apps that register keyboard listeners with one client
-         // and create surfaces with different client
-         bool clientHasListeners= false;
-         wl_resource_for_each_safe( resource, temp, &keyboard->resourceList )
-         {
-            if ( wl_resource_get_client( resource ) == surfaceClient )
-            {
-               clientHasListeners= true;
-            }
-         }
-
-         if ( !clientHasListeners && !wl_list_empty(&keyboard->focusResourceList) )
-         {
-            DEBUG("Don't move focus to client with no listeners");
-            return;
          }
       }
 
