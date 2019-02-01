@@ -131,7 +131,7 @@ static void wstRendererPushSurface( WstRendererNX *renderer, WstRenderSurface *s
 
       surface->surfacePush= 0;
 
-      unsigned n= 0;
+      size_t n= 0;
       do
       {
          NEXUS_SurfaceHandle surface_list[10];
@@ -489,7 +489,7 @@ static void wstRendererNXCommitShm( WstRendererNX *renderer, WstRenderSurface *s
                NxClient_SetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
             }
 
-            unsigned n= 0;
+            size_t n= 0;
             do
             {
                NEXUS_SurfaceHandle surface_list[10];
@@ -554,7 +554,7 @@ static void wstRendererNXCommitSB( WstRendererNX *renderer, WstRenderSurface *su
             }
          }
 
-         unsigned n= 0;
+         size_t n= 0;
          do
          {
             NEXUS_SurfaceHandle surface_list[10];
@@ -607,7 +607,7 @@ static void wstRendererNXCommitBNXS( WstRendererNX *renderer, WstRenderSurface *
          }
       }
 
-      unsigned n= 0;
+      size_t n= 0;
       do
       {
          NEXUS_SurfaceHandle surface_list[10];
