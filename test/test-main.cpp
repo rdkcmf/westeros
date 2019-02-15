@@ -211,6 +211,14 @@ TESTCASE genericTests[]=
      "Test Essos start API paths",
      testCaseEssosStart
    },
+   { "testEssosDisplaySizeChange",
+     "Test Essos display size change notification",
+     testCaseEssosDisplaySizeChange
+   },
+   { "testEssosDisplaySafeAreaChange",
+     "Test Essos display safe area change notification",
+     testCaseEssosDisplaySafeAreaChange
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition

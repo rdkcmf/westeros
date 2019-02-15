@@ -33,6 +33,8 @@ bool testCaseEssosGetEGLDisplayType( EMCTX *emctx );
 bool testCaseEssosCreateNativeWindow( EMCTX *emctx );
 bool testCaseEssosGetWaylandDisplay( EMCTX *emctx );
 bool testCaseEssosStart( EMCTX *emctx );
+bool testCaseEssosDisplaySizeChange( EMCTX *emctx );
+bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx );
 
 #endif
 

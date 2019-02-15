@@ -160,6 +160,12 @@ typedef struct _EMSurface
    NEXUS_SurfaceMemory mem;
 } EMSurface;
 
+typedef struct _EMSurfaceClient
+{
+   unsigned client_id;
+   NEXUS_SurfaceClientSettings settings;
+} EMSurfaceClient;
+
 typedef struct _EMNativeWindow
 {
    uint32_t magic;
@@ -319,6 +325,7 @@ typedef struct _EMCTX
    bool westerosModuleTermCalled;
    int nextNxClientId;
    EMNXClient nxclients[EM_MAX_NXCLIENT];
+   std::map<unsigned,EMSurfaceClient*> surfaceClients;
 
    EMTextureCreated textureCreatedCB;
    void *textureCreatedUserData;
@@ -383,7 +390,18 @@ bool EMSetDisplaySize( EMCTX *ctx, int width, int height )
       ctx->displayWidth= width;
       ctx->displayHeight= height;
 
-      // TBD: generate display change event
+      // Generate display change event
+      for( std::map<unsigned,EMSurfaceClient*>::iterator it= ctx->surfaceClients.begin();
+           it != ctx->surfaceClients.end();
+           ++it )
+      {
+         EMSurfaceClient *emsc= (*it).second;
+         if ( emsc->settings.displayStatusChanged.callback )
+         {
+            emsc->settings.displayStatusChanged.callback( emsc->settings.displayStatusChanged.context,
+                                                          emsc->settings.displayStatusChanged.param );
+         }
+      }
 
       result= true;
    }
@@ -623,6 +641,7 @@ static EMCTX* emCreate( void )
       
       ctx->wlBindings= std::map<struct wl_display*,EMWLBinding>();
       ctx->wlRemotes= std::map<struct wl_display*,EMWLRemote>();
+      ctx->surfaceClients= std::map<unsigned,EMSurfaceClient*>();
 
       ctx->simpleVideoDecoderMain.magic= EM_SIMPLE_VIDEO_DECODER_MAGIC;
       ctx->simpleVideoDecoderMain.inUse= false;
@@ -1064,11 +1083,31 @@ NEXUS_SurfaceClientHandle NEXUS_SurfaceClient_Acquire(
     )
 {
    struct NEXUS_SurfaceClient *sc= 0;
+   EMSurfaceClient *emsc= 0;
+   EMCTX *ctx= 0;
 
    TRACE1("NEXUS_SurfaceClient_Acquire");
 
-   sc= (struct NEXUS_SurfaceClient*)calloc( 1, sizeof(struct NEXUS_SurfaceClient*));
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("NEXUS_SurfaceClient_Acquire: emGetContext failed");
+      goto exit;
+   }
 
+   emsc= (EMSurfaceClient*)calloc( 1, sizeof(EMSurfaceClient));
+   if ( !emsc )
+   {
+      ERROR("NEXUS_SurfaceClient_Acquire: no memory for EMSurfaceClient");
+      goto exit;
+   }
+   emsc->client_id= client_id;
+
+   ctx->surfaceClients.insert( std::pair<unsigned,EMSurfaceClient*>( client_id, emsc ) );
+
+   sc= (struct NEXUS_SurfaceClient*)emsc;
+
+exit:
    return (NEXUS_SurfaceClientHandle)sc;
 }
 
@@ -1076,13 +1115,28 @@ void NEXUS_SurfaceClient_Release(
     NEXUS_SurfaceClientHandle client
     )
 {
-   struct NEXUS_SurfaceClient *sc= (struct NEXUS_SurfaceClient*)client;
+   EMSurfaceClient *emsc= (EMSurfaceClient*)client;
+   EMCTX *ctx= 0;
 
    TRACE1("NEXUS_SurfaceClient_Release");
 
-   if ( sc )
+   if ( emsc )
    {
-      free( sc );
+      ctx= emGetContext();
+      if ( !ctx )
+      {
+         ERROR("NEXUS_SurfaceClient_Release: emGetContext failed");
+      }
+      else
+      {
+         std::map<unsigned,EMSurfaceClient*>::iterator it= ctx->surfaceClients.find( emsc->client_id );
+         if ( it != ctx->surfaceClients.end() )
+         {
+            ctx->surfaceClients.erase(it);
+         }
+      }
+
+      free( emsc );
    }
 }
 
@@ -1091,7 +1145,11 @@ void NEXUS_SurfaceClient_GetSettings(
     NEXUS_SurfaceClientSettings *pSettings
     )
 {
+   EMSurfaceClient *emsc= (EMSurfaceClient*)handle;
+
    TRACE1("NEXUS_SurfaceClient_GetSettings");
+
+   *pSettings= emsc->settings;
 }
 
 NEXUS_Error NEXUS_SurfaceClient_SetSettings(
@@ -1100,8 +1158,11 @@ NEXUS_Error NEXUS_SurfaceClient_SetSettings(
     )
 {
    NEXUS_Error rc= NEXUS_SUCCESS;
+   EMSurfaceClient *emsc= (EMSurfaceClient*)handle;
 
    TRACE1("NEXUS_SurfaceClient_SetSettings");
+
+   emsc->settings= *pSettings;
 
    return rc;
 }

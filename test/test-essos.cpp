@@ -1141,3 +1141,304 @@ exit:
    return testResult;
 }
 
+namespace DisplaySizeChange
+{
+
+typedef struct _SettingsInfo
+{
+   bool wasCalled;
+   int width;
+   int height;
+} SettingsInfo;
+
+static void displaySize( void *userData, int width, int height )
+{
+   SettingsInfo *si= (SettingsInfo*)userData;
+   si->wasCalled= true;
+   si->width= width;
+   si->height= height;
+}
+
+EssSettingsListener settingsListener=
+{
+   displaySize,
+   0
+};
+
+}; // namespace DisplaySizeChange
+
+bool testCaseEssosDisplaySizeChange( EMCTX *emctx )
+{
+   using namespace DisplaySizeChange;
+
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   SettingsInfo settingsInfo;
+   int displayWidth;
+   int displayHeight;
+   int targetIndex;
+   int targetWidth[]= { 1920, 800, 1280, 0 };
+   int targetHeight[]= { 1080, 400, 720, 0 };
+
+   displayWidth= 640;
+   displayHeight= 480;
+   EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, false );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+   result= EssContextSetSettingsListener( ctx, &settingsInfo, &settingsListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetSettingsListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      if ( settingsInfo.wasCalled ) break;
+      usleep(2000);
+   }
+
+   if ( !settingsInfo.wasCalled )
+   {
+      EMERROR("EssSettingsListener not called on startup");
+      goto exit;
+   }
+
+   if ( (settingsInfo.width != displayWidth) ||
+        (settingsInfo.height != displayHeight) )
+   {
+      EMERROR("Unexpected display size on startup: expected (%d,%d) actual (%d, %d)",
+              displayWidth, displayHeight, settingsInfo.width, settingsInfo.height );
+      goto exit;
+   }
+
+   targetIndex= 0;
+   for( ; ; )
+   {
+      memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+      displayWidth= targetWidth[targetIndex];
+      displayHeight= targetHeight[targetIndex];
+
+      if ( !displayWidth || !displayHeight ) break;
+
+      EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+      for( int i= 0; i < 16; ++i )
+      {
+         EssContextRunEventLoopOnce( ctx );
+         if ( settingsInfo.wasCalled ) break;
+         usleep(2000);
+      }
+
+      if ( !settingsInfo.wasCalled )
+      {
+         EMERROR("EssSettingsListener not called");
+         goto exit;
+      }
+
+      if ( (settingsInfo.width != displayWidth) ||
+           (settingsInfo.height != displayHeight) )
+      {
+         EMERROR("Unexpected display size: expected (%d,%d) actual (%d, %d)",
+                 displayWidth, displayHeight, settingsInfo.width, settingsInfo.height );
+         goto exit;
+      }
+
+      ++targetIndex;
+   }
+
+   testResult= true;
+
+exit:
+
+   EssContextDestroy( ctx );
+
+   return testResult;
+}
+
+namespace DisplaySafeAreaChange
+{
+
+#define DEFAULT_PLANE_SAFE_BORDER_PERCENT (5)
+
+typedef struct _SettingsInfo
+{
+   bool wasCalled;
+   int safeX;
+   int safeY;
+   int safeW;
+   int safeH;
+} SettingsInfo;
+
+static void displaySafeArea( void *userData, int x, int y, int width, int height )
+{
+   SettingsInfo *si= (SettingsInfo*)userData;
+   si->wasCalled= true;
+   si->safeX= x;
+   si->safeY= y;
+   si->safeW= width;
+   si->safeH= height;
+}
+
+EssSettingsListener settingsListener=
+{
+   0,
+   displaySafeArea
+};
+
+}; // namespace DisplaySafeAreaChange
+
+bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
+{
+   using namespace DisplaySafeAreaChange;
+
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   SettingsInfo settingsInfo;
+   int displayWidth;
+   int displayHeight;
+   int targetIndex;
+   int targetWidth[]= { 1920, 800, 1280, 0 };
+   int targetHeight[]= { 1080, 400, 720, 0 };
+   int safeX, safeY, safeW, safeH;
+
+   displayWidth= 640;
+   displayHeight= 480;
+   EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, false );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+   result= EssContextSetSettingsListener( ctx, &settingsInfo, &settingsListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetSettingsListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      if ( settingsInfo.wasCalled ) break;
+      usleep(2000);
+   }
+
+   if ( !settingsInfo.wasCalled )
+   {
+      EMERROR("EssSettingsListener not called on startup");
+      goto exit;
+   }
+
+   safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+   safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+   safeW= displayWidth-2*safeX;
+   safeH= displayHeight-2*safeY;
+
+   if ( (settingsInfo.safeX != safeX) ||
+        (settingsInfo.safeY != safeY) ||
+        (settingsInfo.safeW != safeW) ||
+        (settingsInfo.safeH != safeH) )
+   {
+      EMERROR("Unexpected display safe area on startup: expected (%d,%d,%d.%d) actual (%d,%d,%d,%d)",
+              safeX, safeY, safeW, safeH, settingsInfo.safeX, settingsInfo.safeY, settingsInfo.safeW, settingsInfo.safeH );
+      goto exit;
+   }
+
+   targetIndex= 0;
+   for( ; ; )
+   {
+      memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+      displayWidth= targetWidth[targetIndex];
+      displayHeight= targetHeight[targetIndex];
+
+      if ( !displayWidth || !displayHeight ) break;
+
+      EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+      for( int i= 0; i < 16; ++i )
+      {
+         EssContextRunEventLoopOnce( ctx );
+         if ( settingsInfo.wasCalled ) break;
+         usleep(2000);
+      }
+
+      if ( !settingsInfo.wasCalled )
+      {
+         EMERROR("EssSettingsListener not called");
+         goto exit;
+      }
+
+      safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+      safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+      safeW= displayWidth-2*safeX;
+      safeH= displayHeight-2*safeY;
+
+      if ( (settingsInfo.safeX != safeX) ||
+           (settingsInfo.safeY != safeY) ||
+           (settingsInfo.safeW != safeW) ||
+           (settingsInfo.safeH != safeH) )
+      {
+         EMERROR("Unexpected display safe area: expected (%d,%d,%d.%d) actual (%d,%d,%d,%d)",
+                 safeX, safeY, safeW, safeH, settingsInfo.safeX, settingsInfo.safeY, settingsInfo.safeW, settingsInfo.safeH );
+         goto exit;
+      }
+
+      ++targetIndex;
+   }
+
+   testResult= true;
+
+exit:
+
+   EssContextDestroy( ctx );
+
+   return testResult;
+}
+
