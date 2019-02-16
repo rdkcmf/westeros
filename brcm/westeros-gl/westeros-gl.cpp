@@ -67,6 +67,7 @@ typedef struct _WstGLDisplayCtx
 
 typedef struct _WstGLSizeCBInfo
 {
+   WstGLCtx* ctx;
    void *userData;
    WstGLDisplaySizeCallback listener;
    int width;
@@ -232,6 +233,19 @@ void WstGLTerm( WstGLCtx *ctx )
 {
    if ( ctx )
    {
+      pthread_mutex_lock( &g_mutex );
+      for ( std::vector<WstGLSizeCBInfo>::iterator it= gSizeListeners.begin();
+            it != gSizeListeners.end();
+            ++it )
+      {
+         if ( (*it).ctx == ctx )
+         {
+            gSizeListeners.erase(it);
+            break;
+         }
+      }
+      pthread_mutex_unlock( &g_mutex );
+
       if ( ctx->gfxEventCreated )
       {
          ctx->gfxEventCreated= false;
@@ -370,6 +384,7 @@ bool WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySiz
       if ( !found )
       {
          WstGLSizeCBInfo newInfo;
+         newInfo.ctx= ctx;
          newInfo.userData= userData;
          newInfo.listener= listener;
          newInfo.width= 0;

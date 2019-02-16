@@ -383,11 +383,16 @@ static void wstRendererGLDestroy( WstRendererGL *renderer )
             WstGLDestroyNativeWindow( renderer->glCtx, renderer->nativeWindow );
             renderer->nativeWindow= 0;
          }
-         
-         WstGLTerm( renderer->glCtx );
-         renderer->glCtx= 0;
          #endif
       }
+
+      #if defined (WESTEROS_PLATFORM_EMBEDDED)
+      if ( renderer->glCtx )
+      {
+         WstGLTerm( renderer->glCtx );
+         renderer->glCtx= 0;
+      }
+      #endif
 
       free( renderer );
    }

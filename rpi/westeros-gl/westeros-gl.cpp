@@ -42,14 +42,6 @@ typedef struct _WstGLNativePixmap
    int height;
 } WstNativePixmap;
 
-typedef struct _WstGLSizeCBInfo
-{
-   void *userData;
-   WstGLDisplaySizeCallback listener;
-   int width;
-   int height;
-} WstGLSizeCBInfo;
-
 typedef struct _WstGLCtx 
 {
   int displayId;
@@ -57,6 +49,15 @@ typedef struct _WstGLCtx
   int displayHeight;
   DISPMANX_DISPLAY_HANDLE_T dispmanDisplay;
 } WstGLCtx;
+
+typedef struct _WstGLSizeCBInfo
+{
+   WstGLCtx *ctx;
+   void *userData;
+   WstGLDisplaySizeCallback listener;
+   int width;
+   int height;
+} WstGLSizeCBInfo;
 
 static int ctxCount= 0;
 static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
@@ -185,6 +186,19 @@ void WstGLTerm( WstGLCtx *ctx )
 {
    if ( ctx )
    {
+      pthread_mutex_lock( &g_mutex );
+      for ( std::vector<WstGLSizeCBInfo>::iterator it= gSizeListeners.begin();
+            it != gSizeListeners.end();
+            ++it )
+      {
+         if ( (*it).ctx == ctx )
+         {
+            gSizeListeners.erase(it);
+            break;
+         }
+      }
+      pthread_mutex_unlock( &g_mutex );
+
       if ( ctxCount > 0 )
       {
          --ctxCount;
@@ -310,6 +324,7 @@ bool WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySiz
       if ( !found )
       {
          WstGLSizeCBInfo newInfo;
+         newInfo.ctx= ctx;
          newInfo.userData= userData;
          newInfo.listener= listener;
          newInfo.width= 0;
