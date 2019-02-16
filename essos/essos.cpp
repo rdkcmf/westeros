@@ -870,11 +870,11 @@ bool EssContextStart( EssCtx *ctx )
 
       ctx->isRunning= true;
 
+      pthread_mutex_unlock( &ctx->mutex );
+
       essRunEventLoopOnce( ctx );
 
       result= true;
-
-      pthread_mutex_unlock( &ctx->mutex );
    }
 
 exit:   
@@ -1571,17 +1571,13 @@ static void essRunEventLoopOnce( EssCtx *ctx )
          {
             if ( ctx->settingsListener->displaySize )
             {
-               pthread_mutex_unlock( &ctx->mutex );
                ctx->settingsListener->displaySize( ctx->settingsListenerUserData, ctx->resizeWidth, ctx->resizeHeight );
-               pthread_mutex_lock( &ctx->mutex );
             }
             if ( ctx->settingsListener->displaySafeArea )
             {
-               pthread_mutex_unlock( &ctx->mutex );
                ctx->settingsListener->displaySafeArea( ctx->settingsListenerUserData,
                                                        ctx->planeSafeX, ctx->planeSafeY,
                                                        ctx->planeSafeW, ctx->planeSafeH );
-               pthread_mutex_lock( &ctx->mutex );
             }
          }
       }
