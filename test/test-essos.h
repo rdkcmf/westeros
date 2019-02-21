@@ -35,6 +35,8 @@ bool testCaseEssosGetWaylandDisplay( EMCTX *emctx );
 bool testCaseEssosStart( EMCTX *emctx );
 bool testCaseEssosDisplaySizeChange( EMCTX *emctx );
 bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx );
+bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx );
+bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx );
 
 #endif
 

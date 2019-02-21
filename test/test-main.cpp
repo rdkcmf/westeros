@@ -219,6 +219,14 @@ TESTCASE genericTests[]=
      "Test Essos display safe area change notification",
      testCaseEssosDisplaySafeAreaChange
    },
+   { "testEssosDisplaySizeChangeWayland",
+     "Test Essos display size change notification with Wayland",
+     testCaseEssosDisplaySizeChangeWayland
+   },
+   { "testEssosDisplaySafeAreaChangeWayland",
+     "Test Essos display safe area change notification with Wayland",
+     testCaseEssosDisplaySafeAreaChangeWayland
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition

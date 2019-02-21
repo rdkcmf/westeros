@@ -1442,3 +1442,340 @@ exit:
    return testResult;
 }
 
+bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx )
+{
+   using namespace DisplaySizeChange;
+
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   SettingsInfo settingsInfo;
+   int displayWidth;
+   int displayHeight;
+   int targetIndex;
+   int targetWidth[]= { 1920, 800, 1280, 0 };
+   int targetHeight[]= { 1080, 400, 720, 0 };
+
+   displayWidth= 640;
+   displayHeight= 480;
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   WstCompositorResolutionChangeBegin( wctx );
+
+   usleep( 17000 );
+
+   EMSetDisplaySize( emctx, displayWidth, displayHeight );
+   WstCompositorResolutionChangeEnd( wctx, displayWidth, displayHeight );
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+   result= EssContextSetSettingsListener( ctx, &settingsInfo, &settingsListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetSettingsListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      if ( settingsInfo.wasCalled ) break;
+      usleep(2000);
+   }
+
+   if ( !settingsInfo.wasCalled )
+   {
+      EMERROR("EssSettingsListener not called on startup");
+      goto exit;
+   }
+
+   if ( (settingsInfo.width != displayWidth) ||
+        (settingsInfo.height != displayHeight) )
+   {
+      EMERROR("Unexpected display size on startup: expected (%d,%d) actual (%d, %d)",
+              displayWidth, displayHeight, settingsInfo.width, settingsInfo.height );
+      goto exit;
+   }
+
+   targetIndex= 0;
+   for( ; ; )
+   {
+      memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+      displayWidth= targetWidth[targetIndex];
+      displayHeight= targetHeight[targetIndex];
+
+      if ( !displayWidth || !displayHeight ) break;
+
+      WstCompositorResolutionChangeBegin( wctx );
+
+      usleep( 17000 );
+
+      EMSetDisplaySize( emctx, displayWidth, displayHeight );
+      WstCompositorResolutionChangeEnd( wctx, displayWidth, displayHeight );
+
+      for( int i= 0; i < 16; ++i )
+      {
+         EssContextRunEventLoopOnce( ctx );
+         if ( settingsInfo.wasCalled ) break;
+         usleep(2000);
+      }
+
+      if ( !settingsInfo.wasCalled )
+      {
+         EMERROR("EssSettingsListener not called");
+         goto exit;
+      }
+
+      if ( (settingsInfo.width != displayWidth) ||
+           (settingsInfo.height != displayHeight) )
+      {
+         EMERROR("Unexpected display size: expected (%d,%d) actual (%d, %d)",
+                 displayWidth, displayHeight, settingsInfo.width, settingsInfo.height );
+         goto exit;
+      }
+
+      ++targetIndex;
+   }
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   EssContextDestroy( ctx );
+
+   WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
+bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx )
+{
+   using namespace DisplaySafeAreaChange;
+
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   SettingsInfo settingsInfo;
+   int displayWidth;
+   int displayHeight;
+   int targetIndex;
+   int targetWidth[]= { 1920, 800, 1280, 0 };
+   int targetHeight[]= { 1080, 400, 720, 0 };
+   int safeX, safeY, safeW, safeH;
+
+   displayWidth= 640;
+   displayHeight= 480;
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   WstCompositorResolutionChangeBegin( wctx );
+
+   usleep( 17000 );
+
+   EMSetDisplaySize( emctx, displayWidth, displayHeight );
+   WstCompositorResolutionChangeEnd( wctx, displayWidth, displayHeight );
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+   result= EssContextSetSettingsListener( ctx, &settingsInfo, &settingsListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetSettingsListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      if ( settingsInfo.wasCalled ) break;
+      usleep(2000);
+   }
+
+   if ( !settingsInfo.wasCalled )
+   {
+      EMERROR("EssSettingsListener not called on startup");
+      goto exit;
+   }
+
+   safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+   safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+   safeW= displayWidth-2*safeX;
+   safeH= displayHeight-2*safeY;
+
+   if ( (settingsInfo.safeX != safeX) ||
+        (settingsInfo.safeY != safeY) ||
+        (settingsInfo.safeW != safeW) ||
+        (settingsInfo.safeH != safeH) )
+   {
+      EMERROR("Unexpected display safe area on startup: expected (%d,%d,%d.%d) actual (%d,%d,%d,%d)",
+              safeX, safeY, safeW, safeH, settingsInfo.safeX, settingsInfo.safeY, settingsInfo.safeW, settingsInfo.safeH );
+      goto exit;
+   }
+
+   targetIndex= 0;
+   for( ; ; )
+   {
+      memset( &settingsInfo, 0, sizeof(settingsInfo) );
+
+      displayWidth= targetWidth[targetIndex];
+      displayHeight= targetHeight[targetIndex];
+
+      if ( !displayWidth || !displayHeight ) break;
+
+      WstCompositorResolutionChangeBegin( wctx );
+
+      usleep( 17000 );
+
+      EMSetDisplaySize( emctx, displayWidth, displayHeight );
+      WstCompositorResolutionChangeEnd( wctx, displayWidth, displayHeight );
+
+      for( int i= 0; i < 16; ++i )
+      {
+         EssContextRunEventLoopOnce( ctx );
+         if ( settingsInfo.wasCalled ) break;
+         usleep(2000);
+      }
+
+      if ( !settingsInfo.wasCalled )
+      {
+         EMERROR("EssSettingsListener not called");
+         goto exit;
+      }
+
+      safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+      safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
+      safeW= displayWidth-2*safeX;
+      safeH= displayHeight-2*safeY;
+
+      if ( (settingsInfo.safeX != safeX) ||
+           (settingsInfo.safeY != safeY) ||
+           (settingsInfo.safeW != safeW) ||
+           (settingsInfo.safeH != safeH) )
+      {
+         EMERROR("Unexpected display safe area: expected (%d,%d,%d.%d) actual (%d,%d,%d,%d)",
+                 safeX, safeY, safeW, safeH, settingsInfo.safeX, settingsInfo.safeY, settingsInfo.safeW, settingsInfo.safeH );
+         goto exit;
+      }
+
+      ++targetIndex;
+   }
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   EssContextDestroy( ctx );
+
+   WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
