@@ -211,6 +211,10 @@ TESTCASE genericTests[]=
      "Test Essos start API paths",
      testCaseEssosStart
    },
+   { "testEssosEventLoopThrottle",
+     "Test Essos event loop throttle behaviour",
+     testCaseEssosEventLoopThrottle
+   },
    { "testEssosDisplaySizeChange",
      "Test Essos display size change notification",
      testCaseEssosDisplaySizeChange

@@ -118,6 +118,7 @@ typedef struct _EssCtx
    int watchFd;
    std::vector<pollfd> inputDeviceFds;
    int eventLoopPeriodMS;
+   long long eventLoopLastTimeStamp;
 
    int pointerX;
    int pointerY;
@@ -262,6 +263,10 @@ EssCtx* EssContextCreate()
       ctx->watchFd= -1;
       ctx->waylandFd= -1;
       ctx->eventLoopPeriodMS= 16;
+      if ( getenv("ESSOS_NO_EVENT_LOOP_THROTTLE") )
+      {
+         ctx->eventLoopPeriodMS= 0;
+      }
 
       ctx->keyRepeatInitialDelay= DEFAULT_KEY_REPEAT_DELAY;
       ctx->keyRepeatPeriod= DEFAULT_KEY_REPEAT_PERIOD;
@@ -1101,13 +1106,16 @@ void EssContextRunEventLoopOnce( EssCtx *ctx )
 
       if ( ctx->eventLoopPeriodMS )
       {
-         end= essGetCurrentTimeMillis();
-         diff= end-start;
-         delay= ((long long)ctx->eventLoopPeriodMS - diff);
-         if ( delay > 0 )
+         if ( ctx->eventLoopLastTimeStamp )
          {
-            usleep( delay*1000 );
+            diff= start-ctx->eventLoopLastTimeStamp;
+            delay= ((long long)ctx->eventLoopPeriodMS - diff);
+            if ( (delay > 0) && (delay <= ctx->eventLoopPeriodMS) )
+            {
+               usleep( delay*1000 );
+            }
          }
+         ctx->eventLoopLastTimeStamp= start;
       }
    }
 }

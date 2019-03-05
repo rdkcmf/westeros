@@ -1141,6 +1141,144 @@ exit:
    return testResult;
 }
 
+bool testCaseEssosEventLoopThrottle( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   int iterationCount, totalIterations;
+   long long time1, time2, diff, total, mean;
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, false );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   totalIterations= 10;
+
+   // Ensure throttling when calls to EssContextRunEventLoopOnce are made
+   // immediately one after the other
+   total= 0;
+   for( iterationCount= 0; iterationCount < totalIterations; ++iterationCount )
+   {
+      time1= EMGetCurrentTimeMicro();
+      EssContextRunEventLoopOnce( ctx );
+      time2= EMGetCurrentTimeMicro();
+      diff= time2-time1;
+      total += diff;
+   }
+   mean= total/totalIterations;
+
+   if ( mean < 8000 )
+   {
+      EMERROR("Ineffective event loop throttle: mean period: %lld us", mean );
+      goto exit;
+   }
+
+
+   // Ensure no throttling when calls to EssContextRunEventLoopOnce are separated
+   // by 16 ms intervals
+   total= 0;
+   for( iterationCount= 0; iterationCount < totalIterations; ++iterationCount )
+   {
+      time1= EMGetCurrentTimeMicro();
+      EssContextRunEventLoopOnce( ctx );
+      time2= EMGetCurrentTimeMicro();
+      diff= time2-time1;
+      total += diff;
+      usleep( 16667 );
+   }
+   mean= total/totalIterations;
+
+   if ( mean > 8000 )
+   {
+      EMERROR("Unexpected event loop throttle: mean period: %lld us", mean );
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+   ctx= 0;
+
+   usleep( 30000 );
+
+
+
+   setenv( "ESSOS_NO_EVENT_LOOP_THROTTLE", "1", 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, false );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   // Ensuren no throttling when it is disabled by env var
+   total= 0;
+   for( iterationCount= 0; iterationCount < totalIterations; ++iterationCount )
+   {
+      time1= EMGetCurrentTimeMicro();
+      EssContextRunEventLoopOnce( ctx );
+      time2= EMGetCurrentTimeMicro();
+      diff= time2-time1;
+      total += diff;
+   }
+   mean= total/totalIterations;
+
+   if ( mean > 8000 )
+   {
+      EMERROR("Unexpected event loop throttle: mean period: %lld us", mean );
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+   ctx= 0;
+
+   unsetenv( "ESSOS_NO_EVENT_LOOP_THROTTLE" );
+
+   testResult= true;
+
+exit:
+
+   if ( ctx )
+   {
+      EssContextDestroy( ctx );
+   }
+
+   unsetenv( "ESSOS_NO_EVENT_LOOP_THROTTLE" );
+
+   return testResult;
+}
+
 namespace DisplaySizeChange
 {
 

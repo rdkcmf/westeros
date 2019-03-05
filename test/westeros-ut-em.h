@@ -52,6 +52,8 @@ bool EMGetWesterosModuleTermCalled( EMCTX *ctx );
 void EMSetError( EMCTX *ctx, const char *fmt, ... );
 const char* EMGetError( EMCTX *ctx );
 
+long long EMGetCurrentTimeMicro(void);
+
 void EMSetStcChannel( EMCTX *ctx, void *stcChannel );
 void* EMGetStcChannel( EMCTX *ctx );
 void EMSetVideoCodec( EMCTX *ctx, int codec );

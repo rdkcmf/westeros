@@ -446,6 +446,17 @@ const char* EMGetError( EMCTX *ctx )
    return ctx->errorDetail;
 }
 
+long long EMGetCurrentTimeMicro(void)
+{
+   struct timeval tv;
+   long long utcCurrentTimeMicro;
+
+   gettimeofday(&tv,0);
+   utcCurrentTimeMicro= tv.tv_sec*1000000LL+tv.tv_usec;
+
+   return utcCurrentTimeMicro;
+}
+
 void EMSetStcChannel( EMCTX *ctx, void *stcChannel )
 {
    ctx->stcChannel= stcChannel;
@@ -2255,8 +2266,17 @@ EGLAPI EGLBoolean EGLAPIENTRY eglTerminate( EGLDisplay display )
 {
    EGLBoolean result= EGL_FALSE;
    EMEGLDisplay *dsp= (EMEGLDisplay*)display;
+   EMCTX *ctx= 0;
 
    TRACE1("eglTerminate");
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("eglGetDisplay: emGetContext failed");
+      gEGLError= EGL_BAD_ACCESS;
+      goto exit;
+   }
 
    if ( display == EGL_NO_DISPLAY )
    {
@@ -2269,6 +2289,11 @@ EGLAPI EGLBoolean EGLAPIENTRY eglTerminate( EGLDisplay display )
       gEGLError= EGL_BAD_DISPLAY;
       goto exit;
    }   
+
+   if ( display == ctx->eglDisplayDefault )
+   {
+      ctx->eglDisplayDefault= EGL_NO_DISPLAY;
+   }
 
    dsp->initialized= false;
 
