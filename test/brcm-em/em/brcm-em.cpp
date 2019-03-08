@@ -183,6 +183,11 @@ typedef struct _EMNativePixmap
    EMSurface *s;
 } EMNativePixmap;
 
+
+#define COLORIMETRY_MAX_LEN (20)
+#define MASTERINGMETA_MAX_LEN (100)
+#define CONTENTLIGHT_MAX_LEN (20)
+
 typedef struct _EMSimpleVideoDecoder
 {
    uint32_t magic;
@@ -194,6 +199,9 @@ typedef struct _EMSimpleVideoDecoder
    bool started;
    int videoWidth;
    int videoHeight;
+   char colorimetry[COLORIMETRY_MAX_LEN+1];
+   char masteringMeta[MASTERINGMETA_MAX_LEN+1];
+   char contentLight[CONTENTLIGHT_MAX_LEN+1];
    float videoFrameRate;  //FPS
    float videoBitRate;  // Mbps
    bool segmentsStartAtZero;
@@ -201,6 +209,7 @@ typedef struct _EMSimpleVideoDecoder
    unsigned frameNumber;
    uint32_t currentPTS;
    NEXUS_SimpleVideoDecoderClientSettings clientSettings;
+   NEXUS_SimpleVideoDecoderStartSettings startSettings;
    NEXUS_VideoDecoderSettings decoderSettings;
    NEXUS_VideoDecoderTrickState trickState;
    bool captureStarted;
@@ -520,6 +529,39 @@ float EMSimpleVideoDecoderGetBitRate( EMSimpleVideoDecoder *dec )
    return dec->videoBitRate;
 }
 
+void EMSimpleVideoDecoderSetColorimetry( EMSimpleVideoDecoder *dec, const char *colorimetry )
+{
+   memset( dec->colorimetry, 0, sizeof(dec->colorimetry) );
+   strncpy( dec->colorimetry, colorimetry, COLORIMETRY_MAX_LEN );
+}
+
+const char* EMSimpleVideoDecoderGetColorimetry( EMSimpleVideoDecoder *dec )
+{
+   return dec->colorimetry;
+}
+
+void EMSimpleVideoDecoderSetMasteringMeta( EMSimpleVideoDecoder *dec, const char *masteringMeta )
+{
+   memset( dec->masteringMeta, 0, sizeof(dec->masteringMeta) );
+   strncpy( dec->masteringMeta, masteringMeta, MASTERINGMETA_MAX_LEN );
+}
+
+const char* EMSimpleVideoDecoderGetMasteringMeta( EMSimpleVideoDecoder *dec )
+{
+   return dec->masteringMeta;
+}
+
+void EMSimpleVideoDecoderSetContentLight( EMSimpleVideoDecoder *dec, const char *contentLight )
+{
+   memset( dec->contentLight, 0, sizeof(dec->contentLight) );
+   strncpy( dec->contentLight, contentLight, CONTENTLIGHT_MAX_LEN );
+}
+
+const char* EMSimpleVideoDecoderGetContentLight( EMSimpleVideoDecoder *dec )
+{
+   return dec->contentLight;
+}
+
 void EMSimpleVideoDecoderSetSegmentsStartAtZero( EMSimpleVideoDecoder *dec, bool startAtZero )
 {
    dec->segmentsStartAtZero= startAtZero;
@@ -565,6 +607,11 @@ void EMSimpleVideoDecoderSetTrickStateRate( EMSimpleVideoDecoder *dec, int rate 
 int EMSimpleVideoDecoderGetTrickStateRate( EMSimpleVideoDecoder *dec )
 {
    return dec->trickState.rate;
+}
+
+int EMSimpleVideoDecoderGetHdrEotf( EMSimpleVideoDecoder *dec )
+{
+   return dec->startSettings.settings.eotf;
 }
 
 int EMWLEGLWindowGetSwapCount( struct wl_egl_window *w )
@@ -661,6 +708,7 @@ static EMCTX* emCreate( void )
       ctx->simpleVideoDecoderMain.videoFrameRate= 60.0;
       ctx->simpleVideoDecoderMain.videoBitRate= 8.0;
       ctx->simpleVideoDecoderMain.trickState.rate= NEXUS_NORMAL_DECODE_RATE;
+      ctx->simpleVideoDecoderMain.startSettings.settings.eotf= NEXUS_VideoEotf_eInvalid;
 
       ctx->videoCodec= bvideo_codec_unknown;
 
@@ -1271,6 +1319,7 @@ void NEXUS_SimpleVideoDecoder_GetDefaultStartSettings(
     )
 {
    TRACE1("NEXUS_SimpleVideoDecoder_GetDefauiltStartSettings");
+   pSettings->settings.eotf= NEXUS_VideoEotf_eInvalid;
 }
 
 NEXUS_SimpleVideoDecoderHandle NEXUS_SimpleVideoDecoder_Acquire( 
@@ -1689,6 +1738,8 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_Start(
       rc= NEXUS_INVALID_PARAMETER;
       goto exit;
    }
+
+   dec->startSettings= *pSettings;
 
    dec->started= true;
 

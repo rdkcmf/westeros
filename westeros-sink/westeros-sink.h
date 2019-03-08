@@ -101,6 +101,7 @@ struct _GstWesterosSink
 
    gboolean videoStarted;
    gboolean startAfterLink;
+   gboolean startAfterCaps;
    gboolean flushStarted;
    
    gboolean eosEventSeen;

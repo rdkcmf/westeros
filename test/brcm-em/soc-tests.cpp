@@ -70,6 +70,8 @@ static bool testCaseSocSinkBasicPauseResumeWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekZeroBasedWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPipelineGfx( EMCTX *ctx );
+static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
+static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
 
 TESTCASE socTests[]=
 {
@@ -164,6 +166,14 @@ TESTCASE socTests[]=
    { "testSocSinkBasicPipelineGfx",
      "Test creating a basic pipeline with westerossink using graphics path",
      testCaseSocSinkBasicPipelineGfx
+   },
+   { "testSocSinkVP9NonHDR",
+     "Test handling non-HDR VP9 with westerossink",
+     testCaseSocSinkVP9NonHDR
+   },
+   { "testSocSinkVP9HDRColorParameters",
+     "Test handling VP9 HDR color parameters with westerossink",
+     testCaseSocSinkVP9HDRColorParameters
    },
    {
      "", "", (TESTCASEFUNC)0
@@ -2809,3 +2819,244 @@ exit:
    return testResult;
 }
 
+static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx )
+{
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   int frameWidth= 3840;
+   int frameHeight= 2160;
+   int eotf= NEXUS_VideoEotf_eInvalid;
+   float frameRate;
+   int frameNumber;
+   gint64 pos, posExpected;
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_vp9 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, frameWidth, frameHeight );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING);
+
+   // Allow pipeline to run briefly
+   usleep( 1000000 );
+
+   eotf= EMSimpleVideoDecoderGetHdrEotf( videoDecoder );
+   if ( eotf != NEXUS_VideoEotf_eInvalid )
+   {
+      EMERROR("video decoder unexpectedly has HDR parameters");
+      goto exit;
+   }
+
+   // Allow pipeline to run briefly
+   usleep( 1000000 );
+
+   eotf= EMSimpleVideoDecoderGetHdrEotf( videoDecoder );
+   if ( eotf != NEXUS_VideoEotf_eInvalid )
+   {
+      EMERROR("video decoder unexpectedly has HDR parameters");
+      goto exit;
+   }
+
+   for( int i= 0; i < 10; ++i )
+   {
+      usleep( INTERVAL_200_MS );
+
+      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+      frameNumber= videoSrcGetFrameNumber( src );
+
+      posExpected= (frameNumber/frameRate)*GST_SECOND;
+      if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
+      {
+         EMERROR("Failed to query position");
+         goto exit;
+      }
+      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      {
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         goto exit;
+      }
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   testResult= true;
+
+exit:
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+
+   return testResult;
+}
+
+static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx )
+{
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   int frameWidth= 3840;
+   int frameHeight= 2160;
+   int eotf= NEXUS_VideoEotf_eInvalid;
+   float frameRate;
+   int frameNumber;
+   gint64 pos, posExpected;
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_unknown );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, frameWidth, frameHeight );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING);
+
+   // Allow pipeline to run briefly
+   usleep( 1000000 );
+
+   eotf= EMSimpleVideoDecoderGetHdrEotf( videoDecoder );
+   if ( eotf != NEXUS_VideoEotf_eInvalid )
+   {
+      EMERROR("video decoder unexpectedly has HDR parameters already");
+      goto exit;
+   }
+
+   EMSetVideoCodec( emctx, bvideo_codec_vp9 );
+   EMSimpleVideoDecoderSetColorimetry( videoDecoder, "2:6:13:7" );
+   EMSimpleVideoDecoderSetMasteringMeta( videoDecoder, "0.677980:0.321980:0.245000:0.703000:0.137980:0.052000:0.312680:0.328980:1000.000000:0.000000" );
+   EMSimpleVideoDecoderSetContentLight( videoDecoder, "1100:180" );
+
+   // Set frame size which will cause a CAPS event to be emitted
+   videoSrcSetFrameSize( src, frameWidth, frameHeight );
+
+   // Allow pipeline to run briefly
+   usleep( 1000000 );
+
+   eotf= EMSimpleVideoDecoderGetHdrEotf( videoDecoder );
+   if ( eotf == NEXUS_VideoEotf_eInvalid )
+   {
+      EMERROR("HDR parameters not set to video decoder");
+      goto exit;
+   }
+
+   for( int i= 0; i < 10; ++i )
+   {
+      usleep( INTERVAL_200_MS );
+
+      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+      frameNumber= videoSrcGetFrameNumber( src );
+
+      posExpected= (frameNumber/frameRate)*GST_SECOND;
+      if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
+      {
+         EMERROR("Failed to query position");
+         goto exit;
+      }
+      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      {
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         goto exit;
+      }
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   testResult= true;
+
+exit:
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+
+   return testResult;
+}

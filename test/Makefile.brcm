@@ -85,6 +85,7 @@ externals: external \
            external/.libxkbcommon \
            external/.wayland \
            external/.gstreamer \
+           external/.gst-plugins-base \
            external/.brcm-refsw
 	rm -f $(WID)/share/config.site
 
@@ -338,6 +339,19 @@ external/.gstreamer:
 	make && make install && \
 	cd ../.. && \
 	touch .gstreamer
+
+external/.gst-plugins-base:
+	$(call setenv) && \
+	cd external && \
+	mkdir gst-plugins-base && \
+	cd gst-plugins-base && \
+	wget https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.10.4.tar.xz && \
+	tar xf gst-plugins-base-1.10.4.tar.xz && \
+	cd gst-plugins-base-1.10.4 && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd ../.. && \
+	touch .gst-plugins-base
 
 external/.brcm-refsw:
 	cd external && \

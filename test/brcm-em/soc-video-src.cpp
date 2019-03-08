@@ -189,6 +189,32 @@ static gboolean emVideoSrcPadQuery(GstPad *pad, GstObject *parent, GstQuery *que
 
                rv = TRUE;
             }
+            else if (!strcasecmp(struct_name, "get_hdr_metadata"))
+            {
+               const char *value;
+               value= EMSimpleVideoDecoderGetColorimetry(src->dec);
+               g_value_init(&val, G_TYPE_STRING);
+               if ( value && value[0] )
+               {
+                  g_value_set_string(&val, value);
+                  gst_structure_set_value(query_structure, "colorimetry", &val);
+                  rv = TRUE;
+               }
+               value= EMSimpleVideoDecoderGetMasteringMeta(src->dec);
+               if ( value && value[0] )
+               {
+                  g_value_set_string(&val, value);
+                  gst_structure_set_value(query_structure, "mastering_display_metadata", &val);
+                  rv = TRUE;
+               }
+               value= EMSimpleVideoDecoderGetContentLight(src->dec);
+               if ( value && value[0] )
+               {
+                  g_value_set_string(&val, value);
+                  gst_structure_set_value(query_structure, "content_light_level", &val);
+                  rv = TRUE;
+               }
+            }
          }
          break;
       default:
@@ -379,3 +405,29 @@ int videoSrcGetFrameNumber( GstElement *element )
    return frameNumber;
 }
 
+void videoSrcSetFrameSize( GstElement *element, int width, int height )
+{
+   EMVideoSrc *src= EM_VIDEO_SRC(element);
+   GstCaps *caps= 0;
+   GstPad *pad= 0;
+   GstEvent *event= 0;
+
+   pad= GST_BASE_SRC_PAD(src);
+
+   caps= gst_caps_new_simple( "video/x-brcm-avd",
+                              "width", G_TYPE_INT, width,
+                              "height", G_TYPE_INT, height,
+                               NULL );
+   if ( caps )
+   {
+      event= gst_event_new_caps( caps );
+      if ( event )
+      {
+         gst_pad_push_event( pad, gst_event_new_flush_start() );
+         gst_pad_push_event( pad, gst_event_new_flush_stop(TRUE) );
+         gst_pad_push_event( pad, event );
+         src->frameNumber= 0;
+         src->needSegment= true;
+      }
+   }
+}

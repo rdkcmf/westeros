@@ -27,6 +27,9 @@
 
 #include "westeros-sink.h"
 
+#if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+#include <gst/video/video-color.h>
+#endif
 #include "bmedia_types.h"
 
 #define FRAME_POLL_TIME (8000)
@@ -89,6 +92,10 @@ static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
 static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed );
+#if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
+static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *contentLightLevel );
+#endif
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -97,7 +104,7 @@ static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
    WESTEROS_UNUSED(sink);
    printf("westeros-sink-soc: registry: sbFormat: %X\n", format);
 }
-  
+
 static const struct wl_sb_listener sbListener = {
 	sbFormat
 };
@@ -422,6 +429,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
          sink->soc.stcChannel= NULL;
          sink->soc.videoPidChannel= NULL;
          sink->soc.codec= bvideo_codec_unknown;
+
+         #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+         sink->soc.eotf= NEXUS_VideoEotf_eInvalid;
+         memset(&sink->soc.masteringDisplayColorVolume,0,sizeof(NEXUS_MasteringDisplayColorVolume));
+         memset(&sink->soc.contentLightLevel,0,sizeof(NEXUS_ContentLightLevel));
+         #endif
 
          NEXUS_VideoDecoderCapabilities videoDecoderCaps;
          NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
@@ -925,7 +938,14 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    WESTEROS_UNUSED(passToDefault);
    NEXUS_Error rc;
    
-   queryPeerHandles(sink);
+   if ( !queryPeerHandles(sink) )
+   {
+      sink->startAfterLink= TRUE;
+   }
+   else if ( sink->soc.codec == bvideo_codec_unknown )
+   {
+      sink->startAfterCaps= TRUE;
+   }
 
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.clientPlaySpeed= 1.0;
@@ -951,6 +971,16 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
    if( (sink->soc.stcChannel != NULL) && (sink->soc.codec != bvideo_codec_unknown) )
    {
+      if ( sink->soc.codec == bvideo_codec_vp9 )
+      {
+         if ( sink->startAfterCaps )
+         {
+            // Wait till we get final caps since there might be HDR info
+            GST_DEBUG("defer video start till caps");
+            return TRUE;
+         }
+      }
+
       LOCK( sink );
       if ( !sink->videoStarted )
       {
@@ -1119,6 +1149,63 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
       {
          result= TRUE;
       }
+
+      #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+      {
+         const char *colorimetry;
+         const char *masteringDisplayMetadata;
+         const char *contentLightLevel;
+         if ( gst_structure_has_field(structure, "colorimetry") )
+         {
+            GstVideoColorimetry colorimetryInfo;
+            GST_LOG("gst_westeros_sink_soc_accept_caps has colorimetry");
+            colorimetry= gst_structure_get_string(structure,"colorimetry");
+            gst_video_colorimetry_from_string(&colorimetryInfo,colorimetry);
+            if ( colorimetryInfo.transfer == 13 )
+            { // GST_VIDEO_TRANSFER_SMPTE_ST_2084
+               sink->soc.eotf= NEXUS_VideoEotf_eHdr10;
+            }
+            else if ( colorimetryInfo.transfer == 14 )
+            { // GST_VIDEO_TRANSFER_ARIB_STD_B67
+               sink->soc.eotf= NEXUS_VideoEotf_eAribStdB67;
+            }
+            else
+            {
+               sink->soc.eotf= NEXUS_VideoEotf_eSdr;
+            }
+         }
+
+         if ( gst_structure_has_field(structure, "mastering-display-metadata") )
+         {
+            GST_LOG("gst_westeros_sink_soc_accept_caps has mastering-display-metadata");
+            masteringDisplayMetadata= gst_structure_get_string(structure,"mastering-display-metadata");
+            if ( masteringDisplayMetadata )
+            {
+               parseMasteringDisplayColorVolume(masteringDisplayMetadata, &sink->soc.masteringDisplayColorVolume);
+            }
+         }
+
+         if ( gst_structure_has_field(structure, "content-light-level") )
+         {
+            GST_LOG("gst_westeros_sink_soc_accept_caps has content-light-level");
+            contentLightLevel= gst_structure_get_string(structure,"content-light-level");
+            if ( contentLightLevel )
+            {
+               parseContentLightLevel(contentLightLevel, &sink->soc.contentLightLevel);
+            }
+         }
+      }
+      #endif
+
+      if ( !sink->videoStarted && sink->startAfterCaps )
+      {
+         GST_DEBUG("have caps: starting video");
+         sink->startAfterCaps= FALSE;
+         if ( !gst_westeros_sink_soc_start_video( sink ) )
+         {
+            GST_ERROR("gst_westeros_sink_soc_accept_caps: gst_westeros_sink_soc_start_video failed");
+         }
+      }
    }
 
    return result;   
@@ -1203,6 +1290,15 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
       GST_ERROR("gst_westeros_sink_soc_start_video: NEXUS_SimpleVideoDecoder_SetStcChannel failed: %d", (int)rc);
       goto exit;
    }
+
+   #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+   if ( sink->soc.eotf != NEXUS_VideoEotf_eInvalid )
+   {
+      startSettings.settings.eotf= sink->soc.eotf;
+      memcpy(&startSettings.settings.masteringDisplayColorVolume, &sink->soc.masteringDisplayColorVolume, sizeof(NEXUS_MasteringDisplayColorVolume));
+      memcpy(&startSettings.settings.contentLightLevel, &sink->soc.contentLightLevel, sizeof(NEXUS_ContentLightLevel));
+   }
+   #endif
 
    sink->soc.presentationStarted= FALSE;
    rc= NEXUS_SimpleVideoDecoder_Start(sink->soc.videoDecoder, &startSettings);
@@ -1392,6 +1488,71 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    }
    sink->soc.videoPidChannel= (NEXUS_PidChannelHandle)g_value_get_pointer(val);
    gst_query_unref(query);
+
+   #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+   {
+      structure = gst_structure_new("get_hdr_metadata", "colorimetry", G_TYPE_STRING, 0, NULL);
+      #ifdef USE_GST1
+      query= gst_query_new_custom(GST_QUERY_CUSTOM, structure);
+      #else
+      query= gst_query_new_application(GST_QUERY_CUSTOM, structure);
+      #endif
+      result= gst_pad_query(sink->peerPad, query);
+      if ( !result )
+      {
+         GST_LOG("queryPeerHandles: could not query hdr metadata from peer");
+      }
+      else
+      {
+         const char *colorimetry;
+         const char *masteringDisplayMetadata;
+         const char *contentLightLevel;
+
+         structure= (GstStructure *)gst_query_get_structure(query);
+
+         if ( gst_structure_has_field(structure, "colorimetry") )
+         {
+            GstVideoColorimetry colorimetryInfo;
+            GST_LOG("queryPeerHandles: have colorimetry");
+            colorimetry= gst_structure_get_string(structure,"colorimetry");
+            gst_video_colorimetry_from_string(&colorimetryInfo,colorimetry);
+            if ( colorimetryInfo.transfer == 13 )
+            { // GST_VIDEO_TRANSFER_SMPTE_ST_2084
+               sink->soc.eotf= NEXUS_VideoEotf_eHdr10;
+            }
+            else if ( colorimetryInfo.transfer == 14 )
+            { // GST_VIDEO_TRANSFER_ARIB_STD_B67
+               sink->soc.eotf= NEXUS_VideoEotf_eAribStdB67;
+            }
+            else
+            {
+               sink->soc.eotf= NEXUS_VideoEotf_eSdr;
+            }
+         }
+
+         if ( gst_structure_has_field(structure, "mastering_display_metadata") )
+         {
+            GST_LOG("queryPeerHandles have mastering_display_metadata");
+            masteringDisplayMetadata= gst_structure_get_string(structure,"mastering_display_metadata");
+            if ( masteringDisplayMetadata )
+            {
+               parseMasteringDisplayColorVolume(masteringDisplayMetadata, &sink->soc.masteringDisplayColorVolume);
+            }
+         }
+
+         if ( gst_structure_has_field(structure, "content_light_level") )
+         {
+            GST_LOG("queryPeerHandles: have content_light_level");
+            contentLightLevel= gst_structure_get_string(structure,"content_light_level");
+            if ( contentLightLevel )
+            {
+               parseContentLightLevel(contentLightLevel, &sink->soc.contentLightLevel);
+            }
+         }
+      }
+      gst_query_unref(query);
+   }
+   #endif
 
    allocCaptureSurfaces( sink );
 
@@ -2105,3 +2266,59 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
        GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
    }
 }
+
+#if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume )
+{
+   gdouble lumaMax, lumaMin;
+   gdouble Rx, Ry, Gx, Gy, Bx, By, Wx, Wy;
+
+   memset (colorVolume, 0, sizeof(NEXUS_MasteringDisplayColorVolume));
+
+   if (sscanf (metadata, "%lf:%lf:%lf:%lf:%lf:%lf:%lf:%lf:%lf:%lf",
+            &Rx, &Ry, &Gx, &Gy, &Bx, &By, &Wx, &Wy, &lumaMax, &lumaMin) == 10)
+   {
+      colorVolume->redPrimary.x= (int)(Rx*50000);
+      colorVolume->redPrimary.y= (int)(Ry*50000);
+      colorVolume->greenPrimary.x= (int)(Gx*50000);
+      colorVolume->greenPrimary.y= (int)(Gy*50000);
+      colorVolume->bluePrimary.x= (int)(Bx*50000);
+      colorVolume->bluePrimary.y= (int)(By*50000);
+      colorVolume->whitePoint.x= (int)(Wx*50000);
+      colorVolume->whitePoint.y= (int)(Wy*50000);
+
+      // 1 cd / m^2
+      colorVolume->luminance.max= (int)(lumaMax);
+
+      // 0.0001 cd / m^2
+      colorVolume->luminance.min= (int)(lumaMin*100000);
+   }
+
+   GST_DEBUG("mastering_display_metadata r(%d, %d) g(%d, %d) b(%d, %d) w(%d, %d) l(%d, %d)",
+               colorVolume->redPrimary.x,
+               colorVolume->redPrimary.y,
+               colorVolume->greenPrimary.x,
+               colorVolume->greenPrimary.y,
+               colorVolume->bluePrimary.x,
+               colorVolume->bluePrimary.y,
+               colorVolume->whitePoint.x,
+               colorVolume->whitePoint.y,
+               colorVolume->luminance.max,
+               colorVolume->luminance.min);
+}
+
+static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *contentLightLevel )
+{
+   guint maxFALL, maxCLL;
+
+   memset (contentLightLevel, 0, sizeof(NEXUS_ContentLightLevel));
+
+   if ( sscanf (str, "%u:%u", &maxCLL, &maxFALL) == 2 )
+   {
+      contentLightLevel->max= maxCLL;
+      contentLightLevel->maxFrameAverage= maxFALL;
+   }
+
+   GST_DEBUG("content_light_level (%d, %d) ", contentLightLevel->max , contentLightLevel->maxFrameAverage);
+}
+#endif

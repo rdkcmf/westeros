@@ -87,6 +87,12 @@ struct _GstWesterosSinkSoc
    gboolean stoppedForPlaySpeedChange;
    gboolean secureVideo;
 
+   #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+   NEXUS_VideoEotf eotf;
+   NEXUS_ContentLightLevel contentLightLevel;
+   NEXUS_MasteringDisplayColorVolume masteringDisplayColorVolume;
+   #endif
+
    int videoX;
    int videoY;
    int videoWidth;

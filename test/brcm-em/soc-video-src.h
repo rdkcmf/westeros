@@ -62,6 +62,7 @@ GType em_video_src_get_type() G_GNUC_CONST;
 
 GstElement* createVideoSrc( EMCTX *emctx, EMSimpleVideoDecoder *dec );
 int videoSrcGetFrameNumber( GstElement *element );
+void videoSrcSetFrameSize( GstElement *element, int width, int height );
 
 #endif
 
