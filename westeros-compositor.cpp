@@ -787,7 +787,7 @@ WstCompositor* WstCompositorCreate()
 {
    WstCompositor *ctx= 0;
 
-   INFO("westeros (core) vesrsion " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
+   INFO("westeros (core) version " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
    
    ctx= (WstCompositor*)calloc( 1, sizeof(WstCompositor) );
    if ( ctx )
