@@ -249,7 +249,7 @@ EssCtx* EssContextCreate()
 {
    EssCtx *ctx= 0;
 
-   INFO("westeros (essos) vesrsion " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
+   INFO("westeros (essos) version " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
 
    ctx= (EssCtx*)calloc( 1, sizeof(EssCtx) );
    if ( ctx )
