@@ -76,6 +76,7 @@ struct _GstWesterosSinkSoc
    guint32 numDecoded;
    gboolean captureEnabled;
    gboolean videoPlaying;
+   int framesBeforeHideVideo;
 
    gboolean presentationStarted;
    unsigned int ptsOffset;

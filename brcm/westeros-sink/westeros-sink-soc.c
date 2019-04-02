@@ -388,6 +388,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.captureThread= NULL;
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
+   sink->soc.framesBeforeHideVideo= 0;
    sink->soc.numDecoded= 0;
    sink->soc.noFrameCount= 0;
    sink->soc.sb= 0;
@@ -1635,7 +1636,6 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    {
       NEXUS_Error rc;
       NEXUS_SimpleVideoDecoderStartCaptureSettings captureSettings;
-      NEXUS_SurfaceClientSettings vClientSettings;
       
       /* Start video frame capture */
       NEXUS_SimpleVideoDecoder_GetDefaultStartCaptureSettings(&captureSettings);
@@ -1651,14 +1651,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
 
       if ( sink->soc.hideVideoDuringCapture )
       {
-         /* Move HW path video off screen.  The natural inclination would be to suppress
-          * its presentation by setting captureSettings.displayEnable to false, but doing
-          * so seems to cause HW path video to never present again when capture is disabled.
-          * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
-          */
-         NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-         vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
-         NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+         sink->soc.framesBeforeHideVideo= 2;
       }
    }
    else if ( !useGfxPath && sink->soc.captureEnabled )
@@ -1814,6 +1807,21 @@ static void processFrame( GstWesterosSink *sink )
                wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
                wl_surface_commit( sink->surface );
                ++sink->soc.activeBuffers;
+               if ( sink->soc.framesBeforeHideVideo )
+               {
+                  if ( --sink->soc.framesBeforeHideVideo == 0 )
+                  {
+                     /* Move HW path video off screen.  The natural inclination would be to suppress
+                      * its presentation by setting captureSettings.displayEnable to false, but doing
+                      * so seems to cause HW path video to never present again when capture is disabled.
+                      * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
+                      */
+                     NEXUS_SurfaceClientSettings vClientSettings;
+                     NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+                     vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
+                     NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+                  }
+               }
             }
          }
       }

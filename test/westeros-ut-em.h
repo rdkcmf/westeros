@@ -34,6 +34,7 @@ typedef struct _TESTCASE
 } TESTCASE;
 
 typedef struct _EMSimpleVideoDecoder EMSimpleVideoDecoder;
+typedef struct _EMSurfaceClient EMSurfaceClient;
 
 typedef enum _EM_TUNERID
 {
@@ -60,6 +61,9 @@ void EMSetVideoCodec( EMCTX *ctx, int codec );
 int EMGetVideoCodec( EMCTX *ctx );
 void EMSetVideoPidChannel( EMCTX *ctx, void *videoPidChannel );
 void* EMGetVideoPidChannel( EMCTX *ctx );
+
+EMSurfaceClient* EMGetVideoWindow( EMCTX *ctx, int id );
+void EMSurfaceClientGetPosition( EMSurfaceClient *emsc, int *x, int *y, int *width, int *height );
 
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id );
 void EMSimpleVideoDecoderSetVideoSize( EMSimpleVideoDecoder *dec, int width, int height );
