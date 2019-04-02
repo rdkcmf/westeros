@@ -164,6 +164,11 @@ typedef struct _EMSurfaceClient
 {
    unsigned client_id;
    NEXUS_SurfaceClientSettings settings;
+   bool isVideoWindow;
+   NEXUS_Rect pendingPosition;
+   NEXUS_Rect position;
+   bool positionIsPending;
+   long long pendingPositionTime;
 } EMSurfaceClient;
 
 typedef struct _EMNativeWindow
@@ -250,6 +255,7 @@ typedef struct _EMEGLImage
 {
    uint32_t magic;
    EGLClientBuffer clientBuffer;
+   EGLenum target;
 } EMEGLImage;
 
 #define EM_EGL_CONTEXT_MAGIC (0x55112531)
@@ -324,6 +330,7 @@ typedef struct _EMCTX
    unsigned nextNxClientConnectId;
    EMSimpleVideoDecoder simpleVideoDecoderMain;
    NEXUS_VideoDecoderStatus simpleVideoDecoderStatusMain;
+   EMSurfaceClient *videoWindowMain;
    void *stcChannel;
    int videoCodec;
    void *videoPidChannel;
@@ -494,6 +501,30 @@ void EMSetVideoPidChannel( EMCTX *ctx, void *videoPidChannel )
 void* EMGetVideoPidChannel( EMCTX *ctx )
 {
    return ctx->videoPidChannel;
+}
+
+EMSurfaceClient* EMGetVideoWindow( EMCTX *ctx, int id )
+{
+   // ignore id for now
+
+   return ctx->videoWindowMain;
+}
+
+void EMSurfaceClientGetPosition( EMSurfaceClient *emsc, int *x, int *y, int *width, int *height )
+{
+   NEXUS_Rect pendingPosition;
+   NEXUS_Rect position;
+   bool positionIsPending;
+   long long pendingPositionTime;
+   if ( emsc->positionIsPending && (getCurrentTimeMillis() > emsc->pendingPositionTime) )
+   {
+      emsc->positionIsPending= false;
+      emsc->position= emsc->pendingPosition;
+   }
+   if ( x ) *x= emsc->position.x;
+   if ( y ) *y= emsc->position.y;
+   if ( width ) *width= emsc->position.width;
+   if ( height ) *height= emsc->position.height;
 }
 
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id )
@@ -1221,6 +1252,13 @@ NEXUS_Error NEXUS_SurfaceClient_SetSettings(
 
    TRACE1("NEXUS_SurfaceClient_SetSettings");
 
+   if ( emsc->isVideoWindow )
+   {
+      // Emulate settings change on next vertical
+      emsc->positionIsPending= true;
+      emsc->pendingPosition= pSettings->composition.position;
+      emsc->pendingPositionTime= getCurrentTimeMillis()+8;
+   }
    emsc->settings= *pSettings;
 
    return rc;
@@ -1266,27 +1304,64 @@ NEXUS_SurfaceClientHandle NEXUS_SurfaceClient_AcquireVideoWindow(
     unsigned window_id
     )
 {
-   struct NEXUS_SurfaceClient *sc= 0;
+   EMSurfaceClient *emsc= 0;
+   EMCTX *ctx= 0;
 
    TRACE1("NEXUS_SurfaceClient_AcquireVideoWindow");
 
-   sc= (struct NEXUS_SurfaceClient*)calloc( 1, sizeof(struct NEXUS_SurfaceClient*));
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("NEXUS_SurfaceClient_AcquireVideoWindow: emGetContext failed");
+      goto exit;
+   }
 
-   return (NEXUS_SurfaceClientHandle)sc;
+   emsc= (EMSurfaceClient*)calloc( 1, sizeof(EMSurfaceClient));
+   if ( !emsc )
+   {
+      ERROR("NEXUS_SurfaceClient_AcquireVideoWindow: no memory for EMSurfaceClient");
+      goto exit;
+   }
+   emsc->isVideoWindow= true;
+   emsc->client_id= window_id;
+
+   ctx->videoWindowMain= emsc;
+
+exit:
+
+   return (NEXUS_SurfaceClientHandle)emsc;
 }
 
 void NEXUS_SurfaceClient_ReleaseVideoWindow(
     NEXUS_SurfaceClientHandle window_handle
     )
 {
-   struct NEXUS_SurfaceClient *sc= (struct NEXUS_SurfaceClient*)window_handle;
+   EMSurfaceClient *emsc= 0;
+   EMCTX *ctx= 0;
 
    TRACE1("NEXUS_SurfaceClient_ReleaseVideoWindow");
 
-   if ( sc )
+   emsc= (EMSurfaceClient*)window_handle;
+
+   if ( !emsc->isVideoWindow )
    {
-      free( sc );
+      ERROR("NEXUS_SurfaceClient_ReleaseVideoWindow: not a video window");
+      goto exit;
    }
+
+   free( emsc );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("NEXUS_SurfaceClient_ReleaseVideoWindow: emGetContext failed");
+      goto exit;
+   }
+
+   ctx->videoWindowMain= 0;
+
+exit:
+   return;
 }
 
 // Section: nexus_video_decoder ------------------------------------------------------
@@ -2001,6 +2076,11 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_GetCapturedSurfaces(
    }
    pthread_mutex_unlock( &gMutex );
 
+   if ( *pNumReturned == 1 )
+   {
+      usleep(9000);
+   }
+
 exit:
    return rc;
 }
@@ -2039,7 +2119,7 @@ void NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(
          dec->captureSurfacePutNext += 1;
          if ( dec->captureSurfacePutNext >= NEXUS_SIMPLE_DECODER_MAX_SURFACES )
          {
-            dec->captureSurfacePutNext= 0;;
+            dec->captureSurfacePutNext= 0;
          }
       }
    }
@@ -3384,6 +3464,7 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR (EGLDisplay display, EGLContext
    switch( target )
    {
       case EGL_WAYLAND_BUFFER_WL:
+      case EGL_NATIVE_PIXMAP_KHR:
          {
             EMEGLImage *img= 0;
             img= (EMEGLImage*)calloc( 1, sizeof(EMEGLImage));
@@ -3391,6 +3472,7 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR (EGLDisplay display, EGLContext
             {
                img->magic= EM_EGL_IMAGE_MAGIC;
                img->clientBuffer= buffer;
+               img->target= target;
             }
             image= (EGLImageKHR)img;
          }
@@ -4166,15 +4248,28 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
             {
                if ( img->magic == EM_EGL_IMAGE_MAGIC )
                {
-                  struct wl_resource *resource= (struct wl_resource*)img->clientBuffer;
-                  void *deviceBuffer= wl_egl_get_device_buffer( resource );
-                  if( (long long)deviceBuffer < 0 )
+                  int bufferId=-1;
+
+                  if ( img->target == EGL_WAYLAND_BUFFER_WL )
                   {
-                     ERROR("glEGLImageTargetTexture2DOES: image %p had bad device buffer %d", img, deviceBuffer);
+                     struct wl_resource *resource= (struct wl_resource*)img->clientBuffer;
+                     void *deviceBuffer= wl_egl_get_device_buffer( resource );
+                     if( (long long)deviceBuffer < 0 )
+                     {
+                        ERROR("glEGLImageTargetTexture2DOES: image %p had bad device buffer %d", img, deviceBuffer);
+                     }
+                     else
+                     {
+                        bufferId= (((long long)deviceBuffer)&0xFFFFFFFF);
+                     }
                   }
-                  else
+                  else if ( img->target == EGL_NATIVE_PIXMAP_KHR )
                   {
-                     int bufferId= (((long long)deviceBuffer)&0xFFFFFFFF);
+                     bufferId= 0;
+                  }
+
+                  if ( bufferId >= 0 )
+                  {
                      EMCTX *ctx= 0;
                      ctx= emGetContext();
                      if ( ctx )
