@@ -972,6 +972,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
    if( (sink->soc.stcChannel != NULL) && (sink->soc.codec != bvideo_codec_unknown) )
    {
+      #if (NEXUS_PLATFORM_VERSION_MAJOR>15)
       if ( sink->soc.codec == bvideo_codec_vp9 )
       {
          if ( sink->startAfterCaps )
@@ -981,6 +982,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
             return TRUE;
          }
       }
+      #endif
 
       LOCK( sink );
       if ( !sink->videoStarted )
