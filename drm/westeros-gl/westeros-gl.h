@@ -35,8 +35,29 @@ extern "C" {
  */
 typedef struct _WstGLCtx WstGLCtx;
 
+typedef struct _WstGLDisplaySafeArea
+{
+   int x;
+   int y;
+   int w;
+   int h;
+} WstGLDisplaySafeArea;
+
+typedef struct _WstGLDisplayInfo
+{
+   int width;
+   int height;
+   WstGLDisplaySafeArea safeArea;
+} WstGLDisplayInfo;
+
+typedef void (*WstGLDisplaySizeCallback)( void *userData, int width, int height );
+
 WstGLCtx* WstGLInit();
 void WstGLTerm( WstGLCtx *ctx );
+bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo );
+bool WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h );
+bool WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener );
+bool WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback listener );
 void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int height );
 void WstGLDestroyNativeWindow( WstGLCtx *ctx, void *nativeWindow );
 bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixmap );

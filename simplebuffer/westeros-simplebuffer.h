@@ -96,6 +96,8 @@ struct wl_sb_buffer
    const void *driverFormat;
    int32_t offset[3];
    int32_t stride[3];
+   int fd;
+   uint32_t native_handle;
    void *driverBuffer;
 };
 
@@ -116,6 +118,7 @@ int32_t WstSBBufferGetHeight(struct wl_sb_buffer *buffer);
 int32_t WstSBBufferGetStride(struct wl_sb_buffer *buffer);
 void WstSBBufferGetPlaneOffsetAndStride(struct wl_sb_buffer *buffer, int plane, int32_t *offset, int32_t *stride );
 void *WstSBBufferGetBuffer(struct wl_sb_buffer *buffer);
+int WstSBBufferGetFd(struct wl_sb_buffer *buffer);
 
 #endif
 

@@ -16,6 +16,2147 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#ifndef WESTEROS_GL_NO_PLANES
+#include <stdlib.h>
+#include <stdio.h>
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <memory.h>
+#include <pthread.h>
+#include <sys/file.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
+#include <gbm.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#include <drm/drm_fourcc.h>
+
+#include "westeros-gl.h"
+
+#define INT_FATAL(FORMAT, ...)      wstLog(0, "FATAL: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_ERROR(FORMAT, ...)      wstLog(0, "ERROR: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_WARNING(FORMAT, ...)    wstLog(1, "WARN: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_INFO(FORMAT, ...)       wstLog(2, "INFO: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_DEBUG(FORMAT, ...)      wstLog(3, "DEBUG: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_TRACE1(FORMAT, ...)     wstLog(4, "TRACE: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_TRACE2(FORMAT, ...)     wstLog(5, "TRACE: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_TRACE3(FORMAT, ...)     wstLog(6, "TRACE: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+
+#define FATAL(...)                  INT_FATAL(__VA_ARGS__, "")
+#define ERROR(...)                  INT_ERROR(__VA_ARGS__, "")
+#define WARNING(...)                INT_WARNING(__VA_ARGS__, "")
+#define INFO(...)                   INT_INFO(__VA_ARGS__, "")
+#define DEBUG(...)                  INT_DEBUG(__VA_ARGS__, "")
+#define TRACE1(...)                 INT_TRACE1(__VA_ARGS__, "")
+#define TRACE2(...)                 INT_TRACE2(__VA_ARGS__, "")
+#define TRACE3(...)                 INT_TRACE3(__VA_ARGS__, "")
+
+#define DEFAULT_CARD "/dev/dri/card0"
+#ifdef WESTEROS_PLATFORM_QEMUX86
+#define DEFAULT_MODE_WIDTH (1280)
+#define DEFAULT_MODE_HEIGHT (1024)
+#endif
+
+#define DISPLAY_SAFE_BORDER_PERCENT (5)
+
+#define DRM_NO_SRC_CROP
+
+typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
+typedef EGLBoolean (*PREALEGLSWAPBUFFERS)(EGLDisplay, EGLSurface surface );
+typedef EGLSurface (*PREALEGLCREATEWINDOWSURFACE)(EGLDisplay,
+                                                  EGLConfig,
+                                                  EGLNativeWindowType,
+                                                  const EGLint *attrib_list);
+
+typedef struct _VideoServerCtx VideoServerCtx;
+typedef struct _WstOverlayPlane WstOverlayPlane;
+
+typedef struct _VideoServerConnection
+{
+   pthread_mutex_t mutex;
+   VideoServerCtx *server;
+   WstOverlayPlane *videoPlane;
+   int socketFd;
+   int prevFrameFd;
+   pthread_t threadId;
+   bool threadStarted;
+   bool threadStopRequested;
+} VideoServerConnection;
+
+#define MAX_SUN_PATH (80)
+#define MAX_VIDEO_CONNECTIONS (4)
+typedef struct _VideoServerCtx
+{
+   pthread_mutex_t mutex;
+   int refCnt;
+   const char *name;
+   struct sockaddr_un addr;
+   char lock[MAX_SUN_PATH+6];
+   int lockFd;
+   int socketFd;
+   pthread_t threadId;
+   bool threadStarted;
+   bool threadStopRequested;
+   VideoServerConnection* connections[MAX_VIDEO_CONNECTIONS];
+} VideoServerCtx;
+
+typedef struct _VideoFrame
+{
+   bool hide;
+   bool hidden;
+   uint32_t fbId;
+   uint32_t handle;
+   uint32_t frameWidth;
+   uint32_t frameHeight;
+   uint32_t frameFormat;
+   int rectX;
+   int rectY;
+   int rectW;
+   int rectH;
+} VideoFrame;
+
+typedef struct _WstOverlayPlane
+{
+   struct _WstOverlayPlane *next;
+   struct _WstOverlayPlane *prev;
+   bool inUse;
+   int zOrder;
+   uint32_t crtc_id;
+   drmModePlane *plane;
+   struct gbm_bo *bo;
+   uint32_t fbId;
+   uint32_t handle;
+   uint32_t fbIdPrev;
+   uint32_t handlePrev;
+   VideoFrame videoFrameNext;
+} WstOverlayPlane;
+
+typedef struct _WstOverlayPlanes
+{
+   int totalCount;
+   int usedCount;
+   WstOverlayPlane *availHead;
+   WstOverlayPlane *availTail;
+   WstOverlayPlane *usedHead;
+   WstOverlayPlane *usedTail;
+} WstOverlayPlanes;
+
+typedef struct _NativeWindowItem
+{
+   struct _NativeWindowItem *next;
+   void *nativeWindow;
+   EGLSurface surface;
+   WstOverlayPlane *windowPlane;
+   uint32_t handle;
+   uint32_t fbId;
+   struct gbm_bo *prevBo;
+   uint32_t prevFbId;
+} NativeWindowItem;
+
+typedef struct _WstGLCtx
+{
+   pthread_mutex_t mutex;
+   int refCnt;
+   int drmFd;
+   drmModeRes *res;
+   drmModeConnector *conn;
+   drmModeEncoder *enc;
+   drmModeCrtc *crtc;
+   drmModeModeInfo *modeInfo;
+   WstOverlayPlanes overlayPlanes;
+   struct gbm_device* gbm;
+   bool modeSet;
+   bool usePlanes;
+   NativeWindowItem *nwFirst;
+   NativeWindowItem *nwLast;
+   EGLDisplay dpy;
+   int flipPending;
+} WstGLCtx;
+
+typedef struct _WstGLSizeCBInfo
+{
+   struct _WstGLSizeCBInfo *next;
+   WstGLCtx* ctx;
+   void *userData;
+   WstGLDisplaySizeCallback listener;
+   int width;
+   int height;
+} WstGLSizeCBInfo;
+
+static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
+static void wstTermCtx( WstGLCtx *ctx );
+static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw );
+
+static PFNEGLGETPLATFORMDISPLAYEXTPROC gRealEGLGetPlatformDisplay= 0;
+static PREALEGLGETDISPLAY gRealEGLGetDisplay= 0;
+static PREALEGLSWAPBUFFERS gRealEGLSwapBuffers= 0;
+static PREALEGLCREATEWINDOWSURFACE gRealEGLCreateWindowSurface= 0;
+static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
+static WstGLCtx *gCtx= 0;
+static WstGLSizeCBInfo *gSizeListeners= 0;
+static VideoServerCtx *gServer= 0;
+static bool emitFPS= false;
+static int g_activeLevel= 2;
+
+#define WSTRES_FD_VIDEO 0
+#define WSTRES_FB_VIDEO 1
+#define WSTRES_BO_GRAPHICS 2
+#define WSTRES_FB_GRAPHICS 3
+typedef struct _WstResources
+{
+   int fdVideoCount;
+   int handleVideoCount;
+   int fbVideoCount;
+   int boGraphicsCount;
+   int fbGraphicsCount;
+} WstResources;
+static pthread_mutex_t resMutex= PTHREAD_MUTEX_INITIALIZER;
+static WstResources *gResources= 0;
+
+static long long getCurrentTimeMillis(void)
+{
+   struct timeval tv;
+   long long utcCurrentTimeMillis;
+
+   gettimeofday(&tv,0);
+   utcCurrentTimeMillis= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+
+   return utcCurrentTimeMillis;
+}
+
+static void wstLog( int level, const char *fmt, ... )
+{
+   if ( level <= g_activeLevel )
+   {
+      va_list argptr;
+      fprintf( stderr, "%lld: ", getCurrentTimeMillis());
+      va_start( argptr, fmt );
+      vfprintf( stderr, fmt, argptr );
+      va_end( argptr );
+   }
+}
+
+static void wstUpdateResources( int type, bool add, long long v, int line )
+{
+   pthread_mutex_lock( &resMutex );
+   if ( !gResources )
+   {
+      gResources= (WstResources*)calloc( 1, sizeof(WstResources) );
+   }
+   if ( gResources )
+   {
+      switch( type )
+      {
+         case WSTRES_FD_VIDEO:
+            if ( add )
+               ++gResources->fdVideoCount;
+            else
+               --gResources->fdVideoCount;
+            break;
+         case WSTRES_FB_VIDEO:
+            if ( add )
+               ++gResources->fbVideoCount;
+            else
+               --gResources->fbVideoCount;
+            break;
+         case WSTRES_BO_GRAPHICS:
+            if ( add )
+               ++gResources->boGraphicsCount;
+            else
+               --gResources->boGraphicsCount;
+            break;
+         case WSTRES_FB_GRAPHICS:
+            if ( add )
+               ++gResources->fbGraphicsCount;
+            else
+               --gResources->fbGraphicsCount;
+            break;
+         default:
+            break;
+      }
+   }
+   TRACE3("fdv %d fbv %d bog %d fbg %d : v %llx line %d",
+          gResources->fdVideoCount,
+          gResources->fbVideoCount,
+          gResources->boGraphicsCount,
+          gResources->fbGraphicsCount,
+          v, line
+         );
+   pthread_mutex_unlock( &resMutex );
+}
+
+static void wstOverlayAppendUnused( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
+{
+   WstOverlayPlane *insertAfter= planes->availHead;
+
+   if ( insertAfter )
+   {
+      if ( overlay->zOrder <= insertAfter->zOrder )
+      {
+         insertAfter= 0;
+      }
+      while ( insertAfter )
+      {
+         if ( !insertAfter->next || overlay->zOrder <= insertAfter->next->zOrder )
+         {
+            break;
+         }
+         insertAfter= insertAfter->next;
+      }
+   }
+
+   if ( insertAfter )
+   {
+      overlay->next= insertAfter->next;
+      if ( insertAfter->next )
+      {
+         insertAfter->next->prev= overlay;
+      }
+      else
+      {
+         planes->availTail= overlay;
+      }
+      insertAfter->next= overlay;
+   }
+   else
+   {
+      overlay->next= planes->availHead;
+      if ( planes->availHead )
+      {
+         planes->availHead->prev= overlay;
+      }
+      else
+      {
+         planes->availTail= overlay;
+      }
+      planes->availHead= overlay;
+   }
+   overlay->prev= insertAfter;
+}
+
+static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool fromTop )
+{
+   WstOverlayPlane *overlay= 0;
+
+   pthread_mutex_lock( &gCtx->mutex );
+
+   if ( planes->usedCount < planes->totalCount )
+   {
+      ++planes->usedCount;
+      if ( fromTop )
+      {
+         overlay= planes->availTail;
+         planes->availTail= overlay->prev;
+         if ( planes->availTail )
+         {
+            planes->availTail->next= 0;
+         }
+         else
+         {
+            planes->availHead= 0;
+         }
+      }
+      else
+      {
+         overlay= planes->availHead;
+         planes->availHead= overlay->next;
+         if ( planes->availHead )
+         {
+            planes->availHead->prev= 0;
+         }
+         else
+         {
+            planes->availTail= 0;
+         }
+      }
+
+      overlay->next= 0;
+      overlay->prev= planes->usedTail;
+      if ( planes->usedTail )
+      {
+         planes->usedTail->next= overlay;
+      }
+      else
+      {
+         planes->usedHead= overlay;
+      }
+      planes->usedTail= overlay;
+      overlay->inUse= true;
+   }
+   pthread_mutex_unlock( &gCtx->mutex );
+
+   return overlay;
+}
+
+static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
+{
+   if ( overlay )
+   {
+      pthread_mutex_lock( &gCtx->mutex );
+
+      overlay->inUse= false;
+      --planes->usedCount;
+      if ( overlay->next )
+      {
+         overlay->next->prev= overlay->prev;
+      }
+      else
+      {
+         planes->usedTail= overlay->prev;
+      }
+      if ( overlay->prev )
+      {
+         overlay->prev->next= overlay->next;
+      }
+      else
+      {
+         planes->usedHead= overlay->next;
+      }
+      overlay->next= 0;
+      overlay->prev= 0;
+      wstOverlayAppendUnused( planes, overlay );
+
+      pthread_mutex_unlock( &gCtx->mutex );
+   }
+}
+
+static unsigned int wstGetU32( unsigned char *p )
+{
+   unsigned n;
+
+   n= (p[0]<<24)|(p[1]<<16)|(p[2]<<8)|(p[3]);
+
+   return n;
+}
+
+static void *wstVideoServerConnectionThread( void *arg )
+{
+   VideoServerConnection *conn= (VideoServerConnection*)arg;
+   struct msghdr msg;
+   struct cmsghdr *cmsg;
+   struct iovec iov[1];
+   unsigned char mbody[1+4+4+4+4+4+4+4];
+   char cmbody[CMSG_SPACE(sizeof(int))];
+   int len, rc;
+   uint32_t fbId= 0;
+   uint32_t frameWidth, frameHeight;
+   uint32_t frameFormat;
+   uint32_t frameSkipX, frameSkipY, rectSkipX, rectSkipY;
+   int rectX, rectY, rectW, rectH;
+   int fd;
+
+   DEBUG("wstVideoServerConnectionThread: enter");
+
+   conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false );
+   INFO("video plane %p : zorder: %d", conn->videoPlane, (conn->videoPlane ? conn->videoPlane->zOrder: -1) );
+
+   conn->threadStarted= true;
+   while( !conn->threadStopRequested )
+   {
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= sizeof(mbody);
+
+      cmsg= (struct cmsghdr*)cmbody;
+      cmsg->cmsg_len= CMSG_LEN(sizeof(int));
+      cmsg->cmsg_level= SOL_SOCKET;
+      cmsg->cmsg_type= SCM_RIGHTS;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= cmsg;
+      msg.msg_controllen= cmsg->cmsg_len;
+      msg.msg_flags= 0;
+
+      do
+      {
+         len= recvmsg( conn->socketFd, &msg, 0 );
+      }
+      while ( (len < 0) && (errno == EINTR));
+
+      if ( len > 0 )
+      {
+         fd= -1;
+
+         switch ( mbody[0] )
+         {
+            case 'F':
+               cmsg= CMSG_FIRSTHDR(&msg);
+               if ( cmsg &&
+                    cmsg->cmsg_level == SOL_SOCKET &&
+                    cmsg->cmsg_type == SCM_RIGHTS &&
+                    cmsg->cmsg_len >= CMSG_LEN(sizeof(int)) )
+               {
+                  fd= *(int*)CMSG_DATA(cmsg);
+                  if ( fd >= 0 )
+                  {
+                     uint32_t handle;
+
+                     wstUpdateResources( WSTRES_FD_VIDEO, true, fd, __LINE__);
+                     frameWidth= wstGetU32( mbody+1 );
+                     frameHeight= wstGetU32( mbody+5);
+                     frameFormat= wstGetU32( mbody+9);
+                     rectX= (int)wstGetU32( mbody+13 );
+                     rectY= (int)wstGetU32( mbody+17 );
+                     rectW= (int)wstGetU32( mbody+21 );
+                     rectH= (int)wstGetU32( mbody+25 );
+
+                     TRACE2("got frame fd %d (%dx%d) %X (%d, %d, %d, %d)", fd, frameWidth, frameHeight, frameFormat, rectX, rectY, rectW, rectH);
+
+                     rectSkipX= 0;
+                     frameSkipX= 0;
+                     #ifdef DRM_NO_SRC_CROP
+                     /* If drmModeSetPlane won't perform src cropping we will
+                        crop here in the creation of the fb.  This would be the case
+                        where the target video frame rect has negative x or y
+                        coordinates */
+                     if ( rectX < 0 )
+                     {
+                        rectX &= ~1;
+                        frameSkipX= -rectX*frameWidth/rectW;
+                        rectSkipX= -rectX;
+                     }
+                     frameSkipY= 0;
+                     rectSkipY= 0;
+                     if ( rectY < 0 )
+                     {
+                        rectY &= ~1;
+                        frameSkipY= -rectY*frameHeight/rectH;
+                        frameSkipY &= ~1;
+                        rectSkipY= -rectY;
+                     }
+                     #endif
+
+                     pthread_mutex_lock( &gCtx->mutex );
+                     if ( conn->videoPlane->fbIdPrev )
+                     {
+                        wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbIdPrev, __LINE__);
+                        drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbIdPrev );
+                        conn->videoPlane->fbIdPrev= 0;
+                     }
+                     pthread_mutex_unlock( &gCtx->mutex );
+
+                     rc= drmPrimeFDToHandle( gCtx->drmFd, fd, &handle );
+                     if ( !rc )
+                     {
+                        uint32_t handles[4]= { handle,
+                                               handle,
+                                               0,
+                                               0 };
+                        uint32_t pitches[4]= { frameWidth,
+                                               frameWidth,
+                                               0,
+                                               0 };
+                        uint32_t offsets[4]= { frameSkipX+frameSkipY*frameWidth,
+                                               frameWidth*frameHeight+frameSkipX+frameSkipY*(frameWidth/2),
+                                               0,
+                                               0};
+
+                        rc= drmModeAddFB2( gCtx->drmFd,
+                                           frameWidth-frameSkipX,
+                                           frameHeight-frameSkipY,
+                                           frameFormat,
+                                           handles,
+                                           pitches,
+                                           offsets,
+                                           &fbId,
+                                           0 // flags
+                                         );
+                        if ( !rc )
+                        {
+                           wstUpdateResources( WSTRES_FB_VIDEO, true, fbId, __LINE__);
+                           pthread_mutex_lock( &gCtx->mutex );
+                           conn->videoPlane->videoFrameNext.hide= false;
+                           conn->videoPlane->videoFrameNext.fbId= fbId;
+                           conn->videoPlane->videoFrameNext.handle= handle;
+                           conn->videoPlane->videoFrameNext.frameWidth= frameWidth-frameSkipX;
+                           conn->videoPlane->videoFrameNext.frameHeight= frameHeight-frameSkipY;
+                           conn->videoPlane->videoFrameNext.frameFormat= frameFormat;
+                           conn->videoPlane->videoFrameNext.rectX= rectX+rectSkipX;
+                           conn->videoPlane->videoFrameNext.rectY= rectY+rectSkipY;
+                           conn->videoPlane->videoFrameNext.rectW= rectW-rectSkipX;
+                           conn->videoPlane->videoFrameNext.rectH= rectH-rectSkipY;
+                           pthread_mutex_unlock( &gCtx->mutex );
+
+                           wstSwapDRMBuffers( gCtx, 0 );
+                        }
+                        else
+                        {
+                           ERROR("wstVideoServerConnectionThread: drmModeAddFB2 failed: rc %d errno %d", rc, errno);
+                        }
+                     }
+                     else
+                     {
+                        ERROR("wstVideoServerConnectionThread: drmPrimeFDToHandle failed: rc %d errno %d", rc, errno);
+                     }
+                  }
+               }
+               break;
+            case 'H':
+               DEBUG("got hide video plane %d", conn->videoPlane->plane->plane_id);
+               conn->videoPlane->videoFrameNext.hide= true;
+               wstSwapDRMBuffers( gCtx, 0 );
+               break;
+            default:
+               ERROR("got unknown video server message");
+               break;
+         }
+
+         if ( conn->prevFrameFd >= 0 )
+         {
+            wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd, __LINE__);
+            close( conn->prevFrameFd );
+            conn->prevFrameFd= -1;
+         }
+         if ( fd >= 0 )
+         {
+            conn->prevFrameFd= fd;
+         }
+      }
+      else
+      {
+         DEBUG("video server peer disconnected");
+         break;
+      }
+   }
+
+exit:
+   if ( conn->videoPlane )
+   {
+      pthread_mutex_lock( &gCtx->mutex );
+
+      drmModePlane *plane= conn->videoPlane->plane;
+      plane->crtc_id= gCtx->enc->crtc_id;
+      DEBUG("wstVideoServerConnectionThread: drmModeSetPlane plane_id %d crtc_id %d", plane->plane_id, plane->crtc_id);
+      rc= drmModeSetPlane( gCtx->drmFd,
+                           plane->plane_id,
+                           plane->crtc_id,
+                           0, // fbid
+                           0, // flags
+                           0, // plane x
+                           0, // plane y
+                           gCtx->modeInfo->hdisplay,
+                           gCtx->modeInfo->vdisplay,
+                           0, // fb rect x
+                           0, // fb rect y
+                           gCtx->modeInfo->hdisplay<<16,
+                           gCtx->modeInfo->hdisplay<<16 );
+      if ( conn->videoPlane->videoFrameNext.fbId )
+      {
+         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->videoFrameNext.fbId, __LINE__);
+         drmModeRmFB( gCtx->drmFd, conn->videoPlane->videoFrameNext.fbId );
+         conn->videoPlane->videoFrameNext.fbId= 0;
+         conn->videoPlane->videoFrameNext.handle= 0;
+      }
+      if ( conn->videoPlane->fbId )
+      {
+         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbId, __LINE__);
+         drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbId );
+         conn->videoPlane->fbId= 0;
+         conn->videoPlane->handle= 0;
+      }
+      if ( conn->prevFrameFd >= 0 )
+      {
+         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd, __LINE__);
+         close( conn->prevFrameFd );
+         conn->prevFrameFd= -1;
+      }
+      pthread_mutex_unlock( &gCtx->mutex );
+
+      wstOverlayFree( &gCtx->overlayPlanes, conn->videoPlane );
+      conn->videoPlane= 0;
+   }
+
+   conn->threadStarted= false;
+
+   if ( !conn->threadStopRequested )
+   {
+      int i;
+      pthread_mutex_lock( &conn->server->mutex );
+      for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
+      {
+         if ( conn->server->connections[i] == conn )
+         {
+            conn->server->connections[i]= 0;
+            break;
+         }
+      }
+      pthread_mutex_unlock( &conn->server->mutex );
+
+      wstDestroyVideoServerConnection( conn );
+   }
+
+   DEBUG("wstVideoServerConnectionThread: exit");
+
+   return 0;
+}
+
+static VideoServerConnection *wstCreateVideoServerConnection( VideoServerCtx *server, int fd )
+{
+   VideoServerConnection *conn= 0;
+   int rc;
+   bool error= false;
+
+   conn= (VideoServerConnection*)calloc( 1, sizeof(VideoServerConnection) );
+   if ( conn )
+   {
+      pthread_mutex_init( &conn->mutex, 0 );
+      conn->socketFd= fd;
+      conn->server= server;
+      conn->prevFrameFd= -1;
+
+      rc= pthread_create( &conn->threadId, NULL, wstVideoServerConnectionThread, conn );
+      if ( rc )
+      {
+         ERROR("unable to start video connection thread: rc %d errno %d", rc, errno);
+         error= true;
+         goto exit;
+      }
+   }
+
+exit:
+
+   if ( error )
+   {
+      if ( conn )
+      {
+         pthread_mutex_destroy( &conn->mutex );
+         free( conn );
+         conn= 0;
+      }
+   }
+
+   return conn;
+}
+
+static void wstDestroyVideoServerConnection( VideoServerConnection *conn )
+{
+   if ( conn )
+   {
+      if ( conn->socketFd >= 0 )
+      {
+         shutdown( conn->socketFd, SHUT_RDWR );
+      }
+
+      if ( conn->socketFd >= 0 )
+      {
+         close( conn->socketFd );
+         conn->socketFd= -1;
+      }
+
+      if ( conn->threadStarted )
+      {
+         conn->threadStopRequested= true;
+         pthread_join( conn->threadId, NULL );
+      }
+
+      pthread_mutex_destroy( &conn->mutex );
+
+      free( conn );
+   }
+}
+
+static void *wstVideoServerThread( void *arg )
+{
+   int rc;
+   VideoServerCtx *server= (VideoServerCtx*)arg;
+
+   DEBUG("wstVideoServerThread: enter");
+   server->threadStarted= true;
+
+   while( !server->threadStopRequested )
+   {
+      int fd;
+      struct sockaddr_un addr;
+      socklen_t addrLen= sizeof(addr);
+
+      DEBUG("waiting for connections...");
+      fd= accept4( server->socketFd, (struct sockaddr *)&addr, &addrLen, SOCK_CLOEXEC );
+      if ( fd >= 0 )
+      {
+         VideoServerConnection *conn= 0;
+
+         DEBUG("video server received connection: fd %d", fd);
+
+         conn= wstCreateVideoServerConnection( server, fd );
+         if ( conn )
+         {
+            int i;
+            DEBUG("created video server connection %p for fd %d", conn, fd );
+            pthread_mutex_lock( &server->mutex );
+            for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
+            {
+               if ( conn->server->connections[i] == 0 )
+               {
+                  conn->server->connections[i]= conn;
+                  break;
+               }
+            }
+            if ( i >= MAX_VIDEO_CONNECTIONS )
+            {
+               ERROR("too many video connections");
+               wstDestroyVideoServerConnection( conn );
+            }
+            pthread_mutex_unlock( &server->mutex );
+         }
+         else
+         {
+            ERROR("failed to create video server connection for fd %d", fd);
+         }
+      }
+      else
+      {
+         usleep( 10000 );
+      }
+   }
+
+exit:
+   server->threadStarted= false;
+   DEBUG("wstVideoServerThread: exit");
+
+   return 0;
+}
+
+static bool wstInitVideoServer( VideoServerCtx *server )
+{
+   bool result= false;
+   const char *workingDir;
+   int rc, pathNameLen, addressSize;
+
+   pthread_mutex_init( &server->mutex, 0 );
+   server->socketFd= -1;
+   server->lockFd= -1;
+   server->name= "video";
+
+   ++server->refCnt;
+
+   workingDir= getenv("XDG_RUNTIME_DIR");
+   if ( !workingDir )
+   {
+      ERROR("wstInitVideoServer: XDG_RUNTIME_DIR is not set");
+      goto exit;
+   }
+
+   pathNameLen= strlen(workingDir)+strlen("/")+strlen(server->name)+1;
+   if ( pathNameLen > (int)sizeof(server->addr.sun_path) )
+   {
+      ERROR("wstInitVideoServer: name for server unix domain socket is too long: %d versus max %d",
+             pathNameLen, (int)sizeof(server->addr.sun_path) );
+      goto exit;
+   }
+
+   server->addr.sun_family= AF_LOCAL;
+   strcpy( server->addr.sun_path, workingDir );
+   strcat( server->addr.sun_path, "/" );
+   strcat( server->addr.sun_path, server->name );
+
+   strcpy( server->lock, server->addr.sun_path );
+   strcat( server->lock, ".lock" );
+
+   server->lockFd= open(server->lock,
+                        O_CREAT|O_CLOEXEC,
+                        S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
+   if ( server->lockFd < 0 )
+   {
+      ERROR("wstInitVideoServer: failed to create lock file (%s) errno %d", server->lock, errno );
+      goto exit;
+   }
+
+   rc= flock(server->lockFd, LOCK_NB|LOCK_EX );
+   if ( rc < 0 )
+   {
+      ERROR("wstInitVideoServer: failed to lock.  Is another server running with name %s ?", server->name );
+      goto exit;
+   }
+
+   (void)unlink(server->addr.sun_path);
+
+   server->socketFd= socket( PF_LOCAL, SOCK_STREAM|SOCK_CLOEXEC, 0 );
+   if ( server->socketFd < 0 )
+   {
+      ERROR("wstInitVideoServer: unable to open socket: errno %d", errno );
+      goto exit;
+   }
+
+   addressSize= pathNameLen + offsetof(struct sockaddr_un, sun_path);
+
+   rc= bind(server->socketFd, (struct sockaddr *)&server->addr, addressSize );
+   if ( rc < 0 )
+   {
+      ERROR("wstInitVideoServer: Error: bind failed for socket: errno %d", errno );
+      goto exit;
+   }
+
+   rc= listen(server->socketFd, 1);
+   if ( rc < 0 )
+   {
+      ERROR("wstInitVideoServer: Error: listen failed for socket: errno %d", errno );
+      goto exit;
+   }
+
+   rc= pthread_create( &server->threadId, NULL, wstVideoServerThread, server );
+   if ( rc )
+   {
+      ERROR("wstInitVideoServer: Error: unable to start server thread: rc %d errno %d", rc, errno);
+      goto exit;
+   }
+
+   result= true;
+
+exit:
+
+   return result;
+}
+
+static void wstTermVideoServer( VideoServerCtx *server )
+{
+   if ( server )
+   {
+      int i;
+
+      pthread_mutex_lock( &server->mutex );
+      if ( --server->refCnt > 0 )
+      {
+         pthread_mutex_unlock( &server->mutex );
+         return;
+      }
+
+      for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
+      {
+         VideoServerConnection *conn= server->connections[i];
+         if ( conn )
+         {
+            wstDestroyVideoServerConnection( conn );
+            server->connections[i]= 0;
+         }
+      }
+
+      if ( server->socketFd >= 0 )
+      {
+         shutdown( server->socketFd, SHUT_RDWR );
+      }
+
+      if ( server->threadStarted )
+      {
+         server->threadStopRequested= true;
+         pthread_join( server->threadId, NULL );
+      }
+
+      if ( server->socketFd >= 0 )
+      {
+         close(server->socketFd);
+         server->socketFd= -1;
+      }
+
+      if ( server->addr.sun_path )
+      {
+         (void)unlink( server->addr.sun_path );
+         server->addr.sun_path[0]= '\0';
+      }
+
+      if ( server->lockFd >= 0 )
+      {
+         close(server->lockFd);
+         server->lockFd= -1;
+      }
+
+      if ( server->lock[0] != '\0' )
+      {
+         (void)unlink( server->lock );
+         server->lock[0]= '\0';
+      }
+
+      pthread_mutex_unlock( &server->mutex );
+      pthread_mutex_destroy( &server->mutex );
+   }
+}
+
+static void wstGLNotifySizeListeners( void )
+{
+   int width, height;
+   WstGLSizeCBInfo *listeners= 0;
+   WstGLSizeCBInfo *iter, *cb;
+
+   pthread_mutex_lock( &gMutex );
+
+   width= gCtx->crtc->mode.hdisplay;
+   height= gCtx->crtc->mode.vdisplay;
+
+   iter= gSizeListeners;
+   while( iter )
+   {
+      if ( (width != iter->width) || (height != iter->height) )
+      {
+         iter->width= width;
+         iter->height= height;
+         cb= (WstGLSizeCBInfo*)malloc( sizeof(WstGLSizeCBInfo) );
+         if ( cb )
+         {
+            *cb= *iter;
+            cb->next= listeners;
+            listeners= cb;
+         }
+      }
+      iter= iter->next;
+   }
+
+   pthread_mutex_unlock( &gMutex );
+
+   iter= listeners;
+   while( iter )
+   {
+      cb= iter;
+      iter= iter->next;
+      cb->listener( cb->userData, width, height);
+      free( cb );
+   }
+}
+
+static WstGLCtx *wstInitCtx( void )
+{
+   WstGLCtx *ctx= 0;
+   drmModeRes *res= 0;
+   int i, j, len;
+   uint32_t n;
+   const char *card;
+   drmModeConnector *conn= 0;
+   drmModePlaneRes *planeRes= 0;
+   drmModePlane *plane= 0;
+   drmModeObjectProperties *props= 0;
+   drmModePropertyRes *prop= 0;
+   int crtc_idx= -1;
+   bool error= true;
+
+   if ( getenv("WESTEROS_GL_FPS" ) )
+   {
+      emitFPS= true;
+   }
+
+   card= getenv("WESTEROS_DRM_CARD");
+   if ( !card )
+   {
+      card= DEFAULT_CARD;
+   }
+
+   ctx= (WstGLCtx*)calloc( 1, sizeof(WstGLCtx) );
+   if ( ctx )
+   {
+      pthread_mutex_init( &ctx->mutex, 0 );
+      ctx->usePlanes= true;
+      ctx->drmFd= -1;
+      ctx->drmFd= open(card, O_RDWR);
+      if ( ctx->drmFd < 0 )
+      {
+         ERROR("wstInitCtx: failed to open card (%s)", card);
+         goto exit;
+      }
+      if ( getenv("WESTEROS_GL_NO_PLANES") )
+      {
+         INFO("westeros-gl: no planes");
+         ctx->usePlanes= false;
+      }
+      res= drmModeGetResources( ctx->drmFd );
+      if ( !res )
+      {
+         ERROR("wstInitCtx: failed to get resources from card (%s)", card);
+         goto exit;
+      }
+      for( i= 0; i < res->count_connectors; ++i )
+      {
+         conn= drmModeGetConnector( ctx->drmFd, res->connectors[i] );
+         if ( conn )
+         {
+            if ( conn->count_modes && (conn->connection == DRM_MODE_CONNECTED) )
+            {
+               break;
+            }
+            drmModeFreeConnector(conn);
+            conn= 0;
+         }
+      }
+      if ( !conn )
+      {
+         ERROR("wstInitCtx: unable to get connector for card (%s)", card);
+         goto exit;
+      }
+      ctx->res= res;
+      ctx->conn= conn;
+      ctx->gbm= gbm_create_device( ctx->drmFd );
+      if ( !ctx->gbm )
+      {
+         ERROR("wstInitCtx: unable to create gbm device for card (%s)", card);
+         goto exit;
+      }
+      for( i= 0; i < res->count_encoders; ++i )
+      {
+         ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[i]);
+         if ( ctx->enc && (ctx->enc->encoder_id == conn->encoder_id) )
+         {
+            break;
+         }
+         drmModeFreeEncoder( ctx->enc );
+         ctx->enc= 0;
+      }
+      if ( ctx->enc )
+      {
+         ctx->crtc= drmModeGetCrtc(ctx->drmFd, ctx->enc->crtc_id);
+         if ( ctx->crtc && ctx->crtc->mode_valid )
+         {
+            INFO("wstInitCtx: current mode %dx%d@%d", ctx->crtc->mode.hdisplay, ctx->crtc->mode.vdisplay, ctx->crtc->mode.vrefresh );
+
+            for( j= 0; j < res->count_crtcs; ++j )
+            {
+               drmModeCrtc *crtcTest= drmModeGetCrtc( ctx->drmFd, res->crtcs[j] );
+               if ( crtcTest )
+               {
+                  if ( crtcTest->crtc_id == ctx->enc->crtc_id )
+                  {
+                     crtc_idx= j;
+                  }
+                  drmModeFreeCrtc( crtcTest );
+                  if ( crtc_idx >= 0 )
+                  {
+                     break;
+                  }
+               }
+            }
+         }
+         else
+         {
+            ERROR("wstInitCtx: unable to determine current mode for connector %p on card %s", conn, card);
+            goto exit;
+         }
+      }
+      else
+      {
+         ERROR("wstInitCtx: unable to find encoder for connector for card (%s)", card);
+      }
+
+      if ( ctx->usePlanes && (crtc_idx >= 0) )
+      {
+         planeRes= drmModeGetPlaneResources( ctx->drmFd );
+         if ( planeRes )
+         {
+            bool isOverlay;
+
+            for( n= 0; n < planeRes->count_planes; ++n )
+            {
+               plane= drmModeGetPlane( ctx->drmFd, planeRes->planes[n] );
+               if ( plane )
+               {
+                  isOverlay= false;
+
+                  props= drmModeObjectGetProperties( ctx->drmFd, planeRes->planes[n], DRM_MODE_OBJECT_PLANE );
+                  if ( props )
+                  {
+                     for( j= 0; j < props->count_props; ++j )
+                     {
+                        prop= drmModeGetProperty( ctx->drmFd, props->props[j] );
+                        if ( prop )
+                        {
+                           int k,l;
+                           DEBUG("wstInitCtx: property %d name (%s)", props->props[j], prop->name );
+                           for( l= 0; l < prop->count_values; ++l )
+                           {
+                              DEBUG("  value %d (%lld)", l, props->prop_values[l] );
+                           }
+                           for( k= 0; k < prop->count_enums; ++k )
+                           {
+                              DEBUG("  enum name (%s) value %llu", prop->enums[k].name, prop->enums[k].value );
+                           }
+                           len= strlen(prop->name);
+                           if ( (len == 4) && !strncmp( prop->name, "type", len) )
+                           {
+                              if ( plane->possible_crtcs & (1<<crtc_idx) )
+                              {
+                                 isOverlay= true;
+                              }
+                           }
+                        }
+                     }
+                  }
+                  if ( isOverlay )
+                  {
+                     WstOverlayPlane *newPlane;
+                     newPlane= (WstOverlayPlane*)calloc( 1, sizeof(WstOverlayPlane) );
+                     if ( newPlane )
+                     {
+                        int rc;
+                        ++ctx->overlayPlanes.totalCount;
+                        newPlane->plane= plane;
+                        newPlane->zOrder= ctx->overlayPlanes.totalCount;
+                        newPlane->inUse= false;
+                        newPlane->crtc_id= ctx->enc->crtc_id;
+                        wstOverlayAppendUnused( &ctx->overlayPlanes, newPlane );
+
+                        plane= 0;
+                     }
+                  }
+                  if ( prop )
+                  {
+                     drmModeFreeProperty( prop );
+                  }
+                  if ( props )
+                  {
+                     drmModeFreeObjectProperties( props );
+                  }
+                  if ( plane )
+                  {
+                     drmModeFreePlane( plane );
+                     plane= 0;
+                  }
+               }
+               else
+               {
+                  ERROR("wstInitCtx: drmModeGetPlane failed: errno %d", errno);
+               }
+            }
+            drmModeFreePlaneResources( planeRes );
+         }
+         else
+         {
+            ERROR("wstInitCtx: drmModePlaneGetResoures failed: errno %d", errno );
+         }
+
+         INFO( "wstInitCtx; found %d overlay planes", ctx->overlayPlanes.totalCount );
+
+         gServer= (VideoServerCtx*)calloc( 1, sizeof(VideoServerCtx) );
+         if ( gServer )
+         {
+            if ( !wstInitVideoServer( gServer ) )
+            {
+               ERROR("wstInitCtx: failed to initialize video server");
+            }
+         }
+      }
+   }
+   else
+   {
+      ERROR("wstInitCtx: no memory for WstGLCtx");
+   }
+
+   error= false;
+
+exit:
+
+   if ( error )
+   {
+      wstTermCtx(ctx);
+      ctx= 0;
+   }
+
+   return ctx;
+}
+
+static void wstTermCtx( WstGLCtx *ctx )
+{
+   if ( ctx )
+   {
+      wstTermVideoServer( gServer );
+
+      if ( ctx->gbm )
+      {
+         gbm_device_destroy(ctx->gbm);
+         ctx->gbm= 0;
+      }
+      if ( ctx->crtc )
+      {
+         drmModeFreeCrtc(ctx->crtc);
+         ctx->crtc= 0;
+      }
+      if ( ctx->enc )
+      {
+         drmModeFreeEncoder(ctx->enc);
+         ctx->enc= 0;
+      }
+      if ( ctx->conn )
+      {
+         drmModeFreeConnector(ctx->conn);
+         ctx->conn= 0;
+      }
+      if ( ctx->res )
+      {
+         drmModeFreeResources(ctx->res);
+         ctx->res= 0;
+      }
+      if ( ctx->drmFd >= 0 )
+      {
+         close( ctx->drmFd );
+         ctx->drmFd= -1;
+      }
+      pthread_mutex_destroy( &ctx->mutex );
+      free( ctx );
+
+      pthread_mutex_lock( &resMutex );
+      if ( gResources )
+      {
+         free( gResources );
+         gResources= 0;
+      }
+      pthread_mutex_unlock( &resMutex );
+   }
+}
+
+static void pageFlipEventHandler(int fd, unsigned int frame,
+				 unsigned int sec, unsigned int usec,
+				 void *data)
+{
+   WstGLCtx *ctx= (WstGLCtx*)data;
+   if ( ctx->flipPending )
+   {
+      --ctx->flipPending;
+   }
+}
+
+static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
+{
+   struct gbm_surface* gs;
+   struct gbm_bo *bo;
+   uint32_t handle, stride;
+   fd_set fds;
+   drmEventContext ev;
+   drmModePlane *plane= 0;
+   int rc;
+   bool eventPending= false;
+
+   if ( nw )
+   {
+      gs= (struct gbm_surface*)nw->nativeWindow;
+      if ( gs )
+      {
+         bo= gbm_surface_lock_front_buffer(gs);
+         wstUpdateResources( WSTRES_BO_GRAPHICS, true, bo, __LINE__);
+
+         handle= gbm_bo_get_handle(bo).u32;
+         stride = gbm_bo_get_stride(bo);
+
+         if ( nw->handle != handle )
+         {
+            rc= drmModeAddFB( ctx->drmFd,
+                              ctx->modeInfo->hdisplay,
+                              ctx->modeInfo->vdisplay,
+                              32,
+                              32,
+                              stride,
+                              handle,
+                              &nw->fbId );
+             if ( rc )
+             {
+                ERROR("wstSwapDRMBuffers: drmModeAddFB rc %d errno %d", rc, errno);
+                goto exit;
+             }
+             wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
+             nw->handle= handle;
+         }
+
+         if ( !ctx->modeSet )
+         {
+            rc= drmModeSetCrtc( ctx->drmFd,
+                                ctx->enc->crtc_id,
+                                nw->fbId,
+                                0,
+                                0,
+                                &gCtx->conn->connector_id,
+                                1,
+                                gCtx->modeInfo );
+             if ( rc )
+             {
+                ERROR("wstSwapDRMBuffers: drmModeSetCrtc: rc %d errno %d", rc, errno);
+                goto exit;
+             }
+             ctx->modeSet= true;
+         }
+         else if ( nw->windowPlane )
+         {
+            FD_ZERO(&fds);
+            memset(&ev, 0, sizeof(ev));
+
+            rc= drmModePageFlip( ctx->drmFd,
+                                 ctx->enc->crtc_id,
+                                 0, //fbid
+                                 DRM_MODE_PAGE_FLIP_EVENT,
+                                 ctx );
+            if ( !rc )
+            {
+               ctx->flipPending++;
+               eventPending= true;
+            }
+
+            plane= nw->windowPlane->plane;
+            plane->crtc_id= ctx->enc->crtc_id;
+            rc= drmModeSetPlane( ctx->drmFd,
+                                 plane->plane_id,
+                                 plane->crtc_id,
+                                 nw->fbId,
+                                 0,
+                                 0, // plane x
+                                 0, // plane y
+                                 ctx->modeInfo->hdisplay,
+                                 ctx->modeInfo->vdisplay,
+                                 0, // fb rect x
+                                 0, // fb rect y
+                                 ctx->modeInfo->hdisplay<<16,
+                                 ctx->modeInfo->vdisplay<<16 );
+            if ( rc )
+            {
+               ERROR("wstSwapDRMBuffers: drmModeSetPlane rc %d errno %d", rc, errno );
+            }
+         }
+         else
+         {
+            FD_ZERO(&fds);
+            memset(&ev, 0, sizeof(ev));
+
+            rc= drmModePageFlip( ctx->drmFd,
+                                 ctx->enc->crtc_id,
+                                 nw->fbId,
+                                 DRM_MODE_PAGE_FLIP_EVENT,
+                                 ctx );
+            if ( !rc )
+            {
+               ctx->flipPending++;
+               eventPending= true;
+            }
+         }
+      }
+   }
+
+   if ( !nw )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+      if ( ctx->overlayPlanes.usedCount )
+      {
+         WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
+         while( iter )
+         {
+            if ( iter->fbIdPrev )
+            {
+               wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
+               drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
+               iter->fbIdPrev= 0;
+               iter->handlePrev= 0;
+            }
+
+            if ( iter->videoFrameNext.fbId )
+            {
+               uint32_t fbId= iter->videoFrameNext.fbId;
+               uint32_t handle= iter->videoFrameNext.handle;
+               uint32_t frameWidth= iter->videoFrameNext.frameWidth;
+               uint32_t frameHeight= iter->videoFrameNext.frameHeight;
+               int rectX= iter->videoFrameNext.rectX;
+               int rectY= iter->videoFrameNext.rectY;
+               int rectW= iter->videoFrameNext.rectW;
+               int rectH= iter->videoFrameNext.rectH;
+               uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
+
+               iter->fbIdPrev= iter->fbId;
+               iter->handlePrev= iter->handle;
+
+               iter->videoFrameNext.fbId= 0;
+               iter->videoFrameNext.hide= false;
+               iter->videoFrameNext.hidden= false;
+
+               sw= frameWidth;
+               sh= frameHeight;
+               dw= rectW;
+               dh= rectH;
+               sx= 0;
+               dx= rectX;
+               if ( rectX < 0 )
+               {
+                  sx= -rectX*frameWidth/rectW;
+                  sw -= sx;
+                  dx= 0;
+                  dw += rectX;
+               }
+               sy= 0;
+               dy= rectY;
+               if ( rectY < 0 )
+               {
+                  sy= -rectY*frameHeight/rectH;
+                  sh -= sy;
+                  dy= 0;
+                  dh += rectY;
+               }
+               TRACE3("%dx%d %d,%d,%d,%d : s(%d,%d,%d,%d) d(%d,%d,%d,%d)",
+                       frameWidth, frameHeight,
+                       rectX, rectY, rectW, rectH,
+                       sx, sy, sw, sh,
+                       dx, dy, dw, dh );
+               plane= iter->plane;
+               plane->crtc_id= ctx->enc->crtc_id;
+               rc= drmModeSetPlane( ctx->drmFd,
+                                    plane->plane_id,
+                                    plane->crtc_id,
+                                    fbId,
+                                    0,
+                                    dx,
+                                    dy,
+                                    dw,
+                                    dh,
+                                    sx<<16, // fb rect x
+                                    sy<<16, // fb rect y
+                                    sw<<16,
+                                    sh<<16 );
+               if ( !rc )
+               {
+                  iter->fbId= fbId;
+                  iter->handle= handle;
+               }
+               else
+               {
+                  wstUpdateResources( WSTRES_FB_VIDEO, false, fbId, __LINE__);
+                  drmModeRmFB( gCtx->drmFd, fbId );
+                  ERROR("wstSwapDRMBuffers: drmModeSetPlane rc %d errno %d", rc, errno );
+               }
+            }
+            else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
+            {
+               iter->fbIdPrev= iter->fbId;
+               iter->handlePrev= iter->handle;
+
+               plane= iter->plane;
+               plane->crtc_id= ctx->enc->crtc_id;
+               DEBUG("hiding video plane %d", iter->plane->plane_id);
+               rc= drmModeSetPlane( ctx->drmFd,
+                                    plane->plane_id,
+                                    plane->crtc_id,
+                                    0, // fbid
+                                    0, // flags
+                                    0, // plane x
+                                    0, // plane y
+                                    ctx->modeInfo->hdisplay,
+                                    ctx->modeInfo->vdisplay,
+                                    0, // fb rect x
+                                    0, // fb rect y
+                                    ctx->modeInfo->hdisplay<<16,
+                                    ctx->modeInfo->vdisplay<<16 );
+               if ( rc )
+               {
+                  ERROR("wstSwapDRMBuffers: hiding plane: drmModeSetPlane rc %d errno %d", rc, errno );
+               }
+               iter->fbId= 0;
+               iter->handle= 0;
+               iter->videoFrameNext.hidden= true;
+            }
+
+            iter= iter->next;
+         }
+      }
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   if ( eventPending )
+   {
+      ev.version= 2;
+      ev.page_flip_handler= pageFlipEventHandler;
+      FD_SET(0, &fds);
+      FD_SET(ctx->drmFd, &fds);
+      rc= select( ctx->drmFd+1, &fds, NULL, NULL, NULL );
+      if ( rc >= 0 )
+      {
+         if ( FD_ISSET(ctx->drmFd, &fds) )
+         {
+            drmHandleEvent(ctx->drmFd, &ev);
+         }
+      }
+   }
+
+   if ( nw )
+   {
+      if ( nw->prevBo )
+      {
+         wstUpdateResources( WSTRES_FB_GRAPHICS, false, nw->prevFbId, __LINE__);
+         drmModeRmFB( ctx->drmFd, nw->prevFbId );
+         wstUpdateResources( WSTRES_BO_GRAPHICS, false, nw->prevBo, __LINE__);
+         gbm_surface_release_buffer(gs, nw->prevBo);
+      }
+      nw->prevBo= bo;
+      nw->prevFbId= nw->fbId;
+
+      pthread_mutex_lock( &ctx->mutex );
+      if ( ctx->overlayPlanes.usedCount )
+      {
+         WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
+         while( iter )
+         {
+            if ( iter->videoFrameNext.hidden )
+            {
+               iter->videoFrameNext.hidden= false;
+               if ( iter->fbIdPrev )
+               {
+                  wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
+                  drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
+                  iter->fbIdPrev= 0;
+                  iter->handlePrev= 0;
+               }
+            }
+            iter= iter->next;
+         }
+      }
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   if ( emitFPS )
+   {
+      static int frameCount= 0;
+      static long long lastReportTime= -1LL;
+      struct timeval tv;
+      long long now;
+      gettimeofday(&tv,0);
+      now= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+      ++frameCount;
+      if ( lastReportTime == -1LL ) lastReportTime= now;
+      if ( now-lastReportTime > 5000 )
+      {
+         double fps= ((double)frameCount*1000)/((double)(now-lastReportTime));
+         printf("westeros_gl: fps %f\n", fps);
+         lastReportTime= now;
+         frameCount= 0;
+      }
+   }
+
+exit:
+
+   return;
+}
+
+EGLAPI EGLDisplay EGLAPIENTRY eglGetDisplay(EGLNativeDisplayType displayId)
+{
+   EGLDisplay eglDisplay= EGL_NO_DISPLAY;
+
+   DEBUG("westeros-gl: eglGetDisplay: enter: displayId %x", displayId);
+
+   if ( !gCtx )
+   {
+      gCtx= WstGLInit();
+   }
+
+   if ( !gRealEGLGetDisplay )
+   {
+      ERROR("westeros-gl: eglGetDisplay: failed linkage to underlying EGL impl" );
+      goto exit;
+   }
+
+   if ( displayId == EGL_DEFAULT_DISPLAY )
+   {
+      if ( gCtx->gbm )
+      {
+         gCtx->dpy = gRealEGLGetDisplay( (NativeDisplayType)gCtx->gbm );
+      }
+   }
+   else
+   {
+      gCtx->dpy = gRealEGLGetDisplay(displayId);
+   }
+
+   if ( gCtx->dpy )
+   {
+      eglDisplay= gCtx->dpy;
+   }
+
+exit:
+
+   return eglDisplay;
+}
+
+EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig config,
+                                                      EGLNativeWindowType win,
+                                                      const EGLint *attrib_list )
+{
+   EGLSurface eglSurface= EGL_NO_SURFACE;
+
+   if ( gRealEGLCreateWindowSurface )
+   {
+      eglSurface= gRealEGLCreateWindowSurface( dpy, config, win, attrib_list );
+      if ( eglSurface != EGL_NO_SURFACE )
+      {
+         pthread_mutex_lock( &gMutex );
+         if ( gCtx )
+         {
+            NativeWindowItem *nwIter= gCtx->nwFirst;
+            while( nwIter )
+            {
+               if ( nwIter->nativeWindow == win )
+               {
+                  nwIter->surface= eglSurface;
+                  break;
+               }
+               nwIter= nwIter->next;
+            }
+         }
+         pthread_mutex_unlock( &gMutex );
+      }
+   }
+
+exit:
+
+   return eglSurface;
+}
+
+EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
+{
+   EGLBoolean result= EGL_FALSE;
+   NativeWindowItem *nwIter;
+
+   if ( gRealEGLSwapBuffers )
+   {
+      result= gRealEGLSwapBuffers( dpy, surface );
+      if ( EGL_TRUE == result )
+      {
+         pthread_mutex_lock( &gMutex );
+         if ( gCtx )
+         {
+            nwIter= gCtx->nwFirst;
+            while( nwIter )
+            {
+               if ( nwIter->surface == surface )
+               {
+                  wstSwapDRMBuffers( gCtx, nwIter );
+                  break;
+               }
+               nwIter= nwIter->next;
+           }
+         }
+         pthread_mutex_unlock( &gMutex );
+      }
+   }
+
+exit:
+
+   return result;
+}
+
+WstGLCtx* WstGLInit()
+{
+   WstGLCtx *ctx= 0;
+
+   const char *env= getenv( "WESTEROS_GL_DEBUG" );
+   if ( env )
+   {
+      int level= atoi( env );
+      g_activeLevel= level;
+   }
+
+   /*
+    *  Establish the overloading of a subset of EGL methods
+    */
+   if ( !gRealEGLGetDisplay )
+   {
+      gRealEGLGetDisplay= (PREALEGLGETDISPLAY)dlsym( RTLD_NEXT, "eglGetDisplay" );
+      DEBUG("westeros-gl: wstGLInit: realEGLGetDisplay=%p", (void*)gRealEGLGetDisplay );
+      if ( !gRealEGLGetDisplay )
+      {
+         ERROR("westeros-gl: wstGLInit: unable to resolve eglGetDisplay");
+         goto exit;
+      }
+   }
+
+   if ( !gRealEGLCreateWindowSurface )
+   {
+      gRealEGLCreateWindowSurface= (PREALEGLCREATEWINDOWSURFACE)dlsym( RTLD_NEXT, "eglCreateWindowSurface" );
+      DEBUG("westeros-gl: wstGLInit: realEGLCreateWindowSurface=%p", (void*)gRealEGLCreateWindowSurface );
+      if ( !gRealEGLCreateWindowSurface )
+      {
+         ERROR("westeros-gl: wstGLInit: unable to resolve eglCreateWindowSurface");
+         goto exit;
+      }
+   }
+
+   if ( !gRealEGLSwapBuffers )
+   {
+      gRealEGLSwapBuffers= (PREALEGLSWAPBUFFERS)dlsym( RTLD_NEXT, "eglSwapBuffers" );
+      DEBUG("westeros-gl: wstGLInit: realEGLSwapBuffers=%p", (void*)gRealEGLSwapBuffers );
+      if ( !gRealEGLSwapBuffers )
+      {
+         ERROR("westeros-gl: eglSwapBuffers: unable to resolve eglSwapBuffers");
+         goto exit;
+      }
+   }
+
+   pthread_mutex_lock( &gMutex );
+   if( gCtx != NULL )
+   {
+      ++gCtx->refCnt;
+      ctx= gCtx;
+   }
+   if ( !ctx )
+   {
+      ctx= wstInitCtx();
+      if ( ctx )
+      {
+         gCtx= ctx;
+      }
+   }
+   pthread_mutex_unlock( &gMutex );
+
+exit:
+
+   return ctx;
+}
+
+void WstGLTerm( WstGLCtx *ctx )
+{
+   if ( ctx )
+   {
+      pthread_mutex_lock( &gMutex );
+      if ( ctx != gCtx )
+      {
+         ERROR("westeros-gl: WstGLTerm: bad ctx %p, should be %p", ctx, gCtx );
+         pthread_mutex_unlock( &gMutex );
+         return;
+      }
+
+      --ctx->refCnt;
+      if ( ctx->refCnt <= 0 )
+      {
+         wstTermCtx( ctx );
+
+         gCtx= 0;
+      }
+      pthread_mutex_unlock( &gMutex );
+   }
+}
+
+bool _WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
+{
+   return WstGLGetDisplayInfo( ctx, displayInfo );
+}
+
+bool _WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h )
+{
+   return WstGLGetDisplaySafeArea( ctx, x, y, w, h );
+}
+
+bool _WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener )
+{
+   return WstGLAddDisplaySizeListener( ctx, userData, listener );
+}
+
+bool _WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback listener )
+{
+   return WstGLRemoveDisplaySizeListener( ctx, listener );
+}
+
+bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
+{
+   bool result= false;
+
+   if ( ctx && displayInfo )
+   {
+      pthread_mutex_lock( &gMutex );
+
+      displayInfo->width= ctx->crtc->mode.hdisplay;
+      displayInfo->height= ctx->crtc->mode.vdisplay;
+
+      /* Use the SMPTE ST 2046-1 5% safe area border */
+      displayInfo->safeArea.x= displayInfo->width*DISPLAY_SAFE_BORDER_PERCENT/100;
+      displayInfo->safeArea.y= displayInfo->height*DISPLAY_SAFE_BORDER_PERCENT/100;
+      displayInfo->safeArea.w= displayInfo->width - 2*displayInfo->safeArea.x;
+      displayInfo->safeArea.h= displayInfo->height - 2*displayInfo->safeArea.y;
+
+      result= true;
+
+      pthread_mutex_unlock( &gMutex );
+   }
+
+   return result;
+}
+
+bool WstGLGetDisplaySafeArea( WstGLCtx *ctx, int *x, int *y, int *w, int *h )
+{
+   bool result= false;
+   WstGLDisplayInfo di;
+
+   if ( ctx && x && y && w && h )
+   {
+      if ( WstGLGetDisplayInfo( ctx, &di ) )
+      {
+         *x= di.safeArea.x;
+         *y= di.safeArea.y;
+         *w= di.safeArea.w;
+         *h= di.safeArea.h;
+
+         result= true;
+      }
+   }
+
+   return result;
+}
+
+bool WstGLAddDisplaySizeListener( WstGLCtx *ctx, void *userData, WstGLDisplaySizeCallback listener )
+{
+   bool result= false;
+   bool found= false;
+
+   if ( ctx )
+   {
+      WstGLSizeCBInfo *iter, *prev;
+
+      pthread_mutex_lock( &gMutex );
+      prev= 0;
+      iter= gSizeListeners;
+      while ( iter )
+      {
+         if ( iter->listener == listener )
+         {
+            found= true;
+            break;
+         }
+         prev= iter;
+         iter= iter->next;
+      }
+      if ( !found )
+      {
+         WstGLSizeCBInfo *newInfo= (WstGLSizeCBInfo*)calloc( 1, sizeof(WstGLSizeCBInfo) );
+         if ( newInfo )
+         {
+            newInfo->ctx= ctx;
+            newInfo->userData= userData;
+            newInfo->listener= listener;
+            newInfo->width= 0;
+            newInfo->height= 0;
+
+            if ( prev )
+            {
+               prev->next= newInfo;
+            }
+            else
+            {
+               gSizeListeners= newInfo;
+            }
+
+            result= true;
+         }
+         else
+         {
+            ERROR("No memory for new display size listener");
+         }
+      }
+      pthread_mutex_unlock( &gMutex );
+   }
+
+   if ( result )
+   {
+      wstGLNotifySizeListeners();
+   }
+
+   return result;
+}
+
+bool WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback listener )
+{
+   bool result= false;
+   bool found= false;
+
+   if ( ctx )
+   {
+      WstGLSizeCBInfo *iter, *prev;
+
+      pthread_mutex_lock( &gMutex );
+
+      prev= 0;
+      iter= gSizeListeners;
+      while ( iter )
+      {
+         if ( iter->listener == listener )
+         {
+            found= true;
+            if ( prev )
+            {
+               prev->next= iter->next;
+            }
+            else
+            {
+               gSizeListeners= iter->next;
+            }
+            free( iter );
+            break;
+         }
+         prev= iter;
+         iter= iter->next;
+      }
+
+      if ( found )
+      {
+         result= true;
+      }
+
+      pthread_mutex_unlock( &gMutex );
+   }
+
+   return result;
+}
+
+void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int height )
+{
+   void *nativeWindow= 0;
+   NativeWindowItem *nwItem= 0;
+
+   if ( ctx )
+   {
+      bool found= false;
+      int i;
+      for( i= 0; i < ctx->conn->count_modes; ++i )
+      {
+         if ( (ctx->conn->modes[i].hdisplay == width) &&
+              (ctx->conn->modes[i].vdisplay == height) &&
+              (ctx->conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
+         {
+            found= true;
+            ctx->modeInfo= &ctx->conn->modes[i];
+            break;
+         }
+      }
+      if ( !found )
+      {
+         ctx->modeInfo= &ctx->conn->modes[0];
+      }
+
+      nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
+      if ( nwItem )
+      {
+         nativeWindow= gbm_surface_create(ctx->gbm,
+                                          width, height,
+                                          GBM_FORMAT_ARGB8888,
+                                          GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING );
+         if ( nativeWindow )
+         {
+            nwItem->nativeWindow= nativeWindow;
+
+            nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
+            INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
+
+            pthread_mutex_lock( &gMutex );
+            if ( ctx->nwFirst )
+            {
+               nwItem->next= ctx->nwFirst;
+               ctx->nwFirst= nwItem;
+            }
+            else
+            {
+               ctx->nwFirst= ctx->nwLast= nwItem;
+            }
+            pthread_mutex_unlock( &gMutex );
+         }
+      }
+   }
+
+   return nativeWindow;
+}
+
+void WstGLDestroyNativeWindow( WstGLCtx *ctx, void *nativeWindow )
+{
+   if ( ctx )
+   {
+      NativeWindowItem *nwIter, *nwPrev;
+
+      struct gbm_surface *gs= (struct gbm_surface*)nativeWindow;
+      if ( gs )
+      {
+         pthread_mutex_lock( &gMutex );
+         nwPrev= 0;
+         nwIter= ctx->nwFirst;
+         while ( nwIter )
+         {
+            if ( nwIter->nativeWindow == nativeWindow )
+            {
+               if ( nwIter->prevBo )
+               {
+                  gbm_surface_release_buffer(gs, nwIter->prevBo);
+                  drmModeRmFB( ctx->drmFd, nwIter->prevFbId );
+                  nwIter->prevBo= 0;
+                  nwIter->prevFbId= 0;
+               }
+               nwIter->nativeWindow= 0;
+               if ( nwIter->windowPlane )
+               {
+                  wstOverlayFree( &ctx->overlayPlanes, nwIter->windowPlane );
+               }
+               if ( nwPrev )
+               {
+                  nwPrev->next= nwIter->next;
+               }
+               else
+               {
+                  ctx->nwFirst= nwIter->next;
+               }
+               if ( !nwIter->next )
+               {
+                  ctx->nwLast= nwPrev;
+               }
+               free( nwIter );
+               if ( !ctx->nwFirst )
+               {
+                  ctx->modeSet= false;
+               }
+               break;
+            }
+            else
+            {
+               nwPrev= nwIter;
+            }
+            nwIter= nwIter->next;
+         }
+         pthread_mutex_unlock( &gMutex );
+
+         gbm_surface_destroy( gs );
+      }
+   }
+}
+
+bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixmap )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      /* Not yet required */
+   }
+
+   return result;
+}
+
+void WstGLGetNativePixmapDimensions( WstGLCtx *ctx, void *nativePixmap, int *width, int *height )
+{
+   if ( ctx )
+   {
+      /* Not yet required */
+   }
+}
+
+void WstGLReleaseNativePixmap( WstGLCtx *ctx, void *nativePixmap )
+{
+   if ( ctx )
+   {
+      /* Not yet required */
+   }
+}
+
+void* WstGLGetEGLNativePixmap( WstGLCtx *ctx, void *nativePixmap )
+{
+   void* eglPixmap= 0;
+
+   if ( nativePixmap )
+   {
+      /* Not yet required */
+   }
+
+   return eglPixmap;
+}
+
+#endif
+
+#ifdef WESTEROS_GL_NO_PLANES
 #include <dlfcn.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -91,6 +2232,11 @@ typedef struct _WstGLCtx
    EGLConfig config;
    NativeWindowItem *nwFirst;
    NativeWindowItem *nwLast;
+   uint32_t handle;
+   uint32_t fbId;
+   int flipPending;
+   struct gbm_bo *prevBo;
+   uint32_t prevFbId;
 } WstGLCtx;
 
 #ifdef EMIT_FRAMERATE
@@ -344,7 +2490,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
          nativeWindow= gbm_surface_create(ctx->gbm, 
                                           width, 
                                           height,
-                                          GBM_FORMAT_XRGB8888,
+                                          GBM_FORMAT_ARGB8888,
                                           GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
          if ( nativeWindow )
          {
@@ -417,7 +2563,7 @@ bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixma
    bo= gbm_bo_create( ctx->gbm, 
                       ctx->modeInfo->hdisplay, 
                       ctx->modeInfo->vdisplay,
-                      GBM_FORMAT_XRGB8888, 
+                      GBM_FORMAT_ARGB8888, 
                       GBM_BO_USE_RENDERING | GBM_BO_USE_SCANOUT );
 
    if( bo )
@@ -486,6 +2632,7 @@ static void swapDRMBuffers(void* nativeBuffer)
    struct gbm_surface* surface;
    struct gbm_bo *bo;
    static struct gbm_bo *previousBO = NULL;
+   static uint32_t previousFbId= 0;
    uint32_t handle, stride;
    GbmCtx *gbmCtx= 0;
    int fb_id;
@@ -528,14 +2675,15 @@ static void swapDRMBuffers(void* nativeBuffer)
 
             if ( gbmCtx )
             {
-               /* buffering logic change to fix: very minor lines observed in video occasionally. Releasing the current bo when it's                   fb is with display can cause glitches. */
+               /* buffering logic change to fix: very minor lines observed in video occasionally. Releasing the current bo when it's
+                  fb is with display can cause glitches. */
                if ( gbmCtx->handle != handle )
                {
                   /**
-                   * TODO: Support different buffer types. Currently hardcoded to 24bpp
+                   * TODO: Support different buffer types. Currently hardcoded to 32bpp
                    */
                   ret= drmModeAddFB( g_wstCtx->drmFd, g_wstCtx->modeInfo->hdisplay, g_wstCtx->modeInfo->vdisplay,
-                                     24, 32, stride, handle, &fb_id );
+                                     32, 32, stride, handle, &fb_id );
                   if ( ret )
                   {
                      printf( "westeros_gl: WstGLSwapBuffers: drmModeAddFB error: %d errno %d\n", ret, errno );
@@ -553,7 +2701,7 @@ static void swapDRMBuffers(void* nativeBuffer)
 
             #ifdef USE_PAGEFLIP
             FD_ZERO(&fds);
-	    memset(&ev, 0, sizeof(ev));
+            memset(&ev, 0, sizeof(ev));
 
             if ( !g_wstCtx->modeSet )
             {
@@ -568,7 +2716,7 @@ static void swapDRMBuffers(void* nativeBuffer)
             }
             else
             {
-	       ret= drmModePageFlip( g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, DRM_MODE_PAGE_FLIP_EVENT, g_wstCtx );
+               ret= drmModePageFlip( g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, DRM_MODE_PAGE_FLIP_EVENT, g_wstCtx );
                if ( ret )
                {
                   #ifdef VERBOSE_DEBUG
@@ -577,19 +2725,19 @@ static void swapDRMBuffers(void* nativeBuffer)
                }
 
                pageflip_pending++;
-	       ev.version = 2;
-	       ev.page_flip_handler = page_flip_event_handler;
-	       FD_SET(0, &fds);
-	       FD_SET(g_wstCtx->drmFd, &fds);
+               ev.version = 2;
+               ev.page_flip_handler = page_flip_event_handler;
+               FD_SET(0, &fds);
+               FD_SET(g_wstCtx->drmFd, &fds);
 
                /* handling pageflip event */
-	       ret = select(g_wstCtx->drmFd + 1, &fds, NULL, NULL, NULL);
-	       if (ret < 0) {
-			fprintf(stderr, "select() failed with %d: %m\n", errno);
-	       }
-	       else if (FD_ISSET(g_wstCtx->drmFd, &fds)) {
-			drmHandleEvent(g_wstCtx->drmFd, &ev);
-	       }
+               ret = select(g_wstCtx->drmFd + 1, &fds, NULL, NULL, NULL);
+               if (ret < 0) {
+                  fprintf(stderr, "select() failed with %d: %m\n", errno);
+               }
+               else if (FD_ISSET(g_wstCtx->drmFd, &fds)) {
+                  drmHandleEvent(g_wstCtx->drmFd, &ev);
+               }
             }
             #else
             ret = drmModeSetCrtc(g_wstCtx->drmFd, g_wstCtx->drmEncoder->crtc_id, fb_id, 0, 0,
@@ -622,16 +2770,17 @@ static void swapDRMBuffers(void* nativeBuffer)
             }
             #endif
 
-         /* releasing previous bo safetly as current bo is already set to display controller */
-         if (previousBO)
-         {
-            gbm_surface_release_buffer(surface, previousBO);
-         }
-         previousBO=bo;
+            /* releasing previous bo safetly as current bo is already set to display controller */
+            if (previousBO)
+            {
+               gbm_surface_release_buffer(surface, previousBO);
+            }
+            previousBO=bo;
+            previousFbId= fb_id;
          }
 
          #ifndef USE_PAGEFLIP
-	 /* release the used buffer to gbm surface if no free buffer is available */
+         /* release the used buffer to gbm surface if no free buffer is available */
          if(!gbm_surface_has_free_buffers(surface))
          {
                 gbm_surface_release_buffer(surface, bo);
@@ -896,4 +3045,4 @@ static void destroyGbmCtx( struct gbm_bo *bo, void *userData )
       free( gbmCtx );
    }
 }
-
+#endif
