@@ -61,6 +61,8 @@ init:
 	cd brcm/westeros-sink && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
 	rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda
 	rm -f *.o && rm -f *.lo && rm -f .libs/*
+	rm -f .simplebuffer
+	rm -f .simpleshell
 	rm -f .brcm-em
 	rm -f external/install/include/vpc*.h	
 	
