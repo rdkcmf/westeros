@@ -231,6 +231,10 @@ TESTCASE genericTests[]=
      "Test Essos display safe area change notification with Wayland",
      testCaseEssosDisplaySafeAreaChangeWayland
    },
+   { "testEssosKeyboardBasicKeyInputWayland",
+     "Test Essos key events with Wayland",
+     testCaseEssosKeyboardBasicKeyInputWayland
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition
