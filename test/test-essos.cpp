@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <linux/input.h>
 
 #include "test-essos.h"
 
@@ -1365,6 +1366,7 @@ bool testCaseEssosDisplaySizeChange( EMCTX *emctx )
       EMERROR("EssSettingsListener not called on startup");
       goto exit;
    }
+   settingsInfo.wasCalled= false;
 
    if ( (settingsInfo.width != displayWidth) ||
         (settingsInfo.height != displayHeight) )
@@ -1398,6 +1400,7 @@ bool testCaseEssosDisplaySizeChange( EMCTX *emctx )
          EMERROR("EssSettingsListener not called");
          goto exit;
       }
+      settingsInfo.wasCalled= false;
 
       if ( (settingsInfo.width != displayWidth) ||
            (settingsInfo.height != displayHeight) )
@@ -1512,6 +1515,7 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
       EMERROR("EssSettingsListener not called on startup");
       goto exit;
    }
+   settingsInfo.wasCalled= false;
 
    safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
    safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
@@ -1552,6 +1556,7 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
          EMERROR("EssSettingsListener not called");
          goto exit;
       }
+      settingsInfo.wasCalled= false;
 
       safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
       safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
@@ -1678,6 +1683,7 @@ bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx )
       EMERROR("EssSettingsListener not called on startup");
       goto exit;
    }
+   settingsInfo.wasCalled= false;
 
    if ( (settingsInfo.width != displayWidth) ||
         (settingsInfo.height != displayHeight) )
@@ -1716,6 +1722,7 @@ bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx )
          EMERROR("EssSettingsListener not called");
          goto exit;
       }
+      settingsInfo.wasCalled= false;
 
       if ( (settingsInfo.width != displayWidth) ||
            (settingsInfo.height != displayHeight) )
@@ -1840,6 +1847,7 @@ bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx )
       EMERROR("EssSettingsListener not called on startup");
       goto exit;
    }
+   settingsInfo.wasCalled= false;
 
    safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
    safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
@@ -1885,6 +1893,7 @@ bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx )
          EMERROR("EssSettingsListener not called");
          goto exit;
       }
+      settingsInfo.wasCalled= false;
 
       safeX= displayWidth*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
       safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
@@ -1903,6 +1912,280 @@ bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx )
 
       ++targetIndex;
    }
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   EssContextDestroy( ctx );
+
+   WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
+namespace BasicKeyInput
+{
+
+typedef struct _TestCtx
+{
+   bool wasCalled;
+   bool keyAlt;
+   bool keyCtrl;
+   bool keyShift;
+   bool keyCaps;
+   int keyPressed;
+} TestCtx;
+
+static void keyPressed( void *userData, unsigned int key )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->keyPressed= key;
+   switch( key )
+   {
+      case KEY_RIGHTSHIFT:
+      case KEY_LEFTSHIFT:
+         testCtx->keyShift= true;
+         break;
+      case KEY_RIGHTALT:
+      case KEY_LEFTALT:
+         testCtx->keyAlt= true;
+         break;
+      case KEY_RIGHTCTRL:
+      case KEY_LEFTCTRL:
+         testCtx->keyCtrl= true;
+         break;
+      case KEY_CAPSLOCK:
+         testCtx->keyCaps= !testCtx->keyCaps;
+         break;
+      default:
+         break;
+   }
+}
+
+static void keyReleased( void *userData, unsigned int key )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->keyPressed= 0;
+   switch( key )
+   {
+      case KEY_RIGHTSHIFT:
+      case KEY_LEFTSHIFT:
+         testCtx->keyShift= false;
+         break;
+      case KEY_RIGHTALT:
+      case KEY_LEFTALT:
+         testCtx->keyAlt= false;
+         break;
+      case KEY_RIGHTCTRL:
+      case KEY_LEFTCTRL:
+         testCtx->keyCtrl= false;
+         break;
+      case KEY_CAPSLOCK:
+         // Nothing to do
+         break;
+      default:
+         break;
+   }
+}
+
+static EssKeyListener keyListener=
+{
+   keyPressed,
+   keyReleased
+};
+
+};
+
+bool testCaseEssosKeyboardBasicKeyInputWayland( EMCTX *emctx )
+{
+   using namespace BasicKeyInput;
+
+   bool testResult= false;
+   bool result;
+   WstCompositor *wctx= 0;
+   const char *displayName= "test0";
+   EssCtx *ctx= 0;
+   TestCtx tCtx;
+   TestCtx *testCtx= &tCtx;
+
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextSetKeyListener( ctx, testCtx, &keyListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetKeyListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   WstCompositorKeyEvent( wctx,  KEY_A, WstKeyboard_keyState_depressed, 0 );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssKeyListener not called");
+      goto exit;
+   }
+   testCtx->wasCalled= false;
+
+   if ( (testCtx->keyPressed != KEY_A) ||
+        (testCtx->keyAlt || testCtx->keyCtrl || testCtx->keyShift || testCtx->keyCaps )
+      )
+   {
+      EMERROR("Did not get expected key event: expected/actual: key %d/%d alt 0/%d ctrl 0/%d shift 0/%d caps 0/%d",
+              KEY_A, testCtx->keyPressed, testCtx->keyAlt, testCtx->keyCtrl, testCtx->keyShift, testCtx->keyCaps);
+      goto exit;
+   }
+
+   WstCompositorKeyEvent( wctx,  KEY_A, WstKeyboard_keyState_released, 0 );
+   WstCompositorKeyEvent( wctx,  KEY_B, WstKeyboard_keyState_depressed, WstKeyboard_shift );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssKeyListener not called");
+      goto exit;
+   }
+   testCtx->wasCalled= false;
+
+   if ( (testCtx->keyPressed != KEY_B) ||
+        (testCtx->keyAlt || testCtx->keyCtrl || !testCtx->keyShift || testCtx->keyCaps )
+      )
+   {
+      EMERROR("Did not get expected key event: expected/actual: key %d/%d alt 0/%d ctrl 0/%d shift 1/%d caps 0/%d",
+              KEY_B, testCtx->keyPressed, testCtx->keyAlt, testCtx->keyCtrl, testCtx->keyShift, testCtx->keyCaps);
+      goto exit;
+   }
+
+   WstCompositorKeyEvent( wctx,  KEY_B, WstKeyboard_keyState_released, 0 );
+   WstCompositorKeyEvent( wctx,  KEY_C, WstKeyboard_keyState_depressed, WstKeyboard_alt );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssKeyListener not called");
+      goto exit;
+   }
+   testCtx->wasCalled= false;
+
+   if ( (testCtx->keyPressed != KEY_C) ||
+        (!testCtx->keyAlt || testCtx->keyCtrl || testCtx->keyShift || testCtx->keyCaps )
+      )
+   {
+      EMERROR("Did not get expected key event: expected/actual: key %d/%d alt 1/%d ctrl 0/%d shift 0/%d caps 0/%d",
+              KEY_C, testCtx->keyPressed, testCtx->keyAlt, testCtx->keyCtrl, testCtx->keyShift, testCtx->keyCaps);
+      goto exit;
+   }
+
+   WstCompositorKeyEvent( wctx,  KEY_C, WstKeyboard_keyState_released, 0 );
+   WstCompositorKeyEvent( wctx,  KEY_D, WstKeyboard_keyState_depressed, WstKeyboard_ctrl|WstKeyboard_caps );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssKeyListener not called");
+      goto exit;
+   }
+   testCtx->wasCalled= false;
+
+   if ( (testCtx->keyPressed != KEY_D) ||
+        (testCtx->keyAlt || !testCtx->keyCtrl || testCtx->keyShift || !testCtx->keyCaps )
+      )
+   {
+      EMERROR("Did not get expected key event: expected/actual: key %d/%d alt 0/%d ctrl 1/%d shift 0/%d caps 1/%d",
+              KEY_D, testCtx->keyPressed, testCtx->keyAlt, testCtx->keyCtrl, testCtx->keyShift, testCtx->keyCaps);
+      goto exit;
+   }
+
+   WstCompositorKeyEvent( wctx,  KEY_D, WstKeyboard_keyState_released, 0 );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssKeyListener not called");
+      goto exit;
+   }
+   testCtx->wasCalled= false;
 
    testResult= true;
 
