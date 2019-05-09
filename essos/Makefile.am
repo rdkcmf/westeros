@@ -41,6 +41,10 @@ endif
 endif
 endif
 
+if HAVE_EGL
+libessos_la_CXXFLAGS += ${EGL_CFLAGS}
+endif
+
 libessos_la_CXXFLAGS += -DHAVE_WESTEROS $(WESTEROS_CFLAGS)
 libessos_la_LDFLAGS += -lwesteros_gl -lwesteros_simpleshell_client
 
