@@ -34,6 +34,7 @@ typedef struct _WstGLDisplayInfo
    int width;
    int height;
    WstGLDisplaySafeArea safeArea;
+   bool secureGraphics;
 } WstGLDisplayInfo;
 
 typedef void (*WstGLDisplaySizeCallback)( void *userData, int width, int height );

@@ -29,6 +29,9 @@
 #include "nexus_config.h"
 #include "nexus_platform.h"
 #include "nexus_display.h"
+#if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+#include "nexus_video_decoder.h"
+#endif
 #include "default_nexus.h"
 #include "nxclient.h"
 
@@ -54,6 +57,7 @@ typedef struct _WstGLCtx
    NEXUS_Graphics2DHandle gfx;
    bool gfxEventCreated;
    BKNI_EventHandle gfxEvent;
+   bool secureGraphics;
 } WstGLCtx;
 
 typedef struct _WstGLDisplayCtx
@@ -78,6 +82,25 @@ static int ctxCount= 0;
 static pthread_mutex_t g_mutex= PTHREAD_MUTEX_INITIALIZER;
 static WstGLDisplayCtx *gDisplayCtx= 0;
 static std::vector<WstGLSizeCBInfo> gSizeListeners;
+
+static bool useSecureGraphics( void )
+{
+   bool useSecure= false;
+
+   #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+   char *env= getenv("WESTEROS_SECURE_GRAPHICS");
+   if ( env && atoi(env) )
+   {
+      NEXUS_VideoDecoderCapabilities videoDecoderCap;
+      NEXUS_GetVideoDecoderCapabilities(&videoDecoderCap);
+      useSecure=  (videoDecoderCap.memory[0].secure != NEXUS_SecureVideo_eUnsecure) ? true : false;
+   }
+   #endif
+
+   setenv("WESTEROS_RENDER_PROTECTED_CONTENT", (useSecure ?  "1" : "0"), 1);
+
+   return useSecure;
+}
 
 static void gfxCheckPoint( void *data, int unused )
 {
@@ -151,6 +174,7 @@ WstGLCtx* WstGLInit()
    WstGLCtx *ctx= 0;
    NEXUS_Error rc= NEXUS_SUCCESS;
    NxClient_JoinSettings joinSettings;
+   NEXUS_Graphics2DOpenSettings gfxOpenSettings;
 
    ctx= (WstGLCtx*)calloc( 1, sizeof(WstGLCtx) );
    if ( ctx )
@@ -206,7 +230,25 @@ WstGLCtx* WstGLInit()
       BKNI_CreateEvent( &ctx->gfxEvent );
       ctx->gfxEventCreated= true;
       
-      ctx->gfx= NEXUS_Graphics2D_Open(NEXUS_ANY_ID, NULL);
+      ctx->secureGraphics= useSecureGraphics();
+      printf("WstGLInit: secure graphics: %d\n", ctx->secureGraphics);
+      if ( ctx->secureGraphics )
+      {
+         NxClient_DisplaySettings displaySettings;
+
+         NxClient_GetDisplaySettings( &displaySettings );
+         displaySettings.secure= ctx->secureGraphics;
+         rc= NxClient_SetDisplaySettings( &displaySettings );
+         if ( rc != NEXUS_SUCCESS )
+         {
+            printf("WstGLInit: NxClient_SetDisplaySettings failed: rc=%X\n", rc);
+         }
+      }
+
+      NEXUS_Graphics2D_GetDefaultOpenSettings(&gfxOpenSettings);
+      gfxOpenSettings.secure= ctx->secureGraphics;
+
+      ctx->gfx= NEXUS_Graphics2D_Open(NEXUS_ANY_ID, &gfxOpenSettings);
       if ( ctx->gfx )
       {
          NEXUS_Graphics2DSettings gfxSettings;
@@ -332,6 +374,8 @@ bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
          displayInfo->safeArea.y= displayInfo->height*DISPLAY_SAFE_BORDER_PERCENT/100;
          displayInfo->safeArea.w= displayInfo->width - 2*displayInfo->safeArea.x;
          displayInfo->safeArea.h= displayInfo->height - 2*displayInfo->safeArea.y;
+
+         displayInfo->secureGraphics= ctx->secureGraphics;
 
          result= true;
       }
@@ -534,23 +578,49 @@ bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixma
          
          if ( !npm->pixmap )
          {
-            BEGL_PixmapInfo pixmapInfo;
-
             /*
              * Create a new Nexus surface/native pixmap pair
              */   
-            pixmapInfo.width= surfaceStatusIn.width;
-            pixmapInfo.height= surfaceStatusIn.height;
-            #ifdef BIG_ENDIAN_CPU
-            pixmapInfo.format= BEGL_BufferFormat_eR8G8B8A8;
-            #else
-            pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
-            #endif
-            if ( !NXPL_CreateCompatiblePixmap(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
+            #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+            if ( ctx->secureGraphics )
             {
-               printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmap failed\n");
-               free( npm );
-               npm= 0;
+               BEGL_PixmapInfoEXT pixmapInfo;
+
+               NXPL_GetDefaultPixmapInfoEXT(&pixmapInfo);
+
+               pixmapInfo.width= surfaceStatusIn.width;
+               pixmapInfo.height= surfaceStatusIn.height;
+               #ifdef BIG_ENDIAN_CPU
+               pixmapInfo.format= BEGL_BufferFormat_eR8G8B8A8;
+               #else
+               pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
+               #endif
+               pixmapInfo.secure= true;
+               if ( !NXPL_CreateCompatiblePixmapEXT(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
+               {
+                  printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmapEXT failed\n");
+                  free( npm );
+                  npm= 0;
+               }
+            }
+            else
+            #endif
+            {
+               BEGL_PixmapInfo pixmapInfo;
+
+               pixmapInfo.width= surfaceStatusIn.width;
+               pixmapInfo.height= surfaceStatusIn.height;
+               #ifdef BIG_ENDIAN_CPU
+               pixmapInfo.format= BEGL_BufferFormat_eR8G8B8A8;
+               #else
+               pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
+               #endif
+               if ( !NXPL_CreateCompatiblePixmap(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
+               {
+                  printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmap failed\n");
+                  free( npm );
+                  npm= 0;
+               }
             }
          }
 
