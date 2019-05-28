@@ -260,6 +260,31 @@ bool checkIndependentVideoClock( GstWesterosSink *sink )
    return independentClock;
 }
 
+static bool isSVPEnabled( void )
+{
+   bool enabled= false;
+   #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+   NEXUS_VideoDecoderCapabilities videoDecoderCap;
+   NEXUS_GetVideoDecoderCapabilities(&videoDecoderCap);
+   enabled=  (videoDecoderCap.memory[0].secure != NEXUS_SecureVideo_eUnsecure) ? true : false;
+   #endif
+   return enabled;
+}
+
+static bool useSecureGraphics( void )
+{
+   bool useSecure= false;
+
+   char *env= getenv("WESTEROS_SECURE_GRAPHICS");
+   if ( env && atoi(env) )
+   {
+      useSecure= isSVPEnabled();
+   }
+   printf("westerossink: using secure graphics: %d\n", useSecure);
+
+   return useSecure;
+}
+
 void resourceChangedCallback( void *context, int param )
 {
    NEXUS_Error rc;
@@ -378,6 +403,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    {
       sink->soc.captureSurface[i]= NULL;
    }
+   sink->soc.secureGraphics= useSecureGraphics();
    sink->soc.hideVideoDuringCapture= TRUE;
    sink->soc.usePip= FALSE;
    sink->soc.useCameraLatency= FALSE;
@@ -409,7 +435,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.timeResourcesLost= 0;
    sink->soc.positionResourcesLost= 0;
    #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
-   sink->soc.secureVideo= FALSE;
+   sink->soc.secureVideo= isSVPEnabled();
    #endif
    
    rc= NxClient_Join(NULL);
@@ -1366,6 +1392,12 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
       videoSurfaceCreateSettings.width= sink->soc.captureWidth;
       videoSurfaceCreateSettings.height= sink->soc.captureHeight;
       videoSurfaceCreateSettings.pixelFormat= NEXUS_PixelFormat_eA8_R8_G8_B8;
+      #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+      if ( sink->soc.secureGraphics )
+      {
+         videoSurfaceCreateSettings.heap = NEXUS_Platform_GetFramebufferHeap(NEXUS_OFFSCREEN_SECURE_GRAPHICS_SURFACE);
+      }
+      #endif
       for( i= 0; i < NUM_CAPTURE_SURFACES; ++i )
       {
          sink->soc.captureSurface[i]= NEXUS_Surface_Create(&videoSurfaceCreateSettings);
@@ -1642,6 +1674,12 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       /* Start video frame capture */
       NEXUS_SimpleVideoDecoder_GetDefaultStartCaptureSettings(&captureSettings);
       captureSettings.displayEnabled= true;
+      #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+      if ( sink->soc.secureGraphics )
+      {
+         captureSettings.secure= true;
+      }
+      #endif
 
       memcpy(&captureSettings.surface, &sink->soc.captureSurface, sizeof(sink->soc.captureSurface));
       rc= NEXUS_SimpleVideoDecoder_StartCapture(sink->soc.videoDecoder, &captureSettings);

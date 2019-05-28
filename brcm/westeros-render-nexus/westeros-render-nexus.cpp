@@ -36,6 +36,9 @@
 #include "nxclient.h"
 #include "nexus_platform_client.h"
 #include "nexus_surface_client.h"
+#if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+#include "nexus_video_decoder.h"
+#endif
 
 #include <vector>
 
@@ -80,6 +83,7 @@ typedef struct _WstRendererNX
    int outputHeight;
    std::vector<WstRenderSurface*> surfaces;
    bool isDelegate;
+   bool secureGraphics;
 
    EGLDisplay eglDisplay;
    bool haveWaylandEGL;
@@ -107,6 +111,25 @@ static const NEXUS_BlendEquation graphicsAlphaBlend = {
   false,
   NEXUS_BlendFactor_eSourceAlpha
 };
+
+static bool useSecureGraphics( void )
+{
+   bool useSecure= false;
+
+   #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+   char *env= getenv("WESTEROS_SECURE_GRAPHICS");
+   if ( env && atoi(env) )
+   {
+      NEXUS_VideoDecoderCapabilities videoDecoderCap;
+      NEXUS_GetVideoDecoderCapabilities(&videoDecoderCap);
+      useSecure=  (videoDecoderCap.memory[0].secure != NEXUS_SecureVideo_eUnsecure) ? true : false;
+   }
+   #endif
+
+   setenv("WESTEROS_RENDER_PROTECTED_CONTENT", (useSecure ?  "1" : "0"), 1);
+
+   return useSecure;
+}
 
 static void gfxCheckpoint(void *data, int unused)
 {
@@ -218,6 +241,21 @@ static WstRendererNX* wstRendererNXCreate( WstRenderer *renderer )
       {
          free( rendererNX );
          rendererNX= 0;
+      }
+
+      rendererNX->secureGraphics= useSecureGraphics();
+      printf("westeros_render_nexus: secure graphics: %d\n", rendererNX->secureGraphics);
+      if ( rendererNX->secureGraphics )
+      {
+         NxClient_DisplaySettings displaySettings;
+
+         NxClient_GetDisplaySettings( &displaySettings );
+         displaySettings.secure= rendererNX->secureGraphics;
+         rc= NxClient_SetDisplaySettings( &displaySettings );
+         if ( rc != NEXUS_SUCCESS )
+         {
+            printf("WstGLInit: NxClient_SetDisplaySettings failed: rc=%X\n", rc);
+         }
       }
 
       if ( renderer->display )
