@@ -39,6 +39,7 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx );
 bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx );
 bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx );
 bool testCaseEssosKeyboardBasicKeyInputWayland( EMCTX *emctx );
+bool testCaseEssosPointerBasicPointerInputWayland( EMCTX *emctx );
 
 #endif
 

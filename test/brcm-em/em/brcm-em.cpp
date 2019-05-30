@@ -894,14 +894,20 @@ void NXPL_ResizeNativeWindow( void *nativeWindow, int width, int height, int dx,
    }
 }
 
-bool NXPL_CreateCompatiblePixmap(NXPL_PlatformHandle handle, void **pixmapHandle,
-                                 NEXUS_SurfaceHandle *surface, struct BEGL_PixmapInfo *info)
+NXPL_EXPORT void NXPL_GetDefaultPixmapInfoEXT(struct BEGL_PixmapInfoEXT *info)
+{
+   memset( info, 0, sizeof(info));
+   info->secure= false;
+}
+
+bool NXPL_CreateCompatiblePixmapEXT(NXPL_PlatformHandle handle, void **pixmapHandle,
+                                    NEXUS_SURFACEHANDLE *surface, struct BEGL_PixmapInfoEXT *info)
 {
    bool result= false;
    EMNativePixmap *npm= 0;
    EMSurface *ns= 0;
 
-   TRACE1("NXPL_CreateCompatiblePixmap");
+   TRACE1("NXPL_CreateCompatiblePixmapEXT");
 
    ns= (EMSurface*)calloc( 1, sizeof(EMSurface) );
    if ( ns )
@@ -930,6 +936,22 @@ bool NXPL_CreateCompatiblePixmap(NXPL_PlatformHandle handle, void **pixmapHandle
    return result;
 }
 
+bool NXPL_CreateCompatiblePixmap(NXPL_PlatformHandle handle, void **pixmapHandle,
+                                 NEXUS_SurfaceHandle *surface, struct BEGL_PixmapInfo *info)
+{
+   BEGL_PixmapInfoEXT extInfo;
+
+   TRACE1("NXPL_CreateCompatiblePixmap");
+
+   NXPL_GetDefaultPixmapInfoEXT(&extInfo);
+
+   extInfo.format= info->format;
+   extInfo.width= info->width;
+   extInfo.height= info->height;
+
+   return NXPL_CreateCompatiblePixmapEXT(handle, pixmapHandle, surface, &extInfo);
+}
+
 void NXPL_DestroyCompatiblePixmap(NXPL_PlatformHandle handle, void *pixmapHandle)
 {
    EMNativePixmap *npm= (EMNativePixmap*)pixmapHandle;
@@ -950,6 +972,13 @@ void NXPL_DestroyCompatiblePixmap(NXPL_PlatformHandle handle, void *pixmapHandle
       }
       free( npm );
    }
+}
+
+// Section: nexus_platform --------------------------------------------------------
+
+NEXUS_HeapHandle NEXUS_Platform_GetFramebufferHeap( unsigned displayIndex )
+{
+   return (NEXUS_HeapHandle)displayIndex;
 }
 
 // Section: nexus_graphics2d ------------------------------------------------------
@@ -1371,6 +1400,7 @@ void NEXUS_GetVideoDecoderCapabilities(
     )
 {
    TRACE1("NEXUS_GetVideoDecoderCapabilities");
+   memset( pCapabilities, 0, sizeof(pCapabilities));
 }
 
 // Section: nexus_simple_stc_channel ------------------------------------------------------

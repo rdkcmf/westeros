@@ -59,6 +59,7 @@ init:
 	cd brcm && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
 	cd brcm/westeros-render-nexus && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
 	cd brcm/westeros-sink && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd ../brcm-em && rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda
 	rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda
 	rm -f *.o && rm -f *.lo && rm -f .libs/*
 	rm -f .simplebuffer
