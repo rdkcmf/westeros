@@ -235,6 +235,10 @@ TESTCASE genericTests[]=
      "Test Essos key events with Wayland",
      testCaseEssosKeyboardBasicKeyInputWayland
    },
+   { "testEssosPointerBasicPointerInputWayland",
+     "Test Essos pointer events with Wayland",
+     testCaseEssosPointerBasicPointerInputWayland
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition

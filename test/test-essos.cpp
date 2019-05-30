@@ -2200,3 +2200,235 @@ exit:
    return testResult;
 }
 
+namespace BasicPointerInput
+{
+
+typedef struct _TestCtx
+{
+   bool wasCalled;
+   int x;
+   int y;
+   bool motion;
+   int button;
+   bool pressed;
+   bool released;
+} TestCtx;
+
+void pointerMotion( void *userData, int x, int y )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->motion= true;
+   testCtx->pressed= false;
+   testCtx->released= false;
+   testCtx->x= x;
+   testCtx->y= y;
+   testCtx->button= 0;
+}
+
+void pointerButtonPressed( void *userData, int button, int x, int y )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->motion= false;
+   testCtx->pressed= true;
+   testCtx->released= false;
+   testCtx->x= x;
+   testCtx->y= y;
+   testCtx->button= button;
+}
+
+void pointerButtonReleased( void *userData, int button, int x, int y )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->motion= false;
+   testCtx->pressed= false;
+   testCtx->released= true;
+   testCtx->x= x;
+   testCtx->y= y;
+   testCtx->button= button;
+}
+
+static EssPointerListener pointerListener=
+{
+   pointerMotion,
+   pointerButtonPressed,
+   pointerButtonReleased
+};
+
+};
+
+bool testCaseEssosPointerBasicPointerInputWayland( EMCTX *emctx )
+{
+   using namespace BasicPointerInput;
+
+   bool testResult= false;
+   bool result;
+   WstCompositor *wctx= 0;
+   const char *displayName= "test0";
+   EssCtx *ctx= 0;
+   TestCtx tCtx;
+   TestCtx *testCtx= &tCtx;
+
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextSetPointerListener( ctx, testCtx, &pointerListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetPointerListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   EssContextUpdateDisplay( ctx );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+
+
+   WstCompositorPointerEnter( wctx );
+   WstCompositorPointerMoveEvent( wctx, 200, 200 );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssPointerListener not called");
+      goto exit;
+   }
+
+   if ( !testCtx->motion || testCtx->pressed || testCtx->released ||
+        (testCtx->x != 200) || (testCtx->y != 200) )
+   {
+      EMERROR("Did not get expected event: expected/actual motion %d/%d pressed %d/%d released %d/%d x %d/%d y %d/%d button %d/%d",
+              testCtx->motion, true, testCtx->pressed, false, testCtx->released, false,
+               testCtx->x, 200, testCtx->y, 200, testCtx->button, 0);
+      goto exit;
+   }
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+
+
+   WstCompositorPointerButtonEvent( wctx, BTN_LEFT, WstPointer_buttonState_depressed );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssPointerListener not called");
+      goto exit;
+   }
+
+   if ( testCtx->motion || !testCtx->pressed || testCtx->released ||
+        (testCtx->x != 200) || (testCtx->y != 200) || (testCtx->button != BTN_LEFT) )
+   {
+      EMERROR("Did not get expected event: expected/actual motion %d/%d pressed %d/%d released %d/%d x %d/%d y %d/%d button %d/%d",
+              testCtx->motion, false, testCtx->pressed, true, testCtx->released, false,
+               testCtx->x, 200, testCtx->y, 200, testCtx->button, BTN_LEFT);
+      goto exit;
+   }
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+
+
+
+   WstCompositorPointerButtonEvent( wctx, BTN_LEFT, WstPointer_buttonState_released );
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssPointerListener not called");
+      goto exit;
+   }
+
+   if ( testCtx->motion || testCtx->pressed || !testCtx->released ||
+        (testCtx->x != 200) || (testCtx->y != 200) || (testCtx->button != BTN_LEFT) )
+   {
+      EMERROR("Did not get expected event: expected/actual motion %d/%d pressed %d/%d released %d/%d x %d/%d y %d/%d button %d/%d",
+              testCtx->motion, false, testCtx->pressed, false, testCtx->released, true,
+               testCtx->x, 200, testCtx->y, 200, testCtx->button, BTN_LEFT);
+      goto exit;
+   }
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   EssContextDestroy( ctx );
+
+   WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+

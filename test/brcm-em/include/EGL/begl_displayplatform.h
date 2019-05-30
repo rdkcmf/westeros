@@ -55,5 +55,13 @@ typedef struct BEGL_PixmapInfo
    BEGL_BufferFormat format;
 } BEGL_PixmapInfo;
 
+typedef struct BEGL_PixmapInfoEXT
+{
+   uint32_t width;
+   uint32_t height;
+   BEGL_BufferFormat format;
+   bool secure;
+} BEGL_PixmapInfoEXT;
+
 #endif
 
