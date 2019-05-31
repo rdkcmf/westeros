@@ -1022,11 +1022,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          break;
       case GST_EVENT_FLUSH_START:
          LOCK( sink );
-         sink->position= 0;
          sink->flushStarted= TRUE;
-         sink->currentPTS= 0;
-         sink->positionSegmentStart= 0;
-         sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
          UNLOCK( sink );
          gst_westeros_sink_soc_flush( sink );
          passToDefault= TRUE;
@@ -1081,6 +1077,11 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             sink->currentSegment = dataSegment;
             sink->flushStarted= FALSE;
             sink->playbackRate= playbackRate;
+            sink->position= 0;
+            sink->currentPTS= 0;
+            sink->positionSegmentStart= 0;
+            sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
+
             if (appliedRate != 1.0)
             {
                 GST_DEBUG_OBJECT(sink, "rate change done upstream");
@@ -1123,7 +1124,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
    }
    else
    {
-      gst_event_ref(event);
+      gst_event_unref(event);
    }
 
    #ifndef USE_GST1
