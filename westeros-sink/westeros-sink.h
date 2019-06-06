@@ -103,6 +103,7 @@ struct _GstWesterosSink
    gboolean startAfterLink;
    gboolean startAfterCaps;
    gboolean flushStarted;
+   gboolean passCaps;
    
    gboolean eosEventSeen;
    gboolean eosDetected;
