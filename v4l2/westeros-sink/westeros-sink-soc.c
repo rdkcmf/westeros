@@ -64,6 +64,7 @@ static guint g_signals[MAX_SIGNAL]= {0};
 
 static gboolean (*queryOrg)(GstElement *element, GstQuery *query)= 0;
 
+static void wstGetMaxFrameSize( GstWesterosSink *sink );
 static bool wstGetInputFormats( GstWesterosSink *sink );
 static bool wstGetOutputFormats( GstWesterosSink *sink );
 static bool wstSetInputFormat( GstWesterosSink *sink );
@@ -78,6 +79,7 @@ static int wstFindOutputBuffer( GstWesterosSink *sink, int fd );
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name );
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int frameFd );
+static void wstDecoderReset( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
@@ -132,7 +134,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameRate= 0.0;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
-   sink->soc.frameCount= 0;
+   sink->soc.frameInCount= 0;
+   sink->soc.frameOutCount= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
    sink->soc.devname= strdup(DEFAULT_DEVICE_NAME);
@@ -145,6 +148,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.outputFormats= 0;
    sink->soc.fmtIn= {0};
    sink->soc.fmtOut= {0};
+   sink->soc.formatsSet= FALSE;
    sink->soc.minBuffersIn= 0;
    sink->soc.minBuffersOut= 0;
    sink->soc.numBuffersIn= 0;
@@ -167,6 +171,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoY= sink->windowY;
    sink->soc.videoWidth= sink->windowWidth;
    sink->soc.videoHeight= sink->windowHeight;
+
+   // Request caps updates
+   sink->passCaps= TRUE;
 
    // We will use gstreamer for AV sync
    gst_base_sink_set_sync(GST_BASE_SINK(sink), TRUE);
@@ -337,6 +344,8 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
    wstGetOutputFormats( sink );
 
+   wstGetMaxFrameSize( sink );
+
    if ( !sink->soc.useCaptureOnly )
    {
       sink->soc.conn= wstCreateVideoClientConnection( sink, DEFAULT_VIDEO_SERVER );
@@ -409,7 +418,14 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    sink->videoStarted= FALSE;
    UNLOCK( sink );
 
-   *passToDefault= false;
+   if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
+   {
+      *passToDefault= true;
+   }
+   else
+   {
+      *passToDefault= false;
+   }
 
    return TRUE;
 }
@@ -430,6 +446,10 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
    wstTearDownInputBuffers( sink );
 
    wstTearDownOutputBuffers( sink );
+
+   sink->soc.prevFrameFd= -1;
+   sink->soc.nextFrameFd= -1;
+   sink->soc.formatsSet= FALSE;
 
    if ( sink->soc.inputFormats )
    {
@@ -505,6 +525,11 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
          {
             if ( denom == 0 ) denom= 1;
             sink->soc.frameRate= (double)num/(double)denom;
+            if ( sink->soc.frameRate <= 0.0 )
+            {
+               g_print("westeros-sink: caps have framerate of 0 - assume 60\n");
+               sink->soc.frameRate= 60.0;
+            }
          }
          if ( gst_structure_get_int( structure, "width", &width ) )
          {
@@ -518,7 +543,6 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
          {
             if ( (sink->soc.frameHeight != -1) && (sink->soc.frameHeight != height) )
             {
-               g_print("westeros-sink: frame size change\n");
                frameSizeChange= true;
             }
             sink->soc.frameHeight= height;
@@ -526,11 +550,12 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
 
          if ( frameSizeChange )
          {
-            wstTearDownInputBuffers( sink );
-            wstTearDownOutputBuffers( sink );
+            g_print("westeros-sink: frame size change : %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
+            wstDecoderReset( sink );
          }
 
-         if ( (sink->soc.frameWidth > 0) &&
+         if ( (sink->soc.formatsSet == FALSE) &&
+              (sink->soc.frameWidth > 0) &&
               (sink->soc.frameHeight > 0) &&
               (sink->soc.frameRate > 0.0) )
          {
@@ -538,6 +563,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             wstSetOutputFormat( sink );
             wstSetupInputBuffers( sink );
             wstSetupOutputBuffers( sink );
+            sink->soc.formatsSet= TRUE;
 
             readyToStart= true;
          }
@@ -622,6 +648,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
                goto exit;
             }
+
+            ++sink->soc.frameInCount;
          }
       }
 
@@ -637,7 +665,7 @@ exit:
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 {
    LOCK(sink);
-   sink->soc.frameCount= 0;
+   sink->soc.frameOutCount= 0;
    UNLOCK(sink);
 }
 
@@ -752,6 +780,64 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
    WESTEROS_UNUSED(query);
 
    return FALSE;
+}
+
+static void wstGetMaxFrameSize( GstWesterosSink *sink )
+{
+   struct v4l2_frmsizeenum framesize;
+   int rc;
+   int maxWidth= 0, maxHeight= 0;
+
+   memset( &framesize, 0, sizeof(struct v4l2_frmsizeenum) );
+   framesize.index= 0;
+   framesize.pixel_format= V4L2_PIX_FMT_NV12;
+
+   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
+   if ( rc == 0 )
+   {
+      if ( framesize.type == V4L2_FRMSIZE_TYPE_DISCRETE )
+      {
+         maxWidth= framesize.discrete.width;
+         maxHeight= framesize.discrete.height;
+         while ( rc == 0 )
+         {
+            ++framesize.index;
+            rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
+            if ( rc == 0 )
+            {
+               if ( framesize.discrete.width > maxWidth )
+               {
+                  maxWidth= framesize.discrete.width;
+               }
+               if ( framesize.discrete.height > maxHeight )
+               {
+                  maxHeight= framesize.discrete.height;
+               }
+            }
+            else
+            {
+               break;
+            }
+         }
+      }
+      else if ( framesize.type == V4L2_FRMSIZE_TYPE_STEPWISE )
+      {
+         sink->maxWidth= framesize.stepwise.max_width;
+         sink->maxHeight= framesize.stepwise.max_height;
+      }
+   }
+   else
+   {
+      GST_ERROR("wstGetMaxFrameSize: VIDIOC_ENUM_FRAMESIZES error %d", rc);
+      maxWidth= 1920;
+      maxHeight= 1080;
+   }
+   if ( (maxWidth > 0) && (maxHeight > 0) )
+   {
+      g_print("westeros-sink: max frame (%dx%d)\n", maxWidth, maxHeight);
+      sink->maxWidth= maxWidth;
+      sink->maxHeight= maxHeight;
+   }
 }
 
 static bool wstGetInputFormats( GstWesterosSink *sink )
@@ -1428,6 +1514,48 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
    }
 }
 
+static void wstDecoderReset( GstWesterosSink *sink )
+{
+   long long delay;
+
+   if ( sink->soc.frameRate > 0 )
+   {
+      delay= 1000000/sink->soc.frameRate;
+   }
+   delay= ((sink->soc.frameRate > 0) ? 1000000/sink->soc.frameRate : 1000000/60);
+   usleep( delay );
+
+   sink->soc.quitVideoOutputThread= TRUE;
+
+   wstTearDownInputBuffers( sink );
+
+   wstTearDownOutputBuffers( sink );
+
+   if ( sink->soc.videoOutputThread )
+   {
+      g_thread_join( sink->soc.videoOutputThread );
+      sink->soc.videoOutputThread= NULL;
+   }
+
+   if ( sink->soc.v4l2Fd >= 0 )
+   {
+      close( sink->soc.v4l2Fd );
+      sink->soc.v4l2Fd= -1;
+   }
+
+   sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
+   if ( sink->soc.v4l2Fd < 0 )
+   {
+      GST_ERROR("failed to open device (%s)", sink->soc.devname );
+   }
+
+   sink->videoStarted= FALSE;
+   sink->startAfterCaps= TRUE;
+   sink->soc.prevFrameFd= -1;
+   sink->soc.nextFrameFd= -1;
+   sink->soc.formatsSet= FALSE;
+}
+
 typedef struct bufferInfo
 {
    GstWesterosSink *sink;
@@ -1527,11 +1655,11 @@ static gpointer wstVideoOutputThread(gpointer data)
             int resubFd= -1;
 
             LOCK(sink);
-            if (sink->soc.frameCount == 0)
+            if (sink->soc.frameOutCount == 0)
             {
                 g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
             }
-            ++sink->soc.frameCount;
+            ++sink->soc.frameOutCount;
             if ( sink->windowChange )
             {
                sink->windowChange= false;
@@ -1644,14 +1772,14 @@ static gpointer wstEOSDetectionThread(gpointer data)
 
    eosCountDown= 10;
    LOCK(sink)
-   outputFrameCount= sink->soc.frameCount;
+   outputFrameCount= sink->soc.frameOutCount;
    UNLOCK(sink);
    while( !sink->soc.quitEOSDetectionThread )
    {
       usleep( 1000000/sink->soc.frameRate );
 
       LOCK(sink)
-      count= sink->soc.frameCount;
+      count= sink->soc.frameOutCount;
       videoPlaying= sink->soc.videoPlaying;
       eosEventSeen= sink->eosEventSeen;
       UNLOCK(sink)

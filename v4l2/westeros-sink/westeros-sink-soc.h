@@ -62,7 +62,8 @@ struct _GstWesterosSinkSoc
    double frameRate;
    int frameWidth;
    int frameHeight;
-   int frameCount;
+   int frameInCount;
+   int frameOutCount;
    uint32_t inputFormat;
    uint32_t outputFormat;
 
@@ -76,6 +77,7 @@ struct _GstWesterosSinkSoc
    struct v4l2_fmtdesc *outputFormats;
    struct v4l2_format fmtIn;
    struct v4l2_format fmtOut;
+   gboolean formatsSet;
    uint32_t minBuffersIn;
    uint32_t minBuffersOut;
    int numBuffersIn;

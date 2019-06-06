@@ -457,6 +457,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->startAfterLink= FALSE;
    sink->startAfterCaps= FALSE;
    sink->flushStarted= FALSE;
+   sink->passCaps= FALSE;
    sink->rejectPrerollBuffers= FALSE;
    
    sink->srcWidth= 0;
@@ -756,7 +757,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       return GST_STATE_CHANGE_SUCCESS;
    }
 
-   switch (transition) 
+   switch (transition)
    {
       case GST_STATE_CHANGE_NULL_TO_READY:
       {
@@ -818,8 +819,32 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             result= GST_STATE_CHANGE_FAILURE;
          }
          break;
-	   }
+      }
 
+      default:
+         break;
+   }
+
+   if ( gst_base_sink_get_sync(GST_BASE_SINK(sink)) == TRUE )
+   {
+      if (result == GST_STATE_CHANGE_FAILURE)
+      {
+         return result;
+      }
+
+      if ( passToDefault )
+      {
+         result= GST_ELEMENT_CLASS(parent_class)->change_state(element, transition);
+      }
+
+      if (result == GST_STATE_CHANGE_FAILURE)
+      {
+         return result;
+      }
+   }
+
+   switch (transition)
+   {
       case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       {
          if ( gst_westeros_sink_soc_playing_to_paused( sink, &passToDefault ) )
@@ -870,10 +895,13 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
    {
       return result;
    }
-   
-   if ( passToDefault )
+
+   if ( gst_base_sink_get_sync(GST_BASE_SINK(sink)) == FALSE )
    {
-      result= GST_ELEMENT_CLASS(parent_class)->change_state(element, transition);
+      if ( passToDefault )
+      {
+         result= GST_ELEMENT_CLASS(parent_class)->change_state(element, transition);
+      }
    }
  
    return result;
@@ -1014,7 +1042,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                   }
                }
             }
-            if ( !sink->videoStarted && sink->startAfterCaps )
+            if ( sink->passCaps || (!sink->videoStarted && sink->startAfterCaps) )
             {
                gst_westeros_sink_soc_accept_caps( sink, caps );
             }
