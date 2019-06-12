@@ -92,6 +92,7 @@ typedef struct _EssTouchInfo
 typedef struct _EssCtx
 {
    pthread_mutex_t mutex;
+   bool autoMode;
    bool isWayland;
    bool isInitialized;
    bool isRunning;
@@ -259,6 +260,7 @@ EssCtx* EssContextCreate()
       essSetDisplaySize( ctx, DEFAULT_PLANE_WIDTH, DEFAULT_PLANE_HEIGHT, false, 0, 0, 0, 0);
       ctx->windowWidth= DEFAULT_PLANE_WIDTH;
       ctx->windowHeight= DEFAULT_PLANE_HEIGHT;
+      ctx->autoMode= true;
       ctx->notifyFd= -1;
       ctx->watchFd= -1;
       ctx->waylandFd= -1;
@@ -380,6 +382,7 @@ bool EssContextSetUseWayland( EssCtx *ctx, bool useWayland )
       }
       #endif
 
+      ctx->autoMode= false;
       ctx->isWayland= useWayland;
 
       pthread_mutex_unlock( &ctx->mutex );
@@ -611,6 +614,12 @@ bool EssContextInit( EssCtx *ctx )
          goto exit;
       }
 
+      if ( ctx->autoMode )
+      {
+         ctx->isWayland= ((getenv("WAYLAND_DISPLAY") != 0) ? true : false );
+         INFO("auto set mode: isWayland %d", ctx->isWayland);
+      }
+
       pthread_mutex_unlock( &ctx->mutex );
 
       if ( !EssContextSetUseWayland( ctx, ctx->isWayland ) )
@@ -618,15 +627,11 @@ bool EssContextInit( EssCtx *ctx )
          goto exit;
       }
 
-      pthread_mutex_lock( &ctx->mutex );
-
       result= essPlatformInit(ctx);
       if ( result )
       {
          ctx->isInitialized= true;
       }
-
-      pthread_mutex_unlock( &ctx->mutex );
    }
 
 exit:   
@@ -1422,7 +1427,6 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
          {
             sprintf( ctx->lastErrorDetail,
                      "Error.  Unable to create wayland surface" );
-            pthread_mutex_unlock( &ctx->mutex );
             goto exit;
          }
 
@@ -1431,7 +1435,6 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
          {
             sprintf( ctx->lastErrorDetail,
                      "Error.  Unable to create wayland egl window" );
-            pthread_mutex_unlock( &ctx->mutex );
             goto exit;
          }
 
@@ -1453,7 +1456,6 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
          {
             sprintf( ctx->lastErrorDetail,
                      "Error.  Unable to create native egl window" );
-            pthread_mutex_unlock( &ctx->mutex );
             goto exit;
          }
 #endif
