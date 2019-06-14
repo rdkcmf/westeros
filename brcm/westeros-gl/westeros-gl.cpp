@@ -237,7 +237,9 @@ WstGLCtx* WstGLInit()
          NxClient_DisplaySettings displaySettings;
 
          NxClient_GetDisplaySettings( &displaySettings );
+         #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
          displaySettings.secure= ctx->secureGraphics;
+         #endif
          rc= NxClient_SetDisplaySettings( &displaySettings );
          if ( rc != NEXUS_SUCCESS )
          {
@@ -246,7 +248,9 @@ WstGLCtx* WstGLInit()
       }
 
       NEXUS_Graphics2D_GetDefaultOpenSettings(&gfxOpenSettings);
+      #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
       gfxOpenSettings.secure= ctx->secureGraphics;
+      #endif
 
       ctx->gfx= NEXUS_Graphics2D_Open(NEXUS_ANY_ID, &gfxOpenSettings);
       if ( ctx->gfx )

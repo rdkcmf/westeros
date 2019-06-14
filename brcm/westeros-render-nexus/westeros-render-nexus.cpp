@@ -250,7 +250,9 @@ static WstRendererNX* wstRendererNXCreate( WstRenderer *renderer )
          NxClient_DisplaySettings displaySettings;
 
          NxClient_GetDisplaySettings( &displaySettings );
+         #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
          displaySettings.secure= rendererNX->secureGraphics;
+         #endif
          rc= NxClient_SetDisplaySettings( &displaySettings );
          if ( rc != NEXUS_SUCCESS )
          {
