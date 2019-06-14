@@ -59,7 +59,8 @@ enum
   PROP_LATENCY_TARGET,
   PROP_CAPTURE_SIZE,
   PROP_HIDE_VIDEO_DURING_CAPTURE,
-  PROP_CAMERA_LATENCY
+  PROP_CAMERA_LATENCY,
+  PROP_FRAME_STEP_ON_PREROLL
   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
   ,
   PROP_PIP
@@ -92,6 +93,7 @@ static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
 static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed );
+static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
 static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
 static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *contentLightLevel );
@@ -113,6 +115,9 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
 {
    GObjectClass *gobject_class= (GObjectClass *) klass;
    GstElementClass *gstelement_class;
+   GstBaseSinkClass *gstbasesink_class= (GstBaseSinkClass *) klass;
+
+   gstbasesink_class->preroll= GST_DEBUG_FUNCPTR(prerollSinkSoc);
 
    g_object_class_install_property (gobject_class, PROP_VIDEO_PTS_OFFSET,
      g_param_spec_uint ("video_pts_offset",
@@ -182,6 +187,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
      g_param_spec_boolean ("camera-latency",
                            "low latency camera mode",
                            "configure for low latency mode suitable for cameras", FALSE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_FRAME_STEP_ON_PREROLL,
+     g_param_spec_boolean ("frame-step-on-preroll",
+                           "frame step on preroll",
+                           "allow frame stepping on preroll into pause", FALSE, G_PARAM_READWRITE));
 
    #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
    g_object_class_install_property (gobject_class, PROP_PIP,
@@ -408,6 +418,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.usePip= FALSE;
    sink->soc.useCameraLatency= FALSE;
    sink->soc.useLowDelay= FALSE;
+   sink->soc.frameStepOnPreroll= FALSE;
    sink->soc.latencyTarget= DEFAULT_LATENCY_TARGET;
    sink->soc.connectId= 0;
    sink->soc.quitCaptureThread= TRUE;
@@ -706,6 +717,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.useCameraLatency= g_value_get_boolean(value);
             break;
          }
+      case PROP_FRAME_STEP_ON_PREROLL:
+         {
+            sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
+            break;
+         }
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
          {
@@ -794,6 +810,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_CAMERA_LATENCY:
          g_value_set_boolean(value, sink->soc.useCameraLatency);
+         break;
+      case PROP_FRAME_STEP_ON_PREROLL:
+         g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
          break;
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
@@ -2313,6 +2332,75 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
    {
        GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
    }
+}
+
+static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
+{
+   GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
+
+   if ( buffer && sink->soc.frameStepOnPreroll )
+   {
+      if ( queryPeerHandles(sink) )
+      {
+         NEXUS_Error rc;
+
+         #if (NEXUS_PLATFORM_VERSION_MAJOR>15)
+         if ( sink->startAfterCaps )
+         {
+            // Wait till we get final caps since there might be HDR info
+            GST_DEBUG("defer video start till caps");
+            return GST_FLOW_OK;
+         }
+         #endif
+
+         LOCK( sink );
+         if ( !sink->videoStarted )
+         {
+            if ( !gst_westeros_sink_soc_start_video( sink ) )
+            {
+               GST_ERROR("prerollSinkSoc: gst_westeros_sink_soc_start_video failed");
+            }
+
+            if ( checkIndependentVideoClock( sink ) )
+            {
+               NEXUS_VideoDecoderTrickState trickState;
+               NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+               trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
+               NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+               GST_INFO_OBJECT(sink, "disable TsmMode");
+            }
+         }
+
+         if ( sink->videoStarted && !sink->soc.videoPlaying )
+         {
+            NEXUS_Error rc;
+
+            sink->soc.videoPlaying= TRUE;
+            updateClientPlaySpeed( sink, 0.0 );
+            sink->soc.videoPlaying= FALSE;
+            rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
+            if ( rc != NEXUS_SUCCESS )
+            {
+                GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+            }
+            rc= NEXUS_SimpleStcChannel_Invalidate(sink->soc.stcChannel);
+            if ( rc != NEXUS_SUCCESS )
+            {
+                GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
+            }
+            rc= NEXUS_SimpleVideoDecoder_FrameAdvance(sink->soc.videoDecoder);
+            if ( NEXUS_SUCCESS != rc )
+            {
+               GST_ERROR_OBJECT(sink, "prerollSinkSoc: Error NEXUS_SimpleVideoDecoder_FrameAdvance: %d", (int)rc);
+            }
+         }
+         UNLOCK( sink );
+      }
+   }
+
+   GST_INFO("preroll ok");
+
+   return GST_FLOW_OK;
 }
 
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))

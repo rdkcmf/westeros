@@ -53,6 +53,7 @@ struct _GstWesterosSinkSoc
    gboolean useCameraLatency;
    gboolean usePip;
    gboolean useLowDelay;
+   gboolean frameStepOnPreroll;
    gint latencyTarget;
    
    unsigned int connectId;
