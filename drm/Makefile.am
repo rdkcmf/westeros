@@ -19,11 +19,15 @@
 
 AUTOMAKE_OPTIONS = subdir-objects
 
-SUBDIRS = 
+SUBDIRS =
 
 AM_CFLAGS = 
 
 AM_LDFLAGS = 
+
+if HAVE_EGL
+AM_CFLAGS += ${EGL_CFLAGS}
+endif 
 
 lib_LTLIBRARIES = libwesteros_gl.la
 
