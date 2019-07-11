@@ -465,6 +465,7 @@ GL_APICALL void GL_APIENTRY glGetProgramiv (GLuint program, GLenum pname, GLint 
 GL_APICALL void GL_APIENTRY glGetProgramInfoLog (GLuint program, GLsizei bufSize, GLsizei *length, GLchar *infoLog);
 GL_APICALL void GL_APIENTRY glGetShaderiv (GLuint shader, GLenum pname, GLint *params);
 GL_APICALL void GL_APIENTRY glGetShaderInfoLog (GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *infoLog);
+GL_APICALL const GLubyte *GL_APIENTRY glGetString (GLenum name);
 GL_APICALL GLint GL_APIENTRY glGetUniformLocation (GLuint program, const GLchar *name);
 GL_APICALL GLboolean GL_APIENTRY glIsEnabled (GLenum cap);
 GL_APICALL void GL_APIENTRY glLinkProgram (GLuint program);

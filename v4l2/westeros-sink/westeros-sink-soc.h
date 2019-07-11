@@ -47,9 +47,20 @@ typedef struct _WstVideoClientConnection
    int socketFd;
 } WstVideoClientConnection;
 
+typedef struct _WstPlaneInfo
+{
+   int fd;
+   void *start;
+   int capacity;
+} WstPlaneInfo;
+
+#define WST_MAX_PLANES (3)
 typedef struct _WstBufferInfo
 {
    struct v4l2_buffer buf;
+   struct v4l2_plane planes[WST_MAX_PLANES];
+   WstPlaneInfo planeInfo[WST_MAX_PLANES];
+   int planeCount;
    int fd;
    void *start;
    int capacity;
@@ -71,6 +82,7 @@ struct _GstWesterosSinkSoc
    int v4l2Fd;
    struct v4l2_capability caps;
    uint32_t deviceCaps;
+   gboolean isMultiPlane;
    int numInputFormats;
    struct v4l2_fmtdesc *inputFormats;
    int numOutputFormats;

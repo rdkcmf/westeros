@@ -423,11 +423,13 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
       event= gst_event_new_caps( caps );
       if ( event )
       {
+         GST_PAD_STREAM_LOCK(pad);
          gst_pad_push_event( pad, gst_event_new_flush_start() );
          gst_pad_push_event( pad, gst_event_new_flush_stop(TRUE) );
          gst_pad_push_event( pad, event );
          src->frameNumber= 0;
          src->needSegment= true;
+         GST_PAD_STREAM_UNLOCK(pad);
       }
    }
 }

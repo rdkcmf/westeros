@@ -76,6 +76,18 @@
 #define DRM_FORMAT_GR88 (0x38385247)
 #endif
 
+#ifndef DRM_FORMAT_RG88
+#define DRM_FORMAT_RG88 (0x38384752)
+#endif
+
+#ifndef DRM_FORMAT_NV12
+#define DRM_FORMAT_NV12 (0x3231564E)
+#endif
+
+#ifndef DRM_FORMAT_NV21
+#define DRM_FORMAT_NV21 (0x3132564E)
+#endif
+
 static const char *fShaderText =
   "#ifdef GL_ES\n"
   "precision mediump float;\n"
@@ -164,6 +176,25 @@ static const char *fShaderText_Y_UV =
   "   gl_FragColor= vec4( dot(cc_r,temp_vec.xyw), dot(cc_g,temp_vec), dot(cc_b,temp_vec.xyz), 1 );\n"
   "}\n";
 
+static const char *fShaderTextExternal =
+  "#extension GL_OES_EGL_image_external : require\n"
+  "#ifdef GL_ES\n"
+  "precision mediump float;\n"
+  "#endif\n"
+  "uniform samplerExternalOES texture;\n"
+  "varying vec2 txv;\n"
+  "void main()\n"
+  "{\n"
+  "  gl_FragColor= texture2D(texture, txv);\n"
+  "}\n";
+
+typedef enum _WstShaderType
+{
+   WstShaderType_rgb,
+   WstShaderType_yuv,
+   WstShaderType_external
+} WstShaderType;
+
 typedef struct _WstShader
 {
    bool isYUV;
@@ -189,6 +220,7 @@ static bool emitFPS= false;
 struct _WstRenderSurface
 {
    int textureCount;
+   bool externalImage;
    GLuint textureId[MAX_TEXTURES];
 
    int bufferWidth;
@@ -244,6 +276,7 @@ typedef struct _WstRendererEMB
    #endif
 
    bool haveDmaBufImport;
+   bool haveExternalImage;
 
    #if defined (WESTEROS_HAVE_WAYLAND_EGL)
    bool haveWaylandEGL;
@@ -254,6 +287,7 @@ typedef struct _WstRendererEMB
 
    WstShader *textureShader;
    WstShader *textureShaderYUV;
+   WstShader *textureShaderExternal;
    
    std::vector<WstRenderSurface*> surfaces;
    std::vector<GLuint> deadTextures;
@@ -284,7 +318,7 @@ static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSur
                                          EGLint format, int bufferWidth, int bufferHeight );
 #endif                                         
 static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface );
-static WstShader* wstRendererEMBCreateShader( WstRendererEMB *renderer, bool yuv );
+static WstShader* wstRendererEMBCreateShader( WstRendererEMB *renderer, int shaderType );
 static void wstRendererEMBDestroyShader( WstShader *shader );
 static void wstRendererEMBShaderDraw( WstShader *shader,
                                       int width, int height, float* matrix, float alpha,
@@ -391,8 +425,19 @@ static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer )
             rendererEMB->haveDmaBufImport= true;
          }
       }
+      extensions= (const char *)glGetString(GL_EXTENSIONS);
+      if ( extensions )
+      {
+         #ifdef GL_OES_EGL_image_external
+         if ( strstr( extensions, "GL_OES_EGL_image_external" ) )
+         {
+            rendererEMB->haveExternalImage= true;
+         }
+         #endif
+      }
       printf("have wayland-egl: %d\n", rendererEMB->haveWaylandEGL );
       printf("have dmabuf import: %d\n", rendererEMB->haveDmaBufImport );
+      printf("have external image: %d\n", rendererEMB->haveExternalImage );
       #endif
    }
 
@@ -541,11 +586,11 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
          #ifdef EGL_LINUX_DMA_BUF_EXT
          if ( renderer->haveDmaBufImport )
          {
-            int fd= WstSBBufferGetFd( sbBuffer );
-            if ( fd >= 0 )
+            if ( WstSBBufferGetFd( sbBuffer ) >= 0 )
             {
                int i;
                uint32_t frameFormat, frameWidth, frameHeight;
+               int fd[MAX_TEXTURES];
                int32_t offset[MAX_TEXTURES], stride[MAX_TEXTURES];
                EGLint attr[28];
 
@@ -555,6 +600,7 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
 
                for( i= 0; i < MAX_TEXTURES; ++i )
                {
+                  fd[i]= WstSBBufferGetPlaneFd( sbBuffer, i );
                   WstSBBufferGetPlaneOffsetAndStride( sbBuffer, i, &offset[i], &stride[i] );
                }
 
@@ -577,7 +623,68 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
                switch( frameFormat )
                {
                   case WL_SB_FORMAT_NV12:
+                  case WL_SB_FORMAT_NV21:
+                     if ( renderer->haveExternalImage )
                      {
+                        if ( fd[1] == -1 )
+                        {
+                           fd[1]= fd[0];
+                        }
+
+                        i= 0;
+                        attr[i++]= EGL_WIDTH;
+                        attr[i++]= frameWidth;
+                        attr[i++]= EGL_HEIGHT;
+                        attr[i++]= frameHeight;
+                        attr[i++]= EGL_LINUX_DRM_FOURCC_EXT;
+                        attr[i++]= (frameFormat == WL_SB_FORMAT_NV12 ? DRM_FORMAT_NV12 : DRM_FORMAT_NV21);
+                        attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
+                        attr[i++]= fd[0];
+                        attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+                        attr[i++]= offset[0];
+                        attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
+                        attr[i++]= stride[0];
+                        attr[i++]= EGL_DMA_BUF_PLANE1_FD_EXT;
+                        attr[i++]= fd[1];
+                        attr[i++]= EGL_DMA_BUF_PLANE1_OFFSET_EXT;
+                        attr[i++]= offset[1];
+                        attr[i++]= EGL_DMA_BUF_PLANE1_PITCH_EXT;
+                        attr[i++]= stride[1];
+                        attr[i++]= EGL_YUV_COLOR_SPACE_HINT_EXT;
+                        attr[i++]= EGL_ITU_REC709_EXT;
+                        attr[i++]= EGL_SAMPLE_RANGE_HINT_EXT;
+                        attr[i++]= EGL_YUV_FULL_RANGE_EXT;
+                        attr[i++]= EGL_NONE;
+
+                        eglImage= renderer->eglCreateImageKHR( renderer->eglDisplay,
+                                                               EGL_NO_CONTEXT,
+                                                               EGL_LINUX_DMA_BUF_EXT,
+                                                               (EGLClientBuffer)NULL,
+                                                               attr );
+                        if ( eglImage )
+                        {
+                           surface->eglImage[0]= eglImage;
+                           if ( surface->textureId[0] != GL_NONE )
+                           {
+                              glDeleteTextures( 1, &surface->textureId[0] );
+                           }
+                           surface->textureId[0]= GL_NONE;
+                        }
+                        else
+                        {
+                           printf("wstRendererGLPrepareResource: eglCreateImageKHR failed for fd %d, DRM_FORMAT_NV12: errno %X\n", fd[0], eglGetError());
+                        }
+
+                        surface->textureCount= 1;
+                        surface->externalImage= true;
+                     }
+                     else
+                     {
+                        if ( fd[1] == -1 )
+                        {
+                           fd[1]= fd[0];
+                        }
+
                         i= 0;
                         attr[i++]= EGL_WIDTH;
                         attr[i++]= frameWidth;
@@ -586,7 +693,7 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
                         attr[i++]= EGL_LINUX_DRM_FOURCC_EXT;
                         attr[i++]= DRM_FORMAT_R8;
                         attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
-                        attr[i++]= fd;
+                        attr[i++]= fd[0];
                         attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
                         attr[i++]= offset[0];
                         attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
@@ -609,7 +716,7 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
                         }
                         else
                         {
-                           printf("wstRendererGLPrepareResource: eglCreateImageKHR failed for fd %d: errno %X\n", fd, eglGetError());
+                           printf("wstRendererGLPrepareResource: eglCreateImageKHR failed for fd %d, DRM_FORMAT_R8: errno %X\n", fd[0], eglGetError());
                         }
 
                         i= 0;
@@ -618,9 +725,9 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
                         attr[i++]= EGL_HEIGHT;
                         attr[i++]= frameHeight/2;
                         attr[i++]= EGL_LINUX_DRM_FOURCC_EXT;
-                        attr[i++]= DRM_FORMAT_GR88;
+                        attr[i++]= (frameFormat == WL_SB_FORMAT_NV12 ? DRM_FORMAT_GR88 : DRM_FORMAT_RG88);
                         attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
-                        attr[i++]= fd;
+                        attr[i++]= fd[1];
                         attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
                         attr[i++]= offset[1];
                         attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
@@ -643,7 +750,7 @@ static void wstRendererEMBPrepareResource( WstRendererEMB *renderer, WstRenderSu
                         }
                         else
                         {
-                           printf("wstRendererGLPrepareResource: eglCreateImageKHR failed for fd %d: errno %X\n", fd, eglGetError());
+                           printf("wstRendererGLPrepareResource: eglCreateImageKHR failed for fd %d, DRM_FORMAT_GR88: errno %X\n", fd[1], eglGetError());
                         }
 
                         surface->textureCount= 2;
@@ -1231,7 +1338,18 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
          #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
          if ( surface->eglImage[i] && renderer->eglContext )
          {
-            renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, surface->eglImage[i]);
+            #ifdef GL_OES_EGL_image_external
+            if ( surface->externalImage )
+            {
+               renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, surface->eglImage[i]);
+            }
+            else
+            {
+            #endif
+               renderer->glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, surface->eglImage[i]);
+            #ifdef GL_OES_EGL_image_external
+            }
+            #endif
          }
          else 
          #endif
@@ -1318,7 +1436,7 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
 
    if ( surface->textureCount == 1 )
    {
-      wstRendererEMBShaderDraw( renderer->textureShader,
+      wstRendererEMBShaderDraw( surface->externalImage ? renderer->textureShaderExternal : renderer->textureShader,
                                 resW,
                                 resH,
                                 (float*)matrix,
@@ -1344,12 +1462,14 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
    }
 }
 
-static WstShader* wstRendererEMBCreateShader( WstRendererEMB *renderer, bool yuv )
+static WstShader* wstRendererEMBCreateShader( WstRendererEMB *renderer, int shaderType )
 {
    WstShader *shaderNew= 0;
    GLuint type;
    const char *typeName= 0, *src= 0;
    GLint shader, status, len;
+   bool yuv= (shaderType == WstShaderType_yuv);
+   bool noalpha;
 
    shaderNew= (WstShader*)calloc( 1, sizeof(WstShader));
    if ( !shaderNew )
@@ -1374,13 +1494,19 @@ static WstShader* wstRendererEMBCreateShader( WstRendererEMB *renderer, bool yuv
       {
          type= GL_FRAGMENT_SHADER;
          typeName= "fragment";
+         noalpha= true;
          if ( yuv )
          {
             src= (renderer->haveDmaBufImport ? fShaderText_Y_UV : fShaderTextYUV);
          }
+         else if ( shaderType == WstShaderType_external )
+         {
+            src= fShaderTextExternal;
+         }
          else
          {
             src= fShaderText;
+            noalpha= false;
          }
       }
       else
@@ -1454,7 +1580,7 @@ static WstShader* wstRendererEMBCreateShader( WstRendererEMB *renderer, bool yuv
    }
 
    shaderNew->uniAlpha= glGetUniformLocation(shaderNew->program, "alpha");
-   if ( (shaderNew->uniAlpha == -1) && !(yuv && renderer->haveDmaBufImport) )
+   if ( (shaderNew->uniAlpha == -1) && !noalpha )
    {
       printf("wstRendererEMBCreateShader: uniformn 'alpha' location error\n");
       goto exit;
@@ -1650,8 +1776,12 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
 
    if ( !rendererEMB->textureShader )
    {
-      rendererEMB->textureShader= wstRendererEMBCreateShader( rendererEMB, false );
-      rendererEMB->textureShaderYUV= wstRendererEMBCreateShader( rendererEMB, true );
+      rendererEMB->textureShader= wstRendererEMBCreateShader( rendererEMB, WstShaderType_rgb );
+      rendererEMB->textureShaderYUV= wstRendererEMBCreateShader( rendererEMB, WstShaderType_yuv );
+      if ( rendererEMB->haveExternalImage )
+      {
+         rendererEMB->textureShaderExternal= wstRendererEMBCreateShader( rendererEMB, WstShaderType_external );
+      }
       rendererEMB->eglContext= eglGetCurrentContext();
    }
 
