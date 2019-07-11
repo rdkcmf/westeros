@@ -746,7 +746,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
    GstWesterosSink *sink= GST_WESTEROS_SINK(element);
    gboolean passToDefault= true;
 
-   GST_DEBUG_OBJECT(element, "westeros-sink: change state from %s to %s\n", 
+   GST_DEBUG_OBJECT(element, "westeros-sink: change state from %s to %s",
       gst_element_state_get_name (GST_STATE_TRANSITION_CURRENT (transition)),
       gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
 
@@ -766,6 +766,11 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          sink->position= 0;         
          sink->eosDetected= FALSE;
          sink->eosEventSeen= FALSE;
+         if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
+         {
+            result= GST_STATE_CHANGE_FAILURE;
+            break;
+         }
          if ( sink->vpc && sink->surface )
          {
             sink->vpcSurface= wl_vpc_get_vpc_surface( sink->vpc, sink->surface );
@@ -790,10 +795,6 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             GST_ERROR("gst_westeros_sink: null_to_ready: can't create vpc surface: vpc %p surface %p\n",
                       sink->vpc, sink->surface);
          }
-         if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
-         {
-            result= GST_STATE_CHANGE_FAILURE;
-         }         
          break;
       }
 

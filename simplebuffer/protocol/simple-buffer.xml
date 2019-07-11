@@ -41,7 +41,7 @@
     ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
     THIS SOFTWARE.
   </copyright>
-  <interface name="wl_sb" version="2">
+  <interface name="wl_sb" version="3">
     
     <description summary="cross process buffer id wrapper">
       The simple buffer protocol provides a mechanism for encapsulating buffer identifers
@@ -152,6 +152,26 @@
     <request name="create_planar_buffer_fd" since="2">
       <arg name="id" type="new_id" interface="wl_buffer"/>
       <arg name="fd" type="fd"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="format" type="uint"/>
+      <arg name="offset0" type="int"/>
+      <arg name="stride0" type="int"/>
+      <arg name="offset1" type="int"/>
+      <arg name="stride1" type="int"/>
+      <arg name="offset2" type="int"/>
+      <arg name="stride2" type="int"/>
+    </request>
+
+    <!-- Create a wayland buffer encapsulating the specified file descriptors.
+         Use for multi-plane buffers. If there are fewer than 3 file descriptors
+         set remaing descriptors to the value of fd0.  Set offset and stride
+         values to 0 for unused planes. -->
+    <request name="create_planar_buffer_fd2" since="3">
+      <arg name="id" type="new_id" interface="wl_buffer"/>
+      <arg name="fd0" type="fd"/>
+      <arg name="fd1" type="fd"/>
+      <arg name="fd2" type="fd"/>
       <arg name="width" type="int"/>
       <arg name="height" type="int"/>
       <arg name="format" type="uint"/>

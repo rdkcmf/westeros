@@ -1401,6 +1401,7 @@ void NEXUS_GetVideoDecoderCapabilities(
 {
    TRACE1("NEXUS_GetVideoDecoderCapabilities");
    memset( pCapabilities, 0, sizeof(pCapabilities));
+   pCapabilities->memory[0].maxFormat= NEXUS_VideoFormat_e3840x2160p24hz;
 }
 
 // Section: nexus_simple_stc_channel ------------------------------------------------------
@@ -1416,6 +1417,18 @@ NEXUS_Error NEXUS_SimpleStcChannel_Freeze(
 
    return rc;
 }
+
+NEXUS_Error NEXUS_SimpleStcChannel_Invalidate(
+    NEXUS_SimpleStcChannelHandle handle
+    )
+{
+   NEXUS_Error rc= NEXUS_SUCCESS;
+
+   TRACE1("NEXUS_SimpleStcChannel_Invalidate: stc %p", handle);
+
+   return rc;
+}
+
 
 // Section: nexus_simple_video_decoder ------------------------------------------------------
 
@@ -2157,6 +2170,34 @@ void NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(
 
 exit:
    return;
+}
+
+NEXUS_Error NEXUS_SimpleVideoDecoder_FrameAdvance(
+    NEXUS_SimpleVideoDecoderHandle handle
+    )
+{
+   NEXUS_Error rc= NEXUS_SUCCESS;
+   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
+   EMCTX *emctx= 0;
+
+   TRACE1("NEXUS_SimpleVideoDecoder_FrameAdvance");
+
+   emctx= emGetContext();
+   if ( !emctx )
+   {
+      ERROR("NEXUS_SimpleVideoDecoder_FrameAdvance: emGetContext failed");
+      goto exit;
+   }
+
+   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
+   {
+      EMERROR("NEXUS_SimpleVideoDecoder_FrameAdvance: bad decoder handle");
+      rc= NEXUS_INVALID_PARAMETER;
+      goto exit;
+   }
+
+exit:
+   return rc;
 }
 
 
@@ -4571,6 +4612,26 @@ GL_APICALL void GL_APIENTRY glGetShaderInfoLog (GLuint shader, GLsizei bufSize, 
    TRACE1("glGetShaderInfoLog");
    *length= 0;
    *infoLog= '\0';
+}
+
+GL_APICALL const GLubyte *GL_APIENTRY glGetString (GLenum name)
+{
+   const char *s= 0;
+
+   TRACE1("glGetString for %X", name );
+
+   switch( name )
+   {
+      case GL_EXTENSIONS:
+         s= "";
+         break;
+   }
+
+exit:
+
+   TRACE1("glGetString for %X: (%s)", name, s );
+
+   return s;
 }
 
 GL_APICALL GLint GL_APIENTRY glGetUniformLocation (GLuint program, const GLchar *name)

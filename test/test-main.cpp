@@ -2580,7 +2580,6 @@ void* clientLaunchThread( void *arg )
    result= WstCompositorLaunchClient( lctx->wctx, launchCmd );
    if ( result == false )
    {
-      printf("===JRW: setting launchError= true\n");
       lctx->launchError= true;
       EMERROR( "WstCompositorLaunchClient failed" );
       goto exit;

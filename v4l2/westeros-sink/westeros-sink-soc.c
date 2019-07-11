@@ -28,6 +28,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include "westeros-sink.h"
 
@@ -38,6 +39,8 @@
 #define MIN_INPUT_BUFFERS (1)
 #define NUM_OUTPUT_BUFFERS (3)
 #define MIN_OUTPUT_BUFFERS (3)
+
+#define IOCTL ioctl_wrapper
 
 #ifdef GLIB_VERSION_2_32
   #define LOCK_SOC( sink ) g_mutex_lock( &((sink)->soc.mutex) );
@@ -60,10 +63,12 @@ enum
    MAX_SIGNAL
 };
 
+static const char *gDeviceName= DEFAULT_DEVICE_NAME;
 static guint g_signals[MAX_SIGNAL]= {0};
 
 static gboolean (*queryOrg)(GstElement *element, GstQuery *query)= 0;
 
+static void wstDiscoverVideoDecoder( void );
 static void wstGetMaxFrameSize( GstWesterosSink *sink );
 static bool wstGetInputFormats( GstWesterosSink *sink );
 static bool wstGetOutputFormats( GstWesterosSink *sink );
@@ -83,7 +88,18 @@ static void wstDecoderReset( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
+static int ioctl_wrapper( int fd, int request, void* arg );
 
+static long long getCurrentTimeMillis(void)
+{
+   struct timeval tv;
+   long long utcCurrentTimeMillis;
+
+   gettimeofday(&tv,0);
+   utcCurrentTimeMillis= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+
+   return utcCurrentTimeMillis;
+}
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -101,17 +117,24 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
 {
    GObjectClass *gobject_class= (GObjectClass *) klass;
 
+   gst_element_class_set_static_metadata( GST_ELEMENT_CLASS(klass),
+                                          "Westeros Sink",
+                                          "Codec/Decoder/Video/Sink/Video",
+                                          "Writes buffers to the westeros wayland compositor",
+                                          "Comcast" );
+   wstDiscoverVideoDecoder();
+
    g_object_class_install_property (gobject_class, PROP_DEVICE,
-     g_param_spec_string ("device",
-                          "device location",
-                          "Location of the device", DEFAULT_DEVICE_NAME, G_PARAM_READWRITE));
+   g_param_spec_string ("device",
+                         "device location",
+                         "Location of the device", gDeviceName, G_PARAM_READWRITE));
 
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
-                                               0,    // class offset
-                                               NULL, // accumulator
-                                               NULL, // accu data
+                                               0,    /* class offset */
+                                               NULL, /* accumulator */
+                                               NULL, /* accu data */
                                                g_cclosure_marshal_VOID__UINT_POINTER,
                                                G_TYPE_NONE,
                                                2,
@@ -138,10 +161,11 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameOutCount= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
-   sink->soc.devname= strdup(DEFAULT_DEVICE_NAME);
+   sink->soc.devname= strdup(gDeviceName);
    sink->soc.v4l2Fd= -1;
    sink->soc.caps= {0};
    sink->soc.deviceCaps= 0;
+   sink->soc.isMultiPlane= FALSE;
    sink->soc.numInputFormats= 0;
    sink->soc.inputFormats= 0;
    sink->soc.numOutputFormats= 0;
@@ -172,12 +196,17 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoWidth= sink->windowWidth;
    sink->soc.videoHeight= sink->windowHeight;
 
-   // Request caps updates
+   /* Request caps updates */
    sink->passCaps= TRUE;
 
-   // We will use gstreamer for AV sync
+   /* We will use gstreamer for AV sync */
    gst_base_sink_set_sync(GST_BASE_SINK(sink), TRUE);
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), TRUE);
+
+   if ( getenv("WESTEROS_SINK_USE_NV21") )
+   {
+      sink->soc.outputFormat= WL_SB_FORMAT_NV21;
+   }
 
    if ( getenv("WESTEROS_SINK_USE_GFX") )
    {
@@ -271,7 +300,7 @@ void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink,
 
    if ( sink->soc.useCaptureOnly )
    {
-      // Don't use vpc when capture only
+      /* Don't use vpc when capture only */
       if ( sink->vpc )
       {
          wl_vpc_destroy( sink->vpc );
@@ -305,7 +334,7 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       goto exit;
    }
 
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QUERYCAP, &sink->soc.caps );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QUERYCAP, &sink->soc.caps );
    if ( rc < 0 )
    {
       GST_ERROR("failed query caps: %d errno %d", rc, errno);
@@ -329,11 +358,17 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       goto exit;
    }
 
+   if ( (sink->soc.deviceCaps & V4L2_CAP_VIDEO_M2M_MPLANE) && !(sink->soc.deviceCaps & V4L2_CAP_VIDEO_M2M) )
+   {
+      GST_DEBUG("device is multiplane");
+      sink->soc.isMultiPlane= TRUE;
+   }
+
    eb.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
    eb.index= -1;
    eb.plane= -1;
    eb.flags= (O_RDWR|O_CLOEXEC);
-   ioctl( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &eb );
+   IOCTL( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &eb );
    if ( errno == ENOTTY )
    {
       GST_ERROR("device (%s) does not support dmabuf: no VIDIOC_EXPBUF", sink->soc.devname );
@@ -352,7 +387,14 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       if ( !sink->soc.conn )
       {
          GST_ERROR("unable to connect to video server (%s)", DEFAULT_VIDEO_SERVER );
-         goto exit;
+         sink->soc.useCaptureOnly= TRUE;
+         sink->soc.captureEnabled= TRUE;
+         printf("westeros-sink: no video server - capture only\n");
+         if ( sink->vpc )
+         {
+            wl_vpc_destroy( sink->vpc );
+            sink->vpc= 0;
+         }
       }
    }
 
@@ -388,14 +430,13 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
 {
    LOCK( sink );
-   sink->videoStarted= FALSE;
    sink->soc.videoPlaying= FALSE;
    UNLOCK( sink );
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
    {
-      // To complete transition to paused state in async_enabled mode, we need a preroll buffer pushed to the pad;
-      // This is a workaround to avoid the need for preroll buffer.
+      /* To complete transition to paused state in async_enabled mode, we need a preroll buffer pushed to the pad;
+         This is a workaround to avoid the need for preroll buffer. */
       GstBaseSink *basesink;
       basesink = GST_BASE_SINK(sink);
       GST_BASE_SINK_PREROLL_LOCK (basesink);
@@ -489,7 +530,6 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
    const gchar *mime;
    int len;
    bool frameSizeChange= false;
-   bool readyToStart= false;
 
    gchar *str= gst_caps_to_string(caps);
    g_print("westeros-sink: caps: (%s)\n", str);
@@ -560,22 +600,8 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
               (sink->soc.frameRate > 0.0) )
          {
             wstSetInputFormat( sink );
-            wstSetOutputFormat( sink );
             wstSetupInputBuffers( sink );
-            wstSetupOutputBuffers( sink );
             sink->soc.formatsSet= TRUE;
-
-            readyToStart= true;
-         }
-      }
-
-      if ( !sink->videoStarted && sink->startAfterCaps && readyToStart )
-      {
-         GST_DEBUG("have caps: starting video");
-         sink->startAfterCaps= FALSE;
-         if ( !gst_westeros_sink_soc_start_video( sink ) )
-         {
-            GST_ERROR("gst_westeros_sink_soc_accept_caps: gst_westeros_sink_soc_start_video failed");
          }
       }
    }
@@ -641,8 +667,17 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             offset += copylen;
             avail -= copylen;
 
+            if (GST_BUFFER_TIMESTAMP_IS_VALID(buffer) )
+            {
+               GstClockTime timestamp= GST_BUFFER_TIMESTAMP(buffer);
+               GST_TIME_TO_TIMEVAL( timestamp, sink->soc.inBuffers[buffIndex].buf.timestamp );
+            }
             sink->soc.inBuffers[buffIndex].buf.bytesused= copylen;
-            rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.inBuffers[buffIndex].buf );
+            if ( sink->soc.isMultiPlane )
+            {
+               sink->soc.inBuffers[buffIndex].buf.m.planes[0].bytesused= copylen;
+            }
+            rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.inBuffers[buffIndex].buf );
             if ( rc < 0 )
             {
                GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
@@ -650,6 +685,25 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             }
 
             ++sink->soc.frameInCount;
+
+            if ( !sink->videoStarted )
+            {
+               GST_DEBUG("gst_westeros_sink_soc_render: issue input VIDIOC_STREAMON");
+               rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
+               if ( rc < 0 )
+               {
+                  GST_ERROR("streamon failed for input: rc %d errno %d", rc, errno );
+                  goto exit;
+               }
+
+               wstSetOutputFormat( sink );
+               wstSetupOutputBuffers( sink );
+
+               if ( !gst_westeros_sink_soc_start_video( sink ) )
+               {
+                  GST_ERROR("gst_westeros_sink_soc_render: gst_westeros_sink_soc_start_video failed");
+               }
+            }
          }
       }
 
@@ -664,6 +718,7 @@ exit:
 
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 {
+   GST_DEBUG("gst_westeros_sink_soc_flush");
    LOCK(sink);
    sink->soc.frameOutCount= 0;
    UNLOCK(sink);
@@ -674,7 +729,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    gboolean result= FALSE;
    int rc;
 
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
    if ( rc < 0 )
    {
       GST_ERROR("streamon failed for input: rc %d errno %d", rc, errno );
@@ -756,7 +811,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 
    if ( !sink->soc.captureEnabled )
    {
-      // Send a buffer to compositor to update hole punch geometry
+      /* Send a buffer to compositor to update hole punch geometry */
       if ( sink->soc.sb )
       {
          struct wl_buffer *buff;
@@ -782,6 +837,124 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
    return FALSE;
 }
 
+static void wstDiscoverVideoDecoder( void )
+{
+   int rc, len, i, fd;
+   bool acceptsCompressed;
+   GstWesterosSink dummySink;
+   struct v4l2_exportbuffer eb;
+   struct dirent *dirent;
+
+   memset( &dummySink, 0, sizeof(dummySink) );
+
+   DIR *dir= opendir("/dev");
+   if ( dir )
+   {
+      for( ; ; )
+      {
+         fd= -1;
+
+         dirent= readdir( dir );
+         if ( dirent == 0 ) break;
+
+         len= strlen(dirent->d_name);
+         if ( (len == 1) && !strncmp( dirent->d_name, ".", len) )
+         {
+            continue;
+         }
+         else if ( (len == 2) && !strncmp( dirent->d_name, "..", len) )
+         {
+            continue;
+         }
+
+         if ( (len > 5) && !strncmp( dirent->d_name, "video", 5 ) )
+         {
+            char name[256+10];
+            struct v4l2_capability caps;
+            uint32_t deviceCaps;
+
+            strcpy( name, "/dev/" );
+            strcat( name, dirent->d_name );
+            GST_DEBUG("checking device: %s", name);
+            fd= open( name, O_RDWR );
+            if ( fd < 0 )
+            {
+               goto done_check;
+            }
+
+            rc= IOCTL( fd, VIDIOC_QUERYCAP, &caps );
+            if ( rc < 0 )
+            {
+               goto done_check;
+            }
+
+            deviceCaps= (caps.capabilities & V4L2_CAP_DEVICE_CAPS ) ? caps.device_caps : caps.capabilities;
+
+            if ( !(deviceCaps & (V4L2_CAP_VIDEO_M2M | V4L2_CAP_VIDEO_M2M_MPLANE) ))
+            {
+               goto done_check;
+            }
+
+            if ( !(deviceCaps & V4L2_CAP_STREAMING) )
+            {
+               goto done_check;
+            }
+
+            eb.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            eb.index= -1;
+            eb.plane= -1;
+            eb.flags= (O_RDWR|O_CLOEXEC);
+            IOCTL( fd, VIDIOC_EXPBUF, &eb );
+            if ( errno == ENOTTY )
+            {
+               goto done_check;
+            }
+
+            dummySink.soc.v4l2Fd= fd;
+            if ( (deviceCaps & V4L2_CAP_VIDEO_M2M_MPLANE) && !(deviceCaps & V4L2_CAP_VIDEO_M2M) )
+            {
+               dummySink.soc.isMultiPlane= TRUE;
+            }
+
+            wstGetInputFormats( &dummySink );
+            acceptsCompressed= false;
+            for( i= 0; i < dummySink.soc.numInputFormats; ++i)
+            {
+               if ( dummySink.soc.inputFormats[i].flags & V4L2_FMT_FLAG_COMPRESSED )
+               {
+                  acceptsCompressed= true;
+                  break;
+               }
+            }
+
+            if ( dummySink.soc.inputFormats )
+            {
+               free( dummySink.soc.inputFormats );
+            }
+            dummySink.soc.numInputFormats;
+
+            if ( !acceptsCompressed )
+            {
+               goto done_check;
+            }
+
+            gDeviceName= strdup(name );
+            printf("westeros-sink: discover decoder: %s\n", gDeviceName);
+            close( fd );
+            break;
+
+         done_check:
+            if ( fd >= 0 )
+            {
+               close( fd );
+               fd= -1;
+            }
+         }
+      }
+      closedir( dir );
+   }
+}
+
 static void wstGetMaxFrameSize( GstWesterosSink *sink )
 {
    struct v4l2_frmsizeenum framesize;
@@ -792,7 +965,7 @@ static void wstGetMaxFrameSize( GstWesterosSink *sink )
    framesize.index= 0;
    framesize.pixel_format= V4L2_PIX_FMT_NV12;
 
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
    if ( rc == 0 )
    {
       if ( framesize.type == V4L2_FRMSIZE_TYPE_DISCRETE )
@@ -802,7 +975,7 @@ static void wstGetMaxFrameSize( GstWesterosSink *sink )
          while ( rc == 0 )
          {
             ++framesize.index;
-            rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
+            rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
             if ( rc == 0 )
             {
                if ( framesize.discrete.width > maxWidth )
@@ -845,13 +1018,16 @@ static bool wstGetInputFormats( GstWesterosSink *sink )
    bool result= false;
    struct v4l2_fmtdesc format;
    int i, rc;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
 
    i= 0;
    for( ; ; )
    {
       format.index= i;
-      format.type= V4L2_BUF_TYPE_VIDEO_OUTPUT;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &format);
+      format.type= bufferType;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &format);
       if ( rc < 0 )
       {
          if ( errno == EINVAL )
@@ -876,8 +1052,8 @@ static bool wstGetInputFormats( GstWesterosSink *sink )
    for( i= 0; i < sink->soc.numInputFormats; ++i)
    {
       sink->soc.inputFormats[i].index= i;
-      sink->soc.inputFormats[i].type= V4L2_BUF_TYPE_VIDEO_OUTPUT;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &sink->soc.inputFormats[i]);
+      sink->soc.inputFormats[i].type= bufferType;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &sink->soc.inputFormats[i]);
       if ( rc < 0 )
       {
          goto exit;
@@ -897,13 +1073,16 @@ static bool wstGetOutputFormats( GstWesterosSink *sink )
    bool result= false;
    struct v4l2_fmtdesc format;
    int i, rc;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
    i= 0;
    for( ; ; )
    {
       format.index= i;
-      format.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &format);
+      format.type= bufferType;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &format);
       if ( rc < 0 )
       {
          if ( errno == EINVAL )
@@ -928,8 +1107,8 @@ static bool wstGetOutputFormats( GstWesterosSink *sink )
    for( i= 0; i < sink->soc.numOutputFormats; ++i)
    {
       sink->soc.outputFormats[i].index= i;
-      sink->soc.outputFormats[i].type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &sink->soc.outputFormats[i]);
+      sink->soc.outputFormats[i].type= bufferType;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FMT, &sink->soc.outputFormats[i]);
       if ( rc < 0 )
       {
          goto exit;
@@ -948,15 +1127,31 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
 {
    bool result= false;
    int rc;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
 
    memset( &sink->soc.fmtIn, 0, sizeof(struct v4l2_format) );
-   sink->soc.fmtIn.type= V4L2_BUF_TYPE_VIDEO_OUTPUT;
-   sink->soc.fmtIn.fmt.pix.pixelformat= sink->soc.inputFormat;
-   sink->soc.fmtIn.fmt.pix.width= sink->soc.frameWidth;
-   sink->soc.fmtIn.fmt.pix.height= sink->soc.frameHeight;
-   sink->soc.fmtIn.fmt.pix.sizeimage= 1024*1024;
-   sink->soc.fmtIn.fmt.pix.field= V4L2_FIELD_NONE;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_S_FMT, &sink->soc.fmtIn );
+   sink->soc.fmtIn.type= bufferType;
+   if ( sink->soc.isMultiPlane )
+   {
+      sink->soc.fmtIn.fmt.pix_mp.pixelformat= sink->soc.inputFormat;
+      sink->soc.fmtIn.fmt.pix_mp.width= sink->soc.frameWidth;
+      sink->soc.fmtIn.fmt.pix_mp.height= sink->soc.frameHeight;
+      sink->soc.fmtIn.fmt.pix_mp.num_planes= 1;
+      sink->soc.fmtIn.fmt.pix_mp.plane_fmt[0].sizeimage= 1024*1024;
+      sink->soc.fmtIn.fmt.pix_mp.plane_fmt[0].bytesperline= 0;
+      sink->soc.fmtIn.fmt.pix_mp.field= V4L2_FIELD_NONE;
+   }
+   else
+   {
+      sink->soc.fmtIn.fmt.pix.pixelformat= sink->soc.inputFormat;
+      sink->soc.fmtIn.fmt.pix.width= sink->soc.frameWidth;
+      sink->soc.fmtIn.fmt.pix.height= sink->soc.frameHeight;
+      sink->soc.fmtIn.fmt.pix.sizeimage= 1024*1024;
+      sink->soc.fmtIn.fmt.pix.field= V4L2_FIELD_NONE;
+   }
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_FMT, &sink->soc.fmtIn );
    if ( rc < 0 )
    {
       GST_DEBUG("wstSetInputFormat: failed to format for input: rc %d errno %d", rc, errno);
@@ -974,18 +1169,44 @@ static bool wstSetOutputFormat( GstWesterosSink *sink )
 {
    bool result= false;
    int rc;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
    memset( &sink->soc.fmtOut, 0, sizeof(struct v4l2_format) );
-   sink->soc.fmtOut.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
-   sink->soc.fmtOut.fmt.pix.pixelformat= V4L2_PIX_FMT_NV12;
-   sink->soc.fmtOut.fmt.pix.width= sink->soc.frameWidth;
-   sink->soc.fmtOut.fmt.pix.height= sink->soc.frameHeight;
-   sink->soc.fmtOut.fmt.pix.sizeimage= (sink->soc.fmtOut.fmt.pix.width*sink->soc.fmtOut.fmt.pix.height*3)/2;
-   sink->soc.fmtOut.fmt.pix.field= V4L2_FIELD_NONE;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_S_FMT, &sink->soc.fmtOut );
+   sink->soc.fmtOut.type= bufferType;
+
+   /* Get current settings from driver */
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &sink->soc.fmtOut );
    if ( rc < 0 )
    {
-      GST_DEBUG("wstSetOutputFormat: initV4l2: failed to format for input: rc %d errno %d", rc, errno);
+      GST_DEBUG("wstSetOutputFormat: initV4l2: failed get format for output: rc %d errno %d", rc, errno);
+   }
+
+   if ( sink->soc.isMultiPlane )
+   {
+      sink->soc.fmtOut.fmt.pix_mp.pixelformat= V4L2_PIX_FMT_NV12;
+      sink->soc.fmtOut.fmt.pix_mp.width= sink->soc.frameWidth;
+      sink->soc.fmtOut.fmt.pix_mp.height= sink->soc.frameHeight;
+      sink->soc.fmtOut.fmt.pix_mp.num_planes= 2;
+      sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].sizeimage= sink->soc.frameWidth*sink->soc.frameHeight;
+      sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline= sink->soc.frameWidth;
+      sink->soc.fmtOut.fmt.pix_mp.plane_fmt[1].sizeimage= sink->soc.frameWidth*sink->soc.frameHeight/2;
+      sink->soc.fmtOut.fmt.pix_mp.plane_fmt[1].bytesperline= sink->soc.frameWidth;
+      sink->soc.fmtOut.fmt.pix_mp.field= V4L2_FIELD_NONE;
+   }
+   else
+   {
+      sink->soc.fmtOut.fmt.pix.pixelformat= V4L2_PIX_FMT_NV12;
+      sink->soc.fmtOut.fmt.pix.width= sink->soc.frameWidth;
+      sink->soc.fmtOut.fmt.pix.height= sink->soc.frameHeight;
+      sink->soc.fmtOut.fmt.pix.sizeimage= (sink->soc.fmtOut.fmt.pix.width*sink->soc.fmtOut.fmt.pix.height*3)/2;
+      sink->soc.fmtOut.fmt.pix.field= V4L2_FIELD_NONE;
+   }
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_FMT, &sink->soc.fmtOut );
+   if ( rc < 0 )
+   {
+      GST_DEBUG("wstSetOutputFormat: initV4l2: failed to set format for output: rc %d errno %d", rc, errno);
       goto exit;
    }
 
@@ -1003,15 +1224,23 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
    struct v4l2_requestbuffers reqbuf;
    struct v4l2_buffer *bufIn;
    void *bufStart;
+   int32_t bufferType;
+   uint32_t memOffset, memLength, memBytesUsed;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
 
    neededBuffers= NUM_INPUT_BUFFERS;
 
    memset( &ctl, 0, sizeof(ctl));
    ctl.id= V4L2_CID_MIN_BUFFERS_FOR_OUTPUT;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_G_CTRL, &ctl );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_CTRL, &ctl );
    if ( rc == 0 )
    {
       sink->soc.minBuffersIn= ctl.value;
+      if ( sink->soc.minBuffersIn != 0 )
+      {
+         neededBuffers= sink->soc.minBuffersIn;
+      }
    }
 
    if ( sink->soc.minBuffersIn == 0 )
@@ -1021,9 +1250,9 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
 
    memset( &reqbuf, 0, sizeof(reqbuf) );
    reqbuf.count= neededBuffers;
-   reqbuf.type= V4L2_BUF_TYPE_VIDEO_OUTPUT;
+   reqbuf.type= bufferType;
    reqbuf.memory= V4L2_MEMORY_MMAP;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
    if ( rc < 0 )
    {
       GST_ERROR("wstSetupInputBuffers: failed to request %d mmap buffers for input: rc %d errno %d", neededBuffers, rc, errno);
@@ -1047,22 +1276,46 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
    for( int i= 0; i < reqbuf.count; ++i )
    {
       bufIn= &sink->soc.inBuffers[i].buf;
-      bufIn->type= V4L2_BUF_TYPE_VIDEO_OUTPUT;
+      bufIn->type= bufferType;
       bufIn->index= i;
       bufIn->memory= V4L2_MEMORY_MMAP;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QUERYBUF, bufIn );
+      if ( sink->soc.isMultiPlane )
+      {
+         memset( sink->soc.inBuffers[i].planes, 0, sizeof(struct v4l2_plane)*WST_MAX_PLANES);
+         bufIn->m.planes= sink->soc.inBuffers[i].planes;
+         bufIn->length= 3;
+      }
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QUERYBUF, bufIn );
       if ( rc < 0 )
       {
          GST_ERROR("wstSetupInputBuffers: failed to query input buffer %d: rc %d errno %d", i, rc, errno);
          goto exit;
       }
+      if ( sink->soc.isMultiPlane )
+      {
+         if ( bufIn->length != 1 )
+         {
+            GST_ERROR("wstSetupInputBuffers: num planes expected to be 1 for compressed input but is %d", bufIn->length);
+            goto exit;
+         }
+         sink->soc.inBuffers[i].planeCount= 0;
+         memOffset= bufIn->m.planes[0].m.mem_offset;
+         memLength= bufIn->m.planes[0].length;
+         memBytesUsed= bufIn->m.planes[0].bytesused;
+      }
+      else
+      {
+         memOffset= bufIn->m.offset;
+         memLength= bufIn->length;
+         memBytesUsed= bufIn->bytesused;
+      }
 
       bufStart= mmap( NULL,
-                      bufIn->length,
+                      memLength,
                       PROT_READ | PROT_WRITE,
                       MAP_SHARED,
                       sink->soc.v4l2Fd,
-                      bufIn->m.offset );
+                      memOffset );
       if ( bufStart == MAP_FAILED )
       {
          GST_ERROR("wstSetupInputBuffers: failed to mmap input buffer %d: errno %d", i, errno);
@@ -1071,11 +1324,11 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
 
       GST_DEBUG("Input buffer: %d", i);
       GST_DEBUG("  index: %d start: %p bytesUsed %d  offset %d length %d flags %08x",
-              bufIn->index, bufStart, bufIn->bytesused, bufIn->m.offset, bufIn->length, bufIn->flags );
+              bufIn->index, bufStart, memBytesUsed, memOffset, memLength, bufIn->flags );
 
       sink->soc.inBuffers[i].fd= -1;
       sink->soc.inBuffers[i].start= bufStart;
-      sink->soc.inBuffers[i].capacity= bufIn->length;
+      sink->soc.inBuffers[i].capacity= memLength;
    }
 
    result= true;
@@ -1094,10 +1347,13 @@ static void wstTearDownInputBuffers( GstWesterosSink *sink )
 {
    int rc;
    struct v4l2_requestbuffers reqbuf;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
 
    if ( sink->soc.inBuffers )
    {
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_STREAMOFF, &sink->soc.fmtIn.type );
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMOFF, &sink->soc.fmtIn.type );
       if ( rc < 0 )
       {
          GST_ERROR("wstTearDownInputBuffers: streamoff failed for input: rc %d errno %d", rc, errno );
@@ -1118,9 +1374,9 @@ static void wstTearDownInputBuffers( GstWesterosSink *sink )
    {
       memset( &reqbuf, 0, sizeof(reqbuf) );
       reqbuf.count= 0;
-      reqbuf.type= V4L2_BUF_TYPE_VIDEO_OUTPUT;
+      reqbuf.type= bufferType;
       reqbuf.memory= V4L2_MEMORY_MMAP;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
       if ( rc < 0 )
       {
          GST_ERROR("wstTearDownInputBuffers: failed to release v4l2 buffers for input: rc %d errno %d", rc, errno);
@@ -1138,15 +1394,22 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
    struct v4l2_buffer *bufOut;
    struct v4l2_exportbuffer expbuf;
    void *bufStart;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
    neededBuffers= NUM_OUTPUT_BUFFERS;
 
    memset( &ctl, 0, sizeof(ctl));
    ctl.id= V4L2_CID_MIN_BUFFERS_FOR_CAPTURE;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_G_CTRL, &ctl );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_CTRL, &ctl );
    if ( rc == 0 )
    {
       sink->soc.minBuffersOut= ctl.value;
+      if ( sink->soc.minBuffersOut != 0 )
+      {
+         neededBuffers= sink->soc.minBuffersOut;
+      }
    }
 
    if ( sink->soc.minBuffersOut == 0 )
@@ -1156,9 +1419,9 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
 
    memset( &reqbuf, 0, sizeof(reqbuf) );
    reqbuf.count= neededBuffers;
-   reqbuf.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+   reqbuf.type= bufferType;
    reqbuf.memory= V4L2_MEMORY_MMAP;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
    if ( rc < 0 )
    {
       GST_ERROR("wstSetupOutputBuffers: failed to request %d mmap buffers for output: rc %d errno %d", neededBuffers, rc, errno);
@@ -1182,38 +1445,78 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
    for( int i= 0; i < reqbuf.count; ++i )
    {
       sink->soc.outBuffers[i].fd= -1;
+      for( int j= 0; j < 3; ++j )
+      {
+         sink->soc.outBuffers[i].planeInfo[j].fd= -1;
+      }
    }
 
    for( int i= 0; i < reqbuf.count; ++i )
    {
       bufOut= &sink->soc.outBuffers[i].buf;
-      bufOut->type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      bufOut->type= bufferType;
       bufOut->index= i;
       bufOut->memory= V4L2_MEMORY_MMAP;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QUERYBUF, bufOut );
+      if ( sink->soc.isMultiPlane )
+      {
+         memset( sink->soc.outBuffers[i].planes, 0, sizeof(struct v4l2_plane)*WST_MAX_PLANES);
+         bufOut->m.planes= sink->soc.outBuffers[i].planes;
+         bufOut->length= sink->soc.fmtOut.fmt.pix_mp.num_planes;
+      }
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QUERYBUF, bufOut );
       if ( rc < 0 )
       {
          GST_ERROR("wstSetupOutputBuffers: failed to query input buffer %d: rc %d errno %d", i, rc, errno);
          goto exit;
       }
-
-      GST_DEBUG("Output buffer: %d", i);
-      GST_DEBUG("  index: %d bytesUsed %d length %d flags %08x",
-             bufOut->index, bufOut->bytesused, bufOut->length, bufOut->flags );
-
-      memset( &expbuf, 0, sizeof(expbuf) );
-      expbuf.type= bufOut->type;
-      expbuf.index= i;
-      expbuf.flags= O_CLOEXEC;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &expbuf );
-      if ( rc < 0 )
+      if ( sink->soc.isMultiPlane )
       {
-         GST_ERROR("wstSetupOutputBuffers: failed to export v4l2 output buffer %d: rc %d errno %d", i, rc, errno);
-      }
-      GST_DEBUG("  index %d export fd %d", expbuf.index, expbuf.fd );
+         sink->soc.outBuffers[i].planeCount= bufOut->length;
+         for( int j= 0; j < sink->soc.outBuffers[i].planeCount; ++j )
+         {
+            GST_DEBUG("Output buffer: %d", i);
+            GST_DEBUG("  index: %d bytesUsed %d length %d flags %08x",
+                   bufOut->index, bufOut->m.planes[j].bytesused, bufOut->m.planes[j].length, bufOut->flags );
 
-      sink->soc.outBuffers[i].fd= expbuf.fd;
-      sink->soc.outBuffers[i].capacity= bufOut->length;
+            memset( &expbuf, 0, sizeof(expbuf) );
+            expbuf.type= bufOut->type;
+            expbuf.index= i;
+            expbuf.plane= j;
+            expbuf.flags= O_CLOEXEC;
+            rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &expbuf );
+            if ( rc < 0 )
+            {
+               GST_ERROR("wstSetupOutputBuffers: failed to export v4l2 output buffer %d: plane: %d rc %d errno %d", i, j, rc, errno);
+            }
+            GST_DEBUG("  plane %d index %d export fd %d", j, expbuf.index, expbuf.fd );
+
+            sink->soc.outBuffers[i].planeInfo[j].fd= expbuf.fd;
+            sink->soc.outBuffers[i].planeInfo[j].capacity= bufOut->m.planes[j].length;
+         }
+
+         /* Use fd of first plane to identify buffer */
+         sink->soc.outBuffers[i].fd= sink->soc.outBuffers[i].planeInfo[0].fd;
+      }
+      else
+      {
+         GST_DEBUG("Output buffer: %d", i);
+         GST_DEBUG("  index: %d bytesUsed %d length %d flags %08x",
+                bufOut->index, bufOut->bytesused, bufOut->length, bufOut->flags );
+
+         memset( &expbuf, 0, sizeof(expbuf) );
+         expbuf.type= bufOut->type;
+         expbuf.index= i;
+         expbuf.flags= O_CLOEXEC;
+         rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &expbuf );
+         if ( rc < 0 )
+         {
+            GST_ERROR("wstSetupOutputBuffers: failed to export v4l2 output buffer %d: rc %d errno %d", i, rc, errno);
+         }
+         GST_DEBUG("  index %d export fd %d", expbuf.index, expbuf.fd );
+
+         sink->soc.outBuffers[i].fd= expbuf.fd;
+         sink->soc.outBuffers[i].capacity= bufOut->length;
+      }
    }
 
    result= true;
@@ -1232,10 +1535,13 @@ static void wstTearDownOutputBuffers( GstWesterosSink *sink )
 {
    int rc;
    struct v4l2_requestbuffers reqbuf;
+   int32_t bufferType;
+
+   bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
    if ( sink->soc.outBuffers )
    {
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_STREAMOFF, &sink->soc.fmtOut.type );
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMOFF, &sink->soc.fmtOut.type );
       if ( rc < 0 )
       {
          GST_ERROR("wstTearDownOutputBuffers: streamoff failed for output: rc %d errno %d", rc, errno );
@@ -1243,6 +1549,19 @@ static void wstTearDownOutputBuffers( GstWesterosSink *sink )
 
       for( int i= 0; i < sink->soc.numBuffersOut; ++i )
       {
+         if ( sink->soc.outBuffers[i].planeCount )
+         {
+            for( int j= 0; j < sink->soc.outBuffers[i].planeCount; ++j )
+            {
+               if ( sink->soc.outBuffers[i].planeInfo[j].fd >= 0 )
+               {
+                  close( sink->soc.outBuffers[i].planeInfo[j].fd );
+                  sink->soc.outBuffers[i].planeInfo[j].fd= -1;
+               }
+            }
+            sink->soc.outBuffers[i].fd= -1;
+            sink->soc.outBuffers[i].planeCount= 0;
+         }
          if ( sink->soc.outBuffers[i].fd >= 0 )
          {
             close( sink->soc.outBuffers[i].fd );
@@ -1258,9 +1577,9 @@ static void wstTearDownOutputBuffers( GstWesterosSink *sink )
    {
       memset( &reqbuf, 0, sizeof(reqbuf) );
       reqbuf.count= 0;
-      reqbuf.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      reqbuf.type= bufferType;
       reqbuf.memory= V4L2_MEMORY_MMAP;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_REQBUFS, &reqbuf );
       if ( rc < 0 )
       {
          GST_ERROR("wstTearDownOutputBuffers: failed to release v4l2 buffers for output: rc %d errno %d", rc, errno);
@@ -1287,13 +1606,24 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
    {
       int rc;
       struct v4l2_buffer buf;
+      struct v4l2_plane planes[WST_MAX_PLANES];
       memset( &buf, 0, sizeof(buf));
       buf.type= sink->soc.fmtIn.type;
       buf.memory= V4L2_MEMORY_MMAP;
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_DQBUF, &buf );
+      if ( sink->soc.isMultiPlane )
+      {
+         buf.length= 1;
+         buf.m.planes= planes;
+      }
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQBUF, &buf );
       if ( rc == 0 )
       {
          bufferIndex= buf.index;
+         if ( sink->soc.isMultiPlane )
+         {
+            memcpy( sink->soc.inBuffers[bufferIndex].buf.m.planes, buf.m.planes, sizeof(struct v4l2_plane)*WST_MAX_PLANES);
+            buf.m.planes= sink->soc.inBuffers[bufferIndex].buf.m.planes;
+         }
          sink->soc.inBuffers[bufferIndex].buf= buf;
       }
    }
@@ -1306,14 +1636,25 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
    int bufferIndex= -1;
    int rc;
    struct v4l2_buffer buf;
+   struct v4l2_plane planes[WST_MAX_PLANES];
 
    memset( &buf, 0, sizeof(buf));
    buf.type= sink->soc.fmtOut.type;
    buf.memory= V4L2_MEMORY_MMAP;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_DQBUF, &buf );
+   if ( sink->soc.isMultiPlane )
+   {
+      buf.length= sink->soc.outBuffers[0].planeCount;
+      buf.m.planes= planes;
+   }
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQBUF, &buf );
    if ( rc == 0 )
    {
       bufferIndex= buf.index;
+      if ( sink->soc.isMultiPlane )
+      {
+         memcpy( sink->soc.outBuffers[bufferIndex].buf.m.planes, buf.m.planes, sizeof(struct v4l2_plane)*WST_MAX_PLANES);
+         buf.m.planes= sink->soc.outBuffers[bufferIndex].buf.m.planes;
+      }
       sink->soc.outBuffers[bufferIndex].buf= buf;
    }
 
@@ -1518,14 +1859,14 @@ static void wstDecoderReset( GstWesterosSink *sink )
 {
    long long delay;
 
+   sink->soc.quitVideoOutputThread= TRUE;
+
    if ( sink->soc.frameRate > 0 )
    {
       delay= 1000000/sink->soc.frameRate;
    }
    delay= ((sink->soc.frameRate > 0) ? 1000000/sink->soc.frameRate : 1000000/60);
    usleep( delay );
-
-   sink->soc.quitVideoOutputThread= TRUE;
 
    wstTearDownInputBuffers( sink );
 
@@ -1569,9 +1910,9 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
 
    GstWesterosSink *sink= binfo->sink;
 
-   if ( binfo->buffIndex >= 0 )
+   if ( (sink->soc.v4l2Fd >= 0) && (binfo->buffIndex >= 0) )
    {
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[binfo->buffIndex].buf );
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[binfo->buffIndex].buf );
       if ( rc < 0 )
       {
          GST_ERROR("failed to re-queue output buffer: rc %d errno %d", rc, errno);
@@ -1593,13 +1934,22 @@ static gpointer wstVideoOutputThread(gpointer data)
 {
    GstWesterosSink *sink= (GstWesterosSink*)data;
    struct v4l2_selection selection;
-   int i, buffIndex, rc;
+   int i, j, buffIndex, rc;
+   int32_t bufferType;
+   long long prevFrameTime= 0, currFrameTime;
 
    GST_DEBUG("wstVideoOutputThread: enter");
 
    for( i= 0; i < sink->soc.numBuffersOut; ++i )
    {
-      rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[i].buf );
+      if ( sink->soc.isMultiPlane )
+      {
+         for( j= 0; j < sink->soc.outBuffers[i].planeCount; ++j )
+         {
+            sink->soc.outBuffers[i].buf.m.planes[j].bytesused= sink->soc.outBuffers[i].buf.m.planes[j].length;
+         }
+      }
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[i].buf );
       if ( rc < 0 )
       {
          GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
@@ -1607,7 +1957,7 @@ static gpointer wstVideoOutputThread(gpointer data)
       }
    }
 
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtOut.type );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtOut.type );
    if ( rc < 0 )
    {
       GST_ERROR("wstVideoOutputThread: streamon failed for output: rc %d errno %d", rc, errno );
@@ -1616,21 +1966,30 @@ static gpointer wstVideoOutputThread(gpointer data)
 
    g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
 
+   bufferType= sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :V4L2_BUF_TYPE_VIDEO_CAPTURE;
    memset( &selection, 0, sizeof(selection) );
-   selection.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+   selection.type= bufferType;
    selection.target= V4L2_SEL_TGT_COMPOSE_DEFAULT;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
    if ( rc < 0 )
    {
-      GST_ERROR("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
-      goto exit;
+      bufferType= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      memset( &selection, 0, sizeof(selection) );
+      selection.type= bufferType;
+      selection.target= V4L2_SEL_TGT_COMPOSE_DEFAULT;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
+      if ( rc < 0 )
+      {
+         GST_ERROR("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
+         goto exit;
+      }
    }
    GST_DEBUG("Out compose default: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
 
    memset( &selection, 0, sizeof(selection) );
-   selection.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+   selection.type= bufferType;
    selection.target= V4L2_SEL_TGT_COMPOSE;
-   rc= ioctl( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
    if ( rc < 0 )
    {
       GST_ERROR("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
@@ -1654,9 +2013,24 @@ static gpointer wstVideoOutputThread(gpointer data)
          {
             int resubFd= -1;
 
+            currFrameTime= getCurrentTimeMillis();
+            if ( prevFrameTime )
+            {
+               long long framePeriod= currFrameTime-prevFrameTime;
+               long long nominalFramePeriod= 1000.0/sink->soc.frameRate;
+               long long delay= nominalFramePeriod-framePeriod;
+               if ( (delay > 2) && (delay <= nominalFramePeriod) )
+               {
+                  usleep( (delay-1)*1000 );
+                  currFrameTime= getCurrentTimeMillis();
+               }
+            }
+            prevFrameTime= currFrameTime;
+
             LOCK(sink);
             if (sink->soc.frameOutCount == 0)
             {
+                GST_DEBUG("wstVideoOutputThread: emit first frame signal");
                 g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
             }
             ++sink->soc.frameOutCount;
@@ -1681,18 +2055,50 @@ static gpointer wstVideoOutputThread(gpointer data)
 
                   struct wl_buffer *wlbuff;
 
-                  wlbuff= wl_sb_create_planar_buffer_fd( sink->soc.sb,
-                                                         sink->soc.outBuffers[buffIndex].fd,
-                                                         sink->soc.frameWidth,
-                                                         sink->soc.frameHeight,
-                                                         sink->soc.outputFormat,
-                                                         0, //offset0
-                                                         sink->soc.frameWidth*sink->soc.frameHeight, //offset1
-                                                         0, //offset2
-                                                         sink->soc.frameWidth, //stride0
-                                                         sink->soc.frameWidth, //stride1
-                                                         0  //stride2
-                                                       );
+                  if ( sink->soc.outBuffers[buffIndex].planeCount > 1 )
+                  {
+                     int fd0, fd1, fd2;
+                     int offset1= 0;
+                     fd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
+                     fd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
+                     fd2= sink->soc.outBuffers[buffIndex].planeInfo[2].fd;
+                     if ( fd1 < 0 )
+                     {
+                        fd1= fd0;
+                        offset1= sink->soc.frameWidth*sink->soc.frameHeight;
+                     }
+                     if ( fd2 < 0 ) fd2= fd0;
+
+                     wlbuff= wl_sb_create_planar_buffer_fd2( sink->soc.sb,
+                                                             fd0,
+                                                             fd1,
+                                                             fd2,
+                                                             sink->soc.frameWidth,
+                                                             sink->soc.frameHeight,
+                                                             sink->soc.outputFormat,
+                                                             0, /* offset0 */
+                                                             offset1, /* offset1 */
+                                                             0, /* offset2 */
+                                                             sink->soc.frameWidth, /* stride0 */
+                                                             sink->soc.frameWidth, /* stride1 */
+                                                             0  /* stride2 */
+                                                           );
+                  }
+                  else
+                  {
+                     wlbuff= wl_sb_create_planar_buffer_fd( sink->soc.sb,
+                                                            sink->soc.outBuffers[buffIndex].fd,
+                                                            sink->soc.frameWidth,
+                                                            sink->soc.frameHeight,
+                                                            sink->soc.outputFormat,
+                                                            0, /* offset0 */
+                                                            sink->soc.frameWidth*sink->soc.frameHeight, /* offset1 */
+                                                            0, /* offset2 */
+                                                            sink->soc.frameWidth, /* stride0 */
+                                                            sink->soc.frameWidth, /* stride1 */
+                                                            0  /* stride2 */
+                                                          );
+                  }
                   if ( wlbuff )
                   {
                      wl_buffer_add_listener( wlbuff, &wl_buffer_listener, binfo );
@@ -1743,7 +2149,7 @@ static gpointer wstVideoOutputThread(gpointer data)
 
             if ( buffIndex >= 0 )
             {
-               rc= ioctl( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[buffIndex].buf );
+               rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[buffIndex].buf );
                if ( rc < 0 )
                {
                   GST_ERROR("wstVideoOutputThread: failed to re-queue output buffer: rc %d errno %d", rc, errno);
@@ -1821,5 +2227,185 @@ static gpointer wstDispatchThread(gpointer data)
       GST_DEBUG("dispatchThread: exit");
    }
    return NULL;
+}
+
+static int ioctl_wrapper( int fd, int request, void* arg )
+{
+   const char *req= 0;
+   int rc;
+   GstDebugLevel level;
+
+   level= gst_debug_category_get_threshold( gst_westeros_sink_debug );
+   if ( level >= GST_LEVEL_LOG )
+   {
+      switch( request )
+      {
+         case VIDIOC_QUERYCAP: req= "VIDIOC_QUERYCAP"; break;
+         case VIDIOC_ENUM_FMT: req= "VIDIOC_ENUM_FMT"; break;
+         case VIDIOC_G_FMT: req= "VIDIOC_G_FMT"; break;
+         case VIDIOC_S_FMT: req= "VIDIOC_S_FMT"; break;
+         case VIDIOC_REQBUFS: req= "VIDIOC_REQBUFS"; break;
+         case VIDIOC_QUERYBUF: req= "VIDIOC_QUERYBUFS"; break;
+         case VIDIOC_G_FBUF: req= "VIDIOC_G_FBUF"; break;
+         case VIDIOC_S_FBUF: req= "VIDIOC_S_FBUF"; break;
+         case VIDIOC_OVERLAY: req= "VIDIOC_OVERLAY"; break;
+         case VIDIOC_QBUF: req= "VIDIOC_QBUF"; break;
+         case VIDIOC_EXPBUF: req= "VIDIOC_EXPBUF"; break;
+         case VIDIOC_DQBUF: req= "VIDIOC_DQBUF"; break;
+         case VIDIOC_STREAMON: req= "VIDIOC_STREAMON"; break;
+         case VIDIOC_STREAMOFF: req= "VIDIOC_STREAMOFF"; break;
+         case VIDIOC_G_PARM: req= "VIDIOC_G_PARM"; break;
+         case VIDIOC_S_PARM: req= "VIDIOC_S_PARM"; break;
+         case VIDIOC_G_STD: req= "VIDIOC_G_STD"; break;
+         case VIDIOC_S_STD: req= "VIDIOC_S_STD"; break;
+         case VIDIOC_ENUMSTD: req= "VIDIOC_ENUMSTD"; break;
+         case VIDIOC_ENUMINPUT: req= "VIDIOC_ENUMINPUT"; break;
+         case VIDIOC_G_CTRL: req= "VIDIOC_G_CTRL"; break;
+         case VIDIOC_S_CTRL: req= "VIDIOC_S_CTRL"; break;
+         case VIDIOC_QUERYCTRL: req= "VIDIOC_QUERYCTRL"; break;
+         case VIDIOC_ENUM_FRAMESIZES: req= "VIDIOC_ENUM_FRAMESIZES"; break;
+         case VIDIOC_TRY_FMT: req= "VIDIOC_TRY_FMT"; break;
+         case VIDIOC_CROPCAP: req= "VIDIOC_CROPCAP"; break;
+         case VIDIOC_CREATE_BUFS: req= "VIDIOC_CREATE_BUFS"; break;
+         case VIDIOC_G_SELECTION: req= "VIDIOC_G_SELECTION"; break;
+         default: req= "NA"; break;
+      }
+      g_print("westerossink-ioctl: ioct( %d, %x ( %s ) )\n", fd, request, req );
+      if ( request == VIDIOC_S_FMT )
+      {
+         struct v4l2_format *format= (struct v4l2_format*)arg;
+         g_print("westerossink-ioctl: : type %d\n", format->type);
+         if ( (format->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) ||
+              (format->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) )
+         {
+            g_print("westerossink-ioctl: pix_mp: pixelFormat %X w %d h %d field %d cs %d flg %x num_planes %d p0: sz %d bpl %d p1: sz %d bpl %d\n",
+                    format->fmt.pix_mp.pixelformat,
+                    format->fmt.pix_mp.width,
+                    format->fmt.pix_mp.height,
+                    format->fmt.pix_mp.field,
+                    format->fmt.pix_mp.colorspace,
+                    format->fmt.pix_mp.flags,
+                    format->fmt.pix_mp.num_planes,
+                    format->fmt.pix_mp.plane_fmt[0].sizeimage,
+                    format->fmt.pix_mp.plane_fmt[0].bytesperline,
+                    format->fmt.pix_mp.plane_fmt[1].sizeimage,
+                    format->fmt.pix_mp.plane_fmt[1].bytesperline
+                  );
+         }
+      }
+      else if ( request == VIDIOC_REQBUFS )
+      {
+         struct v4l2_requestbuffers *rb= (struct v4l2_requestbuffers*)arg;
+         g_print("westerossink-ioctl: count %d type %d mem %d\n", rb->count, rb->type, rb->memory);
+      }
+      else if ( request == VIDIOC_CREATE_BUFS )
+      {
+         struct v4l2_create_buffers *cb= (struct v4l2_create_buffers*)arg;
+         struct v4l2_format *format= &cb->format;
+         g_print("westerossink-ioctl: count %d mem %d\n", cb->count, cb->memory);
+         g_print("westerossink-ioctl: pix_mp: pixelFormat %X w %d h %d num_planes %d p0: sz %d bpl %d p1: sz %d bpl %d\n",
+                 format->fmt.pix_mp.pixelformat,
+                 format->fmt.pix_mp.width,
+                 format->fmt.pix_mp.height,
+                 format->fmt.pix_mp.num_planes,
+                 format->fmt.pix_mp.plane_fmt[0].sizeimage,
+                 format->fmt.pix_mp.plane_fmt[0].bytesperline,
+                 format->fmt.pix_mp.plane_fmt[1].sizeimage,
+                 format->fmt.pix_mp.plane_fmt[1].bytesperline
+               );
+      }
+      else if ( request == VIDIOC_QBUF )
+      {
+         struct v4l2_buffer *buf= (struct v4l2_buffer*)arg;
+         g_print("westerossink-ioctl: buff: index %d q: type %d bytesused %d flags %X field %d mem %x length %d timestamp sec %ld usec %ld\n",
+                buf->index, buf->type, buf->bytesused, buf->flags, buf->field, buf->memory, buf->length, buf->timestamp.tv_sec, buf->timestamp.tv_usec);
+         if ( buf->m.planes &&
+              ( (buf->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) ||
+                (buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) ) )
+         {
+            g_print("westerossink-ioctl: buff: p0: bu %d len %d moff %d doff %d p1: bu %d len %d moff %d doff %d\n",
+                   buf->m.planes[0].bytesused, buf->m.planes[0].length, buf->m.planes[0].m.mem_offset, buf->m.planes[0].data_offset,
+                   buf->m.planes[1].bytesused, buf->m.planes[1].length, buf->m.planes[1].m.mem_offset, buf->m.planes[1].data_offset );
+         }
+      }
+      else if ( request == VIDIOC_DQBUF )
+      {
+         struct v4l2_buffer *buf= (struct v4l2_buffer*)arg;
+         g_print("westerossink-ioctl: buff: index %d s dq: type %d bytesused %d flags %X field %d mem %x length %d timestamp sec %ld usec %ld\n",
+                buf->index, buf->type, buf->bytesused, buf->flags, buf->field, buf->memory, buf->length, buf->timestamp.tv_sec, buf->timestamp.tv_usec);
+         if ( buf->m.planes &&
+              ( (buf->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) ||
+                (buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) ) )
+         {
+            g_print("westerossink-ioctl: buff: p0: bu %d len %d moff %d doff %d p1: bu %d len %d moff %d doff %d\n",
+                   buf->m.planes[0].bytesused, buf->m.planes[0].length, buf->m.planes[0].m.mem_offset, buf->m.planes[0].data_offset,
+                   buf->m.planes[1].bytesused, buf->m.planes[1].length, buf->m.planes[1].m.mem_offset, buf->m.planes[1].data_offset );
+         }
+      }
+      else if ( (request == VIDIOC_STREAMON) || (request == VIDIOC_STREAMOFF) )
+      {
+         int *type= (int*)arg;
+         g_print("westerossink-ioctl: : type %d\n", *type);
+      }
+   }
+
+   rc= ioctl( fd, request, arg );
+
+
+   if ( level >= GST_LEVEL_LOG )
+   {
+      if ( rc < 0 )
+      {
+         g_print("westerossink-ioctl: ioct( %d, %x ) rc %d errno %d\n", fd, request, rc, errno );
+      }
+      else
+      {
+         g_print("westerossink-ioctl: ioct( %d, %x ) rc %d\n", fd, request, rc );
+         if ( request == VIDIOC_S_FMT )
+         {
+            struct v4l2_format *format= (struct v4l2_format*)arg;
+            if ( (format->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) ||
+                 (format->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) )
+            {
+               g_print("westerossink-ioctl: pix_mp: pixelFormat %X w %d h %d num_planes %d p0: sz %d bpl %d p1: sz %d bpl %d\n",
+                       format->fmt.pix_mp.pixelformat,
+                       format->fmt.pix_mp.width,
+                       format->fmt.pix_mp.height,
+                       format->fmt.pix_mp.num_planes,
+                       format->fmt.pix_mp.plane_fmt[0].sizeimage,
+                       format->fmt.pix_mp.plane_fmt[0].bytesperline,
+                       format->fmt.pix_mp.plane_fmt[1].sizeimage,
+                       format->fmt.pix_mp.plane_fmt[1].bytesperline
+                     );
+            }
+         }
+         else if ( request == VIDIOC_CREATE_BUFS )
+         {
+            struct v4l2_create_buffers *cb= (struct v4l2_create_buffers*)arg;
+            g_print("westerossink-ioctl: index %d count %d mem %d\n", cb->index, cb->count, cb->memory);
+         }
+         else if ( request == VIDIOC_G_CTRL )
+         {
+            struct v4l2_control *ctrl= (struct v4l2_control*)arg;
+            g_print("westerossink-ioctl: id %d value %d\n", ctrl->id, ctrl->value);
+         }
+         else if ( request == VIDIOC_DQBUF )
+         {
+            struct v4l2_buffer *buf= (struct v4l2_buffer*)arg;
+            g_print("westerossink-ioctl: buff: index %d f dq: type %d bytesused %d flags %X field %d mem %x length %d seq %d timestamp sec %ld usec %ld\n",
+                   buf->index, buf->type, buf->bytesused, buf->flags, buf->field, buf->memory, buf->length, buf->sequence, buf->timestamp.tv_sec, buf->timestamp.tv_usec);
+            if ( buf->m.planes &&
+                 ( (buf->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) ||
+                   (buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) ) )
+            {
+               g_print("westerossink-ioctl: buff: p0: bu %d len %d moff %d doff %d p1: bu %d len %d moff %d doff %d\n",
+                      buf->m.planes[0].bytesused, buf->m.planes[0].length, buf->m.planes[0].m.mem_offset, buf->m.planes[0].data_offset,
+                      buf->m.planes[1].bytesused, buf->m.planes[1].length, buf->m.planes[1].m.mem_offset, buf->m.planes[1].data_offset );
+            }
+         }
+      }
+   }
+
+   return rc;
 }
 
