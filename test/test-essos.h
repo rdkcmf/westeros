@@ -24,6 +24,9 @@
 bool testCaseEssosUseWayland( EMCTX *emctx );
 bool testCaseEssosUseDirect( EMCTX *emctx );
 bool testCaseEssosName( EMCTX *emctx );
+bool testCaseEssosGetLastErrorDetail( EMCTX *emctx );
+bool testCaseEssosSetKeyRepeatInitialDelay( EMCTX *emctx );
+bool testCaseEssosSetKeyRepeatPeriod( EMCTX *emctx );
 bool testCaseEssosEGLSurfaceAttributes( EMCTX *emctx );
 bool testCaseEssosEGLContextAttributes( EMCTX *emctx );
 bool testCaseEssosInitialWindowSize( EMCTX *emctx );

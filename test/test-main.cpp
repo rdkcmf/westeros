@@ -175,6 +175,18 @@ TESTCASE genericTests[]=
      "Test Essos name API paths",
      testCaseEssosName
    },
+   { "testEssosAPIGetLastErrorDetail",
+     "Test Essos last error API paths",
+     testCaseEssosGetLastErrorDetail
+   },
+   { "testEssosAPISetKeyRepeatInitialDelay",
+     "Test Essos key repeat initial delay API paths",
+     testCaseEssosSetKeyRepeatInitialDelay
+   },
+   { "testEssosAPISetKeyRepeatPeriod",
+     "Test Essos key repeat period API paths",
+     testCaseEssosSetKeyRepeatPeriod
+   },
    { "testEssosAPIEGLSurfaceAttributes",
      "Test Essos EGL surface attributes API paths",
      testCaseEssosEGLSurfaceAttributes
