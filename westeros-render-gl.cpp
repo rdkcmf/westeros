@@ -1295,7 +1295,7 @@ static void wstRendererGLCommitDispmanx( WstRendererGL *rendererGL, WstRenderSur
 
 static void wstRendererGLRenderSurface( WstRendererGL *renderer, WstRenderSurface *surface )
 {
-   if ( (surface->textureId[0] == GL_NONE) || surface->memDirty )
+   if ( (surface->textureId[0] == GL_NONE) || surface->memDirty || surface->externalImage )
    {
       for ( int i= 0; i < surface->textureCount; ++i )
       {
