@@ -245,6 +245,135 @@ exit:
    return testResult;
 }
 
+bool testCaseEssosGetLastErrorDetail( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   char *detail;
+
+   detail= EssContextGetLastErrorDetail( (EssCtx*)0 );
+   if ( detail )
+   {
+      EMERROR("EssContextGetLastErrorDetail did not reuturn null with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   detail= EssContextGetLastErrorDetail( ctx );
+   if ( detail == 0 )
+   {
+      EMERROR("EssContextGetLastErrorDetail failed");
+      goto exit;
+   }
+
+   result= EssContextSetName( ctx, 0 );
+   if ( result )
+   {
+      EMERROR("EssContextSetName did not fail with null name");
+      goto exit;
+   }
+
+   detail= EssContextGetLastErrorDetail( ctx );
+   if ( detail == 0 )
+   {
+      EMERROR("EssContextGetLastErrorDetail failed");
+      goto exit;
+   }
+   if ( strlen(detail) <= 0 )
+   {
+      EMERROR("EssContextGetLastErrorDetail returned unexpected zero length message");
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+
+   testResult= true;
+
+exit:
+   return testResult;
+}
+
+bool testCaseEssosSetKeyRepeatInitialDelay( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   int delay;
+
+   delay= 500;
+   result= EssContextSetKeyRepeatInitialDelay( (EssCtx*)0, delay );
+   if ( result )
+   {
+      EMERROR("EssContextSetKeyRepeatInitialDelay did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetKeyRepeatInitialDelay( ctx, delay );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetKeyRepeatInitialDelay failed");
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+
+   testResult= true;
+
+exit:
+   return testResult;
+}
+
+bool testCaseEssosSetKeyRepeatPeriod( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   int period;
+
+   period= 200;
+   result= EssContextSetKeyRepeatPeriod( (EssCtx*)0, period );
+   if ( result )
+   {
+      EMERROR("EssContextSetKeyRepeatPeriod did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetKeyRepeatPeriod( ctx, period );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetKeyRepeatPeriod failed");
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+
+   testResult= true;
+
+exit:
+   return testResult;
+}
+
 bool testCaseEssosEGLSurfaceAttributes( EMCTX *emctx )
 {
    bool testResult= false;
