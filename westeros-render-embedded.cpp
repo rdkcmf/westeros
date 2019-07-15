@@ -1323,7 +1323,7 @@ static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSur
 
 static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurface *surface )
 {
-   if ( (surface->textureId[0] == GL_NONE) || surface->memDirty )
+   if ( (surface->textureId[0] == GL_NONE) || surface->memDirty || surface->externalImage )
    {
       for ( int i= 0; i < surface->textureCount; ++i )
       {
