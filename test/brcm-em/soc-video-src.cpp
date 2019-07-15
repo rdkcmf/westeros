@@ -99,6 +99,7 @@ static void em_video_src_init(EMVideoSrc* src)
    src->segStopTime= -1;
 
    gst_base_src_set_format( GST_BASE_SRC(src), GST_FORMAT_TIME );
+   gst_base_src_set_async( GST_BASE_SRC(src), TRUE );
 }
 
 static void emVideoSrcFinalize(GObject *object)

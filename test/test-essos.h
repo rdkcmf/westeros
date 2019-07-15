@@ -37,12 +37,14 @@ bool testCaseEssosCreateNativeWindow( EMCTX *emctx );
 bool testCaseEssosGetWaylandDisplay( EMCTX *emctx );
 bool testCaseEssosStart( EMCTX *emctx );
 bool testCaseEssosEventLoopThrottle( EMCTX *emctx );
+bool testCaseEssosDisplaySize( EMCTX *emctx );
 bool testCaseEssosDisplaySizeChange( EMCTX *emctx );
 bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx );
 bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx );
 bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx );
 bool testCaseEssosKeyboardBasicKeyInputWayland( EMCTX *emctx );
 bool testCaseEssosPointerBasicPointerInputWayland( EMCTX *emctx );
+bool testCaseEssosTerminateListener( EMCTX *emctx );
 
 #endif
 

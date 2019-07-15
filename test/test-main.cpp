@@ -227,6 +227,10 @@ TESTCASE genericTests[]=
      "Test Essos event loop throttle behaviour",
      testCaseEssosEventLoopThrottle
    },
+   { "testEssosDisplaySize",
+     "Test Essos display size API paths",
+     testCaseEssosDisplaySize
+   },
    { "testEssosDisplaySizeChange",
      "Test Essos display size change notification",
      testCaseEssosDisplaySizeChange
@@ -250,6 +254,10 @@ TESTCASE genericTests[]=
    { "testEssosPointerBasicPointerInputWayland",
      "Test Essos pointer events with Wayland",
      testCaseEssosPointerBasicPointerInputWayland
+   },
+   { "testEssosTerminateListener",
+     "Test Essos terminate listener",
+     testCaseEssosTerminateListener
    },
    { "testRenderBasicComposition",
      "Test compositor basic composition",

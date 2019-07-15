@@ -1409,6 +1409,98 @@ exit:
    return testResult;
 }
 
+bool testCaseEssosDisplaySize( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   int displayWidth= 0;
+   int displayHeight= 0;
+   int width, height;
+
+   result= EssContextSetDisplaySize( (EssCtx*)0, displayWidth, displayHeight );
+   if ( result )
+   {
+      EMERROR("EssContextSetDisplaySize did not fail with null handle");
+      goto exit;
+   }
+
+   result= EssContextGetDisplaySize( (EssCtx*)0, &displayWidth, &displayHeight );
+   if ( result )
+   {
+      EMERROR("EssContextGetDisplaySize did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, false );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextSetDisplaySize( ctx, displayWidth, displayHeight );
+   if ( result )
+   {
+      EMERROR("EssContextSetDisplaySize did not fail when called before init");
+      goto exit;
+   }
+
+   result= EssContextGetDisplaySize( ctx, &displayWidth, &displayHeight );
+   if ( result )
+   {
+      EMERROR("EssContextGetDisplaySize did not fail when called before init");
+      goto exit;
+   }
+
+   result= EssContextInit( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextInit failed");
+      goto exit;
+   }
+
+   displayWidth= 1000;
+   displayHeight= 800;
+   result= EssContextSetDisplaySize( ctx, displayWidth, displayHeight );
+   if ( !result )
+   {
+      EMERROR("EssContextSetDisplaySize failed");
+      goto exit;
+   }
+
+   result= EssContextGetDisplaySize( ctx, &width, &height );
+   if ( !result )
+   {
+      EMERROR("EssContextGetDisplaySize failed");
+      goto exit;
+   }
+
+   if ( (width != displayWidth) || (height != displayHeight) )
+   {
+      EMERROR("EssContextGetDisplaySize returned unexpected size: actual %dx%d expected %dx%d", width, height, displayWidth, displayHeight);
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( ctx )
+   {
+      EssContextDestroy( ctx );
+   }
+
+   return testResult;
+}
+
 namespace DisplaySizeChange
 {
 
@@ -2557,6 +2649,146 @@ exit:
    EssContextDestroy( ctx );
 
    WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
+namespace BasicTerminate
+{
+
+typedef struct _TestCtx
+{
+   bool wasCalled;
+} TestCtx;
+
+void terminated( void *userData )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+
+   testCtx->wasCalled= true;
+}
+
+static EssTerminateListener terminateListener=
+{
+   terminated
+};
+
+};
+
+bool testCaseEssosTerminateListener( EMCTX *emctx )
+{
+   using namespace BasicTerminate;
+
+   bool testResult= false;
+   bool result;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   EssCtx *ctx= 0;
+   TestCtx tCtx;
+   TestCtx *testCtx= &tCtx;
+
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   result= EssContextSetTerminateListener( (EssCtx*)0, testCtx, &terminateListener );
+   if ( result )
+   {
+      EMERROR("EssContextSetTerminateListener did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetTerminateListener( ctx, testCtx, &terminateListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetTerminateListener failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   WstCompositorDestroy( wctx );
+   wctx= 0;
+
+   for( int i= 0; i < 16; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      if ( testCtx->wasCalled )
+      {
+         break;
+      }
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssTerminateListener not called");
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   EssContextDestroy( ctx );
+
+   if ( wctx )
+   {
+      WstCompositorDestroy( wctx );
+   }
 
    return testResult;
 }
