@@ -31,6 +31,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#define EGL_EGLEXT_PROTOTYPES
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
@@ -1025,7 +1026,7 @@ static WstGLCtx *wstInitCtx( void )
 {
    WstGLCtx *ctx= 0;
    drmModeRes *res= 0;
-   int i, j, len;
+   int i, j, k, len;
    uint32_t n;
    const char *card;
    drmModeConnector *conn= 0;
@@ -1051,7 +1052,9 @@ static WstGLCtx *wstInitCtx( void )
    if ( ctx )
    {
       pthread_mutex_init( &ctx->mutex, 0 );
+      #ifndef WESTEROS_GL_NO_PLANES
       ctx->usePlanes= true;
+      #endif
       ctx->drmFd= -1;
       ctx->drmFd= open(card, O_RDWR);
       if ( ctx->drmFd < 0 )
@@ -1098,13 +1101,41 @@ static WstGLCtx *wstInitCtx( void )
       }
       for( i= 0; i < res->count_encoders; ++i )
       {
+         uint32_t crtcId= 0;
+         bool found= false;
          ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[i]);
          if ( ctx->enc && (ctx->enc->encoder_id == conn->encoder_id) )
          {
+            found= true;
             break;
          }
-         drmModeFreeEncoder( ctx->enc );
-         ctx->enc= 0;
+         for( j= 0; j < res->count_crtcs; j++ )
+         {
+            if ( ctx->enc->possible_crtcs & (1 << j))
+            {
+               crtcId= res->crtcs[j];
+               for( k= 0; k < res->count_crtcs; k++ )
+               {
+                  if ( res->crtcs[k] == crtcId )
+                  {
+                     drmModeFreeEncoder( ctx->enc );
+                     ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[k]);
+                     ctx->enc->crtc_id= crtcId;
+                     found= true;
+                     break;
+                  }
+               }
+               if ( found )
+               {
+                  break;
+               }
+            }
+         }
+         if ( !found )
+         {
+            drmModeFreeEncoder( ctx->enc );
+            ctx->enc= 0;
+         }
       }
       if ( ctx->enc )
       {
@@ -1132,8 +1163,23 @@ static WstGLCtx *wstInitCtx( void )
          }
          else
          {
-            ERROR("wstInitCtx: unable to determine current mode for connector %p on card %s", conn, card);
-            goto exit;
+            WARNING("wstInitCtx: unable to determine current mode for connector %p on card %s crtc %p", conn, card, ctx->crtc);
+            for( j= 0; j < res->count_crtcs; ++j )
+            {
+               drmModeCrtc *crtcTest= drmModeGetCrtc( ctx->drmFd, res->crtcs[j] );
+               if ( crtcTest )
+               {
+                  if ( crtcTest->crtc_id == ctx->enc->crtc_id )
+                  {
+                     crtc_idx= j;
+                  }
+                  drmModeFreeCrtc( crtcTest );
+                  if ( crtc_idx >= 0 )
+                  {
+                     break;
+                  }
+               }
+            }
          }
       }
       else
@@ -1141,6 +1187,7 @@ static WstGLCtx *wstInitCtx( void )
          ERROR("wstInitCtx: unable to find encoder for connector for card (%s)", card);
       }
 
+      #ifndef WESTEROS_GL_NO_PLANES
       if ( ctx->usePlanes && (crtc_idx >= 0) )
       {
          planeRes= drmModeGetPlaneResources( ctx->drmFd );
@@ -1148,6 +1195,7 @@ static WstGLCtx *wstInitCtx( void )
          {
             bool isOverlay;
 
+            DEBUG("wstInitCtx: planeRes %p count_planes %d", planeRes, planeRes->count_planes );
             for( n= 0; n < planeRes->count_planes; ++n )
             {
                plane= drmModeGetPlane( ctx->drmFd, planeRes->planes[n] );
@@ -1229,15 +1277,19 @@ static WstGLCtx *wstInitCtx( void )
 
          INFO( "wstInitCtx; found %d overlay planes", ctx->overlayPlanes.totalCount );
 
-         gServer= (VideoServerCtx*)calloc( 1, sizeof(VideoServerCtx) );
-         if ( gServer )
+         if ( ctx->overlayPlanes.totalCount )
          {
-            if ( !wstInitVideoServer( gServer ) )
+            gServer= (VideoServerCtx*)calloc( 1, sizeof(VideoServerCtx) );
+            if ( gServer )
             {
-               ERROR("wstInitCtx: failed to initialize video server");
+               if ( !wstInitVideoServer( gServer ) )
+               {
+                  ERROR("wstInitCtx: failed to initialize video server");
+               }
             }
          }
       }
+      #endif
    }
    else
    {
@@ -1651,7 +1703,16 @@ EGLAPI EGLDisplay EGLAPIENTRY eglGetDisplay(EGLNativeDisplayType displayId)
    {
       if ( gCtx->gbm )
       {
-         gCtx->dpy = gRealEGLGetDisplay( (NativeDisplayType)gCtx->gbm );
+         PFNEGLGETPLATFORMDISPLAYEXTPROC realEGLGetPlatformDisplay= 0;
+         realEGLGetPlatformDisplay= (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress( "eglGetPlatformDisplayEXT" );
+         if ( realEGLGetPlatformDisplay )
+         {
+            gCtx->dpy= realEGLGetPlatformDisplay( EGL_PLATFORM_GBM_KHR, gCtx->gbm, NULL );
+         }
+         else
+         {
+            gCtx->dpy = gRealEGLGetDisplay( (NativeDisplayType)gCtx->gbm );
+         }
       }
    }
    else
