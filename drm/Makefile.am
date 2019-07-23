@@ -27,6 +27,7 @@ AM_LDFLAGS =
 
 if HAVE_EGL
 AM_CFLAGS += ${EGL_CFLAGS}
+AM_LDFLAGS += -lEGL
 endif 
 
 lib_LTLIBRARIES = libwesteros_gl.la
