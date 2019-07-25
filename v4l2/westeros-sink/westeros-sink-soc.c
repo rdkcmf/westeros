@@ -37,7 +37,7 @@
 
 #define NUM_INPUT_BUFFERS (2)
 #define MIN_INPUT_BUFFERS (1)
-#define NUM_OUTPUT_BUFFERS (3)
+#define NUM_OUTPUT_BUFFERS (6)
 #define MIN_OUTPUT_BUFFERS (3)
 
 #define IOCTL ioctl_wrapper
