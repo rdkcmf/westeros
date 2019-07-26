@@ -26,6 +26,7 @@
 #include <sys/time.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <bcm_host.h>
 
 #include "westeros-sink.h"
 #include "wayland-egl.h"
@@ -122,6 +123,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    const char *methodName;
    void *module= 0;
    bool error= false;
+   int displayId;
+   uint32_t width, height;
    OMX_ERRORTYPE omxerr;
    
    #ifdef GLIB_VERSION_2_32 
@@ -303,7 +306,15 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_deinit: calling bcm_host_init" );
    sink->soc.bcm_host_init();
    sink->soc.bcmHostIsInit= true;
-   
+
+   displayId= DISPMANX_ID_MAIN_LCD;
+   // get LCD width and height from underlying platform
+   graphics_get_display_size( displayId,&width,&height );
+   sink->windowWidth= width;
+   sink->windowHeight= height;
+   sink->outputWidth= width;
+   sink->outputHeight= height;
+
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_deinit: calling OMX_Init" );
    omxerr= sink->soc.OMX_Init();
    if ( omxerr != OMX_ErrorNone )
