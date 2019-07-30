@@ -3443,7 +3443,9 @@ static void wstCompositorReleaseResources( WstCompositor *ctx )
    if ( ctx->nc )
    {
       WstNestedConnectionReleaseRemoteBuffers( ctx->nc );
+      pthread_mutex_unlock( &ctx->mutex );
       WstNestedConnectionDisconnect( ctx->nc );
+      pthread_mutex_lock( &ctx->mutex );
    }
 
    if ( ctx->isRepeater )
