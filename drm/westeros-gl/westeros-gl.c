@@ -132,7 +132,8 @@ typedef struct _WstOverlayPlane
    int zOrder;
    uint32_t crtc_id;
    drmModePlane *plane;
-   struct gbm_bo *bo;
+   drmModeObjectProperties *planeProps;
+   drmModePropertyRes **planePropRes;
    uint32_t fbId;
    uint32_t handle;
    uint32_t fbIdPrev;
@@ -148,6 +149,7 @@ typedef struct _WstOverlayPlanes
    WstOverlayPlane *availTail;
    WstOverlayPlane *usedHead;
    WstOverlayPlane *usedTail;
+   WstOverlayPlane *primary;
 } WstOverlayPlanes;
 
 typedef struct _NativeWindowItem
@@ -158,6 +160,7 @@ typedef struct _NativeWindowItem
    WstOverlayPlane *windowPlane;
    uint32_t handle;
    uint32_t fbId;
+   struct gbm_bo *bo;
    struct gbm_bo *prevBo;
    uint32_t prevFbId;
 } NativeWindowItem;
@@ -176,6 +179,11 @@ typedef struct _WstGLCtx
    struct gbm_device* gbm;
    bool modeSet;
    bool usePlanes;
+   bool haveAtomic;
+   drmModeObjectProperties *connectorProps;
+   drmModePropertyRes **connectorPropRes;
+   drmModeObjectProperties *crtcProps;
+   drmModePropertyRes **crtcPropRes;
    NativeWindowItem *nwFirst;
    NativeWindowItem *nwLast;
    EGLDisplay dpy;
@@ -195,6 +203,7 @@ typedef struct _WstGLSizeCBInfo
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw );
+static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw );
 
 static PFNEGLGETPLATFORMDISPLAYEXTPROC gRealEGLGetPlatformDisplay= 0;
 static PREALEGLGETDISPLAY gRealEGLGetDisplay= 0;
@@ -348,6 +357,12 @@ static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool fromTop 
    WstOverlayPlane *overlay= 0;
 
    pthread_mutex_lock( &gCtx->mutex );
+
+   if ( planes->totalCount < 2 )
+   {
+      pthread_mutex_unlock( &gCtx->mutex );
+      return 0;
+   }
 
    if ( planes->usedCount < planes->totalCount )
    {
@@ -1022,6 +1037,212 @@ static void wstGLNotifySizeListeners( void )
    }
 }
 
+static void wstReleaseConnectorProperties( WstGLCtx *ctx )
+{
+   int i;
+   if ( ctx->connectorProps )
+   {
+      if ( ctx->connectorPropRes )
+      {
+         for( i= 0; i < ctx->connectorProps->count_props; ++i )
+         {
+            if ( ctx->connectorPropRes[i] )
+            {
+               drmModeFreeProperty( ctx->connectorPropRes[i] );
+               ctx->connectorPropRes[i]= 0;
+            }
+         }
+         free( ctx->connectorPropRes );
+         ctx->connectorPropRes= 0;
+      }
+      drmModeFreeObjectProperties( ctx->connectorProps );
+      ctx->connectorProps= 0;
+   }
+}
+
+static bool wstAcquireConnectorProperties( WstGLCtx *ctx )
+{
+   bool error= false;
+   int i;
+
+   ctx->connectorProps= drmModeObjectGetProperties( ctx->drmFd, ctx->conn->connector_id, DRM_MODE_OBJECT_CONNECTOR );
+   if ( ctx->connectorProps )
+   {
+      ctx->connectorPropRes= (drmModePropertyRes**)calloc( ctx->connectorProps->count_props, sizeof(drmModePropertyRes*) );
+      if ( ctx->connectorPropRes )
+      {
+         for( i= 0; i < ctx->connectorProps->count_props; ++i )
+         {
+            ctx->connectorPropRes[i]= drmModeGetProperty( ctx->drmFd, ctx->connectorProps->props[i] );
+            if ( ctx->connectorPropRes[i] )
+            {
+               DEBUG("connector property %d name (%s) value (%lld)",
+                     ctx->connectorProps->props[i], ctx->connectorPropRes[i]->name, ctx->connectorProps->prop_values[i] );
+            }
+            else
+            {
+               error= true;
+               break;
+            }
+         }
+      }
+      else
+      {
+         error= true;
+      }
+   }
+   else
+   {
+      error= true;
+   }
+   if ( error )
+   {
+      wstReleaseConnectorProperties( ctx );
+      ctx->haveAtomic= false;
+   }
+
+   return !error;
+}
+
+static void wstReleaseCrtcProperties( WstGLCtx *ctx )
+{
+   int i;
+   if ( ctx->crtcProps )
+   {
+      if ( ctx->crtcPropRes )
+      {
+         for( i= 0; i < ctx->crtcProps->count_props; ++i )
+         {
+            if ( ctx->crtcPropRes[i] )
+            {
+               drmModeFreeProperty( ctx->crtcPropRes[i] );
+               ctx->crtcPropRes[i]= 0;
+            }
+         }
+         free( ctx->crtcPropRes );
+         ctx->crtcPropRes= 0;
+      }
+      drmModeFreeObjectProperties( ctx->crtcProps );
+      ctx->crtcProps= 0;
+   }
+}
+
+static bool wstAcquireCrtcProperties( WstGLCtx *ctx )
+{
+   bool error= false;
+   int i;
+
+   ctx->crtcProps= drmModeObjectGetProperties( ctx->drmFd, ctx->crtc->crtc_id, DRM_MODE_OBJECT_CRTC );
+   if ( ctx->crtcProps )
+   {
+      ctx->crtcPropRes= (drmModePropertyRes**)calloc( ctx->crtcProps->count_props, sizeof(drmModePropertyRes*) );
+      if ( ctx->crtcPropRes )
+      {
+         for( i= 0; i < ctx->crtcProps->count_props; ++i )
+         {
+            ctx->crtcPropRes[i]= drmModeGetProperty( ctx->drmFd, ctx->crtcProps->props[i] );
+            if ( ctx->crtcPropRes[i] )
+            {
+               DEBUG("crtc property %d name (%s) value (%lld)",
+                     ctx->crtcProps->props[i], ctx->crtcPropRes[i]->name, ctx->crtcProps->prop_values[i] );
+            }
+            else
+            {
+               error= true;
+               break;
+            }
+         }
+      }
+      else
+      {
+         error= true;
+      }
+   }
+   else
+   {
+      error= true;
+   }
+   if ( error )
+   {
+      wstReleaseCrtcProperties( ctx );
+      ctx->haveAtomic= false;
+   }
+
+   return !error;
+}
+
+static void wstReleasePlaneProperties( WstGLCtx *ctx, WstOverlayPlane *plane )
+{
+   int i;
+   (void)ctx;
+   if ( plane->planeProps )
+   {
+      if ( plane->planePropRes )
+      {
+         for( i= 0; i < plane->planeProps->count_props; ++i )
+         {
+            if ( plane->planePropRes[i] )
+            {
+               drmModeFreeProperty( plane->planePropRes[i] );
+               plane->planePropRes[i]= 0;
+            }
+         }
+         free( plane->planePropRes );
+         plane->planePropRes= 0;
+      }
+      drmModeFreeObjectProperties( plane->planeProps );
+      plane->planeProps= 0;
+   }
+}
+
+static bool wstAcquirePlaneProperties( WstGLCtx *ctx, WstOverlayPlane *plane )
+{
+   bool error= false;
+   int i, j;
+
+   plane->planeProps= drmModeObjectGetProperties( ctx->drmFd, plane->plane->plane_id, DRM_MODE_OBJECT_PLANE );
+   if ( plane->planeProps )
+   {
+      plane->planePropRes= (drmModePropertyRes**)calloc( plane->planeProps->count_props, sizeof(drmModePropertyRes*) );
+      if ( plane->planePropRes )
+      {
+         for( i= 0; i < plane->planeProps->count_props; ++i )
+         {
+            plane->planePropRes[i]= drmModeGetProperty( ctx->drmFd, plane->planeProps->props[i] );
+            if ( plane->planePropRes[i] )
+            {
+               DEBUG("plane %d  property %d name (%s) value (%lld)",
+                     plane->plane->plane_id, plane->planeProps->props[i], plane->planePropRes[i]->name, plane->planeProps->prop_values[i] );
+               for( j= 0; j < plane->planePropRes[i]->count_enums; ++j )
+               {
+                  DEBUG("  enum name (%s) value %llu", plane->planePropRes[i]->enums[j].name, plane->planePropRes[i]->enums[j].value );
+               }
+            }
+            else
+            {
+               error= true;
+               break;
+            }
+         }
+      }
+      else
+      {
+         error= true;
+      }
+   }
+   else
+   {
+      error= true;
+   }
+   if ( error )
+   {
+      wstReleasePlaneProperties( ctx, plane );
+      ctx->haveAtomic= false;
+   }
+
+   return !error;
+}
+
 static WstGLCtx *wstInitCtx( void )
 {
    WstGLCtx *ctx= 0;
@@ -1036,6 +1257,9 @@ static WstGLCtx *wstInitCtx( void )
    drmModePropertyRes *prop= 0;
    int crtc_idx= -1;
    bool error= true;
+   int rc;
+   struct drm_set_client_cap clientCap;
+   struct drm_mode_atomic atom;
 
    if ( getenv("WESTEROS_GL_FPS" ) )
    {
@@ -1067,6 +1291,22 @@ static WstGLCtx *wstInitCtx( void )
          INFO("westeros-gl: no planes");
          ctx->usePlanes= false;
       }
+
+      clientCap.capability= DRM_CLIENT_CAP_UNIVERSAL_PLANES;
+      clientCap.value= 1;
+      rc= ioctl( ctx->drmFd, DRM_IOCTL_SET_CLIENT_CAP, &clientCap);
+      DEBUG("westeros-gl: DRM_IOCTL_SET_CLIENT_CAP: DRM_CLIENT_CAP_UNIVERSAL_PLANES rc %d", rc);
+
+      clientCap.capability= DRM_CLIENT_CAP_ATOMIC;
+      clientCap.value= 1;
+      rc= ioctl( ctx->drmFd, DRM_IOCTL_SET_CLIENT_CAP, &clientCap);
+      DEBUG("westeros-gl: DRM_IOCTL_SET_CLIENT_CAP: DRM_CLIENT_CAP_ATOMIC rc %d", rc);
+      if ( rc == 0 )
+      {
+         ctx->haveAtomic= true;
+         INFO("westeros-gl: have drm atomic mode setting");
+      }
+
       res= drmModeGetResources( ctx->drmFd );
       if ( !res )
       {
@@ -1093,6 +1333,14 @@ static WstGLCtx *wstInitCtx( void )
       }
       ctx->res= res;
       ctx->conn= conn;
+
+      for( i= 0; i < conn->count_modes; ++i )
+      {
+         DEBUG("mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x",
+                i, conn->modes[i].hdisplay, conn->modes[i].vdisplay, conn->modes[i].vrefresh,
+                conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
+      }
+
       ctx->gbm= gbm_create_device( ctx->drmFd );
       if ( !ctx->gbm )
       {
@@ -1163,7 +1411,7 @@ static WstGLCtx *wstInitCtx( void )
          }
          else
          {
-            WARNING("wstInitCtx: unable to determine current mode for connector %p on card %s crtc %p", conn, card, ctx->crtc);
+            WARNING("wstInitCtx: unable to determine current mode for connector %p on card %s crtc %p id %d", conn, card, ctx->crtc, ctx->crtc?ctx->crtc->crtc_id:0 );
             for( j= 0; j < res->count_crtcs; ++j )
             {
                drmModeCrtc *crtcTest= drmModeGetCrtc( ctx->drmFd, res->crtcs[j] );
@@ -1187,13 +1435,27 @@ static WstGLCtx *wstInitCtx( void )
          ERROR("wstInitCtx: unable to find encoder for connector for card (%s)", card);
       }
 
+      if ( ctx->haveAtomic )
+      {
+         wstAcquireConnectorProperties( ctx );
+      }
+      if ( ctx->haveAtomic )
+      {
+         wstAcquireCrtcProperties( ctx );
+      }
+      if ( !ctx->haveAtomic )
+      {
+         wstReleaseConnectorProperties( ctx );
+         wstReleaseCrtcProperties( ctx );
+      }
+
       #ifndef WESTEROS_GL_NO_PLANES
       if ( ctx->usePlanes && (crtc_idx >= 0) )
       {
          planeRes= drmModeGetPlaneResources( ctx->drmFd );
          if ( planeRes )
          {
-            bool isOverlay;
+            bool isOverlay, isPrimary;
 
             DEBUG("wstInitCtx: planeRes %p count_planes %d", planeRes, planeRes->count_planes );
             for( n= 0; n < planeRes->count_planes; ++n )
@@ -1201,7 +1463,7 @@ static WstGLCtx *wstInitCtx( void )
                plane= drmModeGetPlane( ctx->drmFd, planeRes->planes[n] );
                if ( plane )
                {
-                  isOverlay= false;
+                  isOverlay= isPrimary= false;
 
                   props= drmModeObjectGetProperties( ctx->drmFd, planeRes->planes[n], DRM_MODE_OBJECT_PLANE );
                   if ( props )
@@ -1211,40 +1473,53 @@ static WstGLCtx *wstInitCtx( void )
                         prop= drmModeGetProperty( ctx->drmFd, props->props[j] );
                         if ( prop )
                         {
-                           int k,l;
-                           DEBUG("wstInitCtx: property %d name (%s)", props->props[j], prop->name );
-                           for( l= 0; l < prop->count_values; ++l )
+                           if ( plane->possible_crtcs & (1<<crtc_idx) )
                            {
-                              DEBUG("  value %d (%lld)", l, props->prop_values[l] );
-                           }
-                           for( k= 0; k < prop->count_enums; ++k )
-                           {
-                              DEBUG("  enum name (%s) value %llu", prop->enums[k].name, prop->enums[k].value );
-                           }
-                           len= strlen(prop->name);
-                           if ( (len == 4) && !strncmp( prop->name, "type", len) )
-                           {
-                              if ( plane->possible_crtcs & (1<<crtc_idx) )
+                              len= strlen(prop->name);
+                              if ( (len == 4) && !strncmp( prop->name, "type", len) )
                               {
-                                 isOverlay= true;
+                                 if ( props->prop_values[j] == DRM_PLANE_TYPE_PRIMARY )
+                                 {
+                                    isPrimary= true;
+                                 }
+                                 else if ( props->prop_values[j] == DRM_PLANE_TYPE_OVERLAY )
+                                 {
+                                    isOverlay= true;
+                                 }
                               }
                            }
                         }
                      }
                   }
-                  if ( isOverlay )
+                  if ( isPrimary || isOverlay )
                   {
                      WstOverlayPlane *newPlane;
                      newPlane= (WstOverlayPlane*)calloc( 1, sizeof(WstOverlayPlane) );
                      if ( newPlane )
                      {
                         int rc;
-                        ++ctx->overlayPlanes.totalCount;
+                        if ( isOverlay )
+                        {
+                           ++ctx->overlayPlanes.totalCount;
+                        }
                         newPlane->plane= plane;
                         newPlane->zOrder= ctx->overlayPlanes.totalCount;
                         newPlane->inUse= false;
                         newPlane->crtc_id= ctx->enc->crtc_id;
-                        wstOverlayAppendUnused( &ctx->overlayPlanes, newPlane );
+                        if ( ctx->haveAtomic )
+                        {
+                           if ( wstAcquirePlaneProperties( ctx, newPlane ) )
+                           {
+                              if ( isPrimary )
+                              {
+                                 ctx->overlayPlanes.primary= newPlane;
+                              }
+                           }
+                        }
+                        if ( isOverlay )
+                        {
+                           wstOverlayAppendUnused( &ctx->overlayPlanes, newPlane );
+                        }
 
                         plane= 0;
                      }
@@ -1277,7 +1552,7 @@ static WstGLCtx *wstInitCtx( void )
 
          INFO( "wstInitCtx; found %d overlay planes", ctx->overlayPlanes.totalCount );
 
-         if ( ctx->overlayPlanes.totalCount )
+         if ( ctx->overlayPlanes.totalCount >= 2 )
          {
             gServer= (VideoServerCtx*)calloc( 1, sizeof(VideoServerCtx) );
             if ( gServer )
@@ -1287,6 +1562,10 @@ static WstGLCtx *wstInitCtx( void )
                   ERROR("wstInitCtx: failed to initialize video server");
                }
             }
+         }
+         else
+         {
+            ctx->usePlanes= false;
          }
       }
       #endif
@@ -1314,6 +1593,30 @@ static void wstTermCtx( WstGLCtx *ctx )
    if ( ctx )
    {
       wstTermVideoServer( gServer );
+
+      wstReleaseConnectorProperties( ctx );
+      wstReleaseCrtcProperties( ctx );
+      pthread_mutex_lock( &ctx->mutex );
+      if ( ctx->overlayPlanes.totalCount )
+      {
+         WstOverlayPlane *toFree= 0;
+         WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
+         while( iter )
+         {
+            wstReleasePlaneProperties( ctx, iter );
+            drmModeFreePlane( iter->plane );
+            toFree= iter;
+            iter= iter->next;
+            free( toFree );
+         }
+      }
+      if ( ctx->overlayPlanes.primary )
+      {
+         wstReleasePlaneProperties( ctx, ctx->overlayPlanes.primary );
+         drmModeFreePlane( ctx->overlayPlanes.primary->plane );
+         free( ctx->overlayPlanes.primary );
+      }
+      pthread_mutex_unlock( &ctx->mutex );
 
       if ( ctx->gbm )
       {
@@ -1358,6 +1661,32 @@ static void wstTermCtx( WstGLCtx *ctx )
    }
 }
 
+static void wstAtomicAddProperty( WstGLCtx *ctx, drmModeAtomicReq *req, uint32_t objectId,
+                                  int countProps, drmModePropertyRes **propRes, const char *name, uint64_t value )
+{
+   int rc;
+   int i;
+   uint32_t propId= 0;
+
+   for( i= 0; i < countProps; ++i )
+   {
+      if ( !strcmp( name, propRes[i]->name ) )
+      {
+         propId= propRes[i]->prop_id;
+         break;
+      }
+   }
+
+   if ( propId > 0 )
+   {
+      rc= drmModeAtomicAddProperty( req, objectId, propId, value );
+      if ( rc < 0 )
+      {
+         ERROR("wstAtomicAddProperty: drmModeAtomicAddProperty fail: obj %d prop %d (%s) value %lld: rc %d errno %d", objectId, propId, name, value, rc, errno );
+      }
+   }
+}
+
 static void pageFlipEventHandler(int fd, unsigned int frame,
 				 unsigned int sec, unsigned int usec,
 				 void *data)
@@ -1367,6 +1696,246 @@ static void pageFlipEventHandler(int fd, unsigned int frame,
    {
       --ctx->flipPending;
    }
+}
+
+static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
+{
+   int rc;
+   drmModeAtomicReq *req;
+   uint32_t flags= 0; //JRW DRM_MODE_ATOMIC_NONBLOCK;
+   struct gbm_surface* gs;
+   struct gbm_bo *bo;
+   uint32_t handle, stride;
+
+   req= drmModeAtomicAlloc();
+   if ( !req )
+   {
+      ERROR("wstSwapDRMBuffersAtomic: drmModeAtomicAlloc failed, errno %x", errno);
+      goto exit;
+   }
+
+   if ( !ctx->modeSet )
+   {
+      uint32_t blobId= 0;
+
+      flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
+      wstAtomicAddProperty( ctx, req, ctx->conn->connector_id,
+                            ctx->connectorProps->count_props, ctx->connectorPropRes,
+                            "CRTC_ID", ctx->crtc->crtc_id );
+      rc= drmModeCreatePropertyBlob( ctx->drmFd, ctx->modeInfo, sizeof(*ctx->modeInfo), &blobId );
+      if ( rc == 0 )
+      {
+         wstAtomicAddProperty( ctx, req, ctx->crtc->crtc_id,
+                               ctx->crtcProps->count_props, ctx->crtcPropRes,
+                               "MODE_ID", blobId );
+
+         wstAtomicAddProperty( ctx, req, ctx->crtc->crtc_id,
+                               ctx->crtcProps->count_props, ctx->crtcPropRes,
+                               "ACTIVE", 1 );
+      }
+      else
+      {
+         ERROR("wstSwapDRMBuffersAtomic: drmModeCreatePropertyBlob fail: rc %d errno %d", rc, errno);
+      }
+   }
+
+   if ( nw )
+   {
+      gs= (struct gbm_surface*)nw->nativeWindow;
+      if ( gs )
+      {
+         bo= gbm_surface_lock_front_buffer(gs);
+         wstUpdateResources( WSTRES_BO_GRAPHICS, true, bo, __LINE__);
+
+         handle= gbm_bo_get_handle(bo).u32;
+         stride= gbm_bo_get_stride(bo);
+
+         if ( nw->handle != handle )
+         {
+            rc= drmModeAddFB( ctx->drmFd,
+                              ctx->modeInfo->hdisplay,
+                              ctx->modeInfo->vdisplay,
+                              32,
+                              32,
+                              stride,
+                              handle,
+                              &nw->fbId );
+             if ( rc )
+             {
+                ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
+                goto exit;
+             }
+             wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
+             nw->handle= handle;
+             nw->bo= bo;
+         }
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "FB_ID", nw->fbId );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "CRTC_ID", nw->windowPlane->crtc_id );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "SRC_X", 0 );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "SRC_Y", 0 );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "SRC_W", ctx->modeInfo->hdisplay<<16 );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "SRC_H", ctx->modeInfo->vdisplay<<16 );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "CRTC_X", 0 );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "CRTC_Y", 0 );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "CRTC_W", ctx->modeInfo->hdisplay );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "CRTC_H", ctx->modeInfo->vdisplay );
+      }
+   }
+
+   pthread_mutex_lock( &ctx->mutex );
+   if ( ctx->overlayPlanes.usedCount )
+   {
+      WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
+      while( iter )
+      {
+         if ( iter->fbIdPrev )
+         {
+            wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
+            drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
+            iter->fbIdPrev= 0;
+            iter->handlePrev= 0;
+         }
+
+         if ( iter->videoFrameNext.fbId )
+         {
+            uint32_t fbId= iter->videoFrameNext.fbId;
+            uint32_t handle= iter->videoFrameNext.handle;
+            uint32_t frameWidth= iter->videoFrameNext.frameWidth;
+            uint32_t frameHeight= iter->videoFrameNext.frameHeight;
+            int rectX= iter->videoFrameNext.rectX;
+            int rectY= iter->videoFrameNext.rectY;
+            int rectW= iter->videoFrameNext.rectW;
+            int rectH= iter->videoFrameNext.rectH;
+            uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
+
+            iter->fbIdPrev= iter->fbId;
+            iter->handlePrev= iter->handle;
+            iter->fbId= fbId;
+            iter->handle= handle;
+            iter->plane->crtc_id= ctx->overlayPlanes.primary->plane->crtc_id;
+
+            iter->videoFrameNext.fbId= 0;
+            iter->videoFrameNext.hide= false;
+            iter->videoFrameNext.hidden= false;
+
+            sw= frameWidth;
+            sh= frameHeight;
+            dw= rectW;
+            dh= rectH;
+            sx= 0;
+            dx= rectX;
+            if ( rectX < 0 )
+            {
+               sx= -rectX*frameWidth/rectW;
+               sw -= sx;
+               dx= 0;
+               dw += rectX;
+            }
+            sy= 0;
+            dy= rectY;
+            if ( rectY < 0 )
+            {
+               sy= -rectY*frameHeight/rectH;
+               sh -= sy;
+               dy= 0;
+               dh += rectY;
+            }
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "FB_ID", iter->fbId );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "CRTC_ID", iter->plane->crtc_id );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "SRC_X", sx<<16 );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "SRC_Y", sy<<16 );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "SRC_W", sw<<16 );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "SRC_H", sh<<16 );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "CRTC_X", dx );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "CRTC_Y", dy );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "CRTC_W", dw );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "CRTC_H", dh );
+         }
+         iter= iter->next;
+      }
+   }
+   pthread_mutex_unlock( &ctx->mutex );
+
+   rc= drmModeAtomicCommit( ctx->drmFd, req, flags, 0 );
+   if ( rc )
+   {
+      ERROR("drmModeAtomicCommit failed: rc %d errno %d", rc, errno );
+      goto exit;
+   }
+
+   if ( flags & DRM_MODE_ATOMIC_ALLOW_MODESET )
+   {
+      ctx->modeSet= true;
+   }
+
+exit:
+
+   if ( req )
+   {
+      drmModeAtomicFree( req );
+   }
+
+   return;
 }
 
 static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
@@ -1380,6 +1949,12 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
    int rc;
    bool eventPending= false;
 
+   if ( ctx->haveAtomic )
+   {
+      wstSwapDRMBuffersAtomic( ctx, nw );
+      goto done;
+   }
+
    if ( nw )
    {
       gs= (struct gbm_surface*)nw->nativeWindow;
@@ -1389,7 +1964,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
          wstUpdateResources( WSTRES_BO_GRAPHICS, true, bo, __LINE__);
 
          handle= gbm_bo_get_handle(bo).u32;
-         stride = gbm_bo_get_stride(bo);
+         stride= gbm_bo_get_stride(bo);
 
          if ( nw->handle != handle )
          {
@@ -1408,6 +1983,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
              }
              wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
              nw->handle= handle;
+             nw->bo= bo;
          }
 
          if ( !ctx->modeSet )
@@ -1623,16 +2199,18 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
       }
    }
 
+done:
    if ( nw )
    {
       if ( nw->prevBo )
       {
+         gs= (struct gbm_surface*)nw->nativeWindow;
          wstUpdateResources( WSTRES_FB_GRAPHICS, false, nw->prevFbId, __LINE__);
          drmModeRmFB( ctx->drmFd, nw->prevFbId );
          wstUpdateResources( WSTRES_BO_GRAPHICS, false, nw->prevBo, __LINE__);
          gbm_surface_release_buffer(gs, nw->prevBo);
       }
-      nw->prevBo= bo;
+      nw->prevBo= nw->bo;
       nw->prevFbId= nw->fbId;
 
       pthread_mutex_lock( &ctx->mutex );
@@ -2094,8 +2672,33 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
          {
             nwItem->nativeWindow= nativeWindow;
 
-            nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
-            INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
+            if ( ctx->usePlanes )
+            {
+               nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
+               INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
+            }
+            else if ( ctx->haveAtomic )
+            {
+               pthread_mutex_lock( &gMutex );
+               if ( ctx->overlayPlanes.primary )
+               {
+                  if ( !ctx->overlayPlanes.primary->inUse )
+                  {
+                     nwItem->windowPlane= ctx->overlayPlanes.primary;
+                     ctx->overlayPlanes.primary->inUse= true;
+                  }
+                  else
+                  {
+                     WARNING("primary plane already in use");
+                  }
+               }
+               pthread_mutex_unlock( &gMutex );
+            }
+
+            if ( !nwItem->windowPlane )
+            {
+               ctx->haveAtomic= false;
+            }
 
             pthread_mutex_lock( &gMutex );
             if ( ctx->nwFirst )
