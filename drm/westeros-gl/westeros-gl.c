@@ -70,6 +70,12 @@
 
 #define DRM_NO_SRC_CROP
 
+#ifndef DRM_NO_NATIVE_FENCE
+#ifdef EGL_ANDROID_native_fence_sync
+#define DRM_USE_NATIVE_FENCE
+#endif
+#endif
+
 typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
 typedef EGLBoolean (*PREALEGLSWAPBUFFERS)(EGLDisplay, EGLSurface surface );
 typedef EGLSurface (*PREALEGLCREATEWINDOWSURFACE)(EGLDisplay,
@@ -163,6 +169,8 @@ typedef struct _NativeWindowItem
    struct gbm_bo *bo;
    struct gbm_bo *prevBo;
    uint32_t prevFbId;
+   int width;
+   int height;
 } NativeWindowItem;
 
 typedef struct _WstGLCtx
@@ -180,6 +188,7 @@ typedef struct _WstGLCtx
    bool modeSet;
    bool usePlanes;
    bool haveAtomic;
+   bool haveNativeFence;
    drmModeObjectProperties *connectorProps;
    drmModePropertyRes **connectorPropRes;
    drmModeObjectProperties *crtcProps;
@@ -188,6 +197,10 @@ typedef struct _WstGLCtx
    NativeWindowItem *nwLast;
    EGLDisplay dpy;
    int flipPending;
+   #ifdef DRM_USE_NATIVE_FENCE
+   EGLSyncKHR fenceSync;
+   int nativeOutputFenceFd;
+   #endif
 } WstGLCtx;
 
 typedef struct _WstGLSizeCBInfo
@@ -1291,20 +1304,26 @@ static WstGLCtx *wstInitCtx( void )
          INFO("westeros-gl: no planes");
          ctx->usePlanes= false;
       }
+      #ifdef DRM_USE_NATIVE_FENCE
+      ctx->nativeOutputFenceFd= -1;
+      #endif
 
-      clientCap.capability= DRM_CLIENT_CAP_UNIVERSAL_PLANES;
-      clientCap.value= 1;
-      rc= ioctl( ctx->drmFd, DRM_IOCTL_SET_CLIENT_CAP, &clientCap);
-      DEBUG("westeros-gl: DRM_IOCTL_SET_CLIENT_CAP: DRM_CLIENT_CAP_UNIVERSAL_PLANES rc %d", rc);
-
-      clientCap.capability= DRM_CLIENT_CAP_ATOMIC;
-      clientCap.value= 1;
-      rc= ioctl( ctx->drmFd, DRM_IOCTL_SET_CLIENT_CAP, &clientCap);
-      DEBUG("westeros-gl: DRM_IOCTL_SET_CLIENT_CAP: DRM_CLIENT_CAP_ATOMIC rc %d", rc);
-      if ( rc == 0 )
+      if ( ctx->usePlanes )
       {
-         ctx->haveAtomic= true;
-         INFO("westeros-gl: have drm atomic mode setting");
+         clientCap.capability= DRM_CLIENT_CAP_UNIVERSAL_PLANES;
+         clientCap.value= 1;
+         rc= ioctl( ctx->drmFd, DRM_IOCTL_SET_CLIENT_CAP, &clientCap);
+         DEBUG("westeros-gl: DRM_IOCTL_SET_CLIENT_CAP: DRM_CLIENT_CAP_UNIVERSAL_PLANES rc %d", rc);
+
+         clientCap.capability= DRM_CLIENT_CAP_ATOMIC;
+         clientCap.value= 1;
+         rc= ioctl( ctx->drmFd, DRM_IOCTL_SET_CLIENT_CAP, &clientCap);
+         DEBUG("westeros-gl: DRM_IOCTL_SET_CLIENT_CAP: DRM_CLIENT_CAP_ATOMIC rc %d", rc);
+         if ( rc == 0 )
+         {
+            ctx->haveAtomic= true;
+            INFO("westeros-gl: have drm atomic mode setting");
+         }
       }
 
       res= drmModeGetResources( ctx->drmFd );
@@ -1702,7 +1721,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
 {
    int rc;
    drmModeAtomicReq *req;
-   uint32_t flags= 0; //JRW DRM_MODE_ATOMIC_NONBLOCK;
+   uint32_t flags= 0;
    struct gbm_surface* gs;
    struct gbm_bo *bo;
    uint32_t handle, stride;
@@ -1713,6 +1732,13 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       ERROR("wstSwapDRMBuffersAtomic: drmModeAtomicAlloc failed, errno %x", errno);
       goto exit;
    }
+
+   #ifdef DRM_USE_NATIVE_FENCE
+   if ( ctx->haveNativeFence )
+   {
+      flags |= DRM_MODE_ATOMIC_NONBLOCK;
+   }
+   #endif
 
    if ( !ctx->modeSet )
    {
@@ -1739,6 +1765,15 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       }
    }
 
+   #ifdef DRM_USE_NATIVE_FENCE
+   if ( ctx->haveNativeFence )
+   {
+      wstAtomicAddProperty( ctx, req, ctx->crtc->crtc_id,
+                            ctx->crtcProps->count_props, ctx->crtcPropRes,
+                            "OUT_FENCE_PTR", (uint64_t)(unsigned long)(&ctx->nativeOutputFenceFd) );
+   }
+   #endif
+
    if ( nw )
    {
       gs= (struct gbm_surface*)nw->nativeWindow;
@@ -1753,8 +1788,8 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
          if ( nw->handle != handle )
          {
             rc= drmModeAddFB( ctx->drmFd,
-                              ctx->modeInfo->hdisplay,
-                              ctx->modeInfo->vdisplay,
+                              nw->width,
+                              nw->height,
                               32,
                               32,
                               stride,
@@ -1769,6 +1804,26 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
              nw->handle= handle;
              nw->bo= bo;
          }
+
+         #ifdef DRM_USE_NATIVE_FENCE
+         if ( ctx->fenceSync )
+         {
+            EGLint waitResult;
+            for( ; ; )
+            {
+               waitResult= eglClientWaitSyncKHR( ctx->dpy,
+                                                 ctx->fenceSync,
+                                                 0, // flags
+                                                 EGL_FOREVER_KHR );
+               if ( waitResult == EGL_CONDITION_SATISFIED_KHR )
+               {
+                  break;
+               }
+            }
+            eglDestroySyncKHR( ctx->dpy, ctx->fenceSync );
+            ctx->fenceSync= EGL_NO_SYNC_KHR;
+         }
+         #endif
 
          wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
@@ -1788,11 +1843,11 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
 
          wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "SRC_W", ctx->modeInfo->hdisplay<<16 );
+                               "SRC_W", nw->width<<16 );
 
          wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "SRC_H", ctx->modeInfo->vdisplay<<16 );
+                               "SRC_H", nw->height<<16 );
 
          wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
@@ -1809,6 +1864,10 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
          wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
                                "CRTC_H", ctx->modeInfo->vdisplay );
+
+         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                               "IN_FENCE_FD", -1 );
       }
    }
 
@@ -1910,6 +1969,10 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
             wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
                                   iter->planeProps->count_props, iter->planePropRes,
                                   "CRTC_H", dh );
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "IN_FENCE_FD", -1 );
          }
          iter= iter->next;
       }
@@ -2289,7 +2352,7 @@ EGLAPI EGLDisplay EGLAPIENTRY eglGetDisplay(EGLNativeDisplayType displayId)
          }
          else
          {
-            gCtx->dpy = gRealEGLGetDisplay( (NativeDisplayType)gCtx->gbm );
+            gCtx->dpy= gRealEGLGetDisplay( (NativeDisplayType)gCtx->gbm );
          }
       }
    }
@@ -2322,6 +2385,17 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig 
          pthread_mutex_lock( &gMutex );
          if ( gCtx )
          {
+            const char *extensions;
+            extensions= eglQueryString( gCtx->dpy, EGL_EXTENSIONS );
+            if ( extensions )
+            {
+               if ( strstr( extensions, "EGL_ANDROID_native_fence_sync" ) )
+               {
+                  gCtx->haveNativeFence= true;
+                  INFO("westeros-gl: have native fence");
+               }
+            }
+
             NativeWindowItem *nwIter= gCtx->nwFirst;
             while( nwIter )
             {
@@ -2349,6 +2423,26 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
 
    if ( gRealEGLSwapBuffers )
    {
+      #ifdef DRM_USE_NATIVE_FENCE
+      if ( gCtx->nativeOutputFenceFd >= 0 )
+      {
+         EGLint attrib[3];
+         attrib[0]= EGL_SYNC_NATIVE_FENCE_FD_ANDROID;
+         attrib[1]= gCtx->nativeOutputFenceFd;
+         attrib[2]= EGL_NONE;
+         gCtx->fenceSync= eglCreateSyncKHR( dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, attrib );
+         if ( gCtx->fenceSync )
+         {
+            TRACE2("fenceSync %p created for nativeOutputFenceFd %d", gCtx->fenceSync, gCtx->nativeOutputFenceFd);
+            gCtx->nativeOutputFenceFd= -1;
+            eglWaitSyncKHR( dpy, gCtx->fenceSync, 0);
+         }
+         else
+         {
+            ERROR("failed to create fenceSync for nativeOutputFenceFd %d", gCtx->nativeOutputFenceFd);
+         }
+      }
+      #endif
       result= gRealEGLSwapBuffers( dpy, surface );
       if ( EGL_TRUE == result )
       {
@@ -2644,10 +2738,44 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
    if ( ctx )
    {
       bool found= false;
-      int i;
+      int i, area, largestArea= 0;
+      int miPreferred= -1, miBest= -1;
+      int refresh;
+      const char *usePreferred= 0;
+      const char *useBest= 0;
+      if ( ctx->haveAtomic )
+      {
+         usePreferred= getenv("WESTEROS_GL_USE_PREFERRED_MODE");
+         useBest= getenv("WESTEROS_GL_USE_BEST_MODE");
+      }
       for( i= 0; i < ctx->conn->count_modes; ++i )
       {
-         if ( (ctx->conn->modes[i].hdisplay == width) &&
+         if ( usePreferred )
+         {
+            if ( ctx->conn->modes[i].type & DRM_MODE_TYPE_PREFERRED )
+            {
+               miPreferred= i;
+            }
+         }
+         else if ( useBest )
+         {
+            area= ctx->conn->modes[i].hdisplay * ctx->conn->modes[i].vdisplay;
+            if ( area > largestArea )
+            {
+               largestArea= area;
+               miBest= i;
+               refresh= ctx->conn->modes[i].vrefresh;
+            }
+            else if ( area == largestArea )
+            {
+               if ( ctx->conn->modes[i].vrefresh > refresh )
+               {
+                  miBest= i;
+                  refresh= ctx->conn->modes[i].vrefresh;
+               }
+            }
+         }
+         else if ( (ctx->conn->modes[i].hdisplay == width) &&
               (ctx->conn->modes[i].vdisplay == height) &&
               (ctx->conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
          {
@@ -2658,8 +2786,20 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
       }
       if ( !found )
       {
-         ctx->modeInfo= &ctx->conn->modes[0];
+         if ( usePreferred && (miPreferred >= 0) )
+         {
+            ctx->modeInfo= &ctx->conn->modes[miPreferred];
+         }
+         else if ( useBest && (miBest >= 0) )
+         {
+            ctx->modeInfo= &ctx->conn->modes[miBest];
+         }
+         else
+         {
+            ctx->modeInfo= &ctx->conn->modes[0];
+         }
       }
+      INFO("choosing output mode: %dx%dx%d", ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh);
 
       nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
       if ( nwItem )
@@ -2671,6 +2811,8 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
          if ( nativeWindow )
          {
             nwItem->nativeWindow= nativeWindow;
+            nwItem->width= width;
+            nwItem->height= height;
 
             if ( ctx->usePlanes )
             {
