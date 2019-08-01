@@ -361,6 +361,13 @@ typedef struct _WstModule
    bool isInitialized;
 } WstModule;
 
+typedef struct _WstExitInfo
+{
+   bool stopped;
+   pthread_t compositorThreadId;
+   pthread_t exitThreadId;
+} WstExitInfo;
+
 typedef struct _WstCompositor
 {
    const char *displayName;
@@ -486,6 +493,7 @@ typedef struct _WstCompositor
 static const char* wstGetNextNestedDisplayName(void);
 static bool wstCompositorCreateRenderer( WstCompositor *ctx );
 static void wstCompositorReleaseResources( WstCompositor *ctx );
+static void* wstCompositorExitTimerThread( void *arg );
 static void* wstCompositorThread( void *arg );
 static long long wstGetCurrentTimeMillis(void);
 static bool wstCompositorCheckForRepeaterSupport( WstCompositor *ctx );
@@ -2243,6 +2251,8 @@ void WstCompositorStop( WstCompositor *ctx )
 
       if ( ctx->running || ctx->compositorThreadStarted )
       {
+         WstExitInfo *exitInfo= 0;
+
          ctx->running= false;
 
          ctx->outputNestedListener= 0;
@@ -2254,12 +2264,29 @@ void WstCompositorStop( WstCompositor *ctx )
 
          if ( ctx->compositorThreadStarted && ctx->display )
          {
+            exitInfo= (WstExitInfo*)malloc( sizeof(WstExitInfo) );
+            if ( exitInfo )
+            {
+               exitInfo->stopped= false;
+               exitInfo->compositorThreadId= ctx->compositorThreadId;
+               if ( pthread_create( &exitInfo->exitThreadId, NULL, wstCompositorExitTimerThread, exitInfo ) != 0 )
+               {
+                  free( exitInfo );
+                  exitInfo= 0;
+               }
+            }
             wl_display_terminate( ctx->display );
          }
 
          pthread_mutex_unlock( &ctx->mutex );
          pthread_join( ctx->compositorThreadId, NULL );
          pthread_mutex_lock( &ctx->mutex );
+
+         if ( exitInfo )
+         {
+            exitInfo->stopped= true;
+            pthread_cancel( exitInfo->exitThreadId );
+         }
 
          wstCompositorReleaseResources( ctx );
 
@@ -3075,6 +3102,25 @@ struct wayland_simple_shell_callbacks simpleShellCallbacks= {
    simpleShellGetStatus,
    simpleShellSetFocus
 };
+
+static void* wstCompositorExitTimerThread( void *arg )
+{
+   WstExitInfo *info= (WstExitInfo*)arg;
+   if ( info )
+   {
+      if ( !info->stopped )
+      {
+         usleep( 2000000 );
+         if ( !info->stopped )
+         {
+            INFO("calling pthread_cancel for compositorThread");
+            pthread_cancel( info->compositorThreadId );
+         }
+      }
+      free( arg );
+   }
+   return 0;
+}
 
 static void* wstCompositorThread( void *arg )
 {
