@@ -2289,19 +2289,6 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
 
    sink->soc.clientPlaySpeed= clientPlaySpeed;
 
-   if (!sink->soc.videoPlaying)
-   {
-       sink->videoStarted= FALSE;
-       sink->soc.presentationStarted= FALSE;
-       sink->soc.frameCount= 0;
-       sink->soc.stoppedForPlaySpeedChange= TRUE;
-
-       NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
-       settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eHoldUntilTsmLock;
-       NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
-       NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
-   }
-
    NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
    trickState.rate= NEXUS_NORMAL_DECODE_RATE * clientPlaySpeed;
    trickState.stcTrickEnabled= TRUE;
