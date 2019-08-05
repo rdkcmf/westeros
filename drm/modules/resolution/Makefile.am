@@ -23,12 +23,11 @@ lib_LTLIBRARIES = libresolutionmodule.la
 
 libresolutionmodule_la_SOURCES = module.cpp
 
-libresolutionmodule_la_CXXFLAGS= $(AM_CFLAGS) $(libdrm_CFLAGS)
+libresolutionmodule_la_CXXFLAGS= $(AM_CFLAGS) $(libdrm_CFLAGS) -I$(top_srcdir)/../../../
 
 libresolutionmodule_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    -lgbm -ldrm
-
 
 ## IPK Generation Support
 IPK_GEN_PATH = $(abs_top_builddir)/ipk

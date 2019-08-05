@@ -185,6 +185,20 @@ AC_ARG_ENABLE([essos],
               [echo "essos is enabled"])
 AM_CONDITIONAL([ENABLE_ESSOS], [test x$ENABLE_ESSOS != xno])
 
+AC_ARG_ENABLE([modules],
+              AS_HELP_STRING([--enable-modules],[enable modules (default is no)]),
+              [
+                case "${enableval}" in
+                 yes) ENABLE_MODULES=true ;;
+                  no) ENABLE_MODULES=no ;;
+                   *) AC_MSG_ERROR([bad value ${enableval} for --enable-modules]) ;;
+                esac
+              ],
+              [echo "westeros modules build is disabled"])
+AM_CONDITIONAL([ENABLE_MODULES], [test x$ENABLE_MODULES = xtrue])
+
+AM_COND_IF([ENABLE_MODULES], [AC_CONFIG_SUBDIRS([drm/modules])])
+
 GST_MAJORMINOR=1.0
 PKG_CHECK_MODULES([GST], [gstreamer-1.0 >= 1.0], have_gst1="yes", have_gst1="no")
 

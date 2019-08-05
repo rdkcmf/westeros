@@ -36,6 +36,11 @@ if ENABLE_ESSOS
 SUBDIRS += essos
 endif
 
+# add required modules sub directory here
+if ENABLE_MODULES
+SUBDIRS += drm/modules
+endif
+
 if HAVE_EGL
 AM_CXXFLAGS += ${EGL_CFLAGS}
 endif
