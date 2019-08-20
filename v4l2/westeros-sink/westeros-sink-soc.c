@@ -29,6 +29,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <fcntl.h>
 
 #include "westeros-sink.h"
 
