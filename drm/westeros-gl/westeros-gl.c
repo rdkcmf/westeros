@@ -82,6 +82,12 @@ typedef EGLSurface (*PREALEGLCREATEWINDOWSURFACE)(EGLDisplay,
                                                   EGLConfig,
                                                   EGLNativeWindowType,
                                                   const EGLint *attrib_list);
+#ifdef DRM_USE_NATIVE_FENCE
+typedef EGLSyncKHR (*PREALEGLCREATESYNCKHR)(EGLDisplay, EGLenum, const EGLint *attrib_list);
+typedef EGLBoolean (*PREALEGLDESTROYSYNCKHR)(EGLDisplay, EGLSyncKHR);
+typedef EGLint (*PREALEGLCLIENTWAITSYNCKHR)(EGLDisplay, EGLSyncKHR, EGLint, EGLint);
+typedef EGLint (*PREALEGLWAITSYNCKHR)(EGLDisplay, EGLSyncKHR, EGLint);
+#endif
 
 typedef struct _VideoServerCtx VideoServerCtx;
 typedef struct _WstOverlayPlane WstOverlayPlane;
@@ -222,6 +228,12 @@ static PFNEGLGETPLATFORMDISPLAYEXTPROC gRealEGLGetPlatformDisplay= 0;
 static PREALEGLGETDISPLAY gRealEGLGetDisplay= 0;
 static PREALEGLSWAPBUFFERS gRealEGLSwapBuffers= 0;
 static PREALEGLCREATEWINDOWSURFACE gRealEGLCreateWindowSurface= 0;
+#ifdef DRM_USE_NATIVE_FENCE
+static PREALEGLCREATESYNCKHR gRealEGLCreateSyncKHR= 0;
+static PREALEGLDESTROYSYNCKHR gRealEGLDestroySyncKHR= 0;
+static PREALEGLCLIENTWAITSYNCKHR gRealEGLClientWaitSyncKHR= 0;
+static PREALEGLWAITSYNCKHR gRealEGLWaitSyncKHR= 0;
+#endif
 static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
 static WstGLCtx *gCtx= 0;
 static WstGLSizeCBInfo *gSizeListeners= 0;
@@ -1811,7 +1823,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
             EGLint waitResult;
             for( ; ; )
             {
-               waitResult= eglClientWaitSyncKHR( ctx->dpy,
+               waitResult= gRealEGLClientWaitSyncKHR( ctx->dpy,
                                                  ctx->fenceSync,
                                                  0, // flags
                                                  EGL_FOREVER_KHR );
@@ -1820,7 +1832,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
                   break;
                }
             }
-            eglDestroySyncKHR( ctx->dpy, ctx->fenceSync );
+            gRealEGLDestroySyncKHR( ctx->dpy, ctx->fenceSync );
             ctx->fenceSync= EGL_NO_SYNC_KHR;
          }
          #endif
@@ -2389,7 +2401,12 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig 
             extensions= eglQueryString( gCtx->dpy, EGL_EXTENSIONS );
             if ( extensions )
             {
-               if ( strstr( extensions, "EGL_ANDROID_native_fence_sync" ) )
+               if ( strstr( extensions, "EGL_ANDROID_native_fence_sync" ) &&
+                    strstr( extensions, "EGL_KHR_wait_sync" ) &&
+                    gRealEGLCreateSyncKHR &&
+                    gRealEGLDestroySyncKHR &&
+                    gRealEGLClientWaitSyncKHR &&
+                    gRealEGLWaitSyncKHR )
                {
                   gCtx->haveNativeFence= true;
                   INFO("westeros-gl: have native fence");
@@ -2430,12 +2447,12 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          attrib[0]= EGL_SYNC_NATIVE_FENCE_FD_ANDROID;
          attrib[1]= gCtx->nativeOutputFenceFd;
          attrib[2]= EGL_NONE;
-         gCtx->fenceSync= eglCreateSyncKHR( dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, attrib );
+         gCtx->fenceSync= gRealEGLCreateSyncKHR( dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, attrib );
          if ( gCtx->fenceSync )
          {
             TRACE2("fenceSync %p created for nativeOutputFenceFd %d", gCtx->fenceSync, gCtx->nativeOutputFenceFd);
             gCtx->nativeOutputFenceFd= -1;
-            eglWaitSyncKHR( dpy, gCtx->fenceSync, 0);
+            gRealEGLWaitSyncKHR( dpy, gCtx->fenceSync, 0);
          }
          else
          {
@@ -2515,6 +2532,29 @@ WstGLCtx* WstGLInit()
          goto exit;
       }
    }
+
+   #ifdef DRM_USE_NATIVE_FENCE
+   if ( !gRealEGLCreateSyncKHR )
+   {
+      gRealEGLCreateSyncKHR= (PREALEGLCREATESYNCKHR)eglGetProcAddress( "eglCreateSyncKHR" );
+      DEBUG("westeros-gl: wstGLInit: eglCreateSyncKHR=%p", (void*)gRealEGLCreateSyncKHR );
+   }
+   if ( !gRealEGLDestroySyncKHR )
+   {
+      gRealEGLDestroySyncKHR= (PREALEGLDESTROYSYNCKHR)eglGetProcAddress( "eglDestroySyncKHR" );
+      DEBUG("westeros-gl: wstGLInit: eglDestroySyncKHR=%p", (void*)gRealEGLDestroySyncKHR );
+   }
+   if ( !gRealEGLClientWaitSyncKHR )
+   {
+      gRealEGLClientWaitSyncKHR= (PREALEGLCLIENTWAITSYNCKHR)eglGetProcAddress( "eglClientWaitSyncKHR" );
+      DEBUG("westeros-gl: wstGLInit: eglClientWaitSyncKHR=%p", (void*)gRealEGLClientWaitSyncKHR );
+   }
+   if ( !gRealEGLWaitSyncKHR )
+   {
+      gRealEGLWaitSyncKHR= (PREALEGLWAITSYNCKHR)eglGetProcAddress( "eglWaitSyncKHR" );
+      DEBUG("westeros-gl: wstGLInit: eglWaitSyncKHR=%p", (void*)gRealEGLWaitSyncKHR );
+   }
+   #endif
 
    pthread_mutex_lock( &gMutex );
    if( gCtx != NULL )
