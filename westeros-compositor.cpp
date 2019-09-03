@@ -1958,6 +1958,7 @@ bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNest
       {
          sprintf( ctx->lastErrorDetail,
                   "Bad state.  Cannot set keyboard nested listener while compositor is running" );
+         pthread_mutex_unlock( &ctx->mutex );
          goto exit;
       }      
 
@@ -1994,6 +1995,7 @@ bool WstCompositorSetPointerNestedListener( WstCompositor *ctx, WstPointerNested
       {
          sprintf( ctx->lastErrorDetail,
                   "Bad state.  Cannot set pointer nested listener while compositor is running" );
+         pthread_mutex_unlock( &ctx->mutex );
          goto exit;
       }      
 

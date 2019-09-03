@@ -65,6 +65,9 @@ static bool testCaseAPISetDispatchCallback( EMCTX *emctx );
 static bool testCaseAPISetInvalidateCallback( EMCTX *emctx );
 static bool testCaseAPISetOutputNestedCallback( EMCTX *emctx );
 static bool testCaseAPISetClientStatusCallback( EMCTX *emctx );
+static bool testCaseAPISetHidePointerCallback( EMCTX *emctx );
+static bool testCaseAPISetKeyboardNestedListener( EMCTX *emctx );
+static bool testCaseAPISetPointerNestedListener( EMCTX *emctx );
 static bool testCaseAPILaunchClient( EMCTX *emctx );
 static bool testCaseAPIAddModule( EMCTX *emctx );
 
@@ -154,6 +157,18 @@ TESTCASE genericTests[]=
    { "testAPISetClientStatusCallback",
      "Test compositor set client status callback API paths",
      testCaseAPISetClientStatusCallback
+   },
+   { "testAPISetHidePointerCallback",
+     "Test compositor set hide pointer callback API paths",
+     testCaseAPISetHidePointerCallback
+   },
+   { "testAPISetKeyboardNestedListener",
+     "Test compositor set keyboard nested listener API paths",
+     testCaseAPISetKeyboardNestedListener
+   },
+   { "testAPISetPointerNestedListener",
+     "Test compositor set pointer nested listener API paths",
+     testCaseAPISetPointerNestedListener
    },
    { "testAPILaunchClient",
      "Test compositor launch client API paths",
@@ -2101,7 +2116,7 @@ static bool testCaseAPISetTerminatedCallback( EMCTX *emctx )
    result= WstCompositorSetIsRepeater( wctxRepeater, true );
    if ( result == false )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetIsRepeater failed" );
       goto exit;
    }
 
@@ -2529,6 +2544,275 @@ static bool testCaseAPISetClientStatusCallback( EMCTX *emctx )
    if ( !result )
    {      
       EMERROR( "WstCompositorSetClientStatusCallback failed" );
+      goto exit;
+   }
+
+   testResult= true;
+
+   WstCompositorDestroy( wctx );
+
+exit:
+
+   return testResult;
+}
+
+void hidePointerDummy( WstCompositor *ctx, bool hidePointer, void *userData )
+{
+}
+
+static bool testCaseAPISetHidePointerCallback( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   int value;
+
+   result= WstCompositorSetHidePointerCallback( (WstCompositor*)0, hidePointerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetHidePointerCallback did not fail for null handle" );
+      goto exit;
+   }
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetHidePointerCallback( wctx, hidePointerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetHidePointerCallback did not fail for with non-embedded compositor" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( wctx, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetHidePointerCallback( wctx, hidePointerDummy, (void*)&value );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetHidePointerCallback failed" );
+      goto exit;
+   }
+
+   testResult= true;
+
+   WstCompositorDestroy( wctx );
+
+exit:
+
+   return testResult;
+}
+
+static WstKeyboardNestedListener keyboardNestedListenerDummy=
+{
+   (WstKeyboardHandleKeyMapCallback)0,
+   (WstKeyboardHandleEnterCallback)0,
+   (WstKeyboardHandleLeaveCallback)0,
+   (WstKeyboardHandleKeyCallback)0,
+   (WstKeyboardHandleModifiersCallback)0,
+   (WstKeyboardHandleModifiersCallback)0
+};
+
+static bool testCaseAPISetKeyboardNestedListener( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   const char *displayName= "test0";
+   const char *nestedName= "test1";
+   WstCompositor *wctx= 0;
+   int value;
+
+   result= WstCompositorSetKeyboardNestedListener( (WstCompositor*)0, &keyboardNestedListenerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetKeyboardNestedListener did not fail for null handle" );
+      goto exit;
+   }
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetNestedDisplayName( wctx, nestedName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetNestedDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetKeyboardNestedListener( wctx, &keyboardNestedListenerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetKeyboardNestedListener did not fail for with non-nested compositor" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetKeyboardNestedListener( wctx, &keyboardNestedListenerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetKeyboardNestedListener did not fail for running compositor" );
+      goto exit;
+   }
+
+   WstCompositorStop( wctx );
+
+   result= WstCompositorSetIsNested( wctx, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsNested failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetKeyboardNestedListener( wctx, &keyboardNestedListenerDummy, (void*)&value );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetKeyboardNestedListener failed" );
+      goto exit;
+   }
+
+   testResult= true;
+
+   WstCompositorDestroy( wctx );
+
+exit:
+
+   return testResult;
+}
+
+static WstPointerNestedListener pointerNestedListenerDummy=
+{
+   (WstPointerHandleEnterCallback)0,
+   (WstPointerHandleLeaveCallback)0,
+   (WstPointerHandleMotionCallback)0,
+   (WstPointerHandleButtonCallback)0,
+   (WstPointerHandleAxisCallback)0
+};
+
+static bool testCaseAPISetPointerNestedListener( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   const char *displayName= "test0";
+   const char *nestedName= "test1";
+   WstCompositor *wctx= 0;
+   int value;
+
+   result= WstCompositorSetPointerNestedListener( (WstCompositor*)0, &pointerNestedListenerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetPointerNestedListener did not fail for null handle" );
+      goto exit;
+   }
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetNestedDisplayName( wctx, nestedName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetNestedDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetPointerNestedListener( wctx, &pointerNestedListenerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetPointerNestedListener did not fail for with non-nested compositor" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetPointerNestedListener( wctx, &pointerNestedListenerDummy, (void*)&value );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetPointerNestedListener did not fail for running compositor" );
+      goto exit;
+   }
+
+   WstCompositorStop( wctx );
+
+   result= WstCompositorSetIsNested( wctx, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsNested failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetPointerNestedListener( wctx, &pointerNestedListenerDummy, (void*)&value );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetPointerNestedListener failed" );
       goto exit;
    }
 
