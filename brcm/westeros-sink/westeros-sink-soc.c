@@ -42,6 +42,10 @@
 #define DEFAULT_LATENCY_TARGET (100)
 #define MAX_ZORDER (100)
 
+#ifndef DRM_FORMAT_RGBA8888
+#define DRM_FORMAT_RGBA8888 (0x34324152)
+#endif
+
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
@@ -60,7 +64,8 @@ enum
   PROP_CAPTURE_SIZE,
   PROP_HIDE_VIDEO_DURING_CAPTURE,
   PROP_CAMERA_LATENCY,
-  PROP_FRAME_STEP_ON_PREROLL
+  PROP_FRAME_STEP_ON_PREROLL,
+  PROP_ENABLE_TEXTURE
   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
   ,
   PROP_PIP
@@ -76,6 +81,7 @@ enum
    SIGNAL_FIRSTFRAME,
    SIGNAL_UNDERFLOW,
    SIGNAL_PTSERROR,
+   SIGNAL_NEWTEXTURE,
    MAX_SIGNAL
 };
 
@@ -193,6 +199,12 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "frame step on preroll",
                            "allow frame stepping on preroll into pause", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_ENABLE_TEXTURE,
+     g_param_spec_boolean ("enable-texture",
+                           "enable texture signal",
+                           "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+
+
    #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
    g_object_class_install_property (gobject_class, PROP_PIP,
      g_param_spec_boolean ("pip",
@@ -241,6 +253,32 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                               2,
                                               G_TYPE_UINT,
                                               G_TYPE_POINTER );
+
+   g_signals[SIGNAL_NEWTEXTURE]= g_signal_new( "new-video-texture-callback",
+                                               G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                               (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                               0,    /* class offset */
+                                               NULL, /* accumulator */
+                                               NULL, /* accu data */
+                                               NULL,
+                                               G_TYPE_NONE,
+                                               15,
+                                               G_TYPE_UINT, /* format: fourcc */
+                                               G_TYPE_UINT, /* pixel width */
+                                               G_TYPE_UINT, /* pixel height */
+                                               G_TYPE_INT,  /* plane 0 fd */
+                                               G_TYPE_UINT, /* plane 0 byte length */
+                                               G_TYPE_UINT, /* plane 0 stride */
+                                               G_TYPE_POINTER, /* plane 0 data */
+                                               G_TYPE_INT,  /* plane 1 fd */
+                                               G_TYPE_UINT, /* plane 1 byte length */
+                                               G_TYPE_UINT, /* plane 1 stride */
+                                               G_TYPE_POINTER, /* plane 1 data */
+                                               G_TYPE_INT,  /* plane 2 fd */
+                                               G_TYPE_UINT, /* plane 2 byte length */
+                                               G_TYPE_UINT, /* plane 2 stride */
+                                               G_TYPE_POINTER /* plane 2 data */
+                                             );
 }
 
 #include <dlfcn.h>
@@ -419,6 +457,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.useCameraLatency= FALSE;
    sink->soc.useLowDelay= FALSE;
    sink->soc.frameStepOnPreroll= FALSE;
+   sink->soc.enableTextureSignal= FALSE;
    sink->soc.latencyTarget= DEFAULT_LATENCY_TARGET;
    sink->soc.connectId= 0;
    sink->soc.quitCaptureThread= TRUE;
@@ -722,6 +761,18 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
             break;
          }
+      case PROP_ENABLE_TEXTURE:
+         {
+            sink->soc.enableTextureSignal= g_value_get_boolean(value);
+            if ( !sink->display && sink->videoStarted )
+            {
+               if ( sink->soc.enableTextureSignal != sink->soc.captureEnabled )
+               {
+                  gst_westeros_sink_soc_set_video_path( sink, sink->soc.enableTextureSignal );
+               }
+            }
+            break;
+         }
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
          {
@@ -814,7 +865,10 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
       case PROP_FRAME_STEP_ON_PREROLL:
          g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
          break;
-      #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
+      case PROP_ENABLE_TEXTURE:
+         g_value_set_boolean(value, sink->soc.enableTextureSignal);
+         break;
+       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
          g_value_set_boolean(value, sink->soc.usePip);
          break;
@@ -1626,6 +1680,11 @@ static gpointer captureThread(gpointer data)
       gst_westeros_sink_soc_set_video_path( sink, true );
    }
 
+   if ( !sink->display && sink->soc.enableTextureSignal && !sink->soc.captureEnabled )
+   {
+      gst_westeros_sink_soc_set_video_path( sink, true );
+   }
+
    /*
     * Check for new video frames at a rate that
     * can support video at up to 60 fps
@@ -1644,7 +1703,7 @@ static gpointer captureThread(gpointer data)
       
       if ( sink->soc.captureEnabled )
       {
-         if ( videoPlaying && sink->visible && !eosDetected )
+         if ( videoPlaying && (sink->visible || sink->soc.enableTextureSignal) && !eosDetected )
          {
             processFrame( sink );
          }
@@ -1728,12 +1787,15 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       /* Stop video frame capture */
       NEXUS_SimpleVideoDecoder_StopCapture(sink->soc.videoDecoder);
       sink->soc.captureEnabled= FALSE;
-      
-      wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
-      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-      wl_surface_commit( sink->surface );
-      wl_display_flush(sink->display);
-      wl_display_dispatch_queue_pending(sink->display, sink->queue);
+
+      if ( sink->display && sink->surface )
+      {
+         wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
+         wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+         wl_surface_commit( sink->surface );
+         wl_display_flush(sink->display);
+         wl_display_dispatch_queue_pending(sink->display, sink->queue);
+      }
    }
 }
 
@@ -1851,6 +1913,43 @@ static void processFrame( GstWesterosSink *sink )
                     captureStatus.pts, captureStatus.ptsValid, captureStatus.serialNumber, sink->soc.captureCount );
 
 
+            if ( sink->soc.enableTextureSignal )
+            {
+               NEXUS_Error rc;
+               void *mem= 0;
+
+               rc= NEXUS_Surface_Lock( captureSurface, &mem );
+               if ( rc == NEXUS_SUCCESS )
+               {
+                  int fd0, l0, s0, fd1, l1, s1, fd2, l2, s2;
+                  void *p0, *p1, *p2;
+                  fd0= fd1= fd2= -1;
+                  p1= p2= l1= l2= s1= s2= 0;
+                  p0= mem;
+                  s0= sink->soc.captureWidth*4;
+                  l0= s0*sink->soc.captureHeight;
+
+                  g_signal_emit( G_OBJECT(sink),
+                                 g_signals[SIGNAL_NEWTEXTURE],
+                                 0,
+                                 DRM_FORMAT_RGBA8888,
+                                 sink->soc.captureWidth,
+                                 sink->soc.captureHeight,
+                                 fd0, l0, s0, p0,
+                                 fd1, l1, s1, p1,
+                                 fd2, l2, s2, p2
+                               );
+
+                  NEXUS_Surface_Unlock( captureSurface );
+
+                  NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);
+               }
+               else
+               {
+                  GST_ERROR("Error NEXUS_Surface_Lock: %d", (int)rc);
+               }
+            }
+            else
             if ( sink->soc.sb )
             {
                struct wl_buffer *buff;
@@ -1866,20 +1965,20 @@ static void processFrame( GstWesterosSink *sink )
                wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
                wl_surface_commit( sink->surface );
                ++sink->soc.activeBuffers;
-               if ( sink->soc.framesBeforeHideVideo )
+            }
+            if ( sink->soc.framesBeforeHideVideo )
+            {
+               if ( --sink->soc.framesBeforeHideVideo == 0 )
                {
-                  if ( --sink->soc.framesBeforeHideVideo == 0 )
-                  {
-                     /* Move HW path video off screen.  The natural inclination would be to suppress
-                      * its presentation by setting captureSettings.displayEnable to false, but doing
-                      * so seems to cause HW path video to never present again when capture is disabled.
-                      * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
-                      */
-                     NEXUS_SurfaceClientSettings vClientSettings;
-                     NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-                     vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
-                     NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
-                  }
+                  /* Move HW path video off screen.  The natural inclination would be to suppress
+                   * its presentation by setting captureSettings.displayEnable to false, but doing
+                   * so seems to cause HW path video to never present again when capture is disabled.
+                   * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
+                   */
+                  NEXUS_SurfaceClientSettings vClientSettings;
+                  NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+                  vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
+                  NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
                }
             }
          }

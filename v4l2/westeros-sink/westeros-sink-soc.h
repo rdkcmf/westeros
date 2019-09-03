@@ -79,6 +79,7 @@ struct _GstWesterosSinkSoc
    uint32_t outputFormat;
 
    char *devname;
+   gboolean enableTextureSignal;
    int v4l2Fd;
    struct v4l2_capability caps;
    uint32_t deviceCaps;

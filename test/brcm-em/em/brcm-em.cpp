@@ -1124,6 +1124,8 @@ NEXUS_Error NEXUS_Surface_GetMemory(
    NEXUS_Error rc;
    EMSurface *ns;
 
+   TRACE1("NEXUS_Surface_GetMemory");
+
    if ( !surface || ! pMemory )
    {
       rc= NEXUS_INVALID_PARAMETER;
@@ -1169,6 +1171,34 @@ void NEXUS_Surface_Destroy(
       ns->mem.buffer= 0;
    }
    free( ns );
+}
+
+NEXUS_Error NEXUS_Surface_Lock( NEXUS_SurfaceHandle surface, void **ppMemory )
+{
+   NEXUS_Error rc;
+   EMSurface *ns;
+
+   TRACE1("NEXUS_Surface_Lock");
+
+   if ( !surface || ! ppMemory )
+   {
+      rc= NEXUS_INVALID_PARAMETER;
+      goto exit;
+   }
+
+   ns= (EMSurface*)surface;
+
+   *ppMemory= (void*)ns->mem.buffer;
+
+   rc= NEXUS_SUCCESS;
+
+exit:
+   return rc;
+}
+
+void NEXUS_Surface_Unlock( NEXUS_SurfaceHandle surface )
+{
+   TRACE1("NEXUS_Surface_Unlock");
 }
 
 // Section: nexus_surface_client ------------------------------------------------------

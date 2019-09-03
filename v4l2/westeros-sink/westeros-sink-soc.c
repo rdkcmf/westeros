@@ -57,10 +57,12 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
+  PROP_ENABLE_TEXTURE
 };
 enum
 {
    SIGNAL_FIRSTFRAME,
+   SIGNAL_NEWTEXTURE,
    MAX_SIGNAL
 };
 
@@ -130,6 +132,12 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                          "device location",
                          "Location of the device", gDeviceName, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_ENABLE_TEXTURE,
+     g_param_spec_boolean ("enable-texture",
+                           "enable texture signal",
+                           "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+
+
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -141,6 +149,32 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                2,
                                                G_TYPE_UINT,
                                                G_TYPE_POINTER );
+
+   g_signals[SIGNAL_NEWTEXTURE]= g_signal_new( "new-video-texture-callback",
+                                               G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                               (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                               0,    /* class offset */
+                                               NULL, /* accumulator */
+                                               NULL, /* accu data */
+                                               NULL,
+                                               G_TYPE_NONE,
+                                               15,
+                                               G_TYPE_UINT, /* format: fourcc */
+                                               G_TYPE_UINT, /* pixel width */
+                                               G_TYPE_UINT, /* pixel height */
+                                               G_TYPE_INT,  /* plane 0 fd */
+                                               G_TYPE_UINT, /* plane 0 byte length */
+                                               G_TYPE_UINT, /* plane 0 stride */
+                                               G_TYPE_POINTER, /* plane 0 data */
+                                               G_TYPE_INT,  /* plane 1 fd */
+                                               G_TYPE_UINT, /* plane 1 byte length */
+                                               G_TYPE_UINT, /* plane 1 stride */
+                                               G_TYPE_POINTER, /* plane 1 data */
+                                               G_TYPE_INT,  /* plane 2 fd */
+                                               G_TYPE_UINT, /* plane 2 byte length */
+                                               G_TYPE_UINT, /* plane 2 stride */
+                                               G_TYPE_POINTER /* plane 2 data */
+                                             );
 }
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
@@ -163,6 +197,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
    sink->soc.devname= strdup(gDeviceName);
+   sink->soc.enableTextureSignal= FALSE;
    sink->soc.v4l2Fd= -1;
    sink->soc.caps= {0};
    sink->soc.deviceCaps= 0;
@@ -258,6 +293,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
          }
          break;
+      case PROP_ENABLE_TEXTURE:
+         {
+            sink->soc.enableTextureSignal= g_value_get_boolean(value);
+         }
+         break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -274,6 +314,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
    {
       case PROP_DEVICE:
          g_value_set_string(value, sink->soc.devname);
+         break;
+      case PROP_ENABLE_TEXTURE:
+         g_value_set_boolean(value, sink->soc.enableTextureSignal);
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -1476,8 +1519,8 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
          for( int j= 0; j < sink->soc.outBuffers[i].planeCount; ++j )
          {
             GST_DEBUG("Output buffer: %d", i);
-            GST_DEBUG("  index: %d bytesUsed %d length %d flags %08x",
-                   bufOut->index, bufOut->m.planes[j].bytesused, bufOut->m.planes[j].length, bufOut->flags );
+            GST_DEBUG("  index: %d bytesUsed %d offset %d length %d flags %08x",
+                   bufOut->index, bufOut->m.planes[j].bytesused, bufOut->m.planes[j].m.mem_offset, bufOut->m.planes[j].length, bufOut->flags );
 
             memset( &expbuf, 0, sizeof(expbuf) );
             expbuf.type= bufOut->type;
@@ -1493,6 +1536,24 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
 
             sink->soc.outBuffers[i].planeInfo[j].fd= expbuf.fd;
             sink->soc.outBuffers[i].planeInfo[j].capacity= bufOut->m.planes[j].length;
+
+            if ( !sink->display )
+            {
+               bufStart= mmap( NULL,
+                               bufOut->m.planes[j].length,
+                               PROT_READ,
+                               MAP_SHARED,
+                               sink->soc.v4l2Fd,
+                               bufOut->m.planes[j].m.mem_offset );
+               if ( bufStart != MAP_FAILED )
+               {
+                  sink->soc.outBuffers[i].planeInfo[j].start= bufStart;
+               }
+               else
+               {
+                  GST_ERROR("wstSetupOutputBuffers: failed to mmap input buffer %d: errno %d", i, errno);
+               }
+            }
          }
 
          /* Use fd of first plane to identify buffer */
@@ -1501,8 +1562,8 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
       else
       {
          GST_DEBUG("Output buffer: %d", i);
-         GST_DEBUG("  index: %d bytesUsed %d length %d flags %08x",
-                bufOut->index, bufOut->bytesused, bufOut->length, bufOut->flags );
+         GST_DEBUG("  index: %d bytesUsed %d offset %d length %d flags %08x",
+                bufOut->index, bufOut->bytesused, bufOut->m.offset, bufOut->length, bufOut->flags );
 
          memset( &expbuf, 0, sizeof(expbuf) );
          expbuf.type= bufOut->type;
@@ -1517,6 +1578,24 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
 
          sink->soc.outBuffers[i].fd= expbuf.fd;
          sink->soc.outBuffers[i].capacity= bufOut->length;
+
+         if ( !sink->display )
+         {
+            bufStart= mmap( NULL,
+                            bufOut->length,
+                            PROT_READ,
+                            MAP_SHARED,
+                            sink->soc.v4l2Fd,
+                            bufOut->m.offset );
+            if ( bufStart != MAP_FAILED )
+            {
+               sink->soc.outBuffers[i].start= bufStart;
+            }
+            else
+            {
+               GST_ERROR("wstSetupOutputBuffers: failed to mmap input buffer %d: errno %d", i, errno);
+            }
+         }
       }
    }
 
@@ -1559,9 +1638,17 @@ static void wstTearDownOutputBuffers( GstWesterosSink *sink )
                   close( sink->soc.outBuffers[i].planeInfo[j].fd );
                   sink->soc.outBuffers[i].planeInfo[j].fd= -1;
                }
+               if ( sink->soc.outBuffers[i].planeInfo[j].start )
+               {
+                  munmap( sink->soc.outBuffers[i].planeInfo[j].start, sink->soc.outBuffers[i].capacity );
+               }
             }
             sink->soc.outBuffers[i].fd= -1;
             sink->soc.outBuffers[i].planeCount= 0;
+         }
+         if ( sink->soc.outBuffers[i].start )
+         {
+            munmap( sink->soc.outBuffers[i].start, sink->soc.outBuffers[i].capacity );
          }
          if ( sink->soc.outBuffers[i].fd >= 0 )
          {
@@ -2042,7 +2129,53 @@ static gpointer wstVideoOutputThread(gpointer data)
             }
             UNLOCK(sink);
 
-            if ( sink->soc.captureEnabled )
+            if ( sink->soc.enableTextureSignal )
+            {
+               int fd0, l0, s0, fd1, l1, fd2, s1, l2, s2;
+               void *p0, *p1, *p2;
+               if ( sink->soc.outBuffers[buffIndex].planeCount > 1 )
+               {
+                  fd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
+                  fd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
+                  fd2= -1;
+                  l0= sink->soc.frameWidth*sink->soc.frameHeight;
+                  l1= sink->soc.frameWidth*sink->soc.frameHeight/2;
+                  l0= 0;
+                  s0= sink->soc.frameWidth;
+                  s1= sink->soc.frameWidth;
+                  s2= 0;
+                  p0= sink->soc.outBuffers[buffIndex].planeInfo[0].start;
+                  p1= sink->soc.outBuffers[buffIndex].planeInfo[1].start;
+                  p2= 0;
+               }
+               else
+               {
+                  fd0= sink->soc.outBuffers[buffIndex].fd;
+                  fd1= fd0;
+                  fd2= -1;
+                  l0= sink->soc.frameWidth*sink->soc.frameHeight;
+                  l1= sink->soc.frameWidth*sink->soc.frameHeight/2;
+                  l0= 0;
+                  s0= sink->soc.frameWidth;
+                  s1= sink->soc.frameWidth;
+                  s2= 0;
+                  p0= sink->soc.outBuffers[i].start;
+                  p1= p0 + l0;
+                  p2= 0;
+               }
+
+               g_signal_emit( G_OBJECT(sink),
+                              g_signals[SIGNAL_NEWTEXTURE],
+                              0,
+                              sink->soc.outputFormat,
+                              sink->soc.frameWidth,
+                              sink->soc.frameHeight,
+                              fd0, l0, s0, p0,
+                              fd1, l1, s1, p1,
+                              fd2, l2, s2, p2
+                            );
+            }
+            else if ( sink->soc.captureEnabled && sink->soc.sb )
             {
                bufferInfo *binfo;
 
