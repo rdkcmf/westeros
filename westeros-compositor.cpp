@@ -363,6 +363,7 @@ typedef struct _WstModule
 
 typedef struct _WstExitInfo
 {
+   WstCompositor *wctx;
    bool stopped;
    pthread_t compositorThreadId;
    pthread_t exitThreadId;
@@ -2269,6 +2270,7 @@ void WstCompositorStop( WstCompositor *ctx )
             exitInfo= (WstExitInfo*)malloc( sizeof(WstExitInfo) );
             if ( exitInfo )
             {
+               exitInfo->wctx= ctx;
                exitInfo->stopped= false;
                exitInfo->compositorThreadId= ctx->compositorThreadId;
                if ( pthread_create( &exitInfo->exitThreadId, NULL, wstCompositorExitTimerThread, exitInfo ) != 0 )
@@ -3115,6 +3117,8 @@ static void* wstCompositorExitTimerThread( void *arg )
          usleep( 2000000 );
          if ( !info->stopped )
          {
+            pthread_mutex_destroy( &info->wctx->mutex );
+            pthread_mutex_init( &info->wctx->mutex, 0 );
             INFO("calling pthread_cancel for compositorThread");
             pthread_cancel( info->compositorThreadId );
          }
