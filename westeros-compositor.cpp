@@ -2960,7 +2960,9 @@ static void simpleShellSetGeometry( void* userData, uint32_t surfaceId, int x, i
             }
          }
       }
+      pthread_mutex_lock( &ctx->mutex );
       wstCompositorScheduleRepaint( ctx );
+      pthread_mutex_unlock( &ctx->mutex );
    }
 }
 
@@ -3931,7 +3933,7 @@ static void wstCompositorScheduleRepaint( WstCompositor *ctx )
    if ( !ctx->needRepaint )
    {
       ctx->needRepaint= true;
-      if ( ctx->allowImmediateRepaint )
+      if ( ctx->allowImmediateRepaint && ctx->displayTimer )
       {
          wl_event_source_timer_update( ctx->displayTimer, 1 );
       }
@@ -5503,7 +5505,9 @@ static void wstOutputChangeSize( WstCompositor *ctx )
    
    if ( ctx->renderer )
    {
+      pthread_mutex_lock( &ctx->mutex);
       wstCompositorScheduleRepaint(ctx);
+      pthread_mutex_unlock( &ctx->mutex);
       ctx->renderer->outputWidth= ctx->outputWidth;
       ctx->renderer->outputHeight= ctx->outputHeight;
    }
@@ -6736,7 +6740,9 @@ static void wstDefaultNestedVpcVideoXformChange( void *userData,
    }
    if ( needRepaint )
    {
+      pthread_mutex_lock( &ctx->mutex);
       wstCompositorScheduleRepaint( ctx );
+      pthread_mutex_unlock( &ctx->mutex);
    }
 }                                                 
 
@@ -7340,7 +7346,9 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
                                                                          surface->surfaceNested );
       }
    }
+   pthread_mutex_lock( &surface->compositor->mutex);
    wstCompositorScheduleRepaint( surface->compositor );
+   pthread_mutex_unlock( &surface->compositor->mutex);
 }
 
 static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource)
@@ -8206,7 +8214,9 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
          if ( pointer->pointerSurface )
          {
             wstPointerUpdatePosition( pointer );
+            pthread_mutex_lock( &compositor->mutex );
             wstCompositorScheduleRepaint( compositor );
+            pthread_mutex_unlock( &compositor->mutex );
          }
       }
    }
