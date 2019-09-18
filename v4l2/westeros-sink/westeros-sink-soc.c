@@ -680,7 +680,13 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
 
-      nanoTime= GST_BUFFER_PTS(buffer);
+      if ( GST_BUFFER_PTS_IS_VALID(buffer) )
+      {
+         nanoTime= GST_BUFFER_PTS(buffer);
+         LOCK(sink)
+         sink->position= nanoTime;
+         UNLOCK(sink);
+      }
 
       if ( inSize )
       {
@@ -711,9 +717,9 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             offset += copylen;
             avail -= copylen;
 
-            if (GST_BUFFER_TIMESTAMP_IS_VALID(buffer) )
+            if (GST_BUFFER_PTS_IS_VALID(buffer) )
             {
-               GstClockTime timestamp= GST_BUFFER_TIMESTAMP(buffer);
+               GstClockTime timestamp= GST_BUFFER_PTS(buffer);
                GST_TIME_TO_TIMEVAL( timestamp, sink->soc.inBuffers[buffIndex].buf.timestamp );
             }
             sink->soc.inBuffers[buffIndex].buf.bytesused= copylen;

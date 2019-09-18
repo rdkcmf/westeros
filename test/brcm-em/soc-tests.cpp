@@ -60,6 +60,7 @@ static bool testCaseSocSinkFirstFrameSignal( EMCTX *ctx );
 static bool testCaseSocSinkUnderflowSignal( EMCTX *ctx );
 static bool testCaseSocSinkPtsErrorSignal( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReporting( EMCTX *ctx );
+static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *ctx );
 static bool testCaseSocSinkBasicPauseResume( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeek( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekZeroBased( EMCTX *ctx );
@@ -115,6 +116,10 @@ TESTCASE socTests[]=
    { "testSocSinkBasicPositionReporting",
      "Test basic position reporting from a pipeline",
      testCaseSocSinkBasicPositionReporting
+   },
+   { "testSocSinkBasicPositionReportingProperty",
+     "Test basic position reporting from a pipeline via property",
+     testCaseSocSinkBasicPositionReportingProperty
    },
    { "testSocSinkBasicPauseResume",
      "Test basic pause and resume",
@@ -706,6 +711,96 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         goto exit;
+      }
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   testResult= true;
+
+exit:
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+
+   return testResult;
+}
+
+static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
+{
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   float frameRate;
+   int frameNumber;
+   gint64 pos, posExpected;
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   for( int i= 0; i < 10; ++i )
+   {
+      usleep( INTERVAL_200_MS );
+
+      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+      frameNumber= videoSrcGetFrameNumber( src );
+
+      posExpected= (frameNumber/frameRate)*90000LL;
+      g_object_get( sink, "video-pts", &pos, NULL );
+      g_print("%d video-pts %lld expected %lld \n", i, pos, posExpected);
+      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      {
+         EMERROR("Position out of range: expected %lld actual %lld", posExpected, pos);
          goto exit;
       }
    }

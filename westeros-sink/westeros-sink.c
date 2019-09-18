@@ -45,7 +45,8 @@ enum
   PROP_ZORDER,
   PROP_OPACITY,
   PROP_VIDEO_WIDTH,
-  PROP_VIDEO_HEIGHT
+  PROP_VIDEO_HEIGHT,
+  PROP_VIDEO_PTS
 };
 
 #ifdef USE_GST1
@@ -404,6 +405,11 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
            "current video frame height",
            0, G_MAXINT32, 0, G_PARAM_READABLE));
 
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_VIDEO_PTS,
+       g_param_spec_int64 ("video_pts", "video PTS",
+           "current video PTS value",
+           G_MININT64, G_MAXINT64, 0, G_PARAM_READABLE));
+
 #ifdef USE_GST1
   GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug, "westerossink", 0, "westerossink element");
 
@@ -733,6 +739,14 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
          LOCK(sink);
          g_value_set_int(value, sink->srcHeight);
          UNLOCK(sink);
+         break;
+      case PROP_VIDEO_PTS:
+         {
+            LOCK(sink);
+            gint64 currentPTS= ((sink->position * 90000LL)/GST_SECOND);
+            g_value_set_int64(value, currentPTS);
+            UNLOCK(sink);
+         }
          break;
       default:
          gst_westeros_sink_soc_get_property(object, prop_id, value, pspec);
