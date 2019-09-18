@@ -2910,6 +2910,7 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
       nanoTime= GST_BUFFER_PTS(buffer);
 
       LOCK(sink);
+      sink->position= nanoTime;
       windowChange= sink->windowChange;
       if ( windowChange )
       {
