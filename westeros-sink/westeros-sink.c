@@ -103,16 +103,18 @@ static void shellSurfaceId(void *data,
    else
    {
       wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
-      z= wl_fixed_from_double(sink->zorder);
-      wl_simple_shell_set_zorder( sink->shell, sink->surfaceId, z);
-      op= wl_fixed_from_double(sink->opacity);
-      wl_simple_shell_set_opacity( sink->shell, sink->surfaceId, op);
-      wl_simple_shell_get_status( sink->shell, sink->surfaceId );
       if ( !sink->vpc )
       {
          wl_simple_shell_set_geometry( sink->shell, sink->surfaceId, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
       }
    }
+
+   z= wl_fixed_from_double(sink->zorder);
+   wl_simple_shell_set_zorder( sink->shell, sink->surfaceId, z);
+   op= wl_fixed_from_double(sink->opacity);
+   wl_simple_shell_set_opacity( sink->shell, sink->surfaceId, op);
+   wl_simple_shell_get_status( sink->shell, sink->surfaceId );
+
    wl_display_flush(sink->display);
 }
 
