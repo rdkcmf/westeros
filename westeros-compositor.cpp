@@ -160,6 +160,7 @@ typedef struct _WstVpcSurface
    WstSurface *surface;
    WstCompositor *compositor;
    struct wl_vpc_surface *vpcSurfaceNested;
+   bool videoPathSet;
    bool useHWPath;
    bool useHWPathNext;
    bool pathTransitionPending;
@@ -7300,6 +7301,7 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    
    WstCompositor *compositor= surface->compositor;
    vpcSurface->surface= surface;
+   vpcSurface->videoPathSet= false;
    vpcSurface->useHWPath= true;
    vpcSurface->useHWPathNext= true;
    vpcSurface->pathTransitionPending= false;
@@ -7520,14 +7522,22 @@ static void wstUpdateVPCSurfaces( WstCompositor *ctx, std::vector<WstRect> &rect
       int outputWidthEffective= outputWidth*vpcSurface->outputWidthVpcBridge/DEFAULT_OUTPUT_WIDTH;
       int outputHeightEffective= outputHeight*vpcSurface->outputHeightVpcBridge/DEFAULT_OUTPUT_HEIGHT;
 
-      if ( useHWPathEffective != vpcSurface->useHWPath )
+      if ( !vpcSurface->videoPathSet || (useHWPathEffective != vpcSurface->useHWPath) )
       {
          DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPathEffective );
          vpcSurface->useHWPathNext= useHWPathEffective;
-         vpcSurface->pathTransitionPending= true;
+         if ( vpcSurface->videoPathSet )
+         {
+            vpcSurface->pathTransitionPending= true;
+         }
+         else
+         {
+            vpcSurface->useHWPath= useHWPathEffective;
+         }
          wl_vpc_surface_send_video_path_change( vpcSurface->resource,
                                                 useHWPathEffective ? WL_VPC_SURFACE_PATHWAY_HARDWARE
                                                                    : WL_VPC_SURFACE_PATHWAY_GRAPHICS );
+         vpcSurface->videoPathSet= true;
       }
 
       if ( (transXEffective != vpcSurface->xTrans) ||
