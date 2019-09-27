@@ -1456,7 +1456,7 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
    if ( rc == 0 )
    {
       sink->soc.minBuffersOut= ctl.value;
-      if ( sink->soc.minBuffersOut != 0 )
+      if ( (sink->soc.minBuffersOut != 0) && (sink->soc.minBuffersOut > NUM_OUTPUT_BUFFERS) )
       {
          neededBuffers= sink->soc.minBuffersOut;
       }
@@ -2074,8 +2074,7 @@ static gpointer wstVideoOutputThread(gpointer data)
       rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
       if ( rc < 0 )
       {
-         GST_ERROR("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
-         goto exit;
+         GST_WARNING("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
       }
    }
    GST_DEBUG("Out compose default: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
@@ -2086,8 +2085,7 @@ static gpointer wstVideoOutputThread(gpointer data)
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
    if ( rc < 0 )
    {
-      GST_ERROR("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
-      goto exit;
+      GST_WARNING("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
    }
    GST_DEBUG("Out compose: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
 
