@@ -2397,6 +2397,7 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig 
          pthread_mutex_lock( &gMutex );
          if ( gCtx )
          {
+            #ifdef DRM_USE_NATIVE_FENCE
             const char *extensions;
             extensions= eglQueryString( gCtx->dpy, EGL_EXTENSIONS );
             if ( extensions )
@@ -2412,6 +2413,7 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig 
                   INFO("westeros-gl: have native fence");
                }
             }
+            #endif
 
             NativeWindowItem *nwIter= gCtx->nwFirst;
             while( nwIter )
