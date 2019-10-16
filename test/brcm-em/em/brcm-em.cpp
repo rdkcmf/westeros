@@ -2333,6 +2333,15 @@ void NxClient_Disconnect(unsigned connectId)
    TRACE1("NxClient_Disconnect");
 }
 
+NEXUS_Error NxClient_RefreshConnect(unsigned connectId)
+{
+   NEXUS_Error rc= NEXUS_SUCCESS;
+
+   TRACE1("NxClient_RefreshConnect");
+
+   return rc;
+}
+
 void NxClient_GetSurfaceClientComposition(
     unsigned surfaceClientId,
     NEXUS_SurfaceComposition *pSettings
