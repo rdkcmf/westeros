@@ -1111,10 +1111,24 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
       }
       else
       {
+         NEXUS_Error rc;
+         NEXUS_SimpleVideoDecoderClientStatus clientStatus;
+         rc= NEXUS_SimpleVideoDecoder_GetClientStatus(sink->soc.videoDecoder, &clientStatus);
+         if ( rc == NEXUS_SUCCESS )
+         {
+            if ( !clientStatus.enabled && sink->soc.connectId )
+            {
+               GST_INFO_OBJECT(sink, "refreshing nxclient connection %d", sink->soc.connectId);
+               NxClient_RefreshConnect(sink->soc.connectId);
+            }
+         }
+         else
+         {
+            GST_ERROR("gst_westeros_sink_soc_paused_to_playing: NEXUS_SimpleVideoDecoder_GetClientStatus error: %d", (int)rc);
+         }
          sink->videoStarted= TRUE;
          if ( sink->soc.stcChannel )
          {
-            NEXUS_Error rc;
             rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, FALSE);
             GST_DEBUG("NEXUS_SimpleStcChannel_Freeze FALSE ");
             if ( rc != NEXUS_SUCCESS )
