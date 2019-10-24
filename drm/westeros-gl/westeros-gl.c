@@ -98,7 +98,9 @@ typedef struct _VideoServerConnection
    VideoServerCtx *server;
    WstOverlayPlane *videoPlane;
    int socketFd;
-   int prevFrameFd;
+   int prevFrameFd0;
+   int prevFrameFd1;
+   int prevFrameFd2;
    pthread_t threadId;
    bool threadStarted;
    bool threadStopRequested;
@@ -484,15 +486,17 @@ static void *wstVideoServerConnectionThread( void *arg )
    struct msghdr msg;
    struct cmsghdr *cmsg;
    struct iovec iov[1];
-   unsigned char mbody[1+4+4+4+4+4+4+4];
-   char cmbody[CMSG_SPACE(sizeof(int))];
+   unsigned char mbody[1+13*4];
+   char cmbody[CMSG_SPACE(3*sizeof(int))];
    int len, rc;
    uint32_t fbId= 0;
    uint32_t frameWidth, frameHeight;
    uint32_t frameFormat;
    uint32_t frameSkipX, frameSkipY, rectSkipX, rectSkipY;
    int rectX, rectY, rectW, rectH;
-   int fd;
+   int fd0, fd1, fd2;
+   int offset0, offset1, offset2;
+   int stride0, stride1, stride2;
 
    DEBUG("wstVideoServerConnectionThread: enter");
 
@@ -506,7 +510,7 @@ static void *wstVideoServerConnectionThread( void *arg )
       iov[0].iov_len= sizeof(mbody);
 
       cmsg= (struct cmsghdr*)cmbody;
-      cmsg->cmsg_len= CMSG_LEN(sizeof(int));
+      cmsg->cmsg_len= CMSG_LEN(3*sizeof(int));
       cmsg->cmsg_level= SOL_SOCKET;
       cmsg->cmsg_type= SCM_RIGHTS;
 
@@ -526,7 +530,7 @@ static void *wstVideoServerConnectionThread( void *arg )
 
       if ( len > 0 )
       {
-         fd= -1;
+         fd0= fd1= fd2= -1;
 
          switch ( mbody[0] )
          {
@@ -537,12 +541,20 @@ static void *wstVideoServerConnectionThread( void *arg )
                     cmsg->cmsg_type == SCM_RIGHTS &&
                     cmsg->cmsg_len >= CMSG_LEN(sizeof(int)) )
                {
-                  fd= *(int*)CMSG_DATA(cmsg);
-                  if ( fd >= 0 )
+                  fd0 = ((int*)CMSG_DATA(cmsg))[0];
+                  if ( cmsg->cmsg_len >= CMSG_LEN(2*sizeof(int)) )
                   {
-                     uint32_t handle;
+                     fd1 = ((int*)CMSG_DATA(cmsg))[1];
+                  }
+                  if ( cmsg->cmsg_len >= CMSG_LEN(3*sizeof(int)) )
+                  {
+                     fd2 = ((int*)CMSG_DATA(cmsg))[2];
+                  }
+                  if ( fd0 >= 0 )
+                  {
+                     uint32_t handle0, handle1;
 
-                     wstUpdateResources( WSTRES_FD_VIDEO, true, fd, __LINE__);
+                     wstUpdateResources( WSTRES_FD_VIDEO, true, fd0, __LINE__);
                      frameWidth= wstGetU32( mbody+1 );
                      frameHeight= wstGetU32( mbody+5);
                      frameFormat= wstGetU32( mbody+9);
@@ -550,8 +562,27 @@ static void *wstVideoServerConnectionThread( void *arg )
                      rectY= (int)wstGetU32( mbody+17 );
                      rectW= (int)wstGetU32( mbody+21 );
                      rectH= (int)wstGetU32( mbody+25 );
+                     if ( len >= (1+13*4) )
+                     {
+                        offset0= (int)wstGetU32( mbody+29 );
+                        stride0= (int)wstGetU32( mbody+33 );
+                        offset1= (int)wstGetU32( mbody+37 );
+                        stride1= (int)wstGetU32( mbody+41 );
+                        offset2= (int)wstGetU32( mbody+45 );
+                        stride2= (int)wstGetU32( mbody+49 );
 
-                     TRACE2("got frame fd %d (%dx%d) %X (%d, %d, %d, %d)", fd, frameWidth, frameHeight, frameFormat, rectX, rectY, rectW, rectH);
+                        TRACE2("got frame fd %d,%d,%d (%dx%d) %X (%d, %d, %d, %d) off(%d, %d, %d) stride(%d, %d, %d)",
+                               fd0, fd1, fd2, frameWidth, frameHeight, frameFormat, rectX, rectY, rectW, rectH,
+                               offset0, offset1, offset2, stride0, stride1, stride2 );
+                     }
+                     else
+                     {
+                        offset0= 0;
+                        offset1= frameWidth*frameHeight;
+                        stride0= stride1= frameWidth;
+
+                        TRACE2("got frame fd %d (%dx%d) %X (%d, %d, %d, %d)", fd0, frameWidth, frameHeight, frameFormat, rectX, rectY, rectW, rectH);
+                     }
 
                      rectSkipX= 0;
                      frameSkipX= 0;
@@ -586,19 +617,27 @@ static void *wstVideoServerConnectionThread( void *arg )
                      }
                      pthread_mutex_unlock( &gCtx->mutex );
 
-                     rc= drmPrimeFDToHandle( gCtx->drmFd, fd, &handle );
+                     rc= drmPrimeFDToHandle( gCtx->drmFd, fd0, &handle0 );
                      if ( !rc )
                      {
-                        uint32_t handles[4]= { handle,
-                                               handle,
+                        handle1= handle0;
+                        if ( fd1 >= 0 )
+                        {
+                           rc= drmPrimeFDToHandle( gCtx->drmFd, fd1, &handle1 );
+                        }
+                     }
+                     if ( !rc )
+                     {
+                        uint32_t handles[4]= { handle0,
+                                               handle1,
                                                0,
                                                0 };
-                        uint32_t pitches[4]= { frameWidth,
-                                               frameWidth,
+                        uint32_t pitches[4]= { stride0,
+                                               stride1,
                                                0,
                                                0 };
-                        uint32_t offsets[4]= { frameSkipX+frameSkipY*frameWidth,
-                                               frameWidth*frameHeight+frameSkipX+frameSkipY*(frameWidth/2),
+                        uint32_t offsets[4]= { offset0+frameSkipX+frameSkipY*stride0,
+                                               offset1+frameSkipX+frameSkipY*(stride1/2),
                                                0,
                                                0};
 
@@ -618,7 +657,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                            pthread_mutex_lock( &gCtx->mutex );
                            conn->videoPlane->videoFrameNext.hide= false;
                            conn->videoPlane->videoFrameNext.fbId= fbId;
-                           conn->videoPlane->videoFrameNext.handle= handle;
+                           conn->videoPlane->videoFrameNext.handle= handle0;
                            conn->videoPlane->videoFrameNext.frameWidth= frameWidth-frameSkipX;
                            conn->videoPlane->videoFrameNext.frameHeight= frameHeight-frameSkipY;
                            conn->videoPlane->videoFrameNext.frameFormat= frameFormat;
@@ -652,15 +691,33 @@ static void *wstVideoServerConnectionThread( void *arg )
                break;
          }
 
-         if ( conn->prevFrameFd >= 0 )
+         if ( conn->prevFrameFd0 >= 0 )
          {
-            wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd, __LINE__);
-            close( conn->prevFrameFd );
-            conn->prevFrameFd= -1;
+            wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd0, __LINE__);
+            close( conn->prevFrameFd0 );
+            conn->prevFrameFd0= -1;
+            if ( conn->prevFrameFd1 >= 0 )
+            {
+               close( conn->prevFrameFd1 );
+               conn->prevFrameFd1= -1;
+            }
+            if ( conn->prevFrameFd2 >= 0 )
+            {
+               close( conn->prevFrameFd2 );
+               conn->prevFrameFd2= -1;
+            }
          }
-         if ( fd >= 0 )
+         if ( fd0 >= 0 )
          {
-            conn->prevFrameFd= fd;
+            conn->prevFrameFd0= fd0;
+            if ( fd1 >= 0 )
+            {
+               conn->prevFrameFd1= fd1;
+            }
+            if ( fd2 >= 0 )
+            {
+               conn->prevFrameFd2= fd2;
+            }
          }
       }
       else
@@ -705,11 +762,21 @@ exit:
          conn->videoPlane->fbId= 0;
          conn->videoPlane->handle= 0;
       }
-      if ( conn->prevFrameFd >= 0 )
+      if ( conn->prevFrameFd0 >= 0 )
       {
-         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd, __LINE__);
-         close( conn->prevFrameFd );
-         conn->prevFrameFd= -1;
+         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd0, __LINE__);
+         close( conn->prevFrameFd0 );
+         conn->prevFrameFd0= -1;
+         if ( conn->prevFrameFd1 >= 0 )
+         {
+            close( conn->prevFrameFd1 );
+            conn->prevFrameFd1= -1;
+         }
+         if ( conn->prevFrameFd2 >= 0 )
+         {
+            close( conn->prevFrameFd2 );
+            conn->prevFrameFd2= -1;
+         }
       }
       pthread_mutex_unlock( &gCtx->mutex );
 
@@ -753,7 +820,9 @@ static VideoServerConnection *wstCreateVideoServerConnection( VideoServerCtx *se
       pthread_mutex_init( &conn->mutex, 0 );
       conn->socketFd= fd;
       conn->server= server;
-      conn->prevFrameFd= -1;
+      conn->prevFrameFd0= -1;
+      conn->prevFrameFd1= -1;
+      conn->prevFrameFd1= -1;
 
       rc= pthread_create( &conn->threadId, NULL, wstVideoServerConnectionThread, conn );
       if ( rc )
