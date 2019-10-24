@@ -86,7 +86,7 @@ static int wstGetOutputBuffer( GstWesterosSink *sink );
 static int wstFindOutputBuffer( GstWesterosSink *sink, int fd );
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name );
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
-static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int frameFd );
+static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstDecoderReset( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
@@ -1864,7 +1864,7 @@ static int putU32( unsigned char *p, unsigned n )
    return 4;
 }
 
-static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int frameFd )
+static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex )
 {
    int sentLen;
 
@@ -1873,19 +1873,72 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       struct msghdr msg;
       struct cmsghdr *cmsg;
       struct iovec iov[1];
-      unsigned char mbody[1+4+4+4+4+4+4+4];
-      char cmbody[CMSG_SPACE(sizeof(int))];
+      unsigned char mbody[1+13*4];
+      char cmbody[CMSG_SPACE(3*sizeof(int))];
       int i, len;
       int *fd;
-      int fdToSend;
+      int numFdToSend;
+      int frameFd0= -1, frameFd1= -1, frameFd2= -1;
+      int fdToSend0= -1, fdToSend1= -1, fdToSend2= -1;
+      int offset0, offset1, offset2;
+      int stride0, stride1, stride2;
 
-      if ( frameFd >= 0 )
+      if ( buffIndex >= 0 )
       {
-         fdToSend= fcntl( frameFd, F_DUPFD_CLOEXEC, 0 );
-         if ( fdToSend < 0 )
+         GstWesterosSink *sink= conn->sink;
+
+         numFdToSend= 1;
+         offset0= offset1= offset2= 0;
+         stride0= stride1= stride2= sink->soc.frameWidth;
+         if ( sink->soc.outBuffers[buffIndex].planeCount > 1 )
          {
-            GST_ERROR("wstSendFrameVideoClientConnection: failed to dup");
-            return;
+            frameFd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
+
+            frameFd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
+            if ( frameFd1 < 0 )
+            {
+               offset1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+            }
+
+            frameFd2= sink->soc.outBuffers[buffIndex].planeInfo[2].fd;
+            if ( frameFd2 < 0 )
+            {
+               offset2= offset1+(sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height)/2;
+            }
+         }
+         else
+         {
+            frameFd0= sink->soc.outBuffers[buffIndex].fd;
+            offset1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+            offset2= 0;
+            stride2= 0;
+         }
+
+         fdToSend0= fcntl( frameFd0, F_DUPFD_CLOEXEC, 0 );
+         if ( fdToSend0 < 0 )
+         {
+            GST_ERROR("wstSendFrameVideoClientConnection: failed to dup fd0");
+            goto exit;
+         }
+         if ( frameFd1 >= 0 )
+         {
+            fdToSend1= fcntl( frameFd1, F_DUPFD_CLOEXEC, 0 );
+            if ( fdToSend1 < 0 )
+            {
+               GST_ERROR("wstSendFrameVideoClientConnection: failed to dup fd1");
+               goto exit;
+            }
+            ++numFdToSend;
+         }
+         if ( frameFd2 >= 0 )
+         {
+            fdToSend2= fcntl( frameFd2, F_DUPFD_CLOEXEC, 0 );
+            if ( fdToSend2 < 0 )
+            {
+               GST_ERROR("wstSendFrameVideoClientConnection: failed to dup fd2");
+               goto exit;
+            }
+            ++numFdToSend;
          }
 
          i= 0;
@@ -1897,12 +1950,18 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          i += putU32( &mbody[i], conn->sink->soc.videoY );
          i += putU32( &mbody[i], conn->sink->soc.videoWidth );
          i += putU32( &mbody[i], conn->sink->soc.videoHeight );
+         i += putU32( &mbody[i], offset0 );
+         i += putU32( &mbody[i], stride0 );
+         i += putU32( &mbody[i], offset1 );
+         i += putU32( &mbody[i], stride1 );
+         i += putU32( &mbody[i], offset2 );
+         i += putU32( &mbody[i], stride2 );
 
          iov[0].iov_base= (char*)mbody;
          iov[0].iov_len= i;
 
          cmsg= (struct cmsghdr*)cmbody;
-         cmsg->cmsg_len= CMSG_LEN(sizeof(int));
+         cmsg->cmsg_len= CMSG_LEN(numFdToSend*sizeof(int));
          cmsg->cmsg_level= SOL_SOCKET;
          cmsg->cmsg_type= SCM_RIGHTS;
 
@@ -1915,7 +1974,15 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          msg.msg_flags= 0;
 
          fd= (int*)CMSG_DATA(cmsg);
-         *fd= fdToSend;
+         fd[0]= fdToSend0;
+         if ( fdToSend1 >= 0 )
+         {
+            fd[1]= fdToSend1;
+         }
+         if ( fdToSend2 >= 0 )
+         {
+            fd[2]= fdToSend2;
+         }
       }
       else
       {
@@ -1933,7 +2000,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          msg.msg_controllen= 0;
          msg.msg_flags= 0;
 
-         fdToSend= -1;
+         fdToSend0= fdToSend1= fdToSend2= -1;
       }
 
       do
@@ -1942,9 +2009,18 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       }
       while ( (sentLen < 0) && (errno == EINTR));
 
-      if ( fdToSend >= 0 )
+exit:
+      if ( fdToSend0 >= 0 )
       {
-         close( fdToSend );
+         close( fdToSend0 );
+      }
+      if ( fdToSend1 >= 0 )
+      {
+         close( fdToSend1 );
+      }
+      if ( fdToSend2 >= 0 )
+      {
+         close( fdToSend2 );
       }
    }
 }
@@ -2142,9 +2218,9 @@ static gpointer wstVideoOutputThread(gpointer data)
                   fd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
                   fd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
                   fd2= -1;
-                  l0= sink->soc.frameWidth*sink->soc.frameHeight;
-                  l1= sink->soc.frameWidth*sink->soc.frameHeight/2;
-                  l0= 0;
+                  l0= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+                  l1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height/2;
+                  l2= 0;
                   s0= sink->soc.frameWidth;
                   s1= sink->soc.frameWidth;
                   s2= 0;
@@ -2157,14 +2233,14 @@ static gpointer wstVideoOutputThread(gpointer data)
                   fd0= sink->soc.outBuffers[buffIndex].fd;
                   fd1= fd0;
                   fd2= -1;
-                  l0= sink->soc.frameWidth*sink->soc.frameHeight;
-                  l1= sink->soc.frameWidth*sink->soc.frameHeight/2;
-                  l0= 0;
+                  l0= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+                  l1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height/2;
+                  l2= 0;
                   s0= sink->soc.frameWidth;
                   s1= sink->soc.frameWidth;
                   s2= 0;
                   p0= sink->soc.outBuffers[i].start;
-                  p1= p0 + l0;
+                  p1= (char*)p0 + sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
                   p2= 0;
                }
 
@@ -2203,7 +2279,7 @@ static gpointer wstVideoOutputThread(gpointer data)
                      if ( fd1 < 0 )
                      {
                         fd1= fd0;
-                        offset1= sink->soc.frameWidth*sink->soc.frameHeight;
+                        offset1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
                      }
                      if ( fd2 < 0 ) fd2= fd0;
 
@@ -2230,7 +2306,7 @@ static gpointer wstVideoOutputThread(gpointer data)
                                                             sink->soc.frameHeight,
                                                             sink->soc.outputFormat,
                                                             0, /* offset0 */
-                                                            sink->soc.frameWidth*sink->soc.frameHeight, /* offset1 */
+                                                            sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height, /* offset1 */
                                                             0, /* offset2 */
                                                             sink->soc.frameWidth, /* stride0 */
                                                             sink->soc.frameWidth, /* stride1 */
@@ -2274,7 +2350,7 @@ static gpointer wstVideoOutputThread(gpointer data)
                sink->soc.prevFrameFd= sink->soc.nextFrameFd;
                sink->soc.nextFrameFd= sink->soc.outBuffers[buffIndex].fd;
 
-               wstSendFrameVideoClientConnection( sink->soc.conn, sink->soc.outBuffers[buffIndex].fd );
+               wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex );
 
                buffIndex= -1;
             }
