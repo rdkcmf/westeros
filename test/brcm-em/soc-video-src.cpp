@@ -28,8 +28,6 @@
 #include "soc-video-src.h"
 
 static void emVideoSrcFinalize(GObject *object);
-static void emVideoSrcSetProperty(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
-static void emVideoSrcGetProperty(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
 static GstStateChangeReturn emVideoSrcChangeState(GstElement *element, GstStateChange transition);
 static gboolean emVideoSrcQuery(GstElement *element, GstQuery *query);
 static gboolean emVideoSrcPadQuery(GstPad *pad, GstObject *parent, GstQuery *query);
@@ -104,8 +102,6 @@ static void em_video_src_init(EMVideoSrc* src)
 
 static void emVideoSrcFinalize(GObject *object)
 {
-   EMVideoSrc *src= EM_VIDEO_SRC(object);
-
    GST_CALL_PARENT(G_OBJECT_CLASS, finalize, (object));
 }
 
@@ -142,13 +138,13 @@ static GstStateChangeReturn emVideoSrcChangeState(GstElement *element, GstStateC
 static gboolean emVideoSrcQuery(GstElement *element, GstQuery *query)
 {
    gboolean rv= FALSE;
-   EMVideoSrc *src= EM_VIDEO_SRC(element);
 
    switch (GST_QUERY_TYPE(query)) 
    {
       default:
          return GST_ELEMENT_CLASS(parent_class)->query(element, query);
    }
+   return rv;
 }
 
 static gboolean emVideoSrcPadQuery(GstPad *pad, GstObject *parent, GstQuery *query)
@@ -381,7 +377,7 @@ GstElement* createVideoSrc(EMCTX *emctx, EMSimpleVideoDecoder *dec)
 {
    GstElement *element= 0;
 
-   element= g_object_new(EM_TYPE_VIDEO_SRC, NULL);
+   element= (GstElement*)g_object_new(EM_TYPE_VIDEO_SRC, NULL);
    if ( element )
    {
       EMVideoSrc *src= EM_VIDEO_SRC(element);

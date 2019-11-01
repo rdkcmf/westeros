@@ -69,12 +69,10 @@ typedef struct _TestCtx
 static void pointerEnter( void* data, struct wl_pointer *pointer, uint32_t serial,
                           struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy )
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void pointerLeave( void* data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface )
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void pointerMotion( void *data, struct wl_pointer *pointer, uint32_t time, wl_fixed_t sx, wl_fixed_t sy )

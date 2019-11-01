@@ -250,7 +250,7 @@ bool testCaseEssosGetLastErrorDetail( EMCTX *emctx )
    bool testResult= false;
    bool result;
    EssCtx *ctx= 0;
-   char *detail;
+   const char *detail;
 
    detail= EssContextGetLastErrorDetail( (EssCtx*)0 );
    if ( detail )
@@ -1027,7 +1027,6 @@ bool testCaseEssosGetWaylandDisplay( EMCTX *emctx )
    bool testResult= false;
    bool result;
    EssCtx *ctx= 0;
-   NativeWindowType windowType;
    const char *displayName= "test0";
    WstCompositor *wctx= 0;
    struct wl_display *wldisplay= 0;
