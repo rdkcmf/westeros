@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #include "test-render.h"
@@ -288,7 +289,7 @@ bool testCaseRenderBasicCompositionEmbedded( EMCTX *emctx )
    EGLBoolean b;
    std::vector<WstRect> rects;
    float matrix[16];
-   float alpha;
+   float alpha= 1.0;
    bool needHolePunch;
    int hints;
    int bufferIdBase= 500;
@@ -489,7 +490,308 @@ exit:
 
    WstCompositorDestroy( wctx );
 
-   testTermEGL( &ctx->eglCtx );
+   testTermEGL( &ctx->eglCtxS );
+
+   return testResult;
+}
+
+typedef struct _ClientStatusCtx
+{
+   int clientStatus;
+   int clientPid;
+   int detail;
+   bool started;
+   bool connected;
+   bool disconnected;
+   bool stoppedNormal;
+   bool stoppedAbnormal;
+} ClientStatusCtx;
+
+static void clientStatus( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
+{
+   ClientStatusCtx *csctx= (ClientStatusCtx*)userData;
+
+   csctx->clientStatus= status;
+   csctx->clientPid= clientPID;
+   switch( status )
+   {
+      case WstClient_started:
+         csctx->started= true;
+         break;
+      case WstClient_stoppedNormal:
+         csctx->stoppedNormal= true;
+         break;
+      case WstClient_stoppedAbnormal:
+         csctx->stoppedAbnormal= true;
+         csctx->detail= detail;
+         break;
+      case WstClient_connected:
+         csctx->connected= true;
+         break;
+      case WstClient_disconnected:
+         csctx->disconnected= true;
+         break;
+   }
+}
+
+typedef struct _LaunchCtx
+{
+   EMCTX *emctx;
+   WstCompositor *wctx;
+   const char *launchCmd;
+   bool launchThreadStarted;
+   bool launchError;
+} LaunchCtx;
+
+static void* clientLaunchThread( void *arg )
+{
+   LaunchCtx *lctx= (LaunchCtx*)arg;
+   EMCTX *emctx= lctx->emctx;
+   bool result;
+
+   lctx->launchThreadStarted= true;
+
+   result= WstCompositorLaunchClient( lctx->wctx, lctx->launchCmd );
+   if ( result == false )
+   {
+      lctx->launchError= true;
+      EMERROR( "WstCompositorLaunchClient failed" );
+      goto exit;
+   }
+
+exit:
+   lctx->launchThreadStarted= false;
+
+   return 0;
+}
+
+bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   WstCompositor *master= 0;
+   WstCompositor *virt1= 0;
+   WstCompositor *virt2= 0;
+   TestCtx testCtx;
+   TestCtx *ctx= &testCtx;
+   pthread_t clientLaunchThreadId1= 0;
+   ClientStatusCtx csctx1;
+   LaunchCtx lctx1;
+   pthread_t clientLaunchThreadId2= 0;
+   ClientStatusCtx csctx2;
+   LaunchCtx lctx2;
+   EGLBoolean b;
+   int rc, retryCount;
+   std::vector<WstRect> rects;
+   float matrix[16];
+   float alpha= 1.0;
+   bool needHolePunch;
+   int hints;
+
+   EMSetTextureCreatedCallback( emctx, textureCreated, ctx );
+
+   memset( &testCtx, 0, sizeof(TestCtx) );
+
+   result= testSetupEGL( &ctx->eglCtxS, 0 );
+   if ( !result )
+   {
+      EMERROR("testSetupEGL failed for compositor");
+      goto exit;
+   }
+
+   virt1= WstCompositorCreateVirtualEmbedded( NULL );
+   if ( !virt1 )
+   {
+      EMERROR("WstCreateVirtualEmbedded failed for virt1");
+      goto exit;
+   }
+
+   memset( &csctx1, 0, sizeof(csctx1) );
+   result= WstCompositorSetClientStatusCallback( virt1, clientStatus, (void*)&csctx1 );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetClientStatusCallback failed" );
+      goto exit;
+   }
+
+   memset( &lctx1, 0, sizeof(lctx1) );
+   lctx1.emctx= emctx;
+   lctx1.wctx= virt1;
+   lctx1.launchCmd= "./westeros-unittest -x clientApp 600";
+
+   rc= pthread_create( &clientLaunchThreadId1, NULL, clientLaunchThread, &lctx1 );
+   if ( rc )
+   {
+      EMERROR("unable to start client launch thread");
+      goto exit;
+   }
+
+   virt2= WstCompositorCreateVirtualEmbedded( NULL );
+   if ( !virt2 )
+   {
+      EMERROR("WstCreateVirtualEmbedded failed for virt2");
+      goto exit;
+   }
+
+   memset( &csctx2, 0, sizeof(csctx2) );
+   result= WstCompositorSetClientStatusCallback( virt2, clientStatus, (void*)&csctx2 );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetClientStatusCallback failed" );
+      goto exit;
+   }
+
+   memset( &lctx2, 0, sizeof(lctx2) );
+   lctx2.emctx= emctx;
+   lctx2.wctx= virt2;
+   lctx2.launchCmd= "./westeros-unittest -x clientApp 700";
+
+   rc= pthread_create( &clientLaunchThreadId2, NULL, clientLaunchThread, &lctx2 );
+   if ( rc )
+   {
+      EMERROR("unable to start client launch thread");
+      goto exit;
+   }
+
+   ctx->glCtx= WstGLInit();
+   if ( !ctx->glCtx )
+   {
+      EMERROR("Unable to create westeros-gl context");
+      goto exit;
+   }
+
+   ctx->eglNativeWindow= WstGLCreateNativeWindow( ctx->glCtx, 0, 0, ctx->windowWidth, ctx->windowHeight );
+   if ( !ctx->eglNativeWindow )
+   {
+      EMERROR("error: unable to create egl native window");
+      goto exit;
+   }
+   printf("eglNativeWindow %p\n", ctx->eglNativeWindow);
+
+   ctx->eglCtxS.eglSurfaceWindow= eglCreateWindowSurface( ctx->eglCtxS.eglDisplay,
+                                                  ctx->eglCtxS.eglConfig,
+                                                  (EGLNativeWindowType)ctx->eglNativeWindow,
+                                                  NULL );
+   printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", ctx->eglCtxS.eglSurfaceWindow );
+
+   b= eglMakeCurrent( ctx->eglCtxS.eglDisplay, ctx->eglCtxS.eglSurfaceWindow, ctx->eglCtxS.eglSurfaceWindow, ctx->eglCtxS.eglContext );
+   if ( !b )
+   {
+      EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+      goto exit;
+   }
+
+   eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
+
+   retryCount= 0;
+   while( !csctx1.connected && !csctx2.connected )
+   {
+      usleep( 300000 );
+      ++retryCount;
+      if ( retryCount > 50 )
+      {
+         EMERROR("Client failed to connect");
+         goto exit;
+      }
+   }
+
+   hints= WstHints_noRotation;
+   for( int i= 0; i < 20; ++i )
+   {
+      usleep( 32000 );
+
+      WstCompositorComposeEmbedded( virt1,
+                                    0, // x
+                                    0, // y
+                                    WINDOW_WIDTH, // width
+                                    WINDOW_HEIGHT, // height
+                                    matrix,
+                                    alpha,
+                                    hints,
+                                    &needHolePunch,
+                                    rects );
+      if ( (ctx->lastTextureBufferId < 600) || (ctx->lastTextureBufferId > 603) )
+      {
+         EMERROR("Unexpected last texture bufferId: expected(600-603) actual(%d) iteration %d", ctx->lastTextureBufferId, i );
+         goto exit;
+      }
+
+      WstCompositorComposeEmbedded( virt2,
+                                    0, // x
+                                    0, // y
+                                    WINDOW_WIDTH, // width
+                                    WINDOW_HEIGHT, // height
+                                    matrix,
+                                    alpha,
+                                    hints,
+                                    &needHolePunch,
+                                    rects );
+      if ( (ctx->lastTextureBufferId < 700) || (ctx->lastTextureBufferId > 703) )
+      {
+         EMERROR("Unexpected last texture bufferId: expected(700-703) actual(%d) iteration %d", ctx->lastTextureBufferId, i );
+         goto exit;
+      }
+
+      eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+   }
+
+   master= WstCompositorGetMasterEmbedded();
+   if ( !master )
+   {
+      EMERROR("WstCompositorGetMasterEmbedded failed");
+      goto exit;
+   }
+   WstCompositorDestroy( virt1 );
+   WstCompositorDestroy( virt2 );
+   WstCompositorDestroy( master );
+
+   retryCount= 0;
+   while( !csctx1.disconnected && !csctx2.disconnected )
+   {
+      usleep( 300000 );
+      ++retryCount;
+      if ( retryCount > 50 )
+      {
+         EMERROR("Client failed to disconnect");
+         goto exit;
+      }
+   }
+
+   retryCount= 0;
+   while( !csctx1.stoppedNormal && !csctx2.stoppedNormal )
+   {
+      usleep( 300000 );
+      ++retryCount;
+      if ( retryCount > 50 )
+      {
+         EMERROR("Client failed to stop");
+         goto exit;
+      }
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( ctx->eglCtxS.eglSurfaceWindow )
+   {
+      eglDestroySurface( ctx->eglCtxS.eglDisplay, ctx->eglCtxS.eglSurfaceWindow );
+      ctx->eglCtxS.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
+
+   if ( ctx->eglNativeWindow )
+   {
+      WstGLDestroyNativeWindow( ctx->glCtx, ctx->eglNativeWindow );
+      ctx->eglNativeWindow= 0;
+   }
+
+   if ( ctx->glCtx )
+   {
+      WstGLTerm( ctx->glCtx );
+      ctx->glCtx= 0;
+   }
+
+   testTermEGL( &ctx->eglCtxS );
 
    return testResult;
 }
@@ -509,7 +811,7 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
    EGLBoolean b;
    int bufferIdBase= 500;
    int bufferIdCount= 3;
-   int expectedBufferId= bufferIdBase;
+   int expectedBufferId= 1;
 
    memset( &testCtx, 0, sizeof(TestCtx) );
 
@@ -671,9 +973,9 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
       eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
 
       expectedBufferId += 1;
-      if ( expectedBufferId >= bufferIdBase+bufferIdCount )
+      if ( expectedBufferId >= bufferIdCount+1 )
       {
-         expectedBufferId= bufferIdBase;
+         expectedBufferId= 1;
       }
    }
 
@@ -1139,7 +1441,7 @@ bool testCaseRenderWaylandThreadingEmbedded( EMCTX *emctx )
    EGLBoolean b;
    std::vector<WstRect> rects;
    float matrix[16];
-   float alpha;
+   float alpha= 1.0;
    bool needHolePunch;
    int hints;
 

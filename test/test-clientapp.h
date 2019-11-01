@@ -16,18 +16,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef _TEST_RENDER_H
-#define _TEST_RENDER_H
+#ifndef _TEST_CLIENTAPP_H
+#define _TEST_CLIENTAPP_H
 
 #include "westeros-ut-em.h"
 
-bool testCaseRenderBasicComposition( EMCTX *emctx );
-bool testCaseRenderBasicCompositionEmbedded( EMCTX *emctx );
-bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx );
-bool testCaseRenderBasicCompositionNested( EMCTX *emctx );
-bool testCaseRenderBasicCompositionRepeating( EMCTX *emctx );
-bool testCaseRenderWaylandThreading( EMCTX *emctx );
-bool testCaseRenderWaylandThreadingEmbedded( EMCTX *emctx );
+void runClientApp(int argc, const char **argv);
 
 #endif
 

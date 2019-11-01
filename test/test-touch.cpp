@@ -175,12 +175,10 @@ static const struct wl_touch_listener touchListener= {
 static void pointerEnter( void* data, struct wl_pointer *pointer, uint32_t serial,
                           struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy )
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void pointerLeave( void* data, struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface )
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void pointerMotion( void *data, struct wl_pointer *pointer, uint32_t time, wl_fixed_t sx, wl_fixed_t sy )
@@ -409,7 +407,6 @@ static void shellSurfaceCreated(void *data,
                                 uint32_t surfaceId,
                                 const char *name)
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void shellSurfaceDestroyed(void *data,
@@ -417,7 +414,6 @@ static void shellSurfaceDestroyed(void *data,
                                   uint32_t surfaceId,
                                   const char *name)
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void shellSurfaceStatus(void *data,
@@ -432,13 +428,11 @@ static void shellSurfaceStatus(void *data,
                                wl_fixed_t opacity,
                                wl_fixed_t zorder)
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static void shellGetSurfacesDone(void *data,
                                  struct wl_simple_shell *wl_simple_shell)
 {
-   TestCtx *ctx= (TestCtx*)data;
 }
 
 static const struct wl_simple_shell_listener shellListener = 

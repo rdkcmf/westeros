@@ -27,6 +27,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 
+#include <map>
 #include <vector>
 #include <string>
 
@@ -42,6 +43,7 @@
 #include "test-touch.h"
 #include "test-simpleshell.h"
 #include "test-essos.h"
+#include "test-clientapp.h"
 
 static bool invokeTestCase( TESTCASE testCase, std::string &detail );
 static bool testCaseAPIDisplayName( EMCTX *ctx );
@@ -70,7 +72,8 @@ static bool testCaseAPISetKeyboardNestedListener( EMCTX *emctx );
 static bool testCaseAPISetPointerNestedListener( EMCTX *emctx );
 static bool testCaseAPILaunchClient( EMCTX *emctx );
 static bool testCaseAPIAddModule( EMCTX *emctx );
-
+static bool testCaseAPIGetMasterEmbedded( EMCTX *emctx );
+static bool testCaseAPICreateVirtualEmbedded( EMCTX *emctx );
 
 TESTCASE genericTests[]=
 {
@@ -178,6 +181,14 @@ TESTCASE genericTests[]=
      "Test compositor add module API paths",
      testCaseAPIAddModule
    },
+   { "testAPIGetMasterEmbedded",
+     "Test compositor get master embedded API paths",
+     testCaseAPIGetMasterEmbedded
+   },
+   { "testAPICreateVirtualEmbedded",
+     "Test compositor create virtual embedded API paths",
+     testCaseAPICreateVirtualEmbedded
+   },
    { "testEssosAPIUseWayland",
      "Test Essos use wayland API paths",
      testCaseEssosUseWayland
@@ -281,6 +292,10 @@ TESTCASE genericTests[]=
    { "testRenderBasicCompositionEmbedded",
      "Test embedded compositor basic composition",
      testCaseRenderBasicCompositionEmbedded
+   },
+   { "testRenderBasicCompositionEmbeddedVirtual",
+     "Test virtual embedded compositor basic composition",
+     testCaseRenderBasicCompositionEmbeddedVirtual
    },
    { "testRenderBasicCompositionNested",
      "Test nested compositor basic composition",
@@ -440,13 +455,23 @@ void stopWatchDog( void )
    }
 }
 
+void executeCommand( const char *cmd, int argc, const char **argv )
+{
+   if ( strcmp( cmd, "clientApp" ) == 0 )
+   {
+      runClientApp( argc, argv );
+   }
+}
 
 static void showUsage( void )
 {
    printf("Usage:\n");
-   printf(" westeros-unittest <options> [<testname>]\n");
-   printf("  testname - name of test to run, otherwise run all tests\n");
+   printf(" westeros-unittest <options> [<testname1> [<testname2> ...]]\n");
+   printf("  testnameN - names of tests to run, otherwise run all tests\n");
    printf("where: options are:\n");
+   printf(" -w : no watchdog\n" );
+   printf(" -s : no signal handling\n" );
+   printf(" -x <cmd> : execute command <cmd>\n" );
    printf(" -? : show usage\n");
    printf("\n");
 }
@@ -456,8 +481,14 @@ int main( int argc, const char **argv )
    int rc= -1;
    int testIndex;
    int argidx;
+   bool noWatchdog= false;
+   bool noSignal= false;
+   bool executeCmd= false;
+   const char *cmd= 0;
+   int cmdIdx;
    const char *testName= 0;
    struct sigaction sigint;
+   std::map<std::string,std::string> testNames;
    std::vector<std::string> failedTests;
 
    printf("Westeros Unit Test\n\n");
@@ -469,6 +500,20 @@ int main( int argc, const char **argv )
       {
          switch( argv[argidx][1] )
          {
+            case 'w':
+               noWatchdog= true;
+               break;
+            case 's':
+               noSignal= true;
+               break;
+            case 'x':
+               if ( argidx+1 < argc )
+               {
+                  cmdIdx= ++argidx;
+                  cmd= argv[cmdIdx];
+                  executeCmd= true;
+               }
+               break;
             case '?':
                showUsage();
                goto exit;
@@ -480,38 +525,49 @@ int main( int argc, const char **argv )
       }
       else
       {
-         if ( !testName )
-         {
-            testName= argv[argidx];
-         }
-         else
-         {
-            printf( "ignoring extra argument: %s\n", argv[argidx] );
-         }
+         testName= argv[argidx];
+         testNames.insert( std::pair<std::string,std::string>(testName,testName) );
       }
       ++argidx;
    }
 
-   sigint.sa_handler= signalHandler;
-   sigemptyset(&sigint.sa_mask);
-   sigint.sa_flags= SA_RESETHAND;
-   sigaction(SIGINT, &sigint, NULL);
-   sigaction(SIGABRT, &sigint, NULL);
-   sigaction(SIGSEGV, &sigint, NULL);
-   sigaction(SIGFPE, &sigint, NULL);
-   sigaction(SIGILL, &sigint, NULL);
-   sigaction(SIGBUS, &sigint, NULL);
+   if ( !noSignal )
+   {
+      sigint.sa_handler= signalHandler;
+      sigemptyset(&sigint.sa_mask);
+      sigint.sa_flags= SA_RESETHAND;
+      sigaction(SIGINT, &sigint, NULL);
+      sigaction(SIGABRT, &sigint, NULL);
+      sigaction(SIGSEGV, &sigint, NULL);
+      sigaction(SIGFPE, &sigint, NULL);
+      sigaction(SIGILL, &sigint, NULL);
+      sigaction(SIGBUS, &sigint, NULL);
+   }
 
+   if ( !noWatchdog )
+   {
+      startWatchDog();
+   }
 
-   startWatchDog();
+   if ( executeCmd )
+   {
+      executeCommand( cmd, (argc-cmdIdx), argv+cmdIdx );
+      stopWatchDog();
+      goto exit;
+   }
 
    // Run generic tests
    testIndex= 0;
    TESTCASE testCase;
    while ( genericTests[testIndex].func )
    {
+      bool runTest= true;
       testCase= genericTests[testIndex];
-      if ( !testName || !strcmp( testName, testCase.name ) )
+      if ( testNames.size() )
+      {
+         runTest= (testNames.find(testCase.name) != testNames.end());
+      }
+      if ( runTest )
       {
          std::string detail;
          if ( !invokeTestCase( testCase, detail ) )
@@ -527,10 +583,15 @@ int main( int argc, const char **argv )
    testIndex= 0;
    do
    {
+      bool runTest= true;
       testCase= getSocTest( testIndex );
       if ( testCase.func )
       {
-         if ( !testName || !strcmp( testName, testCase.name ) )
+         if ( testNames.size() )
+         {
+            runTest= (testNames.find(testCase.name) != testNames.end());
+         }
+         if ( runTest )
          {
             std::string detail;
             if ( !invokeTestCase( testCase, detail ) )
@@ -554,7 +615,7 @@ done_tests:
    if ( failedTests.size() )
    {
       rc= -1;
-      for( int i= 0; i < failedTests.size(); ++i )
+      for( unsigned int i= 0; i < failedTests.size(); ++i )
       {
          printf("  %s\n", failedTests[i].c_str() );
       }
@@ -1195,7 +1256,7 @@ static bool testCaseAPIVpcBridge( EMCTX *emctx )
    bool result;
    const char *value;
    WstCompositor *wctx= 0;
-   char *bridgeToDisplayName= "outer0";
+   const char *bridgeToDisplayName= "outer0";
 
    result= WstCompositorSetVpcBridge( (WstCompositor*)0, bridgeToDisplayName );
    if ( result )
@@ -1290,7 +1351,7 @@ static bool testCaseAPIOutputSize( EMCTX *emctx )
 {
    bool testResult= false;
    bool result;
-   int width, height, valueWidth, valueHeight;
+   unsigned int width, height, valueWidth, valueHeight;
    WstCompositor *wctx= 0;
 
    width= 800;
@@ -2486,7 +2547,7 @@ exit:
    return testResult;
 }
 
-void clientStatusDummy( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
+static void clientStatusDummy( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
 {
 }
 
@@ -2633,7 +2694,7 @@ static WstKeyboardNestedListener keyboardNestedListenerDummy=
    (WstKeyboardHandleLeaveCallback)0,
    (WstKeyboardHandleKeyCallback)0,
    (WstKeyboardHandleModifiersCallback)0,
-   (WstKeyboardHandleModifiersCallback)0
+   (WstKeyboardHandleRepeatInfoCallback)0
 };
 
 static bool testCaseAPISetKeyboardNestedListener( EMCTX *emctx )
@@ -2837,7 +2898,7 @@ typedef struct _ClientStatusCtx
    bool stoppedAbnormal;
 } ClientStatusCtx;
 
-void clientStatus( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
+static void clientStatus( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
 {
    ClientStatusCtx *csctx= (ClientStatusCtx*)userData;
 
@@ -2872,7 +2933,7 @@ typedef struct _LaunchCtx
    bool launchError;
 } LaunchCtx;
 
-void* clientLaunchThread( void *arg )
+static void* clientLaunchThread( void *arg )
 {
    LaunchCtx *lctx= (LaunchCtx*)arg;
    EMCTX *emctx= lctx->emctx;
@@ -3202,6 +3263,346 @@ static bool testCaseAPIAddModule( EMCTX *emctx )
          goto exit;
       }
    }
+
+   testResult= true;
+
+exit:
+
+   return testResult;
+}
+
+static bool testCaseAPIGetMasterEmbedded( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   WstCompositor *master1= 0;
+   WstCompositor *master2= 0;
+   const char *displayName1, *displayName2;
+
+   master1= WstCompositorGetMasterEmbedded();
+   if ( !master1 )
+   {
+      EMERROR( "WstCompositorGetMasterEmbedded failed to create master" );
+      goto exit;
+   }
+
+   if ( !WstCompositorGetIsEmbedded( master1 ) )
+   {
+      EMERROR( "master compositor not embedded" );
+      goto exit;
+   }
+
+   displayName1= WstCompositorGetDisplayName( master1 );
+   if ( !displayName1 )
+   {
+      EMERROR( "master compositor has no display name" );
+      goto exit;
+   }
+
+   if ( strlen(displayName1) <= 0 )
+   {
+      EMERROR( "master compositor has bad display name: len %d", strlen(displayName1) );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( master1, "foo" );
+   if ( result )
+   {
+      EMERROR( "attempt to change master embedded display name did not fail" );
+      goto exit;
+   }
+
+   master2= WstCompositorGetMasterEmbedded();
+   if ( !master2 )
+   {
+      EMERROR( "WstCompositorGetMasterEmbedded failed to get master" );
+      goto exit;
+   }
+   if ( master2 != master1 )
+   {
+      EMERROR( "WstCompositorGetMasterEmbedded returned unexpected value: expected (%p) actual (%p)", master1, master2 );
+      goto exit;
+   }
+
+   WstCompositorDestroy( master1 );
+
+   master2= WstCompositorGetMasterEmbedded();
+   if ( !master2 )
+   {
+      EMERROR( "WstCompositorGetMasterEmbedded failed to create new master" );
+      goto exit;
+   }
+
+   displayName2= WstCompositorGetDisplayName( master2 );
+   if ( !displayName2 )
+   {
+      EMERROR( "master compositor has no display name" );
+      goto exit;
+   }
+
+   if ( strlen(displayName2) <= 0 )
+   {
+      EMERROR( "master compositor has bad display name: len %d", strlen(displayName2) );
+      goto exit;
+   }
+
+   if ( strcmp( displayName2, displayName1 ) == 0 )
+   {
+      EMERROR( "new master compositor has same display name as old master" );
+      goto exit;
+   }
+
+   WstCompositorDestroy( master2 );
+
+   testResult= true;
+
+exit:
+
+   return testResult;
+}
+
+static bool testCaseAPICreateVirtualEmbedded( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   WstCompositor *master= 0;
+   WstCompositor *virt1= 0;
+   WstCompositor *virt2= 0;
+   const char *displayName1, *displayName2;
+
+   master= WstCompositorCreate();
+   if ( !master )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   virt1= WstCompositorCreateVirtualEmbedded( master );
+   if ( virt1 )
+   {
+      EMERROR( "WstCompositorCreateVirtualEmbedded did not fail with non-embedded master" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( master, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   virt1= WstCompositorCreateVirtualEmbedded( master );
+   if ( !virt1 )
+   {
+      EMERROR( "WstCompositorCreateVirtualEmbedded failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( virt1 );
+   if ( result )
+   {
+      EMERROR( "WstCompositorStart did not fail with virtual with non-running master" );
+      goto exit;
+   }
+
+   WstCompositorDestroy( virt1 );
+   virt1= 0;
+
+   WstCompositorDestroy( master );
+   master= 0;
+
+   virt1= WstCompositorCreateVirtualEmbedded( NULL );
+   if ( !virt1 )
+   {
+      EMERROR( "WstCompositorCreateVirtualEmbedded failed" );
+      goto exit;
+   }
+
+   if ( !WstCompositorGetIsVirtualEmbedded( virt1 ) )
+   {
+      EMERROR( "virtual compositor not reporting is virtual" );
+      goto exit;
+   }
+
+   if ( !WstCompositorGetIsEmbedded( virt1 ) )
+   {
+      EMERROR( "virtual compositor not embedded" );
+      goto exit;
+   }
+
+   displayName1= WstCompositorGetDisplayName( virt1 );
+   if ( !displayName1 )
+   {
+      EMERROR( "virtual compositor has no display name" );
+      goto exit;
+   }
+
+   if ( strlen(displayName1) <= 0 )
+   {
+      EMERROR( "virtual compositor has bad display name: len %d", strlen(displayName1) );
+      goto exit;
+   }
+
+   virt2= WstCompositorCreateVirtualEmbedded( NULL );
+   if ( !virt2 )
+   {
+      EMERROR( "WstCompositorCreateVirtualEmbedded failed for second instance" );
+      goto exit;
+   }
+
+   if ( !WstCompositorGetIsVirtualEmbedded( virt2 ) )
+   {
+      EMERROR( "virtual compositor not reporting is virtual" );
+      goto exit;
+   }
+
+   if ( !WstCompositorGetIsEmbedded( virt2 ) )
+   {
+      EMERROR( "virtual compositor not embedded" );
+      goto exit;
+   }
+
+   displayName2= WstCompositorGetDisplayName( virt2 );
+   if ( !displayName2 )
+   {
+      EMERROR( "virtual compositor has no display name" );
+      goto exit;
+   }
+
+   if ( strlen(displayName2) <= 0 )
+   {
+      EMERROR( "virtual compositor has bad display name: len %d", strlen(displayName1) );
+      goto exit;
+   }
+
+   if ( strcmp( displayName1, displayName2 ) != 0 )
+   {
+      EMERROR( "virtual compositor instances do not share the same display name: (%s) (%s)", displayName1, displayName2 );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( virt1, "name" );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetDisplayName did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetFrameRate( virt1, 30 );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetFrameRate did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetNativeWindow( virt1, 0 );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetNativeWindow did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( virt1, "libwesteros_render_gl.so.0.0.0" );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetRenderModule did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsNested( virt1, true );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetIsNested did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsRepeater( virt1, true );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetIsRepeater did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( virt1, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded (true) failed with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( virt1, false );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded (false) did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetVpcBridge( virt1, "name" );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetVpcBridge did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetNestedDisplayName( virt1, (char *)"name" );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetNestedDisplayName did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetNestedSize( virt1, 100, 100 );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetNestedSize did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetAllowCursorModification( virt1, true );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetAllowCursorModification did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDefaultCursor( virt1, 0, 100, 100, 10, 10 );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetDefaultCursor did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorAddModule( virt1, "name" );
+   if ( result )
+   {
+      EMERROR( "WstCompositorAddModule did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorSetTerminatedCallback( virt1, 0, 0 );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetTerminatedCallback did not fail with virtual" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( virt1 );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorStart failed with virtual with running master" );
+      goto exit;
+   }
+
+   master= WstCompositorGetMasterEmbedded();
+   if ( !master )
+   {
+      EMERROR( "WstCompositorGetMasterEmbedded failed" );
+      goto exit;
+   }
+   WstCompositorDestroy( master );
+   master= 0;
+   virt1= 0;
+   virt2= 0;
 
    testResult= true;
 

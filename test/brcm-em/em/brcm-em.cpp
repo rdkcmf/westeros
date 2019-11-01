@@ -324,7 +324,6 @@ typedef struct _EMCTX
    GLfloat textureWrapT;
    GLint textureMagFilter;
    GLint textureMinFilter;
-   struct wl_display* display;
    std::map<struct wl_display*,EMWLBinding> wlBindings;
    std::map<struct wl_display*,EMWLRemote> wlRemotes;
    unsigned nextNxClientConnectId;
@@ -3741,7 +3740,7 @@ static void wlSwapBuffers( struct wl_egl_window *egl_window )
             wl_surface_damage( egl_window->surface, 0, 0, egl_window->width, egl_window->height);
             wl_surface_commit( egl_window->surface );   
 
-            wl_display_flush( egl_window->ctx->display );
+            wl_display_flush( egl_window->wldisp );
             
             // A call to roundtrip here allows weston-simple-egl to run since that app doesn't
             // call wl_display_dispatch() but merely wl_display_dispatch_pending() which
@@ -3760,7 +3759,7 @@ static void wlSwapBuffers( struct wl_egl_window *egl_window )
          }
       }
       
-      wl_display_dispatch_queue_pending( egl_window->ctx->display, egl_window->queue );
+      wl_display_dispatch_queue_pending( egl_window->wldisp, egl_window->queue );
    }
 }
 
@@ -3782,8 +3781,6 @@ struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width
       ctx= emGetContext();
       if ( ctx )
       {
-         ctx->display= wldisp;
-
          egl_window= (wl_egl_window*)calloc( 1, sizeof(struct wl_egl_window) );
          if ( !egl_window )
          {
@@ -3802,7 +3799,7 @@ struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width
          egl_window->bufferIdCount= 3;
          egl_window->bufferId= 3;
         
-         egl_window->queue= wl_display_create_queue(egl_window->ctx->display);
+         egl_window->queue= wl_display_create_queue(egl_window->wldisp);
          if ( !egl_window->queue )
          {
             printf("wayland-egl: wl_egl_window_create: unable to create event queue\n");
@@ -3811,7 +3808,7 @@ struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width
             goto exit;
          }
 
-         egl_window->registry= wl_display_get_registry( egl_window->ctx->display );
+         egl_window->registry= wl_display_get_registry( egl_window->wldisp );
          if ( !egl_window->registry )
          {
             printf("wayland-egl: wl_egl_window_create: unable to get display registry\n");
@@ -3821,7 +3818,7 @@ struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width
          }
          wl_proxy_set_queue((struct wl_proxy*)egl_window->registry, egl_window->queue);
          wl_registry_add_listener(egl_window->registry, &winRegistryListener, egl_window);
-         wl_display_roundtrip_queue(egl_window->ctx->display, egl_window->queue);
+         wl_display_roundtrip_queue(egl_window->wldisp, egl_window->queue);
          
          if ( !egl_window->bnxs )
          {

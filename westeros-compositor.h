@@ -70,11 +70,11 @@ typedef enum _WstClient_status
    WstClient_disconnected
 } WstClient_status;
 
-typedef void (*WstTerminatedCallback)( WstCompositor *ctx, void *userData );
-typedef void (*WstDispatchCallback)( WstCompositor *ctx, void *userData );
-typedef void (*WstInvalidateSceneCallback)( WstCompositor *ctx, void *userData );
-typedef void (*WstHidePointerCallback)( WstCompositor *ctx, bool hidePointer, void *userData );
-typedef void (*WstClientStatus)( WstCompositor *ctx, int status, int clientPID, int detail, void *userData );
+typedef void (*WstTerminatedCallback)( WstCompositor *wctx, void *userData );
+typedef void (*WstDispatchCallback)( WstCompositor *wctx, void *userData );
+typedef void (*WstInvalidateSceneCallback)( WstCompositor *wctx, void *userData );
+typedef void (*WstHidePointerCallback)( WstCompositor *wctx, bool hidePointer, void *userData );
+typedef void (*WstClientStatus)( WstCompositor *wctx, int status, int clientPID, int detail, void *userData );
 
 typedef void (*WstOutputHandleGeometryCallback)( void *userData, int32_t x, int32_t y, int32_t mmWidth, int32_t mmHeight,
                                                  int32_t subPixel, const char *make, const char *model, int32_t transform );
@@ -153,7 +153,24 @@ WstCompositor* WstCompositorCreate();
  * Destroy a compositor instance.  If the compositor is running
  * it will be stopped, and then all resources will be freed.
  */
-void WstCompositorDestroy( WstCompositor *ctx );
+void WstCompositorDestroy( WstCompositor *wctx );
+
+/**
+ * WstCompositorGetMasterEmbedded
+ *
+ * Atomically get or create the master embedded compositor.  This master
+ * embedded compositor will be the sole embedded compositor instance
+ * for the process and can be used to create multiple virtual embedded
+ * compositor instances with WstCompositorCreateVirtualEmbedded.
+ */
+WstCompositor* WstCompositorGetMasterEmbedded();
+
+/**
+ * WstCompositorCreateVirtualEmbedded
+ *
+ * Create a virtual embedded compositor from an existing embedded compositor.
+ */
+WstCompositor* WstCompositorCreateVirtualEmbedded( WstCompositor *wctx );
 
 /**
  * WstCompositorGetLastErrorDetail
@@ -161,7 +178,7 @@ void WstCompositorDestroy( WstCompositor *ctx );
  * Returns a null terminated string giving information about the
  * last error that has occurred.
  */
-const char *WstCompositorGetLastErrorDetail( WstCompositor *ctx );
+const char *WstCompositorGetLastErrorDetail( WstCompositor *wctx );
 
 /**
  * WstCompositorSetDisplayName
@@ -173,7 +190,7 @@ const char *WstCompositorGetLastErrorDetail( WstCompositor *ctx );
  * default display name of 'wayland-0' will be used.  The display
  * name of a compositor can be obtained using WstCompositorGetDisplayName.
  */
-bool WstCompositorSetDisplayName( WstCompositor *ctx, const char *displayName );
+bool WstCompositorSetDisplayName( WstCompositor *wctx, const char *displayName );
 
 /**
  * WstCompositorSetFrameRate
@@ -181,7 +198,7 @@ bool WstCompositorSetDisplayName( WstCompositor *ctx, const char *displayName );
  * Specity the rate in frames per second (fps) that the compositor should
  * generate each new composited output frame.  This can be called at any time.
  */
-bool WstCompositorSetFrameRate( WstCompositor *ctx, unsigned int frameRate );
+bool WstCompositorSetFrameRate( WstCompositor *wctx, unsigned int frameRate );
 
 /**
  * WstCompositorSetNativeWindow
@@ -189,7 +206,7 @@ bool WstCompositorSetFrameRate( WstCompositor *ctx, unsigned int frameRate );
  * Specify the native window to be used by the compositor render module
  * in creating its rendering context.
  */
-bool WstCompositorSetNativeWindow( WstCompositor *ctx, void *nativeWindow );
+bool WstCompositorSetNativeWindow( WstCompositor *wctx, void *nativeWindow );
 
 /**
  * WstCompositorSetRendererModule
@@ -199,7 +216,7 @@ bool WstCompositorSetNativeWindow( WstCompositor *ctx, void *nativeWindow );
  * name might be libwesteros_render_gl.so.0.  This must be called prior
  * to WstCompositorStart.
  */
-bool WstCompositorSetRendererModule( WstCompositor *ctx, const char *rendererModule );
+bool WstCompositorSetRendererModule( WstCompositor *wctx, const char *rendererModule );
 
 /**
  * WstCompositorSetIsNested
@@ -210,7 +227,7 @@ bool WstCompositorSetRendererModule( WstCompositor *ctx, const char *rendererMod
  * to another compositor and its output frames will be drawn to a surface
  * of the second compositor.
  */
-bool WstCompositorSetIsNested( WstCompositor *ctx, bool isNested );
+bool WstCompositorSetIsNested( WstCompositor *wctx, bool isNested );
 
 /**
  * WstCompositorSetIsRepeater
@@ -223,7 +240,7 @@ bool WstCompositorSetIsNested( WstCompositor *ctx, bool isNested );
  * which it is connected.  Enabling repeating will also enable nested 
  * composition.
  */
-bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater );
+bool WstCompositorSetIsRepeater( WstCompositor *wctx, bool isRepeater );
 
 /**
  * WstCompositorSetIsEmbedded
@@ -237,7 +254,7 @@ bool WstCompositorSetIsRepeater( WstCompositor *ctx, bool isRepeater );
  * Note that multi-threaded applications that use embedded composition must
  * call WstCompositorStart and WstCompositorComposeEmbedded on the same thread.
  */
-bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded );
+bool WstCompositorSetIsEmbedded( WstCompositor *wctx, bool isEmbedded );
 
 /**
  * WstCompositorSetVpcBridge
@@ -247,7 +264,7 @@ bool WstCompositorSetIsEmbedded( WstCompositor *ctx, bool isEmbedded );
  * VPC bridge will allow control over video path and positioning to be
  * extended to higher level compositors from a nested ebedded compositor.
  */
-bool WstCompositorSetVpcBridge( WstCompositor *ctx, char *displayName );
+bool WstCompositorSetVpcBridge( WstCompositor *wctx, char *displayName );
 
 /**
  * WstCompositorSetOutputSize
@@ -255,7 +272,7 @@ bool WstCompositorSetVpcBridge( WstCompositor *ctx, char *displayName );
  * Specify the size of the output surface for the compositor.  This may
  * be called at any time.
  */
-bool WstCompositorSetOutputSize( WstCompositor *ctx, int width, int height );
+bool WstCompositorSetOutputSize( WstCompositor *wctx, int width, int height );
 
 /**
  * WstCompositorSetNestedDisplayName
@@ -264,7 +281,7 @@ bool WstCompositorSetOutputSize( WstCompositor *ctx, int width, int height );
  * and render to as a nested compositor.  This must be called prior to 
  * WstCompositorStart.
  */
-bool WstCompositorSetNestedDisplayName( WstCompositor *ctx, const char *nestedDisplayName );
+bool WstCompositorSetNestedDisplayName( WstCompositor *wctx, const char *nestedDisplayName );
 
 /**
  * WstCompositorSetNestedSize
@@ -273,7 +290,7 @@ bool WstCompositorSetNestedDisplayName( WstCompositor *ctx, const char *nestedDi
  * specified with WstCompositorSetNestedDisplayName in which to display the
  * composited output.  This must be called prior to WstCompositorStart.
  */
-bool WstCompositorSetNestedSize( WstCompositor *ctx, unsigned int width, unsigned int height );
+bool WstCompositorSetNestedSize( WstCompositor *wctx, unsigned int width, unsigned int height );
 
 /**
  * WstCompositorSetAllowCursorModification
@@ -281,7 +298,7 @@ bool WstCompositorSetNestedSize( WstCompositor *ctx, unsigned int width, unsigne
  * Specify whether compositor clients are permitted to modify the pointer cursor
  * image.  This must be called prior to WstCompositorStart.
  */
-bool WstCompositorSetAllowCursorModification( WstCompositor *ctx, bool allow );
+bool WstCompositorSetAllowCursorModification( WstCompositor *wctx, bool allow );
 
 /**
  * WstCompositorSetDefaultCursor
@@ -292,7 +309,7 @@ bool WstCompositorSetAllowCursorModification( WstCompositor *ctx, bool allow );
  * with imgData set to NULL.  This should only be called while the 
  * conpositor is running.
  */
-bool WstCompositorSetDefaultCursor( WstCompositor *ctx, unsigned char *imgData,
+bool WstCompositorSetDefaultCursor( WstCompositor *wctx, unsigned char *imgData,
                                     int width, int height, int hotSpotX, int hotSpotY );
 
 /**
@@ -305,27 +322,27 @@ bool WstCompositorSetDefaultCursor( WstCompositor *ctx, unsigned char *imgData,
  * when the comnpositor starts. The module needs to supply module
  * initialization and termination entry points:
  *
- * bool moduleInit( WstCompositor *ctx, struct wl_display );
- * void moduleTerm( WstCompositor *ctx );
+ * bool moduleInit( WstCompositor *wctx, struct wl_display );
+ * void moduleTerm( WstCompositor *wctx );
  *
  * This API must be called prior to WstCompositorStart.
  *
  */
-bool WstCompositorAddModule( WstCompositor *ctx, const char *moduleName );
+bool WstCompositorAddModule( WstCompositor *wctx, const char *moduleName );
 
 /**
  * WstCompositorResolutionChangeBegin
  *
  * Signal the compositor that a display resolution change is about to happen
  */
-void WstCompositorResolutionChangeBegin( WstCompositor *ctx );
+void WstCompositorResolutionChangeBegin( WstCompositor *wctx );
 
 /**
  * WstCompositorResolutionChangeBegin
  *
  * Signal the compositor that a display resolution change has completed
  */
-void WstCompositorResolutionChangeEnd( WstCompositor *ctx, int width, int height );
+void WstCompositorResolutionChangeEnd( WstCompositor *wctx, int width, int height );
 
 /**
  * WstCompositorGetDisplayName
@@ -335,7 +352,7 @@ void WstCompositorResolutionChangeEnd( WstCompositor *ctx, int width, int height
  * a nested compositor for which no name was specified, the display name
  * that was automatically generated.  This can be called at any time.
  */
-const char *WstCompositorGetDisplayName( WstCompositor *ctx );
+const char *WstCompositorGetDisplayName( WstCompositor *wctx );
 
 /**
  * WstCompositorGetFrameRate
@@ -344,7 +361,7 @@ const char *WstCompositorGetDisplayName( WstCompositor *ctx );
  * compositor instance.  The returned value will be in 
  * frames per second (fps).  This can be called at any time.
  */
-unsigned int WstCompositorGetFrameRate( WstCompositor *ctx );
+unsigned int WstCompositorGetFrameRate( WstCompositor *wctx );
 
 /**
  * WstCompositorGetRendererModule
@@ -352,7 +369,7 @@ unsigned int WstCompositorGetFrameRate( WstCompositor *ctx );
  * Obtain the name of the renderer module being used by
  * this compositor instance.  This can be called at any time.
  */
-const char *WstCompositorGetRendererModule( WstCompositor *ctx );
+const char *WstCompositorGetRendererModule( WstCompositor *wctx );
 
 /**
  * WstCompositorGetIsNested
@@ -360,7 +377,7 @@ const char *WstCompositorGetRendererModule( WstCompositor *ctx );
  * Determine if this compsitor instance is acting as a nested
  * compositor or not.  This may be called at any time.
  */
-bool WstCompositorGetIsNested( WstCompositor *ctx );
+bool WstCompositorGetIsNested( WstCompositor *wctx );
 
 /**
  * WstCompositorGetIsRepeater
@@ -368,7 +385,7 @@ bool WstCompositorGetIsNested( WstCompositor *ctx );
  * Determine if this compsitor instance is acting as a repeating 
  * nested compositor or not.  This may be called at any time.
  */
-bool WstCompositorGetIsRepeater( WstCompositor *ctx );
+bool WstCompositorGetIsRepeater( WstCompositor *wctx );
 
 /**
  * WstCompositorGetIsEmbedded
@@ -376,7 +393,15 @@ bool WstCompositorGetIsRepeater( WstCompositor *ctx );
  * Determine if this compsitor instance is acting as an embedded
  * compositor or not.  This may be called at any time.
  */
-bool WstCompositorGetIsEmbedded( WstCompositor *ctx );
+bool WstCompositorGetIsEmbedded( WstCompositor *wctx );
+
+/**
+ * WstCompositorGetIsVirtualEmbedded
+ *
+ * Determine if this compsitor instance is a virtual embedded
+ * compositor or not.  This may be called at any time.
+ */
+bool WstCompositorGetIsVirtualEmbedded( WstCompositor *wctx );
 
 /**
  * WstCompositorGetVpcBridge
@@ -384,14 +409,14 @@ bool WstCompositorGetIsEmbedded( WstCompositor *ctx );
  * Determine the display, if any, with which this embedded compistor instance
  * will establish a VPC (Video Path Control) bridge.
  */
-const char* WstCompositorGetVpcBridge( WstCompositor *ctx );
+const char* WstCompositorGetVpcBridge( WstCompositor *wctx );
 
 /**
  * WstCompositorGetOutputSize
  *
  * Obtain the width and height of the compositor output.
  */
-void WstCompositorGetOutputSize( WstCompositor *ctx, unsigned int *width, unsigned int *height );
+void WstCompositorGetOutputSize( WstCompositor *wctx, unsigned int *width, unsigned int *height );
 
 /**
  * WstCompositorGetNestedDisplayName
@@ -400,7 +425,7 @@ void WstCompositorGetOutputSize( WstCompositor *ctx, unsigned int *width, unsign
  * instance will be, or is using to connect to as a nested
  * compositor.  This can be called at any time.
  */
-const char *WstCompositorGetNestedDisplayName( WstCompositor *ctx );
+const char *WstCompositorGetNestedDisplayName( WstCompositor *wctx );
 
 /**
  * WstCompositorGetNestedSize
@@ -409,7 +434,7 @@ const char *WstCompositorGetNestedDisplayName( WstCompositor *ctx );
  * or has created on another wayland display as a nested compositor.
  * This can be called at any time.
  */
-void WstCompositorGetNestedSize( WstCompositor *ctx, unsigned int *width, unsigned int *height );
+void WstCompositorGetNestedSize( WstCompositor *wctx, unsigned int *width, unsigned int *height );
 
 /**
  * WstCompositorGetAllowCursorModification
@@ -418,7 +443,7 @@ void WstCompositorGetNestedSize( WstCompositor *ctx, unsigned int *width, unsign
  * compositor clients to modify the pointer cursor image.  
  * This may be called at any time.
  */
-bool WstCompositorGetAllowCursorModification( WstCompositor *ctx );
+bool WstCompositorGetAllowCursorModification( WstCompositor *wctx );
 
 /**
  * WstCompositorSetTerminatedCallback
@@ -426,7 +451,7 @@ bool WstCompositorGetAllowCursorModification( WstCompositor *ctx );
  * Specifies a callback for an embedded compositor to invoke to signal that it
  * has terminated.
  */
-bool WstCompositorSetTerminatedCallback( WstCompositor *ctx, WstTerminatedCallback cb, void *userData );
+bool WstCompositorSetTerminatedCallback( WstCompositor *wctx, WstTerminatedCallback cb, void *userData );
 
 /**
  * WstCompositorSetDispatchCallback
@@ -434,7 +459,7 @@ bool WstCompositorSetTerminatedCallback( WstCompositor *ctx, WstTerminatedCallba
  * Specifies a callback for a compositor to periodically invoke to give an opportunity for any required
  * implementatipn specific event dispatching or other 'main loop' type processing.
  */
-bool WstCompositorSetDispatchCallback( WstCompositor *ctx, WstDispatchCallback cb, void *userData );
+bool WstCompositorSetDispatchCallback( WstCompositor *wctx, WstDispatchCallback cb, void *userData );
 
 /**
  * WstCompositorSetInvalidateCallback
@@ -442,7 +467,7 @@ bool WstCompositorSetDispatchCallback( WstCompositor *ctx, WstDispatchCallback c
  * Specifies a callback for an embedded compositor to invoke to signal that its
  * scene has become invalid and that WstCompositorComposeEmbedded should be called.
  */
-bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneCallback cb, void *userData );
+bool WstCompositorSetInvalidateCallback( WstCompositor *wctx, WstInvalidateSceneCallback cb, void *userData );
 
 /**
  * WstCompositorSetHidePointerCallback
@@ -452,7 +477,7 @@ bool WstCompositorSetInvalidateCallback( WstCompositor *ctx, WstInvalidateSceneC
  * hidden or shown.  The embedded compositor will request the host cursor be hidden
  * when a client requests a different pointer be used.
  */
-bool WstCompositorSetHidePointerCallback( WstCompositor *ctx, WstHidePointerCallback cb, void *userData );
+bool WstCompositorSetHidePointerCallback( WstCompositor *wctx, WstHidePointerCallback cb, void *userData );
 
 /**
  * WstCompositorSetClientStatusCallback
@@ -462,7 +487,7 @@ bool WstCompositorSetHidePointerCallback( WstCompositor *ctx, WstHidePointerCall
  * enum and the client pid.  If the status is WstClient_status_stoppedAbnormal the detail
  * value will be the signal that caused the client to terminate.
  */
-bool WstCompositorSetClientStatusCallback( WstCompositor *ctx, WstClientStatus cb, void *userData );
+bool WstCompositorSetClientStatusCallback( WstCompositor *wctx, WstClientStatus cb, void *userData );
 
 /**
  * WstCompositorSetOutputNestedListener
@@ -473,7 +498,7 @@ bool WstCompositorSetClientStatusCallback( WstCompositor *ctx, WstClientStatus c
  * through the specified callback functions.  This allows the caller to handle the events outside
  * of Wayland.  This must be called prior to WstCompositorStart.
  */
-bool WstCompositorSetOutputNestedListener( WstCompositor *ctx, WstOutputNestedListener *listener, void *userData );
+bool WstCompositorSetOutputNestedListener( WstCompositor *wctx, WstOutputNestedListener *listener, void *userData );
 
 /**
  * WstCompositorSetKeyboardNestedListener
@@ -484,7 +509,7 @@ bool WstCompositorSetOutputNestedListener( WstCompositor *ctx, WstOutputNestedLi
  * through the specified callback functions.  This allows the caller to route keyboard input outside
  * of Wayland.  This must be called prior to WstCompositorStart.
  */
-bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNestedListener *listener, void *userData );
+bool WstCompositorSetKeyboardNestedListener( WstCompositor *wctx, WstKeyboardNestedListener *listener, void *userData );
 
 /**
  * WstCompositorSetPointerNestedListener
@@ -495,7 +520,7 @@ bool WstCompositorSetKeyboardNestedListener( WstCompositor *ctx, WstKeyboardNest
  * through the specified callback functions.  This allows the caller to route pointer input outside
  * of Wayland.  This must be called prior to WstCompositorStart.
  */
-bool WstCompositorSetPointerNestedListener( WstCompositor *ctx, WstPointerNestedListener *listener, void *userData );
+bool WstCompositorSetPointerNestedListener( WstCompositor *wctx, WstPointerNestedListener *listener, void *userData );
 
 /**
  * WstCompositorComposeEmbedded
@@ -517,7 +542,7 @@ bool WstCompositorSetPointerNestedListener( WstCompositor *ctx, WstPointerNested
  *
  * This should only be called while the compositor is running.
  */
-bool WstCompositorComposeEmbedded( WstCompositor *ctx, 
+bool WstCompositorComposeEmbedded( WstCompositor *wctx,
                                    int x, int y, int width, int height,
                                    float *matrix, float alpha, 
                                    unsigned int hints, 
@@ -530,7 +555,7 @@ bool WstCompositorComposeEmbedded( WstCompositor *ctx,
  * when the compositor is running.
  *
  */
-void WstCompositorInvalidateScene( WstCompositor *ctx );
+void WstCompositorInvalidateScene( WstCompositor *wctx );
 
 /**
  * WstCompositorStart
@@ -540,7 +565,7 @@ void WstCompositorInvalidateScene( WstCompositor *ctx );
  * compositor, and start processing events.  The function is not blocking and will
  * return as soon as the compositor is operating.
  */
-bool WstCompositorStart( WstCompositor *ctx );
+bool WstCompositorStart( WstCompositor *wctx );
 
 /**
  * WstCompositorStop
@@ -548,7 +573,7 @@ bool WstCompositorStart( WstCompositor *ctx );
  * Stops the operation of a compositor.  The compositor will halt all operation
  * and release all resources.
  */
-void WstCompositorStop( WstCompositor *ctx );
+void WstCompositorStop( WstCompositor *wctx );
 
 /**
  * WstCompositorKeyEvent
@@ -556,21 +581,21 @@ void WstCompositorStop( WstCompositor *ctx );
  * Pass a key event to the compositor.  The compositor will route the event
  * to an appropriate compositor client.
  */
-void WstCompositorKeyEvent( WstCompositor *ctx, int keyCode, unsigned int keyState, unsigned int modifiers );
+void WstCompositorKeyEvent( WstCompositor *wctx, int keyCode, unsigned int keyState, unsigned int modifiers );
 
 /**
  * WstCompositorPointerEnter
  *
  * Notifiy compositor that the pointer has entered its bounds.
  */
-void WstCompositorPointerEnter( WstCompositor *ctx );
+void WstCompositorPointerEnter( WstCompositor *wctx );
 
 /**
  * WstCompositorPointerLeave
  *
  * Notifiy compositor that the pointer has exited its bounds.
  */
-void WstCompositorPointerLeave( WstCompositor *ctx );
+void WstCompositorPointerLeave( WstCompositor *wctx );
 
 /**
  * WstCompositorPointerMoveEvent
@@ -578,7 +603,7 @@ void WstCompositorPointerLeave( WstCompositor *ctx );
  * Pass a pointer move event to the compositor.  Th compositor will route the event
  * to an appropriate compositor client.
  */
-void WstCompositorPointerMoveEvent( WstCompositor *ctx, int x, int y );
+void WstCompositorPointerMoveEvent( WstCompositor *wctx, int x, int y );
 
 /**
  * WstCompositorPointerButtonEvent
@@ -586,7 +611,7 @@ void WstCompositorPointerMoveEvent( WstCompositor *ctx, int x, int y );
  * Pass a pointer button event to the compositor.  The compositor will route the event
  * to an appropriate compositor client.
  */
-void WstCompositorPointerButtonEvent( WstCompositor *ctx, unsigned int button, unsigned int buttonState );
+void WstCompositorPointerButtonEvent( WstCompositor *wctx, unsigned int button, unsigned int buttonState );
 
 /**
  * WstCompositorTouchEvent
@@ -594,7 +619,7 @@ void WstCompositorPointerButtonEvent( WstCompositor *ctx, unsigned int button, u
  * Pass a touch event to the compositor.  The compositor will route the event to an
  * appropriate compositor client.
  */
-void WstCompositorTouchEvent( WstCompositor *ctx, WstTouchSet *touchSet );
+void WstCompositorTouchEvent( WstCompositor *wctx, WstTouchSet *touchSet );
 
 /**
  * WstCompositorLaunchClient
@@ -603,14 +628,14 @@ void WstCompositorTouchEvent( WstCompositor *ctx, WstTouchSet *touchSet );
  * while the compositor is running.  The function is blocking and will not return until the client
  * process terminates or fails to launch.
  */
-bool WstCompositorLaunchClient( WstCompositor *ctx, const char *cmd );
+bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd );
 
 /**
  * WstCompositorFocusClientById
  *
  * Manually change the keyboard input focus to a client using it's id
  */
-void WstCompositorFocusClientById( WstCompositor *ctx, const int id);
+void WstCompositorFocusClientById( WstCompositor *wctx, const int id);
 
 /**
  * WstCompositorFocusClientByName
@@ -618,7 +643,7 @@ void WstCompositorFocusClientById( WstCompositor *ctx, const int id);
  * Manually change the keyboard input focus to a client using it's name. The name uniqueness is the responsibility of
  * the client. The first hit will be returned.
  */
-void WstCompositorFocusClientByName( WstCompositor *ctx, const char *name);
+void WstCompositorFocusClientByName( WstCompositor *wctx, const char *name);
 
 #endif
 
