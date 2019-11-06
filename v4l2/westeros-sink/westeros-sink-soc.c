@@ -1893,23 +1893,33 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          if ( sink->soc.outBuffers[buffIndex].planeCount > 1 )
          {
             frameFd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
+            stride0= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline;
 
             frameFd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
+            stride1= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[1].bytesperline;
             if ( frameFd1 < 0 )
             {
                offset1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+               stride1= stride0;
             }
 
             frameFd2= sink->soc.outBuffers[buffIndex].planeInfo[2].fd;
+            stride2= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[2].bytesperline;
             if ( frameFd2 < 0 )
             {
                offset2= offset1+(sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height)/2;
+               stride2= stride0;
             }
          }
          else
          {
             frameFd0= sink->soc.outBuffers[buffIndex].fd;
-            offset1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+            if ( sink->soc.isMultiPlane )
+               stride0= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline;
+            else
+               stride0= sink->soc.fmtOut.fmt.pix.bytesperline;
+            offset1= stride0*sink->soc.fmtOut.fmt.pix.height;
+            stride1= stride0;
             offset2= 0;
             stride2= 0;
          }
@@ -2218,12 +2228,12 @@ static gpointer wstVideoOutputThread(gpointer data)
                   fd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
                   fd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
                   fd2= -1;
-                  l0= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
-                  l1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height/2;
-                  l2= 0;
-                  s0= sink->soc.frameWidth;
-                  s1= sink->soc.frameWidth;
+                  s0= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline;
+                  s1= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[1].bytesperline;
                   s2= 0;
+                  l0= s0*sink->soc.fmtOut.fmt.pix.height;
+                  l1= s0*sink->soc.fmtOut.fmt.pix.height/2;
+                  l2= 0;
                   p0= sink->soc.outBuffers[buffIndex].planeInfo[0].start;
                   p1= sink->soc.outBuffers[buffIndex].planeInfo[1].start;
                   p2= 0;
@@ -2233,14 +2243,17 @@ static gpointer wstVideoOutputThread(gpointer data)
                   fd0= sink->soc.outBuffers[buffIndex].fd;
                   fd1= fd0;
                   fd2= -1;
-                  l0= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
-                  l1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height/2;
-                  l2= 0;
-                  s0= sink->soc.frameWidth;
-                  s1= sink->soc.frameWidth;
+                  if ( sink->soc.isMultiPlane )
+                     s0= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline;
+                  else
+                     s0= sink->soc.fmtOut.fmt.pix.bytesperline;
+                  s1= s0;
                   s2= 0;
+                  l0= s0*sink->soc.fmtOut.fmt.pix.height;
+                  l1= s0*sink->soc.fmtOut.fmt.pix.height/2;
+                  l2= 0;
                   p0= sink->soc.outBuffers[i].start;
-                  p1= (char*)p0 + sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+                  p1= (char*)p0 + s0*sink->soc.fmtOut.fmt.pix.height;
                   p2= 0;
                }
 
@@ -2272,14 +2285,19 @@ static gpointer wstVideoOutputThread(gpointer data)
                   if ( sink->soc.outBuffers[buffIndex].planeCount > 1 )
                   {
                      int fd0, fd1, fd2;
+                     int stride0, stride1, stride2;
                      int offset1= 0;
                      fd0= sink->soc.outBuffers[buffIndex].planeInfo[0].fd;
                      fd1= sink->soc.outBuffers[buffIndex].planeInfo[1].fd;
                      fd2= sink->soc.outBuffers[buffIndex].planeInfo[2].fd;
+                     stride0= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline;
+                     stride1= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[1].bytesperline;
+                     stride2= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[2].bytesperline;
                      if ( fd1 < 0 )
                      {
                         fd1= fd0;
-                        offset1= sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height;
+                        stride1= stride0;
+                        offset1= stride0*sink->soc.fmtOut.fmt.pix.height;
                      }
                      if ( fd2 < 0 ) fd2= fd0;
 
@@ -2293,23 +2311,30 @@ static gpointer wstVideoOutputThread(gpointer data)
                                                              0, /* offset0 */
                                                              offset1, /* offset1 */
                                                              0, /* offset2 */
-                                                             sink->soc.frameWidth, /* stride0 */
-                                                             sink->soc.frameWidth, /* stride1 */
+                                                             stride0, /* stride0 */
+                                                             stride1, /* stride1 */
                                                              0  /* stride2 */
                                                            );
                   }
                   else
                   {
+                     int stride;
+
+                     if ( sink->soc.isMultiPlane )
+                        stride= sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline;
+                     else
+                        stride= sink->soc.fmtOut.fmt.pix.bytesperline;
+
                      wlbuff= wl_sb_create_planar_buffer_fd( sink->soc.sb,
                                                             sink->soc.outBuffers[buffIndex].fd,
                                                             sink->soc.frameWidth,
                                                             sink->soc.frameHeight,
                                                             sink->soc.outputFormat,
                                                             0, /* offset0 */
-                                                            sink->soc.frameWidth*sink->soc.fmtOut.fmt.pix.height, /* offset1 */
+                                                            stride*sink->soc.fmtOut.fmt.pix.height, /* offset1 */
                                                             0, /* offset2 */
-                                                            sink->soc.frameWidth, /* stride0 */
-                                                            sink->soc.frameWidth, /* stride1 */
+                                                            stride, /* stride0 */
+                                                            stride, /* stride1 */
                                                             0  /* stride2 */
                                                           );
                   }
