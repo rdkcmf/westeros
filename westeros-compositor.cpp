@@ -2989,6 +2989,7 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
       }
 
       // Build environment for client
+      numEnvVar= 0;
       if ( environ )
       {
          int i= numEnvVar= 0;
@@ -4157,10 +4158,10 @@ static void wstCompositorProcessEvents( WstCompositor *wctx )
          case WstEventType_key:
             {
                WstKeyboard *keyboard= wctx->keyboard;
-               
+
                if ( keyboard )
                {
-                  wstProcessKeyEvent( keyboard, 
+                  wstProcessKeyEvent( keyboard,
                                       wctx->eventQueue[i].v1, //keyCode
                                       wctx->eventQueue[i].v2, //keyState
                                       wctx->eventQueue[i].v3  //modifiers
@@ -4170,51 +4171,45 @@ static void wstCompositorProcessEvents( WstCompositor *wctx )
             break;
          case WstEventType_keyCode:
             {
-               if ( ctx->seat )
+               WstKeyboard *keyboard= wctx->keyboard;
+
+               if ( keyboard )
                {
-                  WstKeyboard *keyboard= wctx->keyboard;
-                  
-                  if ( keyboard )
+                  uint32_t serial;
+                  struct wl_resource *resource;
+
+                  serial= wl_display_next_serial( ctx->display );
+                  wl_resource_for_each( resource, &keyboard->focusResourceList )
                   {
-                     uint32_t serial;
-                     struct wl_resource *resource;
-                     
-                     serial= wl_display_next_serial( ctx->display );
-                     wl_resource_for_each( resource, &keyboard->focusResourceList )
-                     {
-                        wl_keyboard_send_key( resource, 
-                                              serial,
-                                              wctx->eventQueue[i].v1,  //time
-                                              wctx->eventQueue[i].v2,  //key
-                                              wctx->eventQueue[i].v3   //state
-                                            );
-                     }   
+                     wl_keyboard_send_key( resource,
+                                           serial,
+                                           wctx->eventQueue[i].v1,  //time
+                                           wctx->eventQueue[i].v2,  //key
+                                           wctx->eventQueue[i].v3   //state
+                                         );
                   }
                }
             }
             break;
          case WstEventType_keyModifiers:
             {
-               if ( ctx->seat )
+               WstKeyboard *keyboard= wctx->keyboard;
+
+               if ( keyboard )
                {
-                  WstKeyboard *keyboard= wctx->keyboard;
+                  uint32_t serial;
+                  struct wl_resource *resource;
                   
-                  if ( keyboard )
+                  serial= wl_display_next_serial( ctx->display );
+                  wl_resource_for_each( resource, &keyboard->focusResourceList )
                   {
-                     uint32_t serial;
-                     struct wl_resource *resource;
-                     
-                     serial= wl_display_next_serial( ctx->display );
-                     wl_resource_for_each( resource, &keyboard->focusResourceList )
-                     {
-                        wl_keyboard_send_modifiers( resource,
-                                                    serial,
-                                                    wctx->eventQueue[i].v1, // mod depressed
-                                                    wctx->eventQueue[i].v2, // mod latched
-                                                    wctx->eventQueue[i].v3, // mod locked
-                                                    wctx->eventQueue[i].v4  // mod group
-                                                  );
-                     }   
+                     wl_keyboard_send_modifiers( resource,
+                                                 serial,
+                                                 wctx->eventQueue[i].v1, // mod depressed
+                                                 wctx->eventQueue[i].v2, // mod latched
+                                                 wctx->eventQueue[i].v3, // mod locked
+                                                 wctx->eventQueue[i].v4  // mod group
+                                               );
                   }
                }
             }
