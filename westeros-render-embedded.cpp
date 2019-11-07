@@ -480,6 +480,7 @@ static void wstRendererEMBDestroy( WstRendererEMB *renderer )
       if ( renderer->rendererFast )
       {
          renderer->rendererFast->renderTerm( renderer->rendererFast );
+         free( renderer->rendererFast );
          renderer->rendererFast= 0;
       }
       free( renderer );

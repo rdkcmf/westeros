@@ -313,7 +313,11 @@ static void setupEGL( AppCtx *appCtx )
    eglSwapInterval( appCtx->eglDisplay, 1 );
    
 exit:
-   
+
+   if ( eglConfigs )
+   {
+      free( eglConfigs );
+   }
    return;
 }
 
@@ -719,10 +723,11 @@ void getDevices( std::vector<pollfd> &deviceFds )
             devPathName= getDevice( inputPath, result->d_name );
             if ( devPathName )
             {
-               if (openDevice( deviceFds, devPathName ) >= 0 )
-                  free( devPathName );
-               else
+               if (openDevice( deviceFds, devPathName ) < 0 )
+               {
                   printf("Could not open device %s\n", devPathName);
+               }
+               free( devPathName );
             }
          }
       }

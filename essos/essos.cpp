@@ -1339,11 +1339,12 @@ static bool essEGLInit( EssCtx *ctx )
 exit:
    if ( !result )
    {
-      if ( eglConfigs )
-      {
-         free( eglConfigs );
-      }
       essEGLTerm(ctx);
+   }
+
+   if ( eglConfigs )
+   {
+      free( eglConfigs );
    }
 
    return result;
@@ -1751,8 +1752,8 @@ static void essKeyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_
                ctx->modShift= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_SHIFT );
                ctx->modCaps= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CAPS );
             }
-            munmap( map, size );
          }
+         munmap( map, size );
       }
    }
 
@@ -2604,10 +2605,11 @@ static void essGetInputDevices( EssCtx *ctx )
             devPathName= essGetInputDevice( ctx, inputPath, result->d_name );
             if ( devPathName )
             {
-               if (essOpenInputDevice( ctx, devPathName ) >= 0 )
-                  free( devPathName );
-               else
+               if (essOpenInputDevice( ctx, devPathName ) < 0 )
+               {
                   ERROR("essos: could not open device %s", devPathName);
+               }
+               free( devPathName );
             }
          }
       }

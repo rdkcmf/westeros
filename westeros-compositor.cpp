@@ -1326,6 +1326,11 @@ bool WstCompositorSetIsRepeater( WstCompositor *wctx, bool isRepeater )
             // We can't do renderless composition with some wayland-egl.  Ignore the
             // request and configure for nested composition with gl renderer
             ctx->isRepeater= false;
+            if ( ctx->rendererModule )
+            {
+               free( (void*)ctx->rendererModule );
+               ctx->rendererModule= 0;
+            }
             ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
             WARNING("WstCompositorSetIsRepeater: cannot repeat with this wayland-egl: configuring nested with gl renderer");
          }
@@ -1371,6 +1376,11 @@ bool WstCompositorSetIsEmbedded( WstCompositor *wctx, bool isEmbedded )
          char *var= getenv("WESTEROS_VPC_BRIDGE");
          if ( var )
          {
+            if ( ctx->nestedDisplayName )
+            {
+               free( (void*)ctx->nestedDisplayName );
+               ctx->nestedDisplayName= 0;
+            }
             ctx->nestedDisplayName= strdup(var);
             ctx->hasVpcBridge= true;
          }
@@ -2890,6 +2900,7 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
    char **args= 0;
    char **env= 0;
    char *envDisplay= 0;
+   FILE *pClientLog= 0;
    
    if ( wctx && wctx->ctx )
    {
@@ -2992,7 +3003,7 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
       numEnvVar= 0;
       if ( environ )
       {
-         int i= numEnvVar= 0;
+         int i= 0;
          for( ; ; )
          {
             char *var= environ[i];
@@ -3054,7 +3065,6 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
       
       pthread_mutex_unlock( &ctx->mutex );
 
-      FILE *pClientLog= 0;
       char *clientLogName= getenv( "WESTEROS_CAPTURE_CLIENT_STDOUT" );
       if ( clientLogName )
       {
@@ -3124,11 +3134,6 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
          {
             int clientStatus, detail= 0;
 
-            if ( pClientLog )
-            {
-               fclose( pClientLog );
-            }
-            
             if ( WIFSIGNALED(status) )
             {
                int signo= WTERMSIG(status);
@@ -3161,6 +3166,10 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
    }
    
 exit:
+   if ( pClientLog )
+   {
+      fclose( pClientLog );
+   }
 
    if ( envDisplay )
    {
@@ -4020,6 +4029,11 @@ static bool wstCompositorCheckForRepeaterSupport( WstContext *ctx )
 
    #if defined (WESTEROS_PLATFORM_RPI)
    ctx->mustInitRendererModule= true;
+   if ( ctx->rendererModule )
+   {
+      free( (void*)ctx->rendererModule );
+      ctx->rendererModule= 0;
+   }
    ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
    ctx->getDeviceBufferFromResource= (PFNGETDEVICEBUFFERFROMRESOURCE)vc_dispmanx_get_handle_from_wl_buffer;
    #else

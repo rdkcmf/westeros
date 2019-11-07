@@ -287,8 +287,8 @@ static void keyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_t f
                ctx->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
                ctx->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
             }
-            munmap( map, size );
          }
+         munmap( map, size );
       }
    }
 
