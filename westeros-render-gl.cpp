@@ -1592,8 +1592,7 @@ exit:
 
    if ( eglConfigs )
    {
-      //Crashes in free sometimes.  Why?
-      //free( eglConfigs );
+      free( eglConfigs );
       eglConfigs= 0;
    }
 
