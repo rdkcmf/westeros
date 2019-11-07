@@ -1313,6 +1313,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
       }
       #endif
 
+      LOCK(sink);
       if ( !sink->videoStarted && sink->startAfterCaps )
       {
          GST_DEBUG("have caps: starting video");
@@ -1322,6 +1323,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             GST_ERROR("gst_westeros_sink_soc_accept_caps: gst_westeros_sink_soc_start_video failed");
          }
       }
+      UNLOCK(sink);
    }
 
    return result;   
