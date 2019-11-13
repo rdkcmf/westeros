@@ -104,6 +104,8 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
 static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *contentLightLevel );
 #endif
+static int sinkAcquireResources( GstWesterosSink *sink );
+static void sinkReleaseResources( GstWesterosSink *sink );
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -471,8 +473,10 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.activeBuffers= 0;
    sink->soc.captureEnabled= FALSE;
    sink->soc.presentationStarted= FALSE;
+   sink->soc.surfaceClientId= 0;
    sink->soc.surfaceClient= 0;
    sink->soc.videoWindow= 0;
+   sink->soc.videoDecoderId= 0;
    sink->soc.videoDecoder= 0;
    sink->soc.ptsOffset= 0;
    sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
@@ -491,54 +495,30 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    rc= NxClient_Join(NULL);
    if ( rc == NEXUS_SUCCESS )
    {
-      NxClient_GetDefaultAllocSettings(&allocSettings);
-      allocSettings.surfaceClient= 1;
-      allocSettings.simpleVideoDecoder= 1;
-      rc= NxClient_Alloc(&allocSettings, &sink->soc.allocSurface);
-      if ( rc == NEXUS_SUCCESS )
+      sink->soc.stcChannel= NULL;
+      sink->soc.videoPidChannel= NULL;
+      sink->soc.codec= bvideo_codec_unknown;
+
+      #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+      sink->soc.eotf= NEXUS_VideoEotf_eInvalid;
+      memset(&sink->soc.masteringDisplayColorVolume,0,sizeof(NEXUS_MasteringDisplayColorVolume));
+      memset(&sink->soc.contentLightLevel,0,sizeof(NEXUS_ContentLightLevel));
+      #endif
+
+      NEXUS_VideoDecoderCapabilities videoDecoderCaps;
+      NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
+      if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
       {
-         sink->soc.surfaceClientId= sink->soc.allocSurface.surfaceClient[0].id;    
-         sink->soc.surfaceClient= NEXUS_SurfaceClient_Acquire(sink->soc.surfaceClientId);
-         sink->soc.videoWindow= NEXUS_SurfaceClient_AcquireVideoWindow( sink->soc.surfaceClient, 0);
-         sink->soc.videoDecoderId= sink->soc.allocSurface.simpleVideoDecoder[0].id;
-         sink->soc.videoDecoder= NEXUS_SimpleVideoDecoder_Acquire( sink->soc.videoDecoderId );
-
-         sink->soc.stcChannel= NULL;
-         sink->soc.videoPidChannel= NULL;
-         sink->soc.codec= bvideo_codec_unknown;
-
-         #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
-         sink->soc.eotf= NEXUS_VideoEotf_eInvalid;
-         memset(&sink->soc.masteringDisplayColorVolume,0,sizeof(NEXUS_MasteringDisplayColorVolume));
-         memset(&sink->soc.contentLightLevel,0,sizeof(NEXUS_ContentLightLevel));
-         #endif
-
-         NEXUS_VideoDecoderCapabilities videoDecoderCaps;
-         NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
-         if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
-         {
-            sink->maxWidth= 3840;
-            sink->maxHeight= 2160;
-         }
-         else
-         {
-            sink->maxWidth= 1920;
-            sink->maxHeight= 1080;
-         }
-
-         NEXUS_SimpleVideoDecoderClientSettings settings;
-         NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &settings);
-         settings.resourceChanged.callback= resourceChangedCallback;
-         settings.resourceChanged.context= sink;
-         settings.resourceChanged.param= 0;;
-         NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &settings);
-
-         result= TRUE;
+         sink->maxWidth= 3840;
+         sink->maxHeight= 2160;
       }
       else
       {
-         GST_ERROR("gst_westeros_sink_soc_init: NxClient_Alloc failed %d\n", rc);
+         sink->maxWidth= 1920;
+         sink->maxHeight= 1080;
       }
+
+      result= TRUE;
    }
    else
    {
@@ -550,7 +530,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_term( GstWesterosSink *sink )
 {
-   NxClient_Free(&sink->soc.allocSurface);
    NxClient_Uninit(); 
 }
 
@@ -920,114 +899,13 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
    
    WESTEROS_UNUSED(passToDefault);
 
-   /* Connect to the decoder */
-   NxClient_ConnectSettings connectSettings;
-   NxClient_GetDefaultConnectSettings(&connectSettings);
-   connectSettings.simpleVideoDecoder[0].id= sink->soc.videoDecoderId;
-   connectSettings.simpleVideoDecoder[0].surfaceClientId= sink->soc.surfaceClientId;
-   connectSettings.simpleVideoDecoder[0].windowId= 0;
-   connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
-   connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
-   connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
-   #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
-   connectSettings.simpleVideoDecoder[0].decoderCapabilities.secureVideo= (sink->soc.secureVideo ? true : false);
-
-   NEXUS_VideoDecoderCapabilities videoDecoderCaps;
-   NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
-   if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
+   if ( sinkAcquireResources( sink ) )
    {
-      printf("westerossink: supports 4K\n");
-      if ( !sink->soc.usePip )
-      {
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 3840;
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 2160;
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.colorDepth= 10;
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.feeder.colorDepth= 10;
-      }
-   }
-   else
-   {
-   #endif
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 1920;
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 1080;
-   #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
-   }
-   #endif
-   if ( sink->soc.usePip )
-   {
-      // We are using PIP window. Restrict size.
-      connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_ePip;
-      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= MAX_PIP_WIDTH;
-      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= MAX_PIP_HEIGHT;
-   }
-   rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
-   if ( rc == NEXUS_SUCCESS )
-   {
-      sink->soc.presentationStarted= FALSE;
-
-      NEXUS_VideoDecoderSettings settings;
-      NEXUS_VideoDecoderExtendedSettings ext_settings;
-      NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
-      NEXUS_SimpleVideoDecoder_GetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
-
-      #if (NEXUS_PLATFORM_VERSION_MAJOR > 16) || ((NEXUS_PLATFORM_VERSION_MAJOR == 16) && (NEXUS_PLATFORM_VERSION_MINOR > 3))
-      settings.scanMode= NEXUS_VideoDecoderScanMode_e1080p;
-      #endif
-      // Don't enable zeroDelayOutputMode since this combined with
-      // NEXUS_VideoDecoderTimestampMode_eDisplay will cause the capture
-      // to omit all out of order frames (ie. all B-Frames)
-      settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
-      settings.ptsOffset= sink->soc.ptsOffset;
-      settings.fifoEmpty.callback= underflowCallback;
-      settings.fifoEmpty.context= sink;
-      settings.firstPtsPassed.callback= firstPtsPassedCallback;
-      settings.firstPtsPassed.context= sink;
-      settings.ptsError.callback= ptsErrorCallback;
-      settings.ptsError.context= sink;
-      #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
-      settings.streamChanged.callback= streamChangedCallback;
-      settings.streamChanged.context= sink;
-      #endif
-      ext_settings.dataReadyCallback.callback= NULL;
-      ext_settings.dataReadyCallback.context= NULL;
-      ext_settings.zeroDelayOutputMode= false;
-      if ( sink->soc.useLowDelay )
-      {
-         ext_settings.lowLatencySettings.mode= NEXUS_VideoDecoderLowLatencyMode_eAverage;
-         ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
-         printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
-      }
-      if ( sink->soc.useCameraLatency )
-      {
-         NEXUS_VideoDecoderTrickState trickState;
-         NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
-         trickState.rate= 2000;
-         NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
-         ext_settings.zeroDelayOutputMode= true;
-         ext_settings.ignoreDpbOutputDelaySyntax= true;
-         printf("westerossink: using camera mode\n");
-      }
-      ext_settings.treatIFrameAsRap= true;
-      ext_settings.ignoreNumReorderFramesEqZero= true;
-
-      NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
-      NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
-
-      if ( sink->soc.usePip )
-      {
-         gst_westeros_sink_soc_update_video_position( sink );
-      }
-
-      NEXUS_SurfaceComposition composition;
-      NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
-      composition.zorder= sink->zorder*MAX_ZORDER;
-      NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
-
       result= TRUE;
    }
    else
    {
-      GST_ERROR("gst_westeros_sink_null_to_ready: NxClient_Connect failed: %d", rc);
+      GST_ERROR("gst_westeros_sink_null_to_ready: sinkAcquireResources failed");
    }
    
    return result;
@@ -1229,22 +1107,7 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
 
    freeCaptureSurfaces(sink);
 
-   NxClient_Disconnect(sink->soc.connectId);
-   if ( sink->soc.videoDecoder )
-   {
-      NEXUS_SimpleVideoDecoder_Release(sink->soc.videoDecoder);
-      sink->soc.videoDecoder= 0;
-   }
-   if ( sink->soc.videoWindow )
-   {
-      NEXUS_SurfaceClient_ReleaseVideoWindow(sink->soc.videoWindow);
-      sink->soc.videoWindow= 0;
-   }
-   if ( sink->soc.surfaceClient )
-   {
-      NEXUS_SurfaceClient_Release(sink->soc.surfaceClient);
-      sink->soc.surfaceClient= 0;
-   }
+   sinkReleaseResources( sink );
    
    return TRUE;
 }
@@ -2560,3 +2423,174 @@ static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *c
    GST_DEBUG("content_light_level (%d, %d) ", contentLightLevel->max , contentLightLevel->maxFrameAverage);
 }
 #endif
+
+static int sinkAcquireResources( GstWesterosSink *sink )
+{
+   int result= 0;
+   NEXUS_Error rc;
+   NxClient_AllocSettings allocSettings;
+   NxClient_ConnectSettings connectSettings;
+
+   NxClient_GetDefaultAllocSettings(&allocSettings);
+   allocSettings.surfaceClient= 1;
+   allocSettings.simpleVideoDecoder= 1;
+   rc= NxClient_Alloc(&allocSettings, &sink->soc.allocSurface);
+   if ( rc == NEXUS_SUCCESS )
+   {
+      sink->soc.surfaceClientId= sink->soc.allocSurface.surfaceClient[0].id;
+      sink->soc.surfaceClient= NEXUS_SurfaceClient_Acquire(sink->soc.surfaceClientId);
+      sink->soc.videoWindow= NEXUS_SurfaceClient_AcquireVideoWindow( sink->soc.surfaceClient, 0);
+      sink->soc.videoDecoderId= sink->soc.allocSurface.simpleVideoDecoder[0].id;
+      sink->soc.videoDecoder= NEXUS_SimpleVideoDecoder_Acquire( sink->soc.videoDecoderId );
+
+      NEXUS_SimpleVideoDecoderClientSettings settings;
+      NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &settings);
+      settings.resourceChanged.callback= resourceChangedCallback;
+      settings.resourceChanged.context= sink;
+      settings.resourceChanged.param= 0;;
+      NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &settings);
+
+      /* Connect to the decoder */
+      NxClient_GetDefaultConnectSettings(&connectSettings);
+      connectSettings.simpleVideoDecoder[0].id= sink->soc.videoDecoderId;
+      connectSettings.simpleVideoDecoder[0].surfaceClientId= sink->soc.surfaceClientId;
+      connectSettings.simpleVideoDecoder[0].windowId= 0;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
+      #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
+      connectSettings.simpleVideoDecoder[0].decoderCapabilities.secureVideo= (sink->soc.secureVideo ? true : false);
+
+      NEXUS_VideoDecoderCapabilities videoDecoderCaps;
+      NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
+      if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
+      {
+         printf("westerossink: supports 4K\n");
+         if ( !sink->soc.usePip )
+         {
+            connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 3840;
+            connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 2160;
+            connectSettings.simpleVideoDecoder[0].decoderCapabilities.colorDepth= 10;
+            connectSettings.simpleVideoDecoder[0].decoderCapabilities.feeder.colorDepth= 10;
+         }
+      }
+      else
+      {
+      #endif
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 1920;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 1080;
+      #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
+      }
+      #endif
+      if ( sink->soc.usePip )
+      {
+         // We are using PIP window. Restrict size.
+         connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_ePip;
+         connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= MAX_PIP_WIDTH;
+         connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= MAX_PIP_HEIGHT;
+      }
+      rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
+      if ( rc == NEXUS_SUCCESS )
+      {
+         sink->soc.presentationStarted= FALSE;
+
+         NEXUS_VideoDecoderSettings settings;
+         NEXUS_VideoDecoderExtendedSettings ext_settings;
+         NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
+         NEXUS_SimpleVideoDecoder_GetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+
+         #if (NEXUS_PLATFORM_VERSION_MAJOR > 16) || ((NEXUS_PLATFORM_VERSION_MAJOR == 16) && (NEXUS_PLATFORM_VERSION_MINOR > 3))
+         settings.scanMode= NEXUS_VideoDecoderScanMode_e1080p;
+         #endif
+         // Don't enable zeroDelayOutputMode since this combined with
+         // NEXUS_VideoDecoderTimestampMode_eDisplay will cause the capture
+         // to omit all out of order frames (ie. all B-Frames)
+         settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
+         settings.ptsOffset= sink->soc.ptsOffset;
+         settings.fifoEmpty.callback= underflowCallback;
+         settings.fifoEmpty.context= sink;
+         settings.firstPtsPassed.callback= firstPtsPassedCallback;
+         settings.firstPtsPassed.context= sink;
+         settings.ptsError.callback= ptsErrorCallback;
+         settings.ptsError.context= sink;
+         #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
+         settings.streamChanged.callback= streamChangedCallback;
+         settings.streamChanged.context= sink;
+         #endif
+         ext_settings.dataReadyCallback.callback= NULL;
+         ext_settings.dataReadyCallback.context= NULL;
+         ext_settings.zeroDelayOutputMode= false;
+         if ( sink->soc.useLowDelay )
+         {
+            ext_settings.lowLatencySettings.mode= NEXUS_VideoDecoderLowLatencyMode_eAverage;
+            ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
+            printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
+         }
+         if ( sink->soc.useCameraLatency )
+         {
+            NEXUS_VideoDecoderTrickState trickState;
+            NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+            trickState.rate= 2000;
+            NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+            ext_settings.zeroDelayOutputMode= true;
+            ext_settings.ignoreDpbOutputDelaySyntax= true;
+            printf("westerossink: using camera mode\n");
+         }
+         ext_settings.treatIFrameAsRap= true;
+         ext_settings.ignoreNumReorderFramesEqZero= true;
+
+         NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+         NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+
+         if ( sink->soc.usePip )
+         {
+            gst_westeros_sink_soc_update_video_position( sink );
+         }
+
+         NEXUS_SurfaceComposition composition;
+         NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+         composition.zorder= sink->zorder*MAX_ZORDER;
+         NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+
+         result= 1;
+      }
+      else
+      {
+         GST_ERROR("sinkAcquireResources: NxClient_Connect failed: %d", rc);
+      }
+   }
+   else
+   {
+      GST_ERROR("sinkAcquireResources: NxClient_Alloc failed %d\n", rc);
+   }
+
+   return result;
+}
+
+static void sinkReleaseResources( GstWesterosSink *sink )
+{
+   if ( sink->soc.connectId != 0 )
+   {
+      sink->soc.stcChannel= NULL;
+      sink->soc.videoPidChannel= NULL;
+      sink->soc.codec= bvideo_codec_unknown;
+
+      NxClient_Disconnect(sink->soc.connectId);
+      if ( sink->soc.videoDecoder )
+      {
+         NEXUS_SimpleVideoDecoder_Release(sink->soc.videoDecoder);
+         sink->soc.videoDecoder= 0;
+      }
+      if ( sink->soc.videoWindow )
+      {
+         NEXUS_SurfaceClient_ReleaseVideoWindow(sink->soc.videoWindow);
+         sink->soc.videoWindow= 0;
+      }
+      if ( sink->soc.surfaceClient )
+      {
+         NEXUS_SurfaceClient_Release(sink->soc.surfaceClient);
+         sink->soc.surfaceClient= 0;
+      }
+      NxClient_Free(&sink->soc.allocSurface);
+   }
+}

@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "westeros-sink.h"
 
@@ -287,7 +288,7 @@ static void registryHandleGlobalRemove(void *data,
 }
 
 #include <dlfcn.h>
-void captureInit( GstWesterosSink *sink )
+static void captureInit( GstWesterosSink *sink )
 {
    const char *env= getenv("WESTEROSSINK_ENABLE_CAPTURE");
    if ( env )
@@ -324,7 +325,7 @@ void captureInit( GstWesterosSink *sink )
    }
 }
 
-void captureTerm( GstWesterosSink *sink )
+static void captureTerm( GstWesterosSink *sink )
 {
    if ( sink )
    {
@@ -733,14 +734,18 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
    switch (prop_id) 
    {
       case PROP_VIDEO_WIDTH:
-         LOCK(sink);
-         g_value_set_int(value, sink->srcWidth);
-         UNLOCK(sink);
+         {
+            LOCK(sink);
+            g_value_set_int(value, sink->srcWidth);
+            UNLOCK(sink);
+         }
          break;
       case PROP_VIDEO_HEIGHT:
-         LOCK(sink);
-         g_value_set_int(value, sink->srcHeight);
-         UNLOCK(sink);
+         {
+            LOCK(sink);
+            g_value_set_int(value, sink->srcHeight);
+            UNLOCK(sink);
+         }
          break;
       case PROP_VIDEO_PTS:
          {
@@ -879,6 +884,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
          }
+         captureTerm(sink);
          break;
       }
 
@@ -896,10 +902,6 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             {
                result= GST_STATE_CHANGE_FAILURE;
             }
-
-            captureTerm(sink);
-
-            gst_westeros_sink_term( sink );
          }
          break;
       }
