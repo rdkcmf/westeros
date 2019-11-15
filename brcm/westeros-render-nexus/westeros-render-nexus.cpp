@@ -239,8 +239,10 @@ static WstRendererNX* wstRendererNXCreate( WstRenderer *renderer )
       printf("westeros_render_nexus: wstRendererNXCreate: NxClient_Join rc=%X as %s\n", rc, joinSettings.name );
       if ( NEXUS_SUCCESS != rc )
       {
+         printf("WstGLInit: NxClient_Join failed: rc=%X\n", rc);
          free( rendererNX );
          rendererNX= 0;
+         goto exit;
       }
 
       rendererNX->secureGraphics= useSecureGraphics();
@@ -309,6 +311,7 @@ static WstRendererNX* wstRendererNXCreate( WstRenderer *renderer )
       }
    }
 
+exit:
    return rendererNX;
 }
 

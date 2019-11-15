@@ -3046,7 +3046,7 @@ bool WstCompositorLaunchClient( WstCompositor *wctx, const char *cmd )
             env[j++]= environ[i];
          }
       }
-      sprintf( work, "WAYLAND_DISPLAY=%s", ctx->displayName );
+      snprintf( work, sizeof(work), "WAYLAND_DISPLAY=%s", ctx->displayName );
       envDisplay= strdup( work );
       if ( !envDisplay )
       {
@@ -5299,8 +5299,11 @@ static WstSurface* wstSurfaceCreate( WstCompositor *wctx)
 
          WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, &surface->zorder );
       }
-      
-      wstSurfaceInsertSurface( ctx, surface );
+
+      if ( surface )
+      {
+         wstSurfaceInsertSurface( ctx, surface );
+      }
    }
    
    return surface;
@@ -5536,8 +5539,7 @@ static WstSurface* wstGetSurfaceFromSurfaceId( WstContext *ctx, int32_t surfaceI
 static WstSurface* wstGetSurfaceFromPoint( WstCompositor *wctx, int x, int y )
 {
    WstSurface *surface= 0;
-   int sx, sy, sw, sh;
-   wl_fixed_t xFixed, yFixed;
+   int sx=0, sy=0, sw=0, sh=0;
    bool haveRoles= false;
    WstSurface *surfaceNoRole= 0;
    WstContext *ctx= wctx->ctx;
@@ -9031,7 +9033,7 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
    WstCompositor *compositor= pointer->compositor;
    WstContext *ctx= compositor->ctx;
    WstSurface *surface= 0;
-   int sx, sy, sw, sh;
+   int sx=0, sy=0, sw=0, sh=0;
    uint32_t time;
    struct wl_resource *resource;
 
@@ -9174,7 +9176,7 @@ static void wstPointerSetPointer( WstPointer *pointer, WstSurface *surface )
 
 static void wstPointerUpdatePosition( WstPointer *pointer )
 {
-   int px, py, pw, ph;
+   int px=0, py=0, pw=0, ph=0;
    WstCompositor *compositor= pointer->compositor;
    WstSurface *pointerSurface= pointer->pointerSurface;
 
@@ -9254,7 +9256,7 @@ static void wstProcessTouchDownEvent( WstTouch *touch, uint32_t time, int id, in
    WstContext *ctx= touch->compositor->ctx;
    uint32_t serial;
    struct wl_resource *resource;
-   int sx, sy, sw, sh;
+   int sx=0, sy=0, sw=0, sh=0;
 
    if ( ctx->isNested )
    {

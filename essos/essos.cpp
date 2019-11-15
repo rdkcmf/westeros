@@ -2444,7 +2444,7 @@ static GetDisplaySafeArea gGetDisplaySafeArea= 0;
 void displaySizeCallback( void *userData, int width, int height )
 {
    EssCtx *ctx= (EssCtx*)userData;
-   int safex, safey, safew, safeh;
+   int safex= 0, safey= 0, safew= 0, safeh= 0;
    bool customSafe= false;
    INFO("displaySizeCallback: display size %dx%d", width, height );
    if ( gGetDisplaySafeArea )
@@ -2535,7 +2535,7 @@ static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
          fd= open( devPathName, O_RDONLY | O_CLOEXEC );
          if ( fd < 0 )
          {
-            sprintf( ctx->lastErrorDetail,
+            snprintf( ctx->lastErrorDetail, ESS_MAX_ERROR_DETAIL,
             "Error: error opening device: %s\n", devPathName );
          }
          else
@@ -2575,18 +2575,18 @@ static char *essGetInputDevice( EssCtx *ctx, const char *path, char *devName )
    {
       strcpy( devicePathName, path );
       strcat( devicePathName, devName );     
+
+      if ( !stat(devicePathName, &buffer) )
+      {
+         DEBUG( "essGetInputDevice: found %s", devicePathName );
+      }
+      else
+      {
+         free( devicePathName );
+         devicePathName= 0;
+      }
    }
-   
-   if ( !stat(devicePathName, &buffer) )
-   {
-      DEBUG( "essGetInputDevice: found %s", devicePathName );
-   }
-   else
-   {
-      free( devicePathName );
-      devicePathName= 0;
-   }
-   
+
    return devicePathName;
 }
 
