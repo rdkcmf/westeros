@@ -162,8 +162,8 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
    g_object_class_install_property (gobject_class, PROP_ZOOM_MODE,
      g_param_spec_int ("zoom-mode",
                        "zoom-mode",
-                       "Zoom mode (0: full, 1: boxed)",
-                       0, 1, 1, G_PARAM_READWRITE ));
+                       "Set zoom mode",
+                       0, NEXUS_VideoWindowContentMode_eMax-1, NEXUS_VideoWindowContentMode_eFull, G_PARAM_READWRITE ));
 
    g_object_class_install_property(gobject_class, PROP_SERVER_PLAY_SPEED,
       g_param_spec_float("server-play-speed", "server play speed",
@@ -632,13 +632,17 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
          {
             int intValue= g_value_get_int(value);
 
-            if ( intValue == 0 )
+            switch( intValue )
             {
-               sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
-            }
-            else
-            {
-               sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eBox;
+               case 0:
+                  sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
+                  break;
+               case 3:
+                  sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eZoom;
+                  break;
+               default:
+                  sink->soc.zoomMode= intValue;
+                  break;
             }
             if ( sink->soc.videoWindow )
             {
@@ -2551,6 +2555,11 @@ static int sinkAcquireResources( GstWesterosSink *sink )
          NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
          composition.zorder= sink->zorder*MAX_ZORDER;
          NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+
+         NEXUS_SurfaceClientSettings clientSettings;
+         NEXUS_SurfaceClient_GetSettings(sink->soc.videoWindow, &clientSettings);
+         clientSettings.composition.contentMode= sink->soc.zoomMode;
+         NEXUS_SurfaceClient_SetSettings(sink->soc.videoWindow, &clientSettings);
 
          result= 1;
       }
