@@ -129,12 +129,14 @@ static void wstGLGetDisplaySize( void )
 
 static void wstGLNotifySizeListeners( void )
 {
-   int width, height;
+   int width=0, height=0;
+   bool haveSize= false;
    std::vector<WstGLSizeCBInfo> listeners;
 
    pthread_mutex_lock( &g_mutex );
    if ( gDisplayCtx )
    {
+      haveSize= true;
       width= gDisplayCtx->displayWidth;
       height= gDisplayCtx->displayHeight;
 
@@ -153,12 +155,15 @@ static void wstGLNotifySizeListeners( void )
    }
    pthread_mutex_unlock( &g_mutex );
 
-   for ( std::vector<WstGLSizeCBInfo>::iterator it= listeners.begin();
-         it != listeners.end();
-         ++it )
+   if ( haveSize )
    {
-      WstGLSizeCBInfo cbInfo= (*it);
-      cbInfo.listener( cbInfo.userData, width, height );
+      for ( std::vector<WstGLSizeCBInfo>::iterator it= listeners.begin();
+            it != listeners.end();
+            ++it )
+      {
+         WstGLSizeCBInfo cbInfo= (*it);
+         cbInfo.listener( cbInfo.userData, width, height );
+      }
    }
    listeners.clear();
 }

@@ -644,10 +644,12 @@ static void* wstNestedThread( void *data )
    }
  
    nc->started= false;
-   if ( !nc->stopRequested )
+   if ( nc->nestedListener && !nc->stopRequested )
    {
       nc->nestedListener->connectionEnded( nc->nestedListenerUserData );
    }
+
+   return NULL;
 }
 
 WstNestedConnection* WstNestedConnectionCreate( WstCompositor *wctx, 

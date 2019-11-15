@@ -2080,7 +2080,7 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
             else if (!strcasecmp(struct_name, "get_current_pts"))
             {
                g_value_init(&val, G_TYPE_POINTER);
-               g_value_set_pointer(&val, (gpointer)(sink->currentPTS/2));
+               g_value_set_pointer(&val, (gpointer)(guint)(sink->currentPTS/2));
 
                gst_structure_set_value(query_structure, "current_pts", &val);
 
@@ -2089,7 +2089,7 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
             else if (!strcasecmp(struct_name, "get_first_pts"))
             {
                g_value_init(&val, G_TYPE_POINTER);
-               g_value_set_pointer(&val, (gpointer)(sink->firstPTS/2));
+               g_value_set_pointer(&val, (gpointer)(guint)(sink->firstPTS/2));
 
                gst_structure_set_value(query_structure, "first_pts", &val);
 
@@ -2539,8 +2539,16 @@ static int sinkAcquireResources( GstWesterosSink *sink )
          ext_settings.treatIFrameAsRap= true;
          ext_settings.ignoreNumReorderFramesEqZero= true;
 
-         NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
-         NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+         rc= NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_WARNING("sinkAcquireResources: NEXUS_SimpleVideoDecoder_SetSettings failed rc %d", rc);
+         }
+         rc= NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_WARNING("sinkAcquireResources: NEXUS_SimpleVideoDecoder_SetExtendedSettings failed rc %d", rc);
+         }
 
          if ( sink->soc.usePip )
          {
@@ -2550,7 +2558,11 @@ static int sinkAcquireResources( GstWesterosSink *sink )
          NEXUS_SurfaceComposition composition;
          NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
          composition.zorder= sink->zorder*MAX_ZORDER;
-         NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+         rc= NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_WARNING("sinkAcquireResources: NxClient_SetSurfaceClientComposition failed rc %d", rc);
+         }
 
          result= 1;
       }

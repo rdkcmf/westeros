@@ -1279,7 +1279,10 @@ static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstPad *peer)
    if ( sink->startAfterLink )
    {
       sink->startAfterLink= FALSE;
-      gst_westeros_sink_soc_start_video( sink );      
+      if ( !gst_westeros_sink_soc_start_video( sink ) )
+      {
+         GST_ERROR("gst_westeros_sink_link: gst_westeros_sink_sock_start_video failed");
+      }
    }
 
    return GST_PAD_LINK_OK;

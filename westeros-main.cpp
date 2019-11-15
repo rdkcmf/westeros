@@ -692,19 +692,19 @@ char *getDevice( const char *path, char *devName )
    if ( devicePathName )
    {
       strcpy( devicePathName, path );
-      strcat( devicePathName, devName );     
+      strcat( devicePathName, devName );
+
+      if ( !stat(devicePathName, &buffer) )
+      {
+         printf( "found %s\n", devicePathName );
+      }
+      else
+      {
+         free( devicePathName );
+         devicePathName= 0;
+      }
    }
-   
-   if ( !stat(devicePathName, &buffer) )
-   {
-      printf( "found %s\n", devicePathName );           
-   }
-   else
-   {
-      free( devicePathName );
-      devicePathName= 0;
-   }
-   
+
    return devicePathName;
 }
 
@@ -2060,7 +2060,7 @@ int main( int argc, char** argv)
    bool error= false;
    int len, value, width=-1, height=-1;
    AppCtx *appCtx= 0;
-   WstCompositor *wctx;
+   WstCompositor *wctx= 0;
 
    appCtx= initApp();
    if ( !appCtx )
