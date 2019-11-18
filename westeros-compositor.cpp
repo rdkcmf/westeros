@@ -2695,6 +2695,8 @@ void WstCompositorStop( WstCompositor *wctx )
          {
             exitInfo->stopped= true;
             pthread_cancel( exitInfo->exitThreadId );
+            pthread_join( exitInfo->exitThreadId, NULL );
+            free( exitInfo );
          }
 
          wstCompositorReleaseResources( ctx );
@@ -3572,8 +3574,8 @@ static void* wstCompositorExitTimerThread( void *arg )
             INFO("calling pthread_cancel for compositorThread");
             pthread_cancel( info->compositorThreadId );
          }
+         free( info );
       }
-      free( arg );
    }
    return 0;
 }
@@ -7682,66 +7684,75 @@ static void wstSeatCreateDevices( WstCompositor *wctx )
          WstPointer *pointer;
          WstTouch *touch;
 
-         // Create keyboard
-         wctx->keyboard= (WstKeyboard*)calloc( 1, sizeof(WstKeyboard) );
-         if ( wctx->keyboard )
+         if ( !wctx->keyboard )
          {
-            WstKeyboard *keyboard= wctx->keyboard;
-            keyboard->seat= seat;
-            keyboard->compositor= wctx;
-            wl_list_init( &keyboard->resourceList );
-            wl_list_init( &keyboard->focusResourceList );
-            wl_array_init( &keyboard->keys );
-
-            if ( !ctx->isNested )
+            // Create keyboard
+            wctx->keyboard= (WstKeyboard*)calloc( 1, sizeof(WstKeyboard) );
+            if ( wctx->keyboard )
             {
-               keyboard->state= xkb_state_new( ctx->xkbKeymap );
-               if ( keyboard->state )
+               WstKeyboard *keyboard= wctx->keyboard;
+               keyboard->seat= seat;
+               keyboard->compositor= wctx;
+               wl_list_init( &keyboard->resourceList );
+               wl_list_init( &keyboard->focusResourceList );
+               wl_array_init( &keyboard->keys );
+
+               if ( !ctx->isNested )
                {
-                  keyboard->modShift= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_SHIFT );
-                  keyboard->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
-                  keyboard->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
-                  keyboard->modCaps= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CAPS );
-               }
-               else
-               {
-                  ERROR("unable to create key state");
+                  keyboard->state= xkb_state_new( ctx->xkbKeymap );
+                  if ( keyboard->state )
+                  {
+                     keyboard->modShift= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_SHIFT );
+                     keyboard->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
+                     keyboard->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
+                     keyboard->modCaps= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CAPS );
+                  }
+                  else
+                  {
+                     ERROR("unable to create key state");
+                  }
                }
             }
-         }
-         else
-         {
-            ERROR("no memory to allocate keyboard");
-         }
-
-         // Create pointer
-         wctx->pointer= (WstPointer*)calloc( 1, sizeof(WstPointer) );
-         if ( wctx->pointer )
-         {
-            pointer= wctx->pointer;
-            pointer->seat= seat;
-            pointer->compositor= wctx;
-            wl_list_init( &pointer->resourceList );
-            wl_list_init( &pointer->focusResourceList );
-         }
-         else
-         {
-            ERROR("no memory to allocate pointer");
+            else
+            {
+               ERROR("no memory to allocate keyboard");
+            }
          }
 
-         // Create touch
-         wctx->touch= (WstTouch*)calloc( 1, sizeof(WstTouch) );
-         if ( wctx->touch )
+         if ( !wctx->pointer )
          {
-            touch= wctx->touch;
-            touch->seat= seat;
-            touch->compositor= wctx;
-            wl_list_init( &touch->resourceList );
-            wl_list_init( &touch->focusResourceList );
+            // Create pointer
+            wctx->pointer= (WstPointer*)calloc( 1, sizeof(WstPointer) );
+            if ( wctx->pointer )
+            {
+               pointer= wctx->pointer;
+               pointer->seat= seat;
+               pointer->compositor= wctx;
+               wl_list_init( &pointer->resourceList );
+               wl_list_init( &pointer->focusResourceList );
+            }
+            else
+            {
+               ERROR("no memory to allocate pointer");
+            }
          }
-         else
+
+         if ( !wctx->touch )
          {
-            ERROR("no memory to allocate touch");
+            // Create touch
+            wctx->touch= (WstTouch*)calloc( 1, sizeof(WstTouch) );
+            if ( wctx->touch )
+            {
+               touch= wctx->touch;
+               touch->seat= seat;
+               touch->compositor= wctx;
+               wl_list_init( &touch->resourceList );
+               wl_list_init( &touch->focusResourceList );
+            }
+            else
+            {
+               ERROR("no memory to allocate touch");
+            }
          }
       }
    }
@@ -9078,9 +9089,7 @@ static void wstProcessPointerMoveEvent( WstPointer *pointer, int32_t x, int32_t 
          if ( pointer->pointerSurface )
          {
             wstPointerUpdatePosition( pointer );
-            pthread_mutex_lock( &ctx->mutex );
             wstCompositorScheduleRepaint( ctx );
-            pthread_mutex_unlock( &ctx->mutex );
          }
       }
    }
@@ -9565,7 +9574,7 @@ static bool wstInitializeDefaultCursor( WstCompositor *compositor,
       void *data;
 
       ctx->dcDisplay= wl_display_connect( ctx->displayName );
-      if ( !ctx->display )
+      if ( !ctx->dcDisplay )
       {
          goto exit;
       }
@@ -9600,7 +9609,7 @@ static bool wstInitializeDefaultCursor( WstCompositor *compositor,
          goto exit;
       }
       
-      imgDataSize= 512+height*width*4;
+      imgDataSize= height*width*4;
 
       strcpy( filename, "/tmp/westeros-XXXXXX" );
       fd= mkostemp( filename, O_CLOEXEC );

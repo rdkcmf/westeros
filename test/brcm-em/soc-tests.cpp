@@ -2606,7 +2606,7 @@ static bool testCaseSocAPISetDefaultCursor( EMCTX *emctx )
    cursorHeight= 32;
    imgDataSize= cursorWidth*cursorHeight*4;
 
-   imgData= (unsigned char*)malloc( imgDataSize );
+   imgData= (unsigned char*)calloc( 1, imgDataSize );
    if ( !imgData )
    {
       EMERROR("No memory for image data");
