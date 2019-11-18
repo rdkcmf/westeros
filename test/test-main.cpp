@@ -1733,7 +1733,7 @@ static bool testCaseAPISetDefaultCursor( EMCTX *emctx )
    cursorHeight= 32;
    imgDataSize= cursorWidth*cursorHeight*4;
 
-   imgData= (unsigned char*)malloc( imgDataSize );
+   imgData= (unsigned char*)calloc( 1, imgDataSize );
    if ( !imgData )
    {
       EMERROR("No memory for image data");
@@ -1934,7 +1934,7 @@ static bool testCaseAPISetDefaultCursorEmbedded( EMCTX *emctx )
    cursorHeight= 32;
    imgDataSize= cursorWidth*cursorHeight*4;
 
-   imgData= (unsigned char*)malloc( imgDataSize );
+   imgData= (unsigned char*)calloc( 1, imgDataSize );
    if ( !imgData )
    {
       EMERROR("No memory for image data");
@@ -2101,6 +2101,14 @@ static bool testCaseAPISetDefaultCursorEmbedded( EMCTX *emctx )
 
    // Allow default cursor to become active
    usleep( 100000 );
+
+   // Inject pointer move event
+   WstCompositorPointerMoveEvent( wctx, 320, 240 );
+   usleep( 170000 );
+   WstCompositorPointerMoveEvent( wctx, 330, 250 );
+   usleep( 170000 );
+   WstCompositorPointerMoveEvent( wctx, 340, 260 );
+   usleep( 170000 );
 
    result= WstCompositorSetDefaultCursor( wctx, imgData, cursorWidth, cursorHeight, hotSpotX, hotSpotY );
    if ( !result )
@@ -3277,6 +3285,7 @@ static bool testCaseAPIGetMasterEmbedded( EMCTX *emctx )
    bool result;
    WstCompositor *master1= 0;
    WstCompositor *master2= 0;
+   char name1[256];
    const char *displayName1, *displayName2;
 
    master1= WstCompositorGetMasterEmbedded();
@@ -3304,6 +3313,8 @@ static bool testCaseAPIGetMasterEmbedded( EMCTX *emctx )
       EMERROR( "master compositor has bad display name: len %d", strlen(displayName1) );
       goto exit;
    }
+
+   strncpy( name1, displayName1, 255 );
 
    result= WstCompositorSetDisplayName( master1, "foo" );
    if ( result )
@@ -3346,9 +3357,9 @@ static bool testCaseAPIGetMasterEmbedded( EMCTX *emctx )
       goto exit;
    }
 
-   if ( strcmp( displayName2, displayName1 ) == 0 )
+   if ( strcmp( displayName2, name1 ) == 0 )
    {
-      EMERROR( "new master compositor has same display name as old master" );
+      EMERROR( "new master compositor has same display name as old master: (%s), (%s)", displayName2, name1 );
       goto exit;
    }
 
