@@ -704,12 +704,14 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
       posExpected= (frameNumber/frameRate)*GST_SECOND;
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Failed to query position");
          goto exit;
       }
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
@@ -741,6 +743,7 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
    int videoPidChannelProxy;
    float frameRate;
    int frameNumber;
+   unsigned long long basePTS;
    gint64 pos, posExpected;
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -754,6 +757,7 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
    EMSetVideoCodec( emctx, bvideo_codec_h264 );
    EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
    EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+   EMSimpleVideoDecoderSetBasePTS( videoDecoder, 0x40000000ULL );
 
    gst_init( &argc, &argv );
 
@@ -788,6 +792,7 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
 
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
 
+   basePTS= EMSimpleVideoDecoderGetBasePTS( videoDecoder );
    for( int i= 0; i < 10; ++i )
    {
       usleep( INTERVAL_200_MS );
@@ -795,11 +800,12 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
       frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
       frameNumber= videoSrcGetFrameNumber( src );
 
-      posExpected= (frameNumber/frameRate)*90000LL;
+      posExpected= basePTS + (frameNumber/frameRate)*90000LL;
       g_object_get( sink, "video-pts", &pos, NULL );
       g_print("%d video-pts %lld expected %lld \n", i, pos, posExpected);
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %lld actual %lld", posExpected, pos);
          goto exit;
       }
@@ -810,6 +816,8 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
    testResult= true;
 
 exit:
+   EMSimpleVideoDecoderSetBasePTS( videoDecoder, 0ULL );
+
    if ( pipeline )
    {
       gst_object_unref( pipeline );
@@ -905,6 +913,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
 
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Failed to query position");
          goto exit;
       }
@@ -913,6 +922,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
 
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
@@ -1004,6 +1014,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Failed to query position");
          goto exit;
       }
@@ -1012,6 +1023,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
@@ -1045,6 +1057,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Failed to query position");
          goto exit;
       }
@@ -1053,6 +1066,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
@@ -3020,6 +3034,7 @@ static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx )
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
@@ -3145,6 +3160,7 @@ static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx )
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
