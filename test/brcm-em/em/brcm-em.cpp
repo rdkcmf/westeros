@@ -213,6 +213,7 @@ typedef struct _EMSimpleVideoDecoder
    bool firstPtsPassed;
    unsigned frameNumber;
    uint32_t currentPTS;
+   unsigned long long int basePTS;
    NEXUS_SimpleVideoDecoderClientSettings clientSettings;
    NEXUS_SimpleVideoDecoderStartSettings startSettings;
    NEXUS_VideoDecoderSettings decoderSettings;
@@ -613,6 +614,16 @@ unsigned EMSimpleVideoDecoderGetFrameNumber( EMSimpleVideoDecoder *dec )
    return dec->frameNumber;
 }
 
+void EMSimpleVideoDecoderSetBasePTS(  EMSimpleVideoDecoder *dec, unsigned long long int pts )
+{
+   dec->basePTS= (pts & 0x1FFFFFFFFULL);
+}
+
+unsigned long long EMSimpleVideoDecoderGetBasePTS( EMSimpleVideoDecoder *dec )
+{
+   return dec->basePTS;
+}
+
 void EMSimpleVideoDecoderSignalUnderflow( EMSimpleVideoDecoder *dec )
 {
    if ( dec->decoderSettings.fifoEmpty.callback )
@@ -739,6 +750,7 @@ static EMCTX* emCreate( void )
       ctx->simpleVideoDecoderMain.videoBitRate= 8.0;
       ctx->simpleVideoDecoderMain.trickState.rate= NEXUS_NORMAL_DECODE_RATE;
       ctx->simpleVideoDecoderMain.startSettings.settings.eotf= NEXUS_VideoEotf_eInvalid;
+      ctx->simpleVideoDecoderMain.basePTS= 0;
 
       ctx->videoCodec= bvideo_codec_unknown;
 
@@ -1852,7 +1864,7 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_GetStatus(
    pStatus->started= dec->started;
    pStatus->source.width= dec->videoWidth;
    pStatus->source.height= dec->videoHeight;
-   pStatus->pts= ((dec->frameNumber/dec->videoFrameRate)*45000);
+   pStatus->pts= (dec->basePTS/2) + ((dec->frameNumber/dec->videoFrameRate)*45000);
    pStatus->numDecoded= dec->frameNumber;
    pStatus->numDisplayed= dec->frameNumber;
    pStatus->firstPtsPassed= dec->firstPtsPassed;

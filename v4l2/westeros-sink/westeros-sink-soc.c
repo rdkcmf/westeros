@@ -685,6 +685,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          nanoTime= GST_BUFFER_PTS(buffer);
          LOCK(sink)
          sink->position= nanoTime;
+         sink->currentPTS= ((sink->position * 90000LL)/GST_SECOND);
          UNLOCK(sink);
       }
 

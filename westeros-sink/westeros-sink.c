@@ -750,9 +750,9 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
       case PROP_VIDEO_PTS:
          {
             LOCK(sink);
-            gint64 currentPTS= ((sink->position * 90000LL)/GST_SECOND);
-            g_value_set_int64(value, currentPTS);
+            gint64 currentPTS= sink->currentPTS;
             UNLOCK(sink);
+            g_value_set_int64(value, currentPTS);
          }
          break;
       default:

@@ -81,6 +81,8 @@ void EMSimpleVideoDecoderSetSegmentsStartAtZero( EMSimpleVideoDecoder *dec, bool
 bool EMSimpleVideoDecoderGetSegmentsStartAtZero( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSetFrameNumber( EMSimpleVideoDecoder *dec, unsigned frameNumber );
 unsigned EMSimpleVideoDecoderGetFrameNumber( EMSimpleVideoDecoder *dec );
+void EMSimpleVideoDecoderSetBasePTS( EMSimpleVideoDecoder *dec, unsigned long long int pts );
+unsigned long long EMSimpleVideoDecoderGetBasePTS( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSignalUnderflow( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSignalPtsError( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSetTrickStateRate( EMSimpleVideoDecoder *dec, int rate );

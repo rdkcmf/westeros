@@ -2911,6 +2911,7 @@ static void processFrame( GstWesterosSink *sink, GstBuffer *buffer )
 
       LOCK(sink);
       sink->position= nanoTime;
+      sink->currentPTS= ((sink->position * 90000LL)/GST_SECOND);
       windowChange= sink->windowChange;
       if ( windowChange )
       {
