@@ -1868,6 +1868,7 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_GetStatus(
    pStatus->numDecoded= dec->frameNumber;
    pStatus->numDisplayed= dec->frameNumber;
    pStatus->firstPtsPassed= dec->firstPtsPassed;
+   pStatus->numBytesDecoded= dec->frameNumber*1000;
 
 exit:
    return rc;
@@ -2236,6 +2237,9 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_FrameAdvance(
       rc= NEXUS_INVALID_PARAMETER;
       goto exit;
    }
+
+   dec->frameNumber= dec->frameNumber+1;
+   TRACE1("NEXUS_SimpleVideoDecoder_FrameAdvance: frameNumber now %d", dec->frameNumber);
 
 exit:
    return rc;

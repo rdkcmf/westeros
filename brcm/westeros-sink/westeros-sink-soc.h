@@ -77,6 +77,14 @@ struct _GstWesterosSinkSoc
    int frameCount;
    int noFrameCount;
    guint32 numDecoded;
+   gboolean checkForEOS;
+   gboolean emitEOS;
+   gboolean emitUnderflow;
+   gboolean emitPTSError;
+   gboolean emitResourceChange;
+   guint prevQueueDepth;
+   guint prevFifoDepth;
+   guint prevNumDecoded;
    gboolean captureEnabled;
    gboolean videoPlaying;
    int framesBeforeHideVideo;

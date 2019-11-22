@@ -27,6 +27,8 @@
 
 #define UNUSED( x ) ((void)(x))
 
+#define TIMEOUTS_PER_STEP (10)
+
 typedef struct _AppCtx
 {
    struct wl_display *display;
@@ -45,7 +47,10 @@ typedef struct _AppCtx
    bool useSecureVideo;
    gfloat rate;
    gfloat zorder;
+   bool needToAddStateTimer;
    bool needToSetRate;
+   bool stepVideo;
+   int countDownToStep;
    const char *videoRectOverride;
    bool haveMode;
    int outputWidth;
@@ -66,6 +71,7 @@ static void showUsage()
    printf("  -p : emit position logs\n" );
    printf("  -s : secure video\n" );
    printf("  -R <rate> : play with rate\n" );
+   printf("  -S : step frame by frame\n" );
    printf("  -z <zorder> : video z-order, 0.0 - 1.0\n");
    printf("  -? : show usage\n" );
    printf("\n" );   
@@ -185,28 +191,42 @@ gboolean stateChangeTimerTimeout( gpointer userData )
 
       if ( (stateCurrent == GST_STATE_PAUSED) && (statePending == GST_STATE_VOID_PENDING) )
       {
-         if ( !gst_element_seek( ctx->pipeline,
-                                 ctx->rate,
-                                 GST_FORMAT_TIME,
-                                 GST_SEEK_FLAG_FLUSH,
-                                 GST_SEEK_TYPE_SET, //start type
-                                 0, //start
-                                 GST_SEEK_TYPE_NONE, //stop type
-                                 GST_CLOCK_TIME_NONE //stop
-                                ) )
+         if ( ctx->needToSetRate )
          {
-            g_print("Error: unable to set rate\n");
-            g_main_loop_quit( ctx->loop );
-         }
-         else
-         {
-            g_object_set( ctx->player, "mute", TRUE, NULL );
-
-            if ( GST_STATE_CHANGE_FAILURE == gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
+            if ( !gst_element_seek( ctx->pipeline,
+                                    ctx->rate,
+                                    GST_FORMAT_TIME,
+                                    (GstSeekFlags)(GST_SEEK_FLAG_FLUSH|GST_SEEK_FLAG_SEGMENT|GST_SEEK_FLAG_ACCURATE),
+                                    GST_SEEK_TYPE_SET, //start type
+                                    0, //start
+                                    GST_SEEK_TYPE_NONE, //stop type
+                                    GST_CLOCK_TIME_NONE //stop
+                                   ) )
             {
-               g_print("Error: unable to move to PLAYING\n");
+               g_print("Error: unable to set rate\n");
                g_main_loop_quit( ctx->loop );
             }
+            else
+            {
+               g_object_set( ctx->player, "mute", TRUE, NULL );
+
+               if ( GST_STATE_CHANGE_FAILURE == gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
+               {
+                  g_print("Error: unable to move to PLAYING\n");
+                  g_main_loop_quit( ctx->loop );
+               }
+            }
+            goto exit;
+         }
+         else if ( ctx->stepVideo )
+         {
+            if ( --ctx->countDownToStep <= 0 )
+            {
+               gst_element_send_event( ctx->westerossink,
+                                       gst_event_new_step( GST_FORMAT_BUFFERS, 1, 1.0, TRUE, FALSE) );
+               ctx->countDownToStep= TIMEOUTS_PER_STEP;
+            }
+            return G_SOURCE_CONTINUE;
          }
       }
       else
@@ -215,6 +235,7 @@ gboolean stateChangeTimerTimeout( gpointer userData )
       }
    }
 
+exit:
    return G_SOURCE_REMOVE;
 }
 
@@ -231,9 +252,9 @@ static gboolean busCallback(GstBus *bus, GstMessage *message, gpointer data)
             if ( (oldState == GST_STATE_READY) &&
                  (newState == GST_STATE_PAUSED) &&
                  (pendingState == GST_STATE_VOID_PENDING) &&
-                 ctx->needToSetRate  )
+                 ctx->needToAddStateTimer  )
             {
-               ctx->needToSetRate= false;
+               ctx->needToAddStateTimer= false;
 
                g_timeout_add( 500, stateChangeTimerTimeout, ctx );
             }
@@ -326,6 +347,12 @@ bool createPipeline( AppCtx *ctx )
    if ( ctx->useSecureVideo )
    {
       g_object_set(G_OBJECT(ctx->westerossink), "secure-video", TRUE, NULL );
+   }
+
+   if ( ctx->stepVideo )
+   {
+      g_object_set(G_OBJECT(ctx->westerossink), "frame-step-on-preroll", TRUE, NULL );
+      g_object_set(G_OBJECT(ctx->westerossink), "async", TRUE, NULL );
    }
 
    g_object_set(G_OBJECT(ctx->westerossink), "zorder", ctx->zorder, NULL );
@@ -422,6 +449,7 @@ int main( int argc, char **argv )
    int latencyTarget= 0;
    bool emitPosition= false;
    bool useSecureVideo= false;
+   bool stepVideo= false;
    gfloat rate= 1.0f;
    gfloat zorder= 0.0f;
    const char *videoRect= 0;
@@ -484,6 +512,9 @@ int main( int argc, char **argv )
                   }
                }
                break;
+            case 'S':
+               stepVideo= true;
+               break;
             case 'z':
                if ( argidx+1 < argc )
                {
@@ -539,11 +570,17 @@ int main( int argc, char **argv )
    ctx->latencyTarget= latencyTarget;
    ctx->useSecureVideo= useSecureVideo;
    ctx->videoRectOverride= videoRect;
+   ctx->stepVideo= stepVideo;
+   ctx->countDownToStep= TIMEOUTS_PER_STEP;
    ctx->rate= rate;
    ctx->zorder= zorder;
    if ( rate != 1.0f )
    {
       ctx->needToSetRate= true;
+   }
+   if ( ctx->needToSetRate || ctx->stepVideo )
+   {
+      ctx->needToAddStateTimer= true;
    }
 
    ctx->display= wl_display_connect( NULL );
@@ -570,14 +607,20 @@ int main( int argc, char **argv )
       
       if ( ctx->loop )
       {
+         bool startPaused= false;
+
          if ( emitPosition )
          {
             ctx->timerId= g_timeout_add( 1000, progressTimerTimeout, ctx );
          }
 
          g_object_set(G_OBJECT(ctx->player), "uri", uri, NULL );
-         
-         if ( GST_STATE_CHANGE_FAILURE != gst_element_set_state(ctx->pipeline, ctx->needToSetRate ? GST_STATE_PAUSED : GST_STATE_PLAYING) )
+
+         if ( ctx->needToSetRate || ctx->stepVideo )
+         {
+            startPaused= true;
+         }
+         if ( GST_STATE_CHANGE_FAILURE != gst_element_set_state(ctx->pipeline, startPaused ? GST_STATE_PAUSED : GST_STATE_PLAYING) )
          {
             sigint.sa_handler = signalHandler;
             sigemptyset(&sigint.sa_mask);

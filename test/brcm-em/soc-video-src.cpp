@@ -228,6 +228,7 @@ static gboolean emVideoSrcStart( GstBaseSrc *baseSrc )
    EMVideoSrc *src= EM_VIDEO_SRC(baseSrc);
    GstPad *pad= 0;
 
+   GST_DEBUG("start");
    pad= GST_BASE_SRC_PAD(src);
 
    GST_PAD_STREAM_LOCK(pad);
@@ -243,6 +244,7 @@ static gboolean emVideoSrcStop( GstBaseSrc *baseSrc )
    EMVideoSrc *src= EM_VIDEO_SRC(baseSrc);
    GstPad *pad= 0;
 
+   GST_DEBUG("stop");
    pad= GST_BASE_SRC_PAD(src);
 
    rv= gst_pad_stop_task( pad );
@@ -288,6 +290,7 @@ static gboolean emVideoSrcDoSeek( GstBaseSrc *baseSrc, GstSegment *segment )
 {
    EMVideoSrc *src= EM_VIDEO_SRC(baseSrc);
 
+   GST_DEBUG("doseek");
    pthread_mutex_lock( &src->mutex );
    src->needSegment= true;
    src->segRate= segment->rate;
@@ -312,9 +315,19 @@ static void emVideoSrcLoop( GstPad *pad )
    float frameRate;
    float bitRate;
    long long nanoTime;
+   bool needStep= false;
 
    pthread_mutex_lock( &src->mutex );
-   if ( !src->paused || src->needSegment )
+   if ( src->paused  )
+   {
+      int decoderFrameNumber= EMSimpleVideoDecoderGetFrameNumber( src->dec );
+      if ( src->frameNumber != decoderFrameNumber )
+      {
+         src->frameNumber= decoderFrameNumber;
+         needStep= true;
+      }
+   }
+   if ( !src->paused || src->needSegment || needStep )
    {
       frameRate= EMSimpleVideoDecoderGetFrameRate( src->dec );
       bitRate= EMSimpleVideoDecoderGetBitRate( src->dec );
@@ -351,6 +364,7 @@ static void emVideoSrcLoop( GstPad *pad )
 
          GST_BUFFER_PTS(buffer)= nanoTime;
 
+         GST_LOG("push buffer for frame %d", src->frameNumber);
          rv= gst_pad_push( pad, buffer );
          if ( (rv != GST_FLOW_OK) && (rv != GST_FLOW_FLUSHING) )
          {
@@ -368,7 +382,10 @@ static void emVideoSrcLoop( GstPad *pad )
       }   
 
       pthread_mutex_lock( &src->mutex );
-      ++src->frameNumber;
+      if ( !src->paused )
+      {
+         ++src->frameNumber;
+      }
    }
    pthread_mutex_unlock( &src->mutex );
 }
@@ -399,6 +416,8 @@ int videoSrcGetFrameNumber( GstElement *element )
 
    pthread_mutex_unlock( &src->mutex );
 
+   GST_DEBUG("query frame number: %d", frameNumber);
+
    return frameNumber;
 }
 
@@ -408,6 +427,8 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
    GstCaps *caps= 0;
    GstPad *pad= 0;
    GstEvent *event= 0;
+
+   GST_DEBUG("set frame size: %dx%d", width, height);
 
    pad= GST_BASE_SRC_PAD(src);
 

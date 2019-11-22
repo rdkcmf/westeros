@@ -343,6 +343,7 @@ void resourceChangedCallback( void *context, int param )
    rc= NEXUS_SimpleVideoDecoder_GetClientStatus( sink->soc.videoDecoder, &clientStatus );
    if ( rc == NEXUS_SUCCESS )
    {
+      sink->soc.emitResourceChange= TRUE;
       sink->soc.haveResources= clientStatus.enabled;
       GST_INFO_OBJECT(sink, "haveResources: %d", sink->soc.haveResources);
       if ( !sink->soc.haveResources )
@@ -453,7 +454,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    {
       sink->soc.captureSurface[i]= NULL;
    }
-   sink->soc.secureGraphics= useSecureGraphics();
    sink->soc.hideVideoDuringCapture= TRUE;
    sink->soc.usePip= FALSE;
    sink->soc.useCameraLatency= FALSE;
@@ -469,6 +469,14 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.framesBeforeHideVideo= 0;
    sink->soc.numDecoded= 0;
    sink->soc.noFrameCount= 0;
+   sink->soc.checkForEOS= FALSE;
+   sink->soc.emitEOS= FALSE;
+   sink->soc.emitUnderflow= FALSE;
+   sink->soc.emitPTSError= FALSE;
+   sink->soc.emitResourceChange= FALSE;
+   sink->soc.prevQueueDepth= 0;
+   sink->soc.prevFifoDepth= 0;
+   sink->soc.prevNumDecoded= 0;
    sink->soc.sb= 0;
    sink->soc.activeBuffers= 0;
    sink->soc.captureEnabled= FALSE;
@@ -488,13 +496,14 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveResources= FALSE;
    sink->soc.timeResourcesLost= 0;
    sink->soc.positionResourcesLost= 0;
-   #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
-   sink->soc.secureVideo= isSVPEnabled();
-   #endif
-   
+
    rc= NxClient_Join(NULL);
    if ( rc == NEXUS_SUCCESS )
    {
+      sink->soc.secureGraphics= useSecureGraphics();
+      #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
+      sink->soc.secureVideo= isSVPEnabled();
+      #endif
       sink->soc.stcChannel= NULL;
       sink->soc.videoPidChannel= NULL;
       sink->soc.codec= bvideo_codec_unknown;
@@ -1015,11 +1024,13 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
             GST_DEBUG("NEXUS_SimpleStcChannel_Freeze FALSE ");
             if ( rc != NEXUS_SUCCESS )
             {
-                GST_ERROR("gst_westeros_sink_soc_paused_to_playing: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+               GST_ERROR("gst_westeros_sink_soc_paused_to_playing: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
             }
          }
          if ( sink->soc.clientPlaySpeed != sink->playbackRate )
-             updateClientPlaySpeed(sink, sink->playbackRate);
+         {
+            updateClientPlaySpeed(sink, sink->playbackRate);
+         }
       }
       UNLOCK( sink );
    }
@@ -1094,6 +1105,14 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
    sink->soc.numDecoded= 0;
+   sink->soc.prevQueueDepth= 0;
+   sink->soc.prevFifoDepth= 0;
+   sink->soc.prevNumDecoded= 0;
+   sink->soc.checkForEOS= FALSE;
+   sink->soc.emitEOS= FALSE;
+   sink->soc.emitUnderflow= FALSE;
+   sink->soc.emitPTSError= FALSE;
+   sink->soc.emitResourceChange= FALSE;
    UNLOCK( sink );
    
    return TRUE;
@@ -1220,7 +1239,15 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
    sink->soc.numDecoded= 0;
+   sink->soc.checkForEOS= FALSE;
+   sink->soc.emitEOS= FALSE;
+   sink->soc.emitUnderflow= FALSE;
+   sink->soc.emitPTSError= FALSE;
+   sink->soc.emitResourceChange= FALSE;
    sink->soc.noFrameCount= 0;
+   sink->soc.prevQueueDepth= 0;
+   sink->soc.prevFifoDepth= 0;
+   sink->soc.prevNumDecoded= 0;
    sink->soc.presentationStarted= FALSE;
    UNLOCK(sink);
 
@@ -1315,7 +1342,9 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    sink->videoStarted= TRUE;
 
    if ( sink->soc.clientPlaySpeed != sink->playbackRate )
-       updateClientPlaySpeed(sink, sink->playbackRate);
+   {
+      updateClientPlaySpeed(sink, sink->playbackRate);
+   }
 
    result= TRUE;
 
@@ -1326,7 +1355,38 @@ exit:
 
 void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
 {
-   WESTEROS_UNUSED(sink);
+   gboolean sendEOS= FALSE;
+   LOCK(sink);
+   if ( sink->videoStarted )
+   {
+      NEXUS_VideoDecoderStatus videoStatus;
+      if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
+      {
+         if ( videoStatus.fifoDepth == 0 )
+         {
+            sendEOS= TRUE;
+         }
+      }
+      else
+      {
+         sendEOS= TRUE;
+      }
+      if ( !sendEOS )
+      {
+         GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_eos_event: starting checking for eos");
+         sink->soc.checkForEOS= TRUE;
+         sink->soc.noFrameCount= 0;
+      }
+   }
+   else
+   {
+      sendEOS= TRUE;
+   }
+   UNLOCK(sink);
+   if ( sendEOS )
+   {
+      gst_westeros_sink_eos_detected( sink );
+   }
 }
 
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
@@ -1582,8 +1642,57 @@ static gpointer captureThread(gpointer data)
          sink->windowChange= false;
          gst_westeros_sink_soc_update_video_position( sink );
       }
+      gboolean emitEOS= sink->soc.emitEOS;
+      sink->soc.emitEOS= FALSE;
+      gboolean emitUnderflow= sink->soc.emitUnderflow;
+      sink->soc.emitUnderflow= FALSE;
+      gboolean emitPTSError= sink->soc.emitPTSError;
+      sink->soc.emitPTSError= FALSE;
+      gboolean emitResourceChange= sink->soc.emitResourceChange;
+      sink->soc.emitResourceChange= FALSE;
+      gboolean haveResources= sink->soc.haveResources;
       UNLOCK( sink );
-      
+
+      if ( emitEOS )
+      {
+         gst_westeros_sink_eos_detected( sink );
+      }
+
+      if ( emitUnderflow )
+      {
+         NEXUS_Error rc;
+         NEXUS_VideoDecoderStatus videoStatus;
+
+         rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
+         if ( NEXUS_SUCCESS != rc )
+         {
+            GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+         }
+
+         g_signal_emit (G_OBJECT(sink), g_signals[SIGNAL_UNDERFLOW], 0, videoStatus.fifoDepth, videoStatus.queueDepth);
+      }
+
+      if ( emitPTSError )
+      {
+         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_PTSERROR], 0, (unsigned int)(sink->currentPTS/2), NULL);
+      }
+
+      if ( emitResourceChange )
+      {
+         GstPad *pad= gst_pad_get_peer( sink->peerPad );
+         if ( pad )
+         {
+            GstStructure *structure;
+            const char *fieldName= haveResources ? "resource_get" : "resource_lost";
+            structure = gst_structure_new_empty(fieldName);
+            if ( structure )
+            {
+               gst_pad_push_event( pad, gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, structure));
+            }
+            gst_object_unref( pad );
+         }
+      }
+
       if ( sink->soc.captureEnabled )
       {
          if ( videoPlaying && (sink->visible || sink->soc.enableTextureSignal) && !eosDetected )
@@ -1591,10 +1700,8 @@ static gpointer captureThread(gpointer data)
             processFrame( sink );
          }
       }
-      else
-      {      
-         updateVideoStatus( sink );
-      }
+
+      updateVideoStatus( sink );
 
       if ( sink->display && wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
       {
@@ -1711,131 +1818,79 @@ static struct wl_buffer_listener wl_buffer_listener=
 static void processFrame( GstWesterosSink *sink )
 {
    NEXUS_SimpleVideoDecoderCaptureStatus captureStatus;
+   gboolean haveResources= FALSE;
    NEXUS_SurfaceHandle captureSurface= NULL;
    unsigned numReturned= 0;
-   unsigned segmentNumber= 0;
-   gboolean eosDetected= FALSE;
-   gboolean videoPlaying= FALSE;
-   guint64 prevPTS;
-   
-   GST_DEBUG_OBJECT(sink, "processFrame: enter");
-   
+
+   GST_LOG("processFrame: enter");
+
    if ( (sink->soc.captureWidth == -1) || (sink->soc.captureHeight == -1) )
    {
       allocCaptureSurfaces( sink );
    }
 
    LOCK( sink );
-   segmentNumber= sink->segmentNumber;
-   eosDetected= sink->eosDetected;
-   videoPlaying= sink->soc.videoPlaying;
+   haveResources= sink->soc.haveResources;
    UNLOCK( sink );
 
-   for( ; ; )
+   if ( sink->soc.haveResources )
    {
       sink->soc.captureCount++;
+      captureSurface= 0;
       NEXUS_SimpleVideoDecoder_GetCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, &captureStatus, 1, &numReturned);
       if ( numReturned > 0 )
       {
-         bufferInfo *binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
-         if ( binfo )
+         long long now= getCurrentTimeMillis();
+         long long elapsed= now-sink->soc.startTime;
+         GST_LOG("%lld.%03lld: cap surf %p: frame %d pts %u (%d) serial %u iter %d\n",
+                 elapsed/1000LL, elapsed%1000LL, (void*)captureSurface, sink->soc.frameCount,
+                 captureStatus.pts, captureStatus.ptsValid, captureStatus.serialNumber, sink->soc.captureCount );
+
+         if ( sink->soc.enableTextureSignal )
          {
-            binfo->sink= sink;
-            binfo->deviceBuffer= captureSurface;
-            
-            LOCK( sink );
-            if ( sink->flushStarted || segmentNumber != sink->segmentNumber )
+            NEXUS_Error rc;
+            void *mem= 0;
+
+            rc= NEXUS_Surface_Lock( captureSurface, &mem );
+            if ( rc == NEXUS_SUCCESS )
             {
-                UNLOCK( sink );
-                NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);
-                free( binfo );
-                break;
-            }
+               int fd0, l0, s0, fd1, l1, s1, fd2, l2, s2;
+               void *p0, *p1, *p2;
+               fd0= fd1= fd2= -1;
+               p1= p2= 0;
+               l1= l2= s1= s2= 0;
+               p0= mem;
+               s0= sink->soc.captureWidth*4;
+               l0= s0*sink->soc.captureHeight;
 
-            prevPTS= sink->currentPTS;
-            sink->currentPTS= ((gint64)captureStatus.pts)*2LL;
-            if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
-            {
-               if ( sink->currentPTS == 0 )
-               {
-                  gint64 newPts=  90LL * sink->positionSegmentStart / GST_MSECOND + /*ceil*/ 1;
-                  sink->firstPTS= newPts;
-               }
-               else
-               {
-                  sink->firstPTS= sink->currentPTS;
-               }
-               sink->prevPositionSegmentStart = sink->positionSegmentStart;
-               GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
-            }
-            if ( sink->currentPTS != 0 || sink->soc.frameCount == 0 )
-            {
-               if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
-               {
-                  // If we have hit a discontinuity that doesn't look like rollover, then
-                  // treat this as the case of looping a short clip.  Adjust our firstPTS
-                  // to keep our running time correct.
-                  sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
-               }
-               sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
-            }
+               g_signal_emit( G_OBJECT(sink),
+                              g_signals[SIGNAL_NEWTEXTURE],
+                              0,
+                              DRM_FORMAT_RGBA8888,
+                              sink->soc.captureWidth,
+                              sink->soc.captureHeight,
+                              fd0, l0, s0, p0,
+                              fd1, l1, s1, p1,
+                              fd2, l2, s2, p2
+                            );
 
-            if (sink->soc.frameCount == 0)
-            {
-                g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
-            }
-
-            sink->soc.frameCount++;
-            sink->soc.noFrameCount= 0;
-            UNLOCK( sink );
-            
-            long long now= getCurrentTimeMillis();
-            long long elapsed= now-sink->soc.startTime;
-            GST_LOG("%lld.%03lld: cap surf %p: frame %d pts %u (%d) serial %u iter %d\n", 
-                    elapsed/1000LL, elapsed%1000LL, (void*)captureSurface, sink->soc.frameCount, 
-                    captureStatus.pts, captureStatus.ptsValid, captureStatus.serialNumber, sink->soc.captureCount );
-
-
-            if ( sink->soc.enableTextureSignal )
-            {
-               NEXUS_Error rc;
-               void *mem= 0;
-
-               rc= NEXUS_Surface_Lock( captureSurface, &mem );
-               if ( rc == NEXUS_SUCCESS )
-               {
-                  int fd0, l0, s0, fd1, l1, s1, fd2, l2, s2;
-                  void *p0, *p1, *p2;
-                  fd0= fd1= fd2= -1;
-                  p1= p2= l1= l2= s1= s2= 0;
-                  p0= mem;
-                  s0= sink->soc.captureWidth*4;
-                  l0= s0*sink->soc.captureHeight;
-
-                  g_signal_emit( G_OBJECT(sink),
-                                 g_signals[SIGNAL_NEWTEXTURE],
-                                 0,
-                                 DRM_FORMAT_RGBA8888,
-                                 sink->soc.captureWidth,
-                                 sink->soc.captureHeight,
-                                 fd0, l0, s0, p0,
-                                 fd1, l1, s1, p1,
-                                 fd2, l2, s2, p2
-                               );
-
-                  NEXUS_Surface_Unlock( captureSurface );
-
-                  NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);
-               }
-               else
-               {
-                  GST_ERROR("Error NEXUS_Surface_Lock: %d", (int)rc);
-               }
+               NEXUS_Surface_Unlock( captureSurface );
             }
             else
-            if ( sink->soc.sb )
             {
-               struct wl_buffer *buff;
+               GST_ERROR("Error NEXUS_Surface_Lock: %d", (int)rc);
+            }
+         }
+         else
+         if ( sink->soc.sb )
+         {
+            struct wl_buffer *buff;
+
+            bufferInfo *binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+            if ( binfo )
+            {
+               binfo->sink= sink;
+               binfo->deviceBuffer= captureSurface;
 
                buff= wl_sb_create_buffer( sink->soc.sb, 
                                           (uint32_t)captureSurface, 
@@ -1847,53 +1902,48 @@ static void processFrame( GstWesterosSink *sink )
                wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
                wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
                wl_surface_commit( sink->surface );
+               captureSurface= 0;
                ++sink->soc.activeBuffers;
             }
-            if ( sink->soc.framesBeforeHideVideo )
+         }
+         if ( sink->soc.framesBeforeHideVideo )
+         {
+            if ( --sink->soc.framesBeforeHideVideo == 0 )
             {
-               if ( --sink->soc.framesBeforeHideVideo == 0 )
-               {
-                  /* Move HW path video off screen.  The natural inclination would be to suppress
-                   * its presentation by setting captureSettings.displayEnable to false, but doing
-                   * so seems to cause HW path video to never present again when capture is disabled.
-                   * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
-                   */
-                  NEXUS_SurfaceClientSettings vClientSettings;
-                  NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-                  vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
-                  NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
-               }
+               /* Move HW path video off screen.  The natural inclination would be to suppress
+                * its presentation by setting captureSettings.displayEnable to false, but doing
+                * so seems to cause HW path video to never present again when capture is disabled.
+                * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
+                */
+               NEXUS_SurfaceClientSettings vClientSettings;
+               NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+               vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
+               NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
             }
          }
-      }
-      else if ( !eosDetected && videoPlaying )
-      {
-         int limit= (sink->currentPTS > sink->firstPTS) 
-                    ? EOS_DETECT_DELAY
-                    : EOS_DETECT_DELAY_AT_START;
-         ++sink->soc.noFrameCount;
-         if ( sink->soc.noFrameCount*FRAME_POLL_TIME > limit )
+         if ( captureSurface )
          {
-            GST_INFO_OBJECT(sink, "processFrame: eos detected: firstPTS %lld currentPTS %lld\n", sink->firstPTS, sink->currentPTS);
-            gst_westeros_sink_eos_detected( sink );
-            sink->soc.noFrameCount= 0;
+            NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);
          }
-         break;
       }
    }
-   GST_DEBUG_OBJECT(sink, "processFrame: exit");
+
+exit:
+
+   GST_LOG("processFrame: exit");
 }
 
 static void updateVideoStatus( GstWesterosSink *sink )
 {
    NEXUS_VideoDecoderStatus videoStatus;
-   gboolean noFrame= FALSE;
+   gboolean checkForEOS= FALSE;
    gboolean eosDetected= FALSE;
    gboolean videoPlaying= FALSE;
    gboolean flushStarted= FALSE;
    guint64 prevPTS;
 
    LOCK( sink );
+   checkForEOS= sink->soc.checkForEOS;
    eosDetected= sink->eosDetected;
    videoPlaying= sink->soc.videoPlaying;
    flushStarted= sink->flushStarted;
@@ -1961,22 +2011,31 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->soc.noFrameCount= 0;
             sink->soc.presentationStarted= TRUE;
          }
-         else if (videoStatus.queueDepth == 0)
+
+         if ( (sink->soc.prevQueueDepth == videoStatus.queueDepth) &&
+              (sink->soc.prevFifoDepth == videoStatus.fifoDepth) &&
+              (sink->soc.prevNumDecoded == videoStatus.numDecoded) )
          {
-            noFrame= TRUE;
+            ++sink->soc.noFrameCount;
          }
+         else
+         {
+            sink->soc.noFrameCount= 0;
+         }
+
+         sink->soc.prevQueueDepth= videoStatus.queueDepth;
+         sink->soc.prevFifoDepth= videoStatus.fifoDepth;
+         sink->soc.prevNumDecoded= videoStatus.numDecoded;
+
          sink->srcWidth= videoStatus.source.width;
          sink->srcHeight= videoStatus.source.height;
          UNLOCK( sink );
       }
    }
 
-   if ( noFrame && !eosDetected && videoPlaying )
+   if ( videoPlaying && !eosDetected && checkForEOS )
    {
-      int limit= (sink->currentPTS > sink->firstPTS) 
-                 ? EOS_DETECT_DELAY
-                 : EOS_DETECT_DELAY_AT_START;
-      ++sink->soc.noFrameCount;
+      int limit= EOS_DETECT_DELAY;
       if ( sink->soc.noFrameCount*FRAME_POLL_TIME > limit )
       {
          GST_INFO_OBJECT(sink, "updateVideoStatus: eos detected: firstPTS %lld currentPTS %lld\n", sink->firstPTS, sink->currentPTS);
@@ -2156,18 +2215,33 @@ static void underflowCallback( void *userData, int n )
 
    if ( sink->videoStarted )
    {
-      if ( !sink->eosEventSeen )
+      rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
+      if ( NEXUS_SUCCESS == rc )
       {
-         if ( sink->soc.videoDecoder && sink->soc.presentationStarted )
+         GST_INFO("underflow: EOS: %d queueDepth %d", sink->eosEventSeen, videoStatus.queueDepth);
+         LOCK(sink);
+         if ( sink->eosEventSeen )
          {
-            rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
-            if ( NEXUS_SUCCESS != rc )
+            if ( videoStatus.queueDepth > 0 )
             {
-               GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+               sink->soc.checkForEOS= true;
+               sink->soc.noFrameCount= 0;
             }
-
-            g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, videoStatus.fifoDepth, videoStatus.queueDepth);
+            else
+            {
+               GST_INFO("underflow: emitting EOS");
+               sink->soc.emitEOS= TRUE;
+            }
          }
+         else if ( videoStatus.numBytesDecoded )
+         {
+            sink->soc.emitUnderflow= TRUE;
+         }
+         UNLOCK(sink);
+      }
+      else
+      {
+         GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
       }
    }
 }
@@ -2177,7 +2251,9 @@ static void ptsErrorCallback( void *userData, int n )
    GstWesterosSink *sink= (GstWesterosSink*)userData;
    WESTEROS_UNUSED(n);
 
-   g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_PTSERROR], 0, (unsigned int)(sink->currentPTS/2), NULL);
+   LOCK(sink);
+   sink->soc.emitPTSError= TRUE;
+   UNLOCK(sink);
 }
 
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec) 
@@ -2261,12 +2337,14 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
    NEXUS_VideoDecoderSettings settings;
 
    if ( !sink->videoStarted || sink->soc.serverPlaySpeed != 1.0 )
-       return;
+   {
+      return;
+   }
 
    if ( clientPlaySpeed < 0 )
    {
-       GST_WARNING_OBJECT(sink, "Ignoring negative play speed");
-       return;
+      GST_WARNING_OBJECT(sink, "Ignoring negative play speed");
+      return;
    }
 
    sink->soc.clientPlaySpeed= clientPlaySpeed;
@@ -2277,29 +2355,44 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
 
    if ( clientPlaySpeed <= 1.0 )
    {
-       trickState.topFieldOnly= false;
-       trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+      trickState.topFieldOnly= false;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
    }
    else
-   if ( (clientPlaySpeed > 1.0) && (clientPlaySpeed <= 4.0) )
+   if ( (clientPlaySpeed > 1.0) && (clientPlaySpeed <= 2.0) )
    {
-       trickState.topFieldOnly= true;
-       trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+      trickState.topFieldOnly= true;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+   }
+   else
+   if ( (clientPlaySpeed > 2.0) && (clientPlaySpeed <= 4.0) )
+   {
+      trickState.topFieldOnly= true;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eIP;
    }
    else
    {
-       trickState.topFieldOnly= true;
-       trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
+      trickState.topFieldOnly= true;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
+   }
+
+   if ( clientPlaySpeed == 1.0 )
+   {
+      trickState.tsmEnabled= checkIndependentVideoClock( sink ) ? NEXUS_TsmMode_eDisabled : NEXUS_TsmMode_eEnabled;
+   }
+   else
+   {
+      trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
    }
 
    NEXUS_Error rc = NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
    if ( NEXUS_SUCCESS != rc )
    {
-       GST_ERROR_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_SetTrickState: %d", (int)rc);
+      GST_ERROR_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_SetTrickState: %d", (int)rc);
    }
    else
    {
-       GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
+      GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
    }
 }
 
@@ -2350,18 +2443,23 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
             rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
             if ( rc != NEXUS_SUCCESS )
             {
-                GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+               GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
             }
             rc= NEXUS_SimpleStcChannel_Invalidate(sink->soc.stcChannel);
             if ( rc != NEXUS_SUCCESS )
             {
-                GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
+               GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
             }
             rc= NEXUS_SimpleVideoDecoder_FrameAdvance(sink->soc.videoDecoder);
             if ( NEXUS_SUCCESS != rc )
             {
                GST_ERROR_OBJECT(sink, "prerollSinkSoc: Error NEXUS_SimpleVideoDecoder_FrameAdvance: %d", (int)rc);
             }
+            sink->soc.videoPlaying= TRUE;
+            UNLOCK( sink );
+            updateVideoStatus(sink);
+            LOCK( sink );
+            sink->soc.videoPlaying= FALSE;
          }
          UNLOCK( sink );
       }

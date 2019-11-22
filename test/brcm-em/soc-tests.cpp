@@ -64,6 +64,7 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *ctx );
 static bool testCaseSocSinkBasicPauseResume( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeek( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekZeroBased( EMCTX *ctx );
+static bool testCaseSocSinkFrameAdvance( EMCTX *ctx );
 static bool testCaseSocSinkServerPlaySpeedDecodeRate( EMCTX *ctx );
 static bool testCaseSocSinkInitWithCompositor( EMCTX *emctx );
 static bool testCaseSocSinkBasicPipelineWithCompositor( EMCTX *ctx );
@@ -74,6 +75,7 @@ static bool testCaseSocSinkBasicPositionReportingWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPauseResumeWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekZeroBasedWithCompositor( EMCTX *ctx );
+static bool testCaseSocSinkFrameAdvanceWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPipelineGfx( EMCTX *ctx );
 static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
 static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
@@ -133,6 +135,10 @@ TESTCASE socTests[]=
      "Test basic seek operation with zero based segments",
      testCaseSocSinkBasicSeekZeroBased
    },
+   { "testSocSinkFrameAdvance",
+     "Test decode with frame advance",
+     testCaseSocSinkFrameAdvance
+   },
    { "testSocSinkServerPlaySpeedDecodeRate",
      "Test decode rate with server play speed property",
      testCaseSocSinkServerPlaySpeedDecodeRate
@@ -172,6 +178,10 @@ TESTCASE socTests[]=
    { "testSocSinkBasicSeekZeroBasedWithCompositor",
      "Test basic seek operation with zero based segments with a compositor",
      testCaseSocSinkBasicSeekZeroBasedWithCompositor
+   },
+   { "testSocSinkFrameAdvanceWithCompositor",
+     "Test decode with frame advance with a compositor",
+     testCaseSocSinkFrameAdvanceWithCompositor
    },
    { "testSocSinkBasicPipelineGfx",
      "Test creating a basic pipeline with westerossink using graphics path",
@@ -521,6 +531,9 @@ static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
 
    EMSimpleVideoDecoderSignalUnderflow( videoDecoder );
 
+   // Allow pipeline to run briefly
+   usleep( 200000 );
+
    gst_element_set_state( pipeline, GST_STATE_NULL );
 
    if ( !receivedSignal )
@@ -614,6 +627,9 @@ static bool testCaseSocSinkPtsErrorSignal( EMCTX *emctx )
    usleep( 200000 );
 
    EMSimpleVideoDecoderSignalPtsError( videoDecoder );
+
+   // Allow pipeline to run briefly
+   usleep( 200000 );
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
 
@@ -802,7 +818,7 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
 
       posExpected= basePTS + (frameNumber/frameRate)*90000LL;
       g_object_get( sink, "video-pts", &pos, NULL );
-      g_print("%d video-pts %lld expected %lld \n", i, pos, posExpected);
+      g_print("%d video-pts %lld expected %lld \n", i, (long long int)pos, (long long int)posExpected);
       if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
@@ -1102,6 +1118,110 @@ static bool testCaseSocSinkBasicSeekZeroBased( EMCTX *emctx )
    testResult= testCaseSocSinkBasicSeek( emctx );
 
 exit:
+
+   return testResult;
+}
+
+static bool testCaseSocSinkFrameAdvance( EMCTX *emctx )
+{
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   float frameRate;
+   int frameNumber;
+   gint64 pos, posExpected;
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   g_object_set( G_OBJECT(sink), "frame-step-on-preroll", TRUE, NULL );
+   g_object_set( G_OBJECT(sink), "async", TRUE, NULL );
+
+   gst_element_set_state( pipeline, GST_STATE_PAUSED );
+
+   for( int i= 0; i < 10; ++i )
+   {
+      usleep( INTERVAL_200_MS );
+
+      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+      frameNumber= videoSrcGetFrameNumber( src );
+
+      posExpected= (frameNumber/frameRate)*GST_SECOND;
+      if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
+      {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
+         EMERROR("Failed to query position");
+         goto exit;
+      }
+      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         goto exit;
+      }
+
+      gst_element_send_event( sink,
+                              gst_event_new_step( GST_FORMAT_BUFFERS, 1, 1.0, TRUE, FALSE) );
+
+      usleep( INTERVAL_200_MS );
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   testResult= true;
+
+exit:
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
 
    return testResult;
 }
@@ -1614,6 +1734,54 @@ static bool testCaseSocSinkBasicSeekZeroBasedWithCompositor( EMCTX *emctx )
    setenv( "WAYLAND_DISPLAY", value, true );
 
    testResult= testCaseSocSinkBasicSeekZeroBased( emctx );
+
+   WstCompositorDestroy( wctx );
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   return testResult;
+}
+
+static bool testCaseSocSinkFrameAdvanceWithCompositor( EMCTX *emctx )
+{
+   bool testResult= false;
+   WstCompositor *wctx= 0;
+   bool result;
+   const char *value;
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRenderedModule failed" );
+      goto exit;
+   }
+
+   value= WstCompositorGetDisplayName( wctx );
+   if ( value == 0 )
+   {
+      EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", value, true );
+
+   testResult= testCaseSocSinkFrameAdvance( emctx );
 
    WstCompositorDestroy( wctx );
 

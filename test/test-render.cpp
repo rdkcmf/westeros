@@ -746,7 +746,7 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
    WstCompositorDestroy( master );
 
    retryCount= 0;
-   while( !csctx1.disconnected && !csctx2.disconnected )
+   while( !csctx1.disconnected || !csctx2.disconnected )
    {
       usleep( 300000 );
       ++retryCount;
@@ -758,7 +758,8 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
    }
 
    retryCount= 0;
-   while( !csctx1.stoppedNormal && !csctx2.stoppedNormal )
+   while( !(csctx1.stoppedNormal || csctx1.stoppedAbnormal) ||
+          !(csctx2.stoppedNormal || csctx2.stoppedAbnormal) )
    {
       usleep( 300000 );
       ++retryCount;
