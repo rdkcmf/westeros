@@ -1081,10 +1081,14 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             gboolean eosDetected= sink->eosDetected;
             sink->eosEventSeen= TRUE;
             UNLOCK( sink );
-            if (eosDetected) {
-               gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+            if ( eosDetected )
+            {
+               passToDefault= TRUE;
             }
-            gst_westeros_sink_soc_eos_event( sink );
+            else
+            {
+               gst_westeros_sink_soc_eos_event( sink );
+            }
          }
          break;
          
@@ -1150,10 +1154,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             }
             UNLOCK( sink );
 
-            if ( gst_base_sink_get_sync(GST_BASE_SINK(sink)) )
-            {
-               passToDefault= TRUE;
-            }
+            passToDefault= TRUE;
          }
          break;
        default:
@@ -1343,9 +1344,22 @@ void gst_westeros_sink_eos_detected( GstWesterosSink *sink )
    gboolean eosEventSeen= sink->eosEventSeen;
    sink->eosDetected= TRUE;
    UNLOCK( sink );
-   if (eosEventSeen) {
+   if (eosEventSeen)
+   {
       GST_DEBUG_OBJECT(sink, "gst_westeros_sink_eos_detected: posting EOS");
-      gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+      if (sink->parentEventFunc)
+      {
+         #ifdef USE_GST1
+         sink->parentEventFunc(GST_BASE_SINK_PAD(sink), GST_OBJECT_CAST(sink), gst_event_new_eos());
+         #else
+         sink->parentEventFunc(GST_BASE_SINK_PAD(sink), gst_event_new_eos());
+         #endif
+      }
+      else
+      {
+         GST_WARNING("gst_westeros_sink_eos_detected: no parentEventFunc: posting eos msg");
+         gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+      }
    }
 }
 
