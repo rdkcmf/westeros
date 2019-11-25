@@ -532,15 +532,6 @@ static void wstRendererNXCommitShm( WstRendererNX *renderer, WstRenderSurface *s
                NxClient_SetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
             }
 
-            size_t n= 0;
-            do
-            {
-               NEXUS_SurfaceHandle surface_list[10];
-               int rc = NEXUS_SurfaceClient_RecycleSurface(surface->gfxSurfaceClient, surface_list, 10, &n);
-               if (rc) break;
-            }
-            while (n >= 10);
-
             surface->surfacePending= nexusSurface;
          }
 
@@ -596,15 +587,6 @@ static void wstRendererNXCommitSB( WstRendererNX *renderer, WstRenderSurface *su
                NxClient_SetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
             }
          }
-
-         size_t n= 0;
-         do
-         {
-            NEXUS_SurfaceHandle surface_list[10];
-            int rc = NEXUS_SurfaceClient_RecycleSurface(surface->gfxSurfaceClient, surface_list, 10, &n);
-            if (rc) break;
-         }
-         while (n >= 10);
          
          surface->surfacePending= surfaceIn;
       }
@@ -649,15 +631,6 @@ static void wstRendererNXCommitBNXS( WstRendererNX *renderer, WstRenderSurface *
             NxClient_SetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
          }
       }
-
-      size_t n= 0;
-      do
-      {
-         NEXUS_SurfaceHandle surface_list[10];
-         int rc = NEXUS_SurfaceClient_RecycleSurface(surface->gfxSurfaceClient, surface_list, 10, &n);
-         if (rc) break;
-      }
-      while (n >= 10);
       
       surface->surfacePending= surfaceIn;
    }
