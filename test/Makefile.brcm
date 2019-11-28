@@ -409,6 +409,7 @@ external/.brcm-refsw:
 	cp temp/nexus/modules/core/include/nexus_core_compat.h include && \
 	cp temp/nexus/modules/core/include/nexus_core_file_init.h include && \
 	cp temp/nexus/modules/core/include/nexus_core_priv.h include && \
+	cp temp/nexus/modules/core/include/nexus_core_utils.h include && \
 	cp temp/nexus/modules/display/include/nexus_display.h include && \
 	cp temp/nexus/modules/display/include/nexus_display_custom.h include && \
 	cp temp/nexus/modules/display/include/nexus_display_init.h include && \
