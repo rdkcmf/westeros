@@ -510,6 +510,8 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->display= 0;
    sink->currentSegment = NULL;
 
+   sink->processPadEvent= 0;
+
    sink->mediaCaptureModule= 0;
    sink->mediaCaptureContext= 0;
    sink->mediaCaptureDestroyContext= 0;
@@ -1036,6 +1038,14 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
    gboolean result= TRUE;
    gboolean passToDefault= FALSE;
 
+   if ( sink->processPadEvent )
+   {
+      if ( sink->processPadEvent( sink, pad, event, &passToDefault ) )
+      {
+         goto done;
+      }
+   }
+
    switch (GST_EVENT_TYPE(event))
    {
       case GST_EVENT_CAPS:
@@ -1162,6 +1172,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          break;
    }
 
+done:
    if (passToDefault && sink->parentEventFunc)
    {
       #ifdef USE_GST1
@@ -1251,7 +1262,6 @@ static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstPad *peer)
 {
    GstWesterosSink *sink= GST_WESTEROS_SINK(gst_pad_get_parent(pad));
 #endif
-   GstElement *pElement;
 
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_link: enter");
    
@@ -1260,21 +1270,7 @@ static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstPad *peer)
       GST_ERROR("Peer Caps is not supported\n");
    }
 
-   gchar *peerName= gst_pad_get_name(peer);
-   pElement= (GstElement*)gst_pad_get_parent_element(pad); 
-   if (pElement)
-   {
-      gst_object_unref(pElement);
-   }
-
-   pElement= (GstElement*)gst_pad_get_parent_element(peer);
-   if(pElement)
-   {
-      gst_object_unref(pElement);
-   }
-
    sink->peerPad= peer;
-   g_free(peerName);  
    
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_link: startAfterLink %d", sink->startAfterLink);
    if ( sink->startAfterLink )

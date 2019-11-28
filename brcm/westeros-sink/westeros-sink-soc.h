@@ -24,6 +24,7 @@
 #include "default_nexus.h"
 #include "nxclient.h"
 #include "nexus_surface_client.h"
+#include "nexus_core_utils.h"
 #include "nexus_stc_channel.h"
 #include "nexus_simple_video_decoder.h"
 
@@ -77,6 +78,7 @@ struct _GstWesterosSinkSoc
    int frameCount;
    int noFrameCount;
    guint32 numDecoded;
+   gboolean ignoreDiscontinuity;
    gboolean checkForEOS;
    gboolean emitEOS;
    gboolean emitUnderflow;

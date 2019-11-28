@@ -55,6 +55,7 @@
 #include "default_nexus.h"
 #include "bmedia_types.h"
 #include "nexus_platform.h"
+#include "nexus_core_utils.h"
 #include "nexus_simple_stc_channel.h"
 #include "nexus_simple_video_decoder.h"
 #include "nexus_surface_client.h"
@@ -983,6 +984,18 @@ void NXPL_DestroyCompatiblePixmap(NXPL_PlatformHandle handle, void *pixmapHandle
       }
       free( npm );
    }
+}
+
+// Section: nexus_misc --------------------------------------------------------
+
+void NEXUS_StartCallbacks_tagged(void *interfaceHandle, const char *pFileName, unsigned lineNumber, const char *pFunctionName)
+{
+   TRACE1("NEXUS_StartCallbacks");
+}
+
+void NEXUS_StopCallbacks_tagged(void *interfaceHandle, const char *pFileName, unsigned lineNumber, const char *pFunctionName)
+{
+   TRACE1("NEXUS_StopCallbacks");
 }
 
 // Section: nexus_platform --------------------------------------------------------

@@ -50,6 +50,8 @@ G_BEGIN_DECLS
 typedef struct _GstWesterosSink GstWesterosSink;
 typedef struct _GstWesterosSinkClass GstWesterosSinkClass;
 
+typedef gboolean (*ProcessPadEvent)(GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
+
 typedef void* (*MediaCaptureCreateContext)( GstElement *element );
 typedef void (*MediaCaptureDestroyContext)( void *context );
 
@@ -127,7 +129,9 @@ struct _GstWesterosSink
    uint32_t surfaceId;
    struct wl_vpc *vpc;
    struct wl_vpc_surface *vpcSurface;
-   
+
+   ProcessPadEvent processPadEvent;
+
    void *mediaCaptureModule;
    MediaCaptureDestroyContext mediaCaptureDestroyContext;
    void *mediaCaptureContext;

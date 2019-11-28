@@ -65,7 +65,8 @@ enum
   PROP_HIDE_VIDEO_DURING_CAPTURE,
   PROP_CAMERA_LATENCY,
   PROP_FRAME_STEP_ON_PREROLL,
-  PROP_ENABLE_TEXTURE
+  PROP_ENABLE_TEXTURE,
+  PROP_QUEUED_FRAMES
   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
   ,
   PROP_PIP
@@ -99,6 +100,7 @@ static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
 static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed );
+static gboolean processEventSinkSoc( GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
 static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
@@ -205,6 +207,12 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
      g_param_spec_boolean ("enable-texture",
                            "enable texture signal",
                            "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_QUEUED_FRAMES,
+     g_param_spec_uint ("queued-frames",
+                       "queued frames",
+                       "Get number for frames that are decoded and queued for rendering",
+                       0, G_MAXUINT32, 0, G_PARAM_READABLE ));
 
 
    #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
@@ -350,6 +358,7 @@ void resourceChangedCallback( void *context, int param )
       {
          sink->soc.timeResourcesLost= getCurrentTimeMillis();
          sink->soc.positionResourcesLost= sink->position;
+         sink->soc.ignoreDiscontinuity= TRUE;
       }
    }
 }
@@ -469,6 +478,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.framesBeforeHideVideo= 0;
    sink->soc.numDecoded= 0;
    sink->soc.noFrameCount= 0;
+   sink->soc.ignoreDiscontinuity= FALSE;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
    sink->soc.emitUnderflow= FALSE;
@@ -496,6 +506,10 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveResources= FALSE;
    sink->soc.timeResourcesLost= 0;
    sink->soc.positionResourcesLost= 0;
+
+   gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), TRUE);
+
+   sink->processPadEvent= processEventSinkSoc;
 
    rc= NxClient_Join(NULL);
    if ( rc == NEXUS_SUCCESS )
@@ -800,6 +814,7 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
             NEXUS_Error rc;
             NEXUS_VideoDecoderStatus videoStatus;
 
+            videoStatus.fifoDepth= 0;
             if ( sink->soc.videoDecoder )
             {
                rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
@@ -807,12 +822,8 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
                {
                   GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
                }
-               g_value_set_uint(value, videoStatus.fifoDepth);
             }
-            else
-            {
-               GST_ERROR("Error: video decoder handle is NULL");
-            }
+            g_value_set_uint(value, videoStatus.fifoDepth);
          }
          break;
       case PROP_VIDEO_DECODER:
@@ -859,6 +870,23 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
+         break;
+      case PROP_QUEUED_FRAMES:
+         {
+            NEXUS_Error rc;
+            NEXUS_VideoDecoderStatus videoStatus;
+
+            videoStatus.queueDepth= 0;
+            if ( sink->soc.videoDecoder )
+            {
+               rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
+               if ( NEXUS_SUCCESS != rc )
+               {
+                  GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+               }
+            }
+            g_value_set_uint(value, videoStatus.queueDepth);
+         }
          break;
        #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
@@ -942,10 +970,12 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
 
-   if ( sink->soc.stcChannel )
+   if ( !sink->startAfterLink && !sink->startAfterCaps )
    {
-      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
-      BDBG_ASSERT(!rc);
+      if ( !gst_westeros_sink_soc_start_video( sink ) )
+      {
+         GST_ERROR("gst_westeros_sink_soc_paused_to_playing: gst_westeros_sink_soc_start_video failed");
+      }
    }
 
    return TRUE;
@@ -980,15 +1010,6 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
          if ( !gst_westeros_sink_soc_start_video( sink ) )
          {
             GST_ERROR("gst_westeros_sink_soc_paused_to_playing: gst_westeros_sink_soc_start_video failed");
-         }
-
-         if ( checkIndependentVideoClock( sink ) )
-         {
-            NEXUS_VideoDecoderTrickState trickState;
-            NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
-            trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
-            NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
-            GST_INFO_OBJECT(sink, "disable TsmMode");
          }
 
          if ( sink->soc.stoppedForPlaySpeedChange )
@@ -1031,6 +1052,15 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
          {
             updateClientPlaySpeed(sink, sink->playbackRate);
          }
+      }
+
+      if ( checkIndependentVideoClock( sink ) )
+      {
+         NEXUS_VideoDecoderTrickState trickState;
+         NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+         trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
+         NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+         GST_INFO_OBJECT(sink, "disable TsmMode");
       }
       UNLOCK( sink );
    }
@@ -1239,6 +1269,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
    sink->soc.numDecoded= 0;
+   sink->soc.ignoreDiscontinuity= TRUE;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
    sink->soc.emitUnderflow= FALSE;
@@ -1313,6 +1344,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    #endif
 
    sink->soc.presentationStarted= FALSE;
+   sink->soc.frameCount= 0;
    rc= NEXUS_SimpleVideoDecoder_Start(sink->soc.videoDecoder, &startSettings);
    if ( rc != NEXUS_SUCCESS )
    {
@@ -1330,7 +1362,9 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    }
 
    if ( sink->startPTS != 0 )
-       gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
+   {
+      gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
+   }
 
    sink->soc.quitCaptureThread= FALSE;
    if ( sink->soc.captureThread == NULL ) 
@@ -1341,10 +1375,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
  
    sink->videoStarted= TRUE;
 
-   if ( sink->soc.clientPlaySpeed != sink->playbackRate )
-   {
-      updateClientPlaySpeed(sink, sink->playbackRate);
-   }
+   updateClientPlaySpeed(sink, sink->playbackRate);
 
    result= TRUE;
 
@@ -1670,11 +1701,50 @@ static gpointer captureThread(gpointer data)
          }
 
          g_signal_emit (G_OBJECT(sink), g_signals[SIGNAL_UNDERFLOW], 0, videoStatus.fifoDepth, videoStatus.queueDepth);
+
+         GstPad *pad= gst_pad_get_peer( sink->peerPad );
+         if ( pad )
+         {
+            GstStructure *structure;
+            structure= gst_structure_new("video_buffer_underflow",
+                                         "buffer_underflow", G_TYPE_BOOLEAN, TRUE,
+                                         "decoder_pts", G_TYPE_UINT, videoStatus.pts,
+                                          NULL );
+            if ( structure )
+            {
+               gst_pad_push_event( pad, gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, structure));
+            }
+            gst_object_unref( pad );
+         }
       }
 
       if ( emitPTSError )
       {
+         NEXUS_Error rc;
+         NEXUS_VideoDecoderStatus videoStatus;
+
          g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_PTSERROR], 0, (unsigned int)(sink->currentPTS/2), NULL);
+
+         rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
+         if ( NEXUS_SUCCESS != rc )
+         {
+            GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+         }
+
+         GstPad *pad= gst_pad_get_peer( sink->peerPad );
+         if ( pad )
+         {
+            GstStructure *structure;
+            structure= gst_structure_new("capture_stream_on_error",
+                                         "error_string", G_TYPE_STRING, "VideoPtsError",
+                                         "decoder_pts", G_TYPE_UINT, videoStatus.pts,
+                                         NULL );
+            if ( structure )
+            {
+               gst_pad_push_event( pad, gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, structure));
+            }
+            gst_object_unref( pad );
+         }
       }
 
       if ( emitResourceChange )
@@ -1973,6 +2043,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
          else
          if ( (videoStatus.firstPtsPassed || videoStatus.numDecoded > sink->soc.numDecoded) && (sink->currentPTS/2 != videoStatus.pts) )
          {
+            sink->soc.ignoreDiscontinuity= FALSE;
             sink->soc.numDecoded= videoStatus.numDecoded;
             prevPTS= sink->currentPTS;
             sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
@@ -2160,30 +2231,60 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
             }
             else if (!strcasecmp(struct_name, "get_video_playback_quality"))
             {
-                NEXUS_Error rc;
-                NEXUS_VideoDecoderStatus videoStatus;
-                if ( sink->soc.videoDecoder )
-                {
-                    rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus );
-                    if ( NEXUS_SUCCESS != rc )
-                    {
-                        GST_WARNING_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
-                    }
-                    else
-                    {
-                        g_value_init(&val, G_TYPE_UINT);
+               NEXUS_Error rc;
+               NEXUS_VideoDecoderStatus videoStatus;
+               if ( sink->soc.videoDecoder )
+               {
+                  rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus );
+                  if ( NEXUS_SUCCESS != rc )
+                  {
+                     GST_WARNING_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+                  }
+                  else
+                  {
+                     g_value_init(&val, G_TYPE_UINT);
 
-                        g_value_set_uint(&val, videoStatus.numDecoded);
-                        gst_structure_set_value(query_structure, "total", &val);
+                     g_value_set_uint(&val, videoStatus.numDecoded);
+                     gst_structure_set_value(query_structure, "total", &val);
 
-                        g_value_set_uint(&val, videoStatus.numDecodeDrops + videoStatus.numDisplayDrops);
-                        gst_structure_set_value(query_structure, "dropped", &val);
+                     g_value_set_uint(&val, videoStatus.numDecodeDrops + videoStatus.numDisplayDrops);
+                     gst_structure_set_value(query_structure, "dropped", &val);
 
-                        g_value_set_uint(&val, videoStatus.numDecodeErrors + videoStatus.numDisplayErrors);
-                        gst_structure_set_value(query_structure, "corrupted", &val);
-                    }
+                     g_value_set_uint(&val, videoStatus.numDecodeErrors + videoStatus.numDisplayErrors);
+                     gst_structure_set_value(query_structure, "corrupted", &val);
+                  }
+               }
+               rv = TRUE;
+            }
+            else if (!strcasecmp(struct_name, "get_decoder_status"))
+            {
+               guint pts= 0, fifoDepth= 0;
+               NEXUS_Error rc;
+               NEXUS_VideoDecoderStatus videoStatus;
+               if ( sink->soc.videoDecoder )
+               {
+                   rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus );
+                   if ( NEXUS_SUCCESS == rc )
+                   {
+                      pts= videoStatus.pts;
+                      fifoDepth= videoStatus.fifoDepth;
+                   }
+                   else
+                   {
+                      GST_WARNING_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+                   }
                 }
-                rv = TRUE;
+
+                GST_LOG("Video decoder status queried: pts %x fifoDepth %u", pts, fifoDepth);
+
+                g_value_init(&val, G_TYPE_UINT);
+
+                g_value_set_uint(&val, pts);
+                gst_structure_set_value(query_structure, "pts", &val);
+
+                g_value_set_uint(&val, fifoDepth);
+                gst_structure_set_value(query_structure, "fifoDepth", &val);
+                rv= TRUE;
             }
          }
          break;
@@ -2233,9 +2334,15 @@ static void underflowCallback( void *userData, int n )
                sink->soc.emitEOS= TRUE;
             }
          }
-         else if ( videoStatus.numBytesDecoded )
+         else
          {
-            sink->soc.emitUnderflow= TRUE;
+            GST_INFO("underflow: presentationStarted %d ignoreDisc %d numBytesDecoded %llu PTS 0x%x eosSeen %d",
+                      sink->soc.presentationStarted, sink->soc.ignoreDiscontinuity, videoStatus.numBytesDecoded,
+                      videoStatus.pts, sink->eosEventSeen );
+            if ( sink->soc.presentationStarted && !sink->soc.ignoreDiscontinuity && videoStatus.numBytesDecoded )
+            {
+               sink->soc.emitUnderflow= TRUE;
+            }
          }
          UNLOCK(sink);
       }
@@ -2250,9 +2357,23 @@ static void ptsErrorCallback( void *userData, int n )
 {
    GstWesterosSink *sink= (GstWesterosSink*)userData;
    WESTEROS_UNUSED(n);
+   NEXUS_Error rc;
+   NEXUS_VideoDecoderStatus videoStatus;
 
+   videoStatus.pts= 0;
+   rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus );
+   if ( rc != NEXUS_SUCCESS )
+   {
+      GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+   }
+   GST_INFO("pts error: current pts 0x%lx decoder pts 0x%x ignoreDisc %d frameCount %d",
+            sink->currentPTS/2, videoStatus.pts, sink->soc.ignoreDiscontinuity, sink->soc.frameCount);
    LOCK(sink);
-   sink->soc.emitPTSError= TRUE;
+   /* Ignore PTS error if we have just flushed */
+   if ( !sink->soc.ignoreDiscontinuity && sink->soc.frameCount > 1 )
+   {
+      sink->soc.emitPTSError= TRUE;
+   }
    UNLOCK(sink);
 }
 
@@ -2394,13 +2515,88 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
    {
       GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
    }
+
+   rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, clientPlaySpeed == 0.0 ? TRUE : FALSE);
+   if ( rc != NEXUS_SUCCESS )
+   {
+      GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+   }
+   if ( clientPlaySpeed == 0.0 )
+   {
+      rc= NEXUS_SimpleStcChannel_Invalidate(sink->soc.stcChannel);
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
+      }
+   }
+}
+
+static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault )
+{
+   gboolean result= FALSE;
+
+   if ( sink->startAfterLink && !sink->videoStarted )
+   {
+      if ( queryPeerHandles(sink) )
+      {
+         LOCK( sink );
+         if ( !gst_westeros_sink_soc_start_video( sink ) )
+         {
+            GST_ERROR("prerollSinkSoc: gst_westeros_sink_soc_start_video failed");
+         }
+         UNLOCK( sink );
+      }
+   }
+
+   switch (GST_EVENT_TYPE(event))
+   {
+      case GST_EVENT_CUSTOM_DOWNSTREAM:
+      case GST_EVENT_CUSTOM_DOWNSTREAM_OOB:
+         {
+            GstStructure *structure;
+            const GValue *val;
+            structure= (GstStructure*)gst_event_get_structure(event);
+            val= gst_structure_get_value(structure, "new_pid_channel");
+            if ( val )
+            {
+               gpointer *ptr= g_value_get_pointer(val);
+               if ( ptr )
+               {
+                  LOCK(sink);
+                  GST_DEBUG("Pid channel changing: old %p", sink->soc.videoPidChannel);
+                  sink->soc.videoPidChannel= (NEXUS_PidChannelHandle)ptr;
+                  GST_DEBUG("Pid channel changing: new %p", sink->soc.videoPidChannel);
+
+                  if ( sink->videoStarted )
+                  {
+                     sink->videoStarted= FALSE;
+                     sink->soc.presentationStarted= FALSE;
+                     NEXUS_SimpleVideoDecoder_Stop( sink->soc.videoDecoder );
+                     sink->soc.frameCount= 0;
+                     if ( !gst_westeros_sink_soc_start_video( sink ) )
+                     {
+                        GST_ERROR("gst_westeros_sink_soc_start_video failed");
+                     }
+                  }
+                  UNLOCK(sink);
+               }
+            }
+
+            *passToDefault= FALSE;
+
+            result= true;
+         }
+         break;
+   }
+
+   return result;
 }
 
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
 {
    GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
 
-   if ( buffer && sink->soc.frameStepOnPreroll )
+   if ( buffer )
    {
       if ( queryPeerHandles(sink) )
       {
@@ -2437,32 +2633,33 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
          {
             NEXUS_Error rc;
 
-            sink->soc.videoPlaying= TRUE;
             updateClientPlaySpeed( sink, 0.0 );
-            sink->soc.videoPlaying= FALSE;
-            rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
-            if ( rc != NEXUS_SUCCESS )
+
+            if ( sink->soc.frameStepOnPreroll )
             {
-               GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+               rc= NEXUS_SimpleVideoDecoder_FrameAdvance(sink->soc.videoDecoder);
+               if ( NEXUS_SUCCESS != rc )
+               {
+                  GST_ERROR_OBJECT(sink, "prerollSinkSoc: Error NEXUS_SimpleVideoDecoder_FrameAdvance: %d", (int)rc);
+               }
+               sink->soc.videoPlaying= TRUE;
+               UNLOCK( sink );
+               updateVideoStatus(sink);
+               LOCK( sink );
+               sink->soc.videoPlaying= FALSE;
             }
-            rc= NEXUS_SimpleStcChannel_Invalidate(sink->soc.stcChannel);
-            if ( rc != NEXUS_SUCCESS )
-            {
-               GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
-            }
-            rc= NEXUS_SimpleVideoDecoder_FrameAdvance(sink->soc.videoDecoder);
-            if ( NEXUS_SUCCESS != rc )
-            {
-               GST_ERROR_OBJECT(sink, "prerollSinkSoc: Error NEXUS_SimpleVideoDecoder_FrameAdvance: %d", (int)rc);
-            }
-            sink->soc.videoPlaying= TRUE;
-            UNLOCK( sink );
-            updateVideoStatus(sink);
-            LOCK( sink );
-            sink->soc.videoPlaying= FALSE;
          }
          UNLOCK( sink );
       }
+   }
+
+   if ( !sink->soc.frameStepOnPreroll )
+   {
+      /* Set need_preroll to FALSE so that base sink will not block in
+         wait_preroll since this would prevent further buffering while in
+         paused state.  This is because westerossink does both the decoding
+         and the display */
+      GST_BASE_SINK(sink)->need_preroll= FALSE;
    }
 
    GST_INFO("preroll ok");
@@ -2544,6 +2741,8 @@ static int sinkAcquireResources( GstWesterosSink *sink )
       sink->soc.videoWindow= NEXUS_SurfaceClient_AcquireVideoWindow( sink->soc.surfaceClient, 0);
       sink->soc.videoDecoderId= sink->soc.allocSurface.simpleVideoDecoder[0].id;
       sink->soc.videoDecoder= NEXUS_SimpleVideoDecoder_Acquire( sink->soc.videoDecoderId );
+
+      NEXUS_StartCallbacks( sink->soc.videoDecoder );
 
       NEXUS_SimpleVideoDecoderClientSettings settings;
       NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &settings);
@@ -2693,6 +2892,8 @@ static void sinkReleaseResources( GstWesterosSink *sink )
       sink->soc.stcChannel= NULL;
       sink->soc.videoPidChannel= NULL;
       sink->soc.codec= bvideo_codec_unknown;
+
+      NEXUS_StopCallbacks( sink->soc.videoDecoder );
 
       NxClient_Disconnect(sink->soc.connectId);
       if ( sink->soc.videoDecoder )
