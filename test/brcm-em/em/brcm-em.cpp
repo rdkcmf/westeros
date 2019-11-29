@@ -346,6 +346,8 @@ typedef struct _EMCTX
 
    EMTextureCreated textureCreatedCB;
    void *textureCreatedUserData;
+   EMBufferPushed bufferPushedCB;
+   void *bufferPushedUserData;
 
    char errorDetail[EM_MAX_ERROR];
 } EMCTX;
@@ -672,6 +674,12 @@ void EMSetTextureCreatedCallback( EMCTX *ctx, EMTextureCreated cb, void *userDat
 {
    ctx->textureCreatedCB= cb;
    ctx->textureCreatedUserData= userData;
+}
+
+void EMSetBufferPushedCallback( EMCTX *ctx, EMBufferPushed cb, void *userData )
+{
+   ctx->bufferPushedCB= cb;
+   ctx->bufferPushedUserData= userData;
 }
 
 
@@ -1357,6 +1365,21 @@ NEXUS_Error NEXUS_SurfaceClient_PushSurface(
    NEXUS_Error rc= NEXUS_SUCCESS;
 
    TRACE1("NEXUS_SurfaceClient_PushSurface");
+
+   EMCTX *ctx= 0;
+   ctx= emGetContext();
+   if ( ctx )
+   {
+      if ( ctx->bufferPushedCB )
+      {
+         int bufferId= (int)surface;
+         ctx->bufferPushedCB( ctx, ctx->bufferPushedUserData, bufferId );
+      }
+   }
+   else
+   {
+      ERROR("glEGLImageTargetTexture2DOES: emGetContext failed");
+   }
 
    return rc;
 }

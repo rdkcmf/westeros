@@ -42,6 +42,7 @@ typedef enum _EM_TUNERID
 } EM_TUNERID;
 
 typedef void (*EMTextureCreated)( EMCTX *ctx, void *userData, int bufferId );
+typedef void (*EMBufferPushed)( EMCTX *ctx, void *userData, int bufferId );
 
 EMCTX* EMCreateContext( void );
 void EMDestroyContext( EMCTX* ctx );
@@ -92,6 +93,7 @@ int EMSimpleVideoDecoderGetHdrEotf( EMSimpleVideoDecoder *dec );
 int EMWLEGLWindowGetSwapCount( struct wl_egl_window *w );
 void EMWLEGLWindowSetBufferRange( struct wl_egl_window *w, int base, int count );
 void EMSetTextureCreatedCallback( EMCTX *ctx, EMTextureCreated cb, void *userData );
+void EMSetBufferPushedCallback( EMCTX *ctx, EMBufferPushed cb, void *userData );
 
 #endif
 
