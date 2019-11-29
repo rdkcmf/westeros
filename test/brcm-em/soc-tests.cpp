@@ -80,6 +80,7 @@ static bool testCaseSocSinkBasicPipelineGfx( EMCTX *ctx );
 static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
 static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
 static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
+static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
 
 TESTCASE socTests[]=
 {
@@ -198,6 +199,10 @@ TESTCASE socTests[]=
    { "testSocSinkGfxTransition",
      "Test westerossink transition from HW to graphics path",
      testCaseSocSinkGfxTransition
+   },
+   { "testSocRenderBasicCompositionEmbeddedFast",
+     "Test embedded compositor basic composition with fast render delegation",
+     testCaseSocRenderBasicCompositionEmbeddedFast
    },
    {
      "", "", (TESTCASEFUNC)0
@@ -3614,6 +3619,296 @@ exit:
    testTermEGL( &ctx->eglCtx );
 
    unsetenv( "WAYLAND_DISPLAY" );
+
+   return testResult;
+}
+
+namespace EmbeddedFast
+{
+
+typedef struct _TestCtx
+{
+   TestEGLCtx eglCtx;  // client / wayland client
+   TestEGLCtx eglCtxS; // server / compositor
+   struct wl_display *display;
+   struct wl_compositor *compositor;
+   struct wl_surface *surface;
+   WstGLCtx *glCtx;
+   struct wl_egl_window *wlEglWindow;
+   void *eglNativeWindow;
+   int windowWidth;
+   int windowHeight;
+   int lastPushedBufferId;
+} TestCtx;
+
+static void registryHandleGlobal(void *data,
+                                 struct wl_registry *registry, uint32_t id,
+                                 const char *interface, uint32_t version)
+{
+   TestCtx *ctx= (TestCtx*)data;
+   int len;
+
+   len= strlen(interface);
+
+   if ( (len==13) && !strncmp(interface, "wl_compositor", len) ) {
+      ctx->compositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
+      printf("compositor %p\n", ctx->compositor);
+   }
+}
+
+static void registryHandleGlobalRemove(void *data,
+                                      struct wl_registry *registry,
+                                      uint32_t name)
+{
+}
+
+static const struct wl_registry_listener registryListener =
+{
+   registryHandleGlobal,
+   registryHandleGlobalRemove
+};
+
+void bufferPushed( EMCTX *ctx, void *userData, int bufferId )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+
+   testCtx->lastPushedBufferId= bufferId;
+}
+
+} // namespace EmbeddedFast
+
+bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx )
+{
+   using namespace EmbeddedFast;
+
+   bool testResult= false;
+   bool result;
+   WstCompositor *wctx= 0;
+   const char *displayName= "test0";
+   struct wl_display *display= 0;
+   struct wl_registry *registry= 0;
+   TestCtx testCtx;
+   TestCtx *ctx= &testCtx;
+   EGLBoolean b;
+   std::vector<WstRect> rects;
+   float matrix[16];
+   float alpha= 1.0;
+   bool needHolePunch;
+   int hints;
+   int bufferIdBase= 1500;
+   int bufferIdCount= 3;
+   int expectedBufferId= bufferIdBase;
+
+   memset( &testCtx, 0, sizeof(TestCtx) );
+
+   result= testSetupEGL( &ctx->eglCtxS, 0 );
+   if ( !result )
+   {
+      EMERROR("testSetupEGL failed for compositor");
+      goto exit;
+   }
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_embedded.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( wctx, true );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   setenv( "WESTEROS_FAST_RENDER", "libwesteros_render_nexus.so.0.0.0", true );
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   EMSetBufferPushedCallback( emctx, bufferPushed, ctx );
+
+   display= wl_display_connect(displayName);
+   if ( !display )
+   {
+      EMERROR( "wl_display_connect failed" );
+      goto exit;
+   }
+   ctx->display= display;
+
+   registry= wl_display_get_registry(display);
+   if ( !registry )
+   {
+      EMERROR( "wl_display_get_registrty failed" );
+      goto exit;
+   }
+
+   wl_registry_add_listener(registry, &registryListener, ctx);
+
+   wl_display_roundtrip(display);
+
+   if ( !ctx->compositor )
+   {
+      EMERROR("Failed to acquire needed compositor items");
+      goto exit;
+   }
+
+   result= testSetupEGL( &ctx->eglCtx, display );
+   if ( !result )
+   {
+      EMERROR("testSetupEGL failed");
+      goto exit;
+   }
+
+   ctx->surface= wl_compositor_create_surface(ctx->compositor);
+   printf("surface=%p\n", ctx->surface);
+   if ( !ctx->surface )
+   {
+      EMERROR("error: unable to create wayland surface");
+      goto exit;
+   }
+
+   ctx->windowWidth= WINDOW_WIDTH;
+   ctx->windowHeight= WINDOW_HEIGHT;
+
+   ctx->wlEglWindow= wl_egl_window_create(ctx->surface, ctx->windowWidth, ctx->windowHeight);
+   if ( !ctx->wlEglWindow )
+   {
+      EMERROR("error: unable to create wl_egl_window");
+      goto exit;
+   }
+   printf("wl_egl_window %p\n", ctx->wlEglWindow);
+
+   EMWLEGLWindowSetBufferRange( ctx->wlEglWindow, bufferIdBase, bufferIdCount );
+
+   ctx->eglCtx.eglSurfaceWindow= eglCreateWindowSurface( ctx->eglCtx.eglDisplay,
+                                                  ctx->eglCtx.eglConfig,
+                                                  (EGLNativeWindowType)ctx->wlEglWindow,
+                                                  NULL );
+   printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", ctx->eglCtx.eglSurfaceWindow );
+
+   b= eglMakeCurrent( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglContext );
+   if ( !b )
+   {
+      EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+      goto exit;
+   }
+
+   eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
+
+   hints= WstHints_noRotation;
+   WstCompositorComposeEmbedded( wctx,
+                                 0, // x
+                                 0, // y
+                                 WINDOW_WIDTH, // width
+                                 WINDOW_HEIGHT, // height
+                                 matrix,
+                                 alpha,
+                                 hints,
+                                 &needHolePunch,
+                                 rects );
+
+   eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+   wl_display_roundtrip(display);
+
+   for( int i= 0; i < 20; ++i )
+   {
+      usleep( 17000 );
+
+      WstCompositorComposeEmbedded( wctx,
+                                    0, // x
+                                    0, // y
+                                    WINDOW_WIDTH, // width
+                                    WINDOW_HEIGHT, // height
+                                    matrix,
+                                    alpha,
+                                    hints,
+                                    &needHolePunch,
+                                    rects );
+
+      if ( ctx->lastPushedBufferId != expectedBufferId )
+      {
+         EMERROR("Unexpected last pushed bufferId: expected(%d) actual(%d) iteration %d", expectedBufferId, ctx->lastPushedBufferId, i );
+         goto exit;
+      }
+
+      eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+      expectedBufferId += 1;
+      if ( expectedBufferId >= bufferIdBase+bufferIdCount )
+      {
+         expectedBufferId= bufferIdBase;
+      }
+   }
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WESTEROS_FAST_RENDER" );
+
+   if ( ctx->eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow );
+      ctx->eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
+
+   if ( ctx->wlEglWindow )
+   {
+      wl_egl_window_destroy( ctx->wlEglWindow );
+      ctx->wlEglWindow= 0;
+   }
+
+   if ( ctx->surface )
+   {
+      wl_surface_destroy( ctx->surface );
+      ctx->surface= 0;
+   }
+
+   testTermEGL( &ctx->eglCtx );
+
+   if ( ctx->compositor )
+   {
+      wl_compositor_destroy( ctx->compositor );
+      ctx->compositor= 0;
+   }
+
+   if ( registry )
+   {
+      wl_registry_destroy(registry);
+      registry= 0;
+   }
+
+   if ( display )
+   {
+      wl_display_roundtrip(display);
+      wl_display_disconnect(display);
+      display= 0;
+   }
+
+   WstCompositorDestroy( wctx );
+
+   testTermEGL( &ctx->eglCtxS );
 
    return testResult;
 }
