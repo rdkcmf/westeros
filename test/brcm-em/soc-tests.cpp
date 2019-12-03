@@ -81,6 +81,7 @@ static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
 static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
 static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
+static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx );
 
 TESTCASE socTests[]=
 {
@@ -203,6 +204,10 @@ TESTCASE socTests[]=
    { "testSocRenderBasicCompositionEmbeddedFast",
      "Test embedded compositor basic composition with fast render delegation",
      testCaseSocRenderBasicCompositionEmbeddedFast
+   },
+   { "testSocRenderBasicCompositionEmbeddedFastRepeater",
+     "Test embedded compositor basic composition with fast render delegation and repeater client",
+     testCaseSocRenderBasicCompositionEmbeddedFastRepeater
    },
    {
      "", "", (TESTCASEFUNC)0
@@ -3677,7 +3682,7 @@ void bufferPushed( EMCTX *ctx, void *userData, int bufferId )
 
 } // namespace EmbeddedFast
 
-bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx )
+static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx )
 {
    using namespace EmbeddedFast;
 
@@ -3909,6 +3914,339 @@ exit:
    WstCompositorDestroy( wctx );
 
    testTermEGL( &ctx->eglCtxS );
+
+   return testResult;
+}
+
+namespace EmbeddedFastRepeater
+{
+typedef struct _ClientStatusCtx
+{
+   int clientStatus;
+   int clientPid;
+   int detail;
+   bool started;
+   bool connected;
+   bool disconnected;
+   bool stoppedNormal;
+   bool stoppedAbnormal;
+} ClientStatusCtx;
+
+static void clientStatus( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
+{
+   ClientStatusCtx *csctx= (ClientStatusCtx*)userData;
+
+   csctx->clientStatus= status;
+   csctx->clientPid= clientPID;
+   switch( status )
+   {
+      case WstClient_started:
+         csctx->started= true;
+         break;
+      case WstClient_stoppedNormal:
+         csctx->stoppedNormal= true;
+         break;
+      case WstClient_stoppedAbnormal:
+         csctx->stoppedAbnormal= true;
+         csctx->detail= detail;
+         break;
+      case WstClient_connected:
+         csctx->connected= true;
+         break;
+      case WstClient_disconnected:
+         csctx->disconnected= true;
+         break;
+   }
+}
+
+typedef struct _LaunchCtx
+{
+   EMCTX *emctx;
+   WstCompositor *wctx;
+   const char *launchCmd;
+   bool launchThreadStarted;
+   bool launchError;
+} LaunchCtx;
+
+static void* clientLaunchThread( void *arg )
+{
+   LaunchCtx *lctx= (LaunchCtx*)arg;
+   EMCTX *emctx= lctx->emctx;
+   bool result;
+
+   lctx->launchThreadStarted= true;
+
+   result= WstCompositorLaunchClient( lctx->wctx, lctx->launchCmd );
+   if ( result == false )
+   {
+      lctx->launchError= true;
+      EMERROR( "WstCompositorLaunchClient failed" );
+      goto exit;
+   }
+
+exit:
+   lctx->launchThreadStarted= false;
+
+   return 0;
+}
+
+typedef struct _TestCtx
+{
+   TestEGLCtx eglCtx;
+   struct wl_display *display;
+   struct wl_compositor *compositor;
+   struct wl_surface *surface;
+   WstGLCtx *glCtx;
+   struct wl_egl_window *wlEglWindow;
+   void *eglNativeWindow;
+   int windowWidth;
+   int windowHeight;
+   int lastPushedBufferId;
+} TestCtx;
+
+static void registryHandleGlobal(void *data,
+                                 struct wl_registry *registry, uint32_t id,
+                                 const char *interface, uint32_t version)
+{
+   TestCtx *ctx= (TestCtx*)data;
+   int len;
+
+   len= strlen(interface);
+
+   if ( (len==13) && !strncmp(interface, "wl_compositor", len) ) {
+      ctx->compositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
+      printf("compositor %p\n", ctx->compositor);
+   }
+}
+
+static void registryHandleGlobalRemove(void *data,
+                                      struct wl_registry *registry,
+                                      uint32_t name)
+{
+}
+
+static const struct wl_registry_listener registryListener =
+{
+   registryHandleGlobal,
+   registryHandleGlobalRemove
+};
+
+void bufferPushed( EMCTX *ctx, void *userData, int bufferId )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+
+   testCtx->lastPushedBufferId= bufferId;
+}
+
+} // namespace EmbeddedFastRepeater
+
+static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx )
+{
+   using namespace EmbeddedFastRepeater;
+
+   bool testResult= false;
+   bool result;
+   WstCompositor *wctx= 0;
+   const char *displayName= "test0";
+   TestCtx testCtx;
+   TestCtx *ctx= &testCtx;
+   int rc;
+   EGLBoolean b;
+   pthread_t clientLaunchThreadId= 0;
+   ClientStatusCtx csctx;
+   LaunchCtx lctx;
+   std::vector<WstRect> rects;
+   float matrix[16];
+   float alpha= 1.0;
+   bool needHolePunch;
+   int hints;
+   int bufferIdBase= 1700;
+   int bufferIdCount= 3;
+   int retryCount;
+
+   memset( &testCtx, 0, sizeof(TestCtx) );
+
+   result= testSetupEGL( &ctx->eglCtx, 0 );
+   if ( !result )
+   {
+      EMERROR("testSetupEGL failed for compositor");
+      goto exit;
+   }
+   ctx->glCtx= WstGLInit();
+   if ( !ctx->glCtx )
+   {
+      EMERROR("Unable to create westeros-gl context");
+      goto exit;
+   }
+
+   ctx->windowWidth= WINDOW_WIDTH;
+   ctx->windowHeight= WINDOW_HEIGHT;
+
+   ctx->eglNativeWindow= WstGLCreateNativeWindow( ctx->glCtx, 0, 0, ctx->windowWidth, ctx->windowHeight );
+   if ( !ctx->eglNativeWindow )
+   {
+      EMERROR("error: unable to create egl native window");
+      goto exit;
+   }
+   printf("eglNativeWindow %p\n", ctx->eglNativeWindow);
+
+   ctx->eglCtx.eglSurfaceWindow= eglCreateWindowSurface( ctx->eglCtx.eglDisplay,
+                                                  ctx->eglCtx.eglConfig,
+                                                  (EGLNativeWindowType)ctx->eglNativeWindow,
+                                                  NULL );
+   printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", ctx->eglCtx.eglSurfaceWindow );
+
+   b= eglMakeCurrent( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglContext );
+   if ( !b )
+   {
+      EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+      goto exit;
+   }
+
+   eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_embedded.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( wctx, true );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   setenv( "WESTEROS_FAST_RENDER", "libwesteros_render_nexus.so.0.0.0", true );
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   EMSetBufferPushedCallback( emctx, bufferPushed, ctx );
+
+   hints= WstHints_noRotation;
+   WstCompositorComposeEmbedded( wctx,
+                                 0, // x
+                                 0, // y
+                                 WINDOW_WIDTH, // width
+                                 WINDOW_HEIGHT, // height
+                                 matrix,
+                                 alpha,
+                                 hints,
+                                 &needHolePunch,
+                                 rects );
+
+   eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+   memset( &csctx, 0, sizeof(csctx) );
+   result= WstCompositorSetClientStatusCallback( wctx, clientStatus, (void*)&csctx );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetClientStatusCallback failed" );
+      goto exit;
+   }
+
+   memset( &lctx, 0, sizeof(lctx) );
+   lctx.emctx= emctx;
+   lctx.wctx= wctx;
+   lctx.launchCmd= "./westeros-unittest -x repeaterApp repeater0 1700";
+
+   rc= pthread_create( &clientLaunchThreadId, NULL, clientLaunchThread, &lctx );
+   if ( rc )
+   {
+      EMERROR("unable to start client launch thread");
+      goto exit;
+   }
+
+   retryCount= 0;
+   while( !csctx.connected )
+   {
+      usleep( 300000 );
+      ++retryCount;
+      if ( retryCount > 50 )
+      {
+         EMERROR("Repeater client failed to connect");
+         goto exit;
+      }
+   }
+
+   for( int i= 0; i < 20; ++i )
+   {
+      WstCompositorComposeEmbedded( wctx,
+                                    0, // x
+                                    0, // y
+                                    WINDOW_WIDTH, // width
+                                    WINDOW_HEIGHT, // height
+                                    matrix,
+                                    alpha,
+                                    hints,
+                                    &needHolePunch,
+                                    rects );
+
+      if ( (ctx->lastPushedBufferId < bufferIdBase) || (ctx->lastPushedBufferId >= bufferIdBase+bufferIdCount) )
+      {
+         EMERROR("Unexpected last pushed bufferId: expected(%d-%d) actual(%d) iteration %d", bufferIdBase, bufferIdBase+bufferIdCount-1, ctx->lastPushedBufferId, i );
+         goto exit;
+      }
+
+      usleep( 17000 );
+   }
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WESTEROS_FAST_RENDER" );
+
+   WstCompositorStop( wctx );
+
+   if ( clientLaunchThreadId )
+   {
+      pthread_join( clientLaunchThreadId, NULL );
+      clientLaunchThreadId= 0;
+   }
+
+   WstCompositorDestroy( wctx );
+
+   if ( ctx->eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow );
+      ctx->eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
+
+   if ( ctx->eglNativeWindow )
+   {
+      WstGLDestroyNativeWindow( ctx->glCtx, ctx->eglNativeWindow );
+      ctx->eglNativeWindow= 0;
+   }
+
+   if ( ctx->glCtx )
+   {
+      WstGLTerm( ctx->glCtx );
+      ctx->glCtx= 0;
+   }
+
+   testTermEGL( &ctx->eglCtx );
 
    return testResult;
 }

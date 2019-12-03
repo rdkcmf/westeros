@@ -44,6 +44,7 @@
 #include "test-simpleshell.h"
 #include "test-essos.h"
 #include "test-clientapp.h"
+#include "test-repeaterapp.h"
 
 static bool invokeTestCase( TESTCASE testCase, std::string &detail );
 static bool testCaseAPIDisplayName( EMCTX *ctx );
@@ -293,6 +294,10 @@ TESTCASE genericTests[]=
      "Test embedded compositor basic composition",
      testCaseRenderBasicCompositionEmbedded
    },
+   { "testRenderBasicCompositionEmbeddedFastRepeater",
+     "Test embedded compositor basic composition with repeater client",
+     testCaseRenderBasicCompositionEmbeddedRepeater
+   },
    { "testRenderBasicCompositionEmbeddedVirtual",
      "Test virtual embedded compositor basic composition",
      testCaseRenderBasicCompositionEmbeddedVirtual
@@ -460,6 +465,10 @@ void executeCommand( const char *cmd, int argc, const char **argv )
    if ( strcmp( cmd, "clientApp" ) == 0 )
    {
       runClientApp( argc, argv );
+   }
+   else if ( strcmp( cmd, "repeaterApp" ) == 0 )
+   {
+      runRepeaterApp( argc, argv );
    }
 }
 
@@ -1256,7 +1265,7 @@ static bool testCaseAPIVpcBridge( EMCTX *emctx )
    bool result;
    const char *value;
    WstCompositor *wctx= 0;
-   const char *bridgeToDisplayName= "outer0";
+   char *bridgeToDisplayName= (char*)"outer0";
 
    result= WstCompositorSetVpcBridge( (WstCompositor*)0, bridgeToDisplayName );
    if ( result )
@@ -3136,6 +3145,12 @@ static bool testCaseAPILaunchClient( EMCTX *emctx )
          goto exit;
       }
 
+      if ( clientLaunchThreadId )
+      {
+         pthread_join( clientLaunchThreadId, NULL );
+      }
+      clientLaunchThreadId= 0;
+
       WstCompositorDestroy( wctx );
       wctx= 0;
    }
@@ -3548,7 +3563,7 @@ static bool testCaseAPICreateVirtualEmbedded( EMCTX *emctx )
       goto exit;
    }
 
-   result= WstCompositorSetVpcBridge( virt1, "name" );
+   result= WstCompositorSetVpcBridge( virt1, (char*)"name" );
    if ( result )
    {
       EMERROR( "WstCompositorSetVpcBridge did not fail with virtual" );
