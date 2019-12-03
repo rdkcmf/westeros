@@ -36,6 +36,7 @@ westeros_unittest_SOURCES = ../test-main.cpp \
                             ../test-simpleshell.cpp \
                             ../test-essos.cpp \
                             ../test-clientapp.cpp \
+                            ../test-repeaterapp.cpp \
                             soc-video-src.cpp \
                             soc-tests.cpp
 
