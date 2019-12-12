@@ -4502,7 +4502,7 @@ static int wstCompositorDisplayTimeOut( void *data )
 {
    WstContext *ctx= (WstContext*)data;
    long long frameTime, now;
-   int nextFrameDelay;
+   long long nextFrameDelay;
    
    frameTime= wstGetCurrentTimeMillis();   
    
@@ -4526,6 +4526,7 @@ static int wstCompositorDisplayTimeOut( void *data )
    now= wstGetCurrentTimeMillis();
    nextFrameDelay= (ctx->framePeriodMillis-(now-frameTime));
    if ( nextFrameDelay < 1 ) nextFrameDelay= 1;
+   if ( nextFrameDelay > ctx->framePeriodMillis ) nextFrameDelay= ctx->framePeriodMillis;
 
    pthread_mutex_lock( &ctx->mutex );
    wl_event_source_timer_update( ctx->displayTimer, nextFrameDelay );
