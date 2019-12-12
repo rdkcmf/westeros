@@ -34,7 +34,6 @@
 
 #define FRAME_POLL_TIME (8000)
 #define EOS_DETECT_DELAY (500000)
-#define EOS_DETECT_DELAY_AT_START (10000000)
 #define DEFAULT_CAPTURE_WIDTH (1280)
 #define DEFAULT_CAPTURE_HEIGHT (720)
 #define MAX_PIP_WIDTH (640)
@@ -974,7 +973,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    {
       if ( !gst_westeros_sink_soc_start_video( sink ) )
       {
-         GST_ERROR("gst_westeros_sink_soc_paused_to_playing: gst_westeros_sink_soc_start_video failed");
+         GST_ERROR("gst_westeros_sink_soc_ready_to_paused: gst_westeros_sink_soc_start_video failed");
       }
    }
 
@@ -2104,12 +2103,13 @@ static void updateVideoStatus( GstWesterosSink *sink )
       }
    }
 
-   if ( videoPlaying && !eosDetected && checkForEOS )
+   if ( videoPlaying && !eosDetected )
    {
-      int limit= EOS_DETECT_DELAY;
+      int limit= checkForEOS ? EOS_DETECT_DELAY : 4*EOS_DETECT_DELAY;
       if ( sink->soc.noFrameCount*FRAME_POLL_TIME > limit )
       {
          GST_INFO_OBJECT(sink, "updateVideoStatus: eos detected: firstPTS %lld currentPTS %lld\n", sink->firstPTS, sink->currentPTS);
+         sink->eosEventSeen= TRUE;
          gst_westeros_sink_eos_detected( sink );
          sink->soc.noFrameCount= 0;
       }

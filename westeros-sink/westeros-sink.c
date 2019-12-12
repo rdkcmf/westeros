@@ -825,6 +825,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          captureInit(sink);
 
+         sink->eosEventSeen= FALSE;
          if ( gst_westeros_sink_soc_ready_to_paused(sink, &passToDefault) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
@@ -1079,6 +1080,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          break;
       case GST_EVENT_FLUSH_START:
          LOCK( sink );
+         sink->eosEventSeen= FALSE;
          sink->flushStarted= TRUE;
          UNLOCK( sink );
          gst_westeros_sink_soc_flush( sink );
