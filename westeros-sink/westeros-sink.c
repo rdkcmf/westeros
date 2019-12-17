@@ -656,39 +656,51 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
          }
          else
          {
-            LOCK( sink );
-            sink->windowChange= true;
-            sink->windowX= atoi( parts[0] );
-            sink->windowY= atoi( parts[1] );
-            sink->windowWidth= atoi( parts[2] );
-            sink->windowHeight= atoi( parts[3] );
-            if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) ||
-                 (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
-            {
-               sink->windowSizeOverride= true;
-            }    
-            UNLOCK( sink );
+            int nx, ny, nw, nh;
+            nx= atoi( parts[0] );
+            ny= atoi( parts[1] );
+            nw= atoi( parts[2] );
+            nh= atoi( parts[3] );
 
-            printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n",
-                    sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
-
-            if ( sink->vpcSurface )
+            if ( (nx != sink->windowX) ||
+                 (ny != sink->windowY) ||
+                 (nw != sink->windowWidth) ||
+                 (nh != sink->windowHeight) )
             {
+               LOCK( sink );
+               sink->windowChange= true;
+               sink->windowX= nx;
+               sink->windowY= ny;
+               sink->windowWidth= nw;
+               sink->windowHeight= nh;
+               if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) ||
+                    (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
+               {
+                  sink->windowSizeOverride= true;
+               }
+               UNLOCK( sink );
+
+               printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n",
+                       sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+
                if ( sink->vpcSurface )
                {
-                  wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+                  if ( sink->vpcSurface )
+                  {
+                     wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+                  }
                }
-            }
-            if ( sink->shell && sink->surfaceId )
-            {
-               wl_simple_shell_set_geometry( sink->shell, sink->surfaceId,sink->windowX, sink->windowY,sink->windowWidth, sink->windowHeight );
-               if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
+               if ( sink->shell && sink->surfaceId )
                {
-                  wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
-                  
-                  wl_simple_shell_get_status( sink->shell, sink->surfaceId);
-                  
-                  wl_display_flush( sink->display );
+                  wl_simple_shell_set_geometry( sink->shell, sink->surfaceId,sink->windowX, sink->windowY,sink->windowWidth, sink->windowHeight );
+                  if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
+                  {
+                     wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
+
+                     wl_simple_shell_get_status( sink->shell, sink->surfaceId);
+
+                     wl_display_flush( sink->display );
+                  }
                }
             }
          }
