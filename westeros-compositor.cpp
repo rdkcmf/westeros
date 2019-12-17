@@ -5300,7 +5300,10 @@ static WstSurface* wstSurfaceCreate( WstCompositor *wctx)
             surface= 0;
          }
 
-         WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, &surface->zorder );
+         if ( surface )
+         {
+            WstRendererSurfaceGetZOrder( ctx->renderer, surface->surface, &surface->zorder );
+         }
       }
 
       if ( surface )
