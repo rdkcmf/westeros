@@ -177,6 +177,21 @@ bool EssContextSetEGLContextAttributes( EssCtx *ctx, EGLint *attrs, EGLint size 
 bool EssContextGetEGLContextAttributes( EssCtx *ctx, EGLint **attrs, EGLint *size );
 
 /**
+ * EssContextSetDisplayMode
+ *
+ * Available only on devices where westeros-gl supports mode setting.
+ *
+ * Set the active display mode. The mode is specified by a string
+ * with the format "[wx]h[p|i][[x]r]".  For example:
+ * 1920x1080i60
+ * 720p
+ * 1080i
+ * 3840x2160
+ * 1920x1080x24
+ */
+bool EssContextSetDisplayMode( EssCtx *ctx, const char *mode );
+
+/**
  * EssContextSetInitialWindowSize
  *
  * Specifies the window size to use when the application starts

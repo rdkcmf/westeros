@@ -634,9 +634,9 @@ bool testCaseEssosInitialWindowSize( EMCTX *emctx )
    usleep( 17000 );
 
    result= EssContextSetInitialWindowSize( ctx, 1920, 1080 );
-   if ( result  )
+   if ( !result  )
    {
-      EMERROR("EssContextSetInitialWindowSize did not fail on running context");
+      EMERROR("EssContextSetInitialWindowSize failed on running context");
       goto exit;
    }
 

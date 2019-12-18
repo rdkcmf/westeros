@@ -76,6 +76,7 @@ typedef struct _AppCtx
    float alpha;
    int x, y, width, height;
    int outputWidth, outputHeight;
+   int windowWidth, windowHeight;
    std::vector<WstRect> rects;
    int hints;
    int tickCount;
@@ -150,6 +151,7 @@ static void showUsage()
    printf("  --nestedInput : register nested input listeners\n" ); 
    printf("  --width <width> : width of nested composition surface\n" );
    printf("  --height <width> : height of nested composition surface\n" );
+   printf("  --window-size <w>x<h> : size of app window (eg. 1920x1080)\n");
    #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
    printf("  --animate : enable animation (scale, rotate, translate) (use with --embedded)\n" );
    printf("  --animate2 : enable animation (size, translate) (use with --embedded)\n");
@@ -1319,6 +1321,9 @@ AppCtx* initApp()
    appCtx= (AppCtx*)calloc( 1, sizeof(AppCtx) );
    if ( appCtx )
    {
+      appCtx->width= appCtx->windowWidth;
+      appCtx->height= appCtx->windowHeight;
+
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       appCtx->inputCtx= (InputCtx*)calloc( 1, sizeof(InputCtx) );
       if ( !appCtx->inputCtx )
@@ -1412,8 +1417,8 @@ bool startApp( AppCtx *appCtx, WstCompositor *wctx )
          appCtx->matrix[15]= 1.0f;
          appCtx->x= 0;
          appCtx->y= 0;
-         appCtx->width= 1280;
-         appCtx->height= 720;
+         appCtx->width= appCtx->windowWidth;
+         appCtx->height= appCtx->windowHeight;
          appCtx->outputWidth= appCtx->width;
          appCtx->outputHeight= appCtx->height;
          
@@ -2057,6 +2062,7 @@ int main( int argc, char** argv)
    const char *displayName= 0;
    const char *nestedDisplayName= 0;
    bool repeater= false;
+   bool windowSize= false;
    bool error= false;
    int len, value, width=-1, height=-1;
    AppCtx *appCtx= 0;
@@ -2231,6 +2237,23 @@ int main( int argc, char** argv)
             }
          }
       }
+      else if ( (len == 13) && !strncmp( argv[i], "--window-size", len) )
+      {
+         if ( i+1 < argc )
+         {
+            int w, h;
+            ++i;
+            if ( sscanf( argv[i], "%dx%d", &w, &h ) == 2 )
+            {
+               if ( (w > 0) && (h > 0) )
+               {
+                  windowSize= true;
+                  appCtx->windowWidth= w;
+                  appCtx->windowHeight= h;
+               }
+            }
+         }
+      }
       #if defined (WESTEROS_PLATFORM_EMBEDDED) || defined (WESTEROS_HAVE_WAYLAND_EGL)
       else
       if ( (len == 9) && !strncmp( argv[i], "--animate", len) )
@@ -2329,6 +2352,15 @@ int main( int argc, char** argv)
             sigemptyset(&sigint.sa_mask);
             sigint.sa_flags = SA_RESETHAND;
             sigaction(SIGINT, &sigint, NULL);
+
+            if ( windowSize )
+            {
+               // On systems using KMS these calls can lead to a mode change
+               // whereas on other systems something else needs to set the mode
+               // and these calls just inform the compositor.
+               WstCompositorResolutionChangeBegin( wctx );
+               WstCompositorResolutionChangeEnd( wctx, appCtx->windowWidth, appCtx->windowHeight );
+            }
 
             while( g_running )
             {
