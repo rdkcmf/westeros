@@ -216,6 +216,7 @@ static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx );
 #ifdef HAVE_WESTEROS
 static bool essPlatformInitDirect( EssCtx *ctx );
 static void essPlatformTermDirect( EssCtx *ctx );
+static bool essPlatformSetDisplayModeDirect( EssCtx *ctx, const char *mode );
 static int essOpenInputDevice( EssCtx *ctx, const char *devPathName );
 static char *essGetInputDevice( EssCtx *ctx, const char *path, char *devName );
 static void essGetInputDevices( EssCtx *ctx );
@@ -540,6 +541,40 @@ bool EssContextGetEGLContextAttributes( EssCtx *ctx, EGLint **attrs, EGLint *siz
    return result;
 }
 
+bool EssContextSetDisplayMode( EssCtx *ctx, const char *mode )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( !mode )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Invalid parameter: mode is null" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+
+      if ( ctx->isWayland )
+      {
+         WARNING("EssContextSetDisplayMode ignored for Wayland");
+         result= true;
+      }
+      else
+      {
+         result= essPlatformSetDisplayModeDirect( ctx, mode );
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+exit:
+
+   return result;
+}
+
 bool EssContextSetInitialWindowSize( EssCtx *ctx, int width, int height )
 {
    bool result= false;
@@ -550,9 +585,9 @@ bool EssContextSetInitialWindowSize( EssCtx *ctx, int width, int height )
       
       if ( ctx->isRunning )
       {
-         sprintf( ctx->lastErrorDetail,
-                  "Bad state.  Context is already running" );
          pthread_mutex_unlock( &ctx->mutex );
+         WARNING("EssContextSetInitialWindowSize: already running: calling resize (%d,%d)", width, height);
+         result= EssContextResizeWindow( ctx, width, height );
          goto exit;
       }
 
@@ -2437,9 +2472,14 @@ extern "C"
    typedef void (*DisplaySizeCallback)( void *userData, int width, int height );
    typedef bool (*AddDisplaySizeListener)( WstGLCtx *ctx, void *userData, DisplaySizeCallback listener );
    typedef bool (*GetDisplaySafeArea)( WstGLCtx *ctx, int *x, int *y, int *w, int *h );
+   typedef bool (*GetDisplayCaps)( WstGLCtx *ctx, unsigned int *caps );
+   typedef bool (*SetDisplayMode)( WstGLCtx *ctx, const char *mode );
+
 }
 
 static GetDisplaySafeArea gGetDisplaySafeArea= 0;
+static GetDisplayCaps gGetDisplayCaps= 0;
+static SetDisplayMode gSetDisplayMode= 0;
 
 void displaySizeCallback( void *userData, int width, int height )
 {
@@ -2487,6 +2527,8 @@ static bool essPlatformInitDirect( EssCtx *ctx )
             AddDisplaySizeListener addDisplaySizeListener= 0;
             addDisplaySizeListener= (AddDisplaySizeListener)dlsym( module, "_WstGLAddDisplaySizeListener" );
             gGetDisplaySafeArea= (GetDisplaySafeArea)dlsym( module, "_WstGLGetDisplaySafeArea" );
+            gGetDisplayCaps= (GetDisplayCaps)dlsym( module, "_WstGLGetDisplayCaps" );
+            gSetDisplayMode= (SetDisplayMode)dlsym( module, "_WstGLSetDisplayMode" );
             if ( addDisplaySizeListener )
             {
                addDisplaySizeListener( ctx->glCtx, ctx, displaySizeCallback );
@@ -2519,6 +2561,45 @@ static void essPlatformTermDirect( EssCtx *ctx )
          ctx->glCtx= 0;
       }
    }
+}
+
+static bool essPlatformSetDisplayModeDirect( EssCtx *ctx, const char *mode )
+{
+   bool result= false;
+   bool canSetMode= false;
+
+   #ifdef WESTEROS_GL_DISPLAY_CAPS
+   if ( gGetDisplayCaps && gSetDisplayMode )
+   {
+      unsigned int displayCaps= 0;
+      if ( gGetDisplayCaps( ctx->glCtx, &displayCaps ) )
+      {
+         if ( displayCaps & WstGLDisplayCap_modeset )
+         {
+            canSetMode= true;
+         }
+      }
+   }
+   #endif
+
+   if ( !canSetMode )
+   {
+      sprintf( ctx->lastErrorDetail,
+               "Error.  Mode setting not supported" );
+      goto exit;
+   }
+
+   result= gSetDisplayMode( ctx->glCtx, mode );
+   if ( !result )
+   {
+      sprintf( ctx->lastErrorDetail,
+               "Error.  Mode setting for (%s) failed", mode );
+      goto exit;
+   }
+
+exit:
+
+   return result;
 }
 
 static const char *inputPath= "/dev/input/";
