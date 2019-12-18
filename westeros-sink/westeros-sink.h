@@ -129,6 +129,7 @@ struct _GstWesterosSink
    uint32_t surfaceId;
    struct wl_vpc *vpc;
    struct wl_vpc_surface *vpcSurface;
+   struct wl_output *output;
 
    ProcessPadEvent processPadEvent;
 

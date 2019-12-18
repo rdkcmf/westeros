@@ -231,6 +231,72 @@ static const struct wl_vpc_surface_listener vpcListener= {
    vpcVideoXformChange
 };
 
+static void outputHandleGeometry( void *data,
+                                  struct wl_output *output,
+                                  int x,
+                                  int y,
+                                  int mmWidth,
+                                  int mmHeight,
+                                  int subPixel,
+                                  const char *make,
+                                  const char *model,
+                                  int transform )
+{
+   WESTEROS_UNUSED(data);
+   WESTEROS_UNUSED(output);
+   WESTEROS_UNUSED(x);
+   WESTEROS_UNUSED(y);
+   WESTEROS_UNUSED(mmWidth);
+   WESTEROS_UNUSED(mmHeight);
+   WESTEROS_UNUSED(subPixel);
+   WESTEROS_UNUSED(make);
+   WESTEROS_UNUSED(model);
+   WESTEROS_UNUSED(transform);
+}
+
+static void outputHandleMode( void *data,
+                              struct wl_output *output,
+                              uint32_t flags,
+                              int width,
+                              int height,
+                              int refreshRate )
+{
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+
+   if ( flags & WL_OUTPUT_MODE_CURRENT )
+   {
+      if ( !sink->windowSizeOverride )
+      {
+         printf("westeros-sink: compositor sets window to (%dx%d)\n", width, height);
+         sink->windowWidth= width;
+         sink->windowHeight= height;
+      }
+   }
+}
+
+static void outputHandleDone( void *data,
+                              struct wl_output *output )
+{
+   WESTEROS_UNUSED(data);
+   WESTEROS_UNUSED(output);
+}
+
+static void outputHandleScale( void *data,
+                               struct wl_output *output,
+                               int32_t scale )
+{
+   WESTEROS_UNUSED(data);
+   WESTEROS_UNUSED(output);
+   WESTEROS_UNUSED(scale);
+}
+
+static const struct wl_output_listener outputListener = {
+   outputHandleGeometry,
+   outputHandleMode,
+   outputHandleDone,
+   outputHandleScale
+};
+
 static void registryHandleGlobal(void *data, 
                                  struct wl_registry *registry, uint32_t id,
 		                           const char *interface, uint32_t version);
@@ -272,6 +338,11 @@ static void registryHandleGlobal(void *data,
       sink->vpc= (struct wl_vpc*)wl_registry_bind(registry, id, &wl_vpc_interface, 1);
       printf("westeros-sink: registry: vpc %p\n", (void*)sink->vpc);
       wl_proxy_set_queue((struct wl_proxy*)sink->vpc, sink->queue);
+   }
+   else if ((len==9) && !strncmp(interface, "wl_output", len) )
+   {
+      sink->output= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
+		wl_output_add_listener(sink->output, &outputListener, sink);
    }
    gst_westeros_sink_soc_registryHandleGlobal( sink, registry, id, interface, version );
 
@@ -524,6 +595,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
       sink->surfaceId= 0;
       sink->vpc= 0;
       sink->vpcSurface= 0;
+      sink->output= 0;
 
       if ( !sink->display ) 
       {
@@ -571,6 +643,11 @@ static void gst_westeros_sink_term(GstWesterosSink *sink)
 {
    sink->initialized= FALSE;
 
+   if ( sink->output )
+   {
+      wl_output_destroy( sink->output );
+      sink->output= 0;
+   }
    if ( sink->vpc )
    {
       wl_vpc_destroy( sink->vpc );
