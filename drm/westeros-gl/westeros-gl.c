@@ -190,9 +190,14 @@ typedef struct _WstGLCtx
    drmModeEncoder *enc;
    drmModeCrtc *crtc;
    drmModeModeInfo *modeInfo;
+   drmModeModeInfo modeCurrent;
+   drmModeModeInfo modeNext;
    WstOverlayPlanes overlayPlanes;
    struct gbm_device* gbm;
+   bool usingSetDisplayMode;
    bool modeSet;
+   bool modeSetPending;
+   bool notifySizeChange;
    bool usePlanes;
    bool haveAtomic;
    bool haveNativeFence;
@@ -239,8 +244,14 @@ static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
 static WstGLCtx *gCtx= 0;
 static WstGLSizeCBInfo *gSizeListeners= 0;
 static VideoServerCtx *gServer= 0;
+static int gGraphicsMaxWidth= 0;
+static int gGraphicsMaxHeight= 0;
 static bool emitFPS= false;
 static int g_activeLevel= 2;
+
+#define WSTGL_CHECK_GRAPHICS_SIZE(w, h) \
+   if ( gGraphicsMaxWidth && ((w) > gGraphicsMaxWidth) ) (w)= gGraphicsMaxWidth; \
+   if ( gGraphicsMaxHeight && ((h) > gGraphicsMaxHeight) ) (h)= gGraphicsMaxHeight
 
 #define WSTRES_FD_VIDEO 0
 #define WSTRES_FB_VIDEO 1
@@ -1095,14 +1106,18 @@ static void wstGLNotifySizeListeners( void )
    WstGLSizeCBInfo *listeners= 0;
    WstGLSizeCBInfo *iter, *cb;
 
+   DEBUG("wstGLNotifySizeListeners: enter");
    pthread_mutex_lock( &gMutex );
 
-   width= gCtx->crtc->mode.hdisplay;
-   height= gCtx->crtc->mode.vdisplay;
+   width= gCtx->modeCurrent.hdisplay;
+   height= gCtx->modeCurrent.vdisplay;
+
+   WSTGL_CHECK_GRAPHICS_SIZE(width, height);
 
    iter= gSizeListeners;
    while( iter )
    {
+      DEBUG("wstGLNotifySizeListeners: check %p : has %dx%d vs %dx%d", iter, iter->width, iter->height, width, height);
       if ( (width != iter->width) || (height != iter->height) )
       {
          iter->width= width;
@@ -1110,6 +1125,7 @@ static void wstGLNotifySizeListeners( void )
          cb= (WstGLSizeCBInfo*)malloc( sizeof(WstGLSizeCBInfo) );
          if ( cb )
          {
+            DEBUG("wstGLNotifySizeListeners: add %p to list (from %p)", cb, iter);
             *cb= *iter;
             cb->next= listeners;
             listeners= cb;
@@ -1125,9 +1141,11 @@ static void wstGLNotifySizeListeners( void )
    {
       cb= iter;
       iter= iter->next;
+      DEBUG("wstGLNotifySizeListeners: invoke %p", cb);
       cb->listener( cb->userData, width, height);
       free( cb );
    }
+   DEBUG("wstGLNotifySizeListeners: exit");
 }
 
 static void wstReleaseConnectorProperties( WstGLCtx *ctx )
@@ -1354,6 +1372,21 @@ static WstGLCtx *wstInitCtx( void )
    struct drm_set_client_cap clientCap;
    struct drm_mode_atomic atom;
 
+   const char *env= getenv("WESTEROS_GL_GRAPHICS_MAX_SIZE");
+   if ( env )
+   {
+      int w= 0, h= 0;
+      if ( sscanf( env, "%dx%d", &w, &h ) == 2 )
+      {
+         if ( (w > 0) && (h > 0) )
+         {
+            gGraphicsMaxWidth= w;
+            gGraphicsMaxHeight= h;
+            INFO("Max graphics size: %dx%d", gGraphicsMaxWidth, gGraphicsMaxHeight );
+         }
+      }
+   }
+
    if ( getenv("WESTEROS_GL_FPS" ) )
    {
       emitFPS= true;
@@ -1489,6 +1522,7 @@ static WstGLCtx *wstInitCtx( void )
          ctx->crtc= drmModeGetCrtc(ctx->drmFd, ctx->enc->crtc_id);
          if ( ctx->crtc && ctx->crtc->mode_valid )
          {
+            ctx->modeCurrent= ctx->crtc->mode;
             INFO("wstInitCtx: current mode %dx%d@%d", ctx->crtc->mode.hdisplay, ctx->crtc->mode.vdisplay, ctx->crtc->mode.vrefresh );
 
             for( j= 0; j < res->count_crtcs; ++j )
@@ -1597,6 +1631,12 @@ static WstGLCtx *wstInitCtx( void )
                      if ( newPlane )
                      {
                         int rc;
+                        int pfi;
+                        DEBUG("plane %d count_formats %d", plane->plane_id, plane->count_formats);
+                        for( pfi= 0; pfi < plane->count_formats; ++pfi )
+                        {
+                           DEBUG("plane %d format %d: %x", plane->plane_id, pfi, plane->formats[pfi]);
+                        }
                         if ( isOverlay )
                         {
                            ++ctx->overlayPlanes.totalCount;
@@ -1605,6 +1645,7 @@ static WstGLCtx *wstInitCtx( void )
                         newPlane->zOrder= ctx->overlayPlanes.totalCount;
                         newPlane->inUse= false;
                         newPlane->crtc_id= ctx->enc->crtc_id;
+                        TRACE3("plane zorder %d primary %d overlay %d crtc_id %d", newPlane->zOrder, isPrimary, isOverlay, newPlane->crtc_id);
                         if ( ctx->haveAtomic )
                         {
                            if ( wstAcquirePlaneProperties( ctx, newPlane ) )
@@ -1778,11 +1819,16 @@ static void wstAtomicAddProperty( WstGLCtx *ctx, drmModeAtomicReq *req, uint32_t
 
    if ( propId > 0 )
    {
+      TRACE3("wstAtomicAddProperty: objectId %d: %s, %lld", objectId, name, value);
       rc= drmModeAtomicAddProperty( req, objectId, propId, value );
       if ( rc < 0 )
       {
          ERROR("wstAtomicAddProperty: drmModeAtomicAddProperty fail: obj %d prop %d (%s) value %lld: rc %d errno %d", objectId, propId, name, value, rc, errno );
       }
+   }
+   else
+   {
+      WARNING("wstAtomicAddProperty: skip prop %s", name);
    }
 }
 
@@ -1806,6 +1852,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
    struct gbm_bo *bo;
    uint32_t handle, stride;
 
+   TRACE3("wstSwapDRMBuffersAtomic: atomic start");
    req= drmModeAtomicAlloc();
    if ( !req )
    {
@@ -1860,7 +1907,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       if ( gs )
       {
          bo= gbm_surface_lock_front_buffer(gs);
-         wstUpdateResources( WSTRES_BO_GRAPHICS, true, bo, __LINE__);
+         wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
 
          handle= gbm_bo_get_handle(bo).u32;
          stride= gbm_bo_get_stride(bo);
@@ -1977,11 +2024,13 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
             int rectH= iter->videoFrameNext.rectH;
             uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
 
+            /* TODO: adjust video target rect based on output resolution.  sink will be working
+               with graphics resolution coordinates which may differ from output resolution */
             iter->fbIdPrev= iter->fbId;
             iter->handlePrev= iter->handle;
             iter->fbId= fbId;
             iter->handle= handle;
-            iter->plane->crtc_id= ctx->overlayPlanes.primary->plane->crtc_id;
+            iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
 
             iter->videoFrameNext.fbId= 0;
             iter->videoFrameNext.hide= false;
@@ -2079,6 +2128,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
 
 exit:
 
+   TRACE3("wstSwapDRMBuffersAtomic: atomic stop");
    if ( req )
    {
       drmModeAtomicFree( req );
@@ -2098,6 +2148,14 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
    int rc;
    bool eventPending= false;
 
+   if ( ctx->modeSetPending )
+   {
+      ctx->notifySizeChange= true;
+      ctx->modeCurrent= ctx->modeNext;
+      ctx->modeSetPending= false;
+      ctx->modeSet= false;
+   }
+
    if ( ctx->haveAtomic )
    {
       wstSwapDRMBuffersAtomic( ctx, nw );
@@ -2110,7 +2168,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
       if ( gs )
       {
          bo= gbm_surface_lock_front_buffer(gs);
-         wstUpdateResources( WSTRES_BO_GRAPHICS, true, bo, __LINE__);
+         wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
 
          handle= gbm_bo_get_handle(bo).u32;
          stride= gbm_bo_get_stride(bo);
@@ -2356,7 +2414,7 @@ done:
          gs= (struct gbm_surface*)nw->nativeWindow;
          wstUpdateResources( WSTRES_FB_GRAPHICS, false, nw->prevFbId, __LINE__);
          drmModeRmFB( ctx->drmFd, nw->prevFbId );
-         wstUpdateResources( WSTRES_BO_GRAPHICS, false, nw->prevBo, __LINE__);
+         wstUpdateResources( WSTRES_BO_GRAPHICS, false, (long long)nw->prevBo, __LINE__);
          gbm_surface_release_buffer(gs, nw->prevBo);
       }
       nw->prevBo= nw->bo;
@@ -2555,6 +2613,11 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          }
          pthread_mutex_unlock( &gMutex );
       }
+      if ( gCtx->notifySizeChange )
+      {
+         gCtx->notifySizeChange= false;
+         wstGLNotifySizeListeners();
+      }
    }
 
 exit:
@@ -2676,6 +2739,16 @@ void WstGLTerm( WstGLCtx *ctx )
    }
 }
 
+bool _WstGLGetDisplayCaps( WstGLCtx *ctx, unsigned int *caps )
+{
+   return WstGLGetDisplayCaps( ctx, caps );
+}
+
+bool _WstGLSetDisplayMode( WstGLCtx *ctx, const char *mode )
+{
+   return WstGLSetDisplayMode( ctx, mode );
+}
+
 bool _WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
 {
    return WstGLGetDisplayInfo( ctx, displayInfo );
@@ -2696,6 +2769,202 @@ bool _WstGLRemoveDisplaySizeListener( WstGLCtx *ctx, WstGLDisplaySizeCallback li
    return WstGLRemoveDisplaySizeListener( ctx, listener );
 }
 
+bool WstGLGetDisplayCaps( WstGLCtx *ctx, unsigned int *caps )
+{
+   bool result= false;
+
+   if ( ctx && caps )
+   {
+      unsigned int displayCaps= WstGLDisplayCap_modeset;
+
+      *caps= displayCaps;
+
+      result= true;
+   }
+
+   return result;
+}
+
+bool WstGLSetDisplayMode( WstGLCtx *ctx, const char *mode )
+{
+   bool result= false;
+
+   if ( ctx && mode )
+   {
+      int width= -1, height= -1, rate= -1;
+      bool interlaced= false;
+      bool haveTarget= false;
+      bool useBestRate= true;
+
+      DEBUG("WstGLSetDisplayMode: mode (%s)", mode);
+
+      if ( sscanf( mode, "%dx%dx%d", &width, &height, &rate ) == 3 )
+      {
+         interlaced= false;
+      }
+      else if ( sscanf( mode, "%dx%dp%d", &width, &height, &rate ) == 3 )
+      {
+         interlaced= false;
+      }
+      else if ( sscanf( mode, "%dx%di%d", &width, &height, &rate ) == 3 )
+      {
+         interlaced= true;
+      }
+      else if ( sscanf( mode, "%dx%d", &width, &height ) == 2 )
+      {
+         int len= strlen(mode);
+         interlaced= (mode[len-1] == 'i');
+      }
+      else if ( sscanf( mode, "%dp", &height ) == 1 )
+      {
+         int len= strlen(mode);
+         interlaced= (mode[len-1] == 'i');
+         width= -1;
+      }
+      if ( height > 0 )
+      {
+         if ( width < 0 )
+         {
+            switch( height )
+            {
+               case 480:
+               case 576:
+                  width= 720;
+                  break;
+               case 720:
+                  width= 1280;
+                  break;
+               case 1080:
+                  width= 1920;
+                  break;
+               case 1440:
+                  width= 2560;
+                  break;
+               case 2160:
+                  width= 3840;
+                  break;
+               case 2880:
+                  width= 5120;
+                  break;
+               case 4320:
+                  width= 7680;
+                  break;
+               default:
+                  break;
+            }
+         }
+      }
+      if ( rate >= 0 )
+      {
+         useBestRate= false;
+      }
+      if ( (width > 0) && (height > 0) )
+      {
+         if ( ctx->drmFd >= 0  )
+         {
+            drmModeRes *res= 0;
+            drmModeConnector *conn= 0;
+
+            res= drmModeGetResources( ctx->drmFd );
+            if ( res )
+            {
+               int i;
+               for( i= 0; i < res->count_connectors; ++i )
+               {
+                  conn= drmModeGetConnector( ctx->drmFd, res->connectors[i] );
+                  if ( conn )
+                  {
+                     if ( conn->count_modes && (conn->connection == DRM_MODE_CONNECTED) )
+                     {
+                        break;
+                     }
+                     drmModeFreeConnector(conn);
+                     conn= 0;
+                  }
+               }
+               if ( conn )
+               {
+                  uint32_t rateBest= 0;
+                  int miBest= -1;
+
+                  DEBUG("wstGLSetDisplayMode: want %dx%dx%d interlaced %d use best rate %d", width, height, rate, interlaced, useBestRate);
+                  for( i= 0; i < conn->count_modes; ++i )
+                  {
+                     DEBUG("wstGLSetDisplayMode: consider mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x",
+                            i, conn->modes[i].hdisplay, conn->modes[i].vdisplay, conn->modes[i].vrefresh,
+                            conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
+
+                     if ( (conn->modes[i].hdisplay == width) &&
+                          (conn->modes[i].vdisplay == height) )
+                     {
+                        bool modeIsInterlaced= (conn->modes[i].flags & DRM_MODE_FLAG_INTERLACE);
+                        if ( modeIsInterlaced != interlaced )
+                        {
+                           continue;
+                        }
+                        if ( useBestRate )
+                        {
+                           if ( conn->modes[i].vrefresh > rateBest )
+                           {
+                              rateBest= conn->modes[i].vrefresh;
+                              miBest= i;
+                           }
+                        }
+                        else if ( conn->modes[i].vrefresh == rate )
+                        {
+                           miBest= i;
+                           break;
+                        }
+                     }
+                  }
+                  if ( miBest >= 0 )
+                  {
+                     pthread_mutex_lock( &ctx->mutex );
+                     ctx->modeNext= conn->modes[miBest];
+                     ctx->usingSetDisplayMode= true;
+                     ctx->modeSetPending= true;
+                     pthread_mutex_unlock( &ctx->mutex );
+
+                     INFO("WstGLSetDisplayMode: choosing output mode: %dx%dx%d (%s) flags 0x%x",
+                           ctx->modeNext.hdisplay,
+                           ctx->modeNext.vdisplay,
+                           ctx->modeNext.vrefresh,
+                           ctx->modeNext.name,
+                           ctx->modeNext.flags );
+
+                     result= true;
+                  }
+                  else
+                  {
+                     ERROR("WstGLSetDisplayMode: failed to find a mode matching (%s)", mode);
+                  }
+
+                  drmModeFreeConnector( conn );
+               }
+               else
+               {
+                  ERROR("wstGLSetDisplayMode: unable to get connector for card");
+               }
+            }
+            else
+            {
+               ERROR("WstGLSetDisplayMode: unable to get card resources");
+            }
+         }
+         else
+         {
+            ERROR("WstGLSetDisplayMode: no open device");
+         }
+      }
+      else
+      {
+         ERROR("WstGLSetDisplayMode: unable to parse mode (%s)", mode);
+      }
+   }
+
+   return result;
+}
+
 bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
 {
    bool result= false;
@@ -2704,8 +2973,10 @@ bool WstGLGetDisplayInfo( WstGLCtx *ctx, WstGLDisplayInfo *displayInfo )
    {
       pthread_mutex_lock( &gMutex );
 
-      displayInfo->width= ctx->crtc->mode.hdisplay;
-      displayInfo->height= ctx->crtc->mode.vdisplay;
+      displayInfo->width= ctx->modeCurrent.hdisplay;
+      displayInfo->height= ctx->modeCurrent.vdisplay;
+
+      WSTGL_CHECK_GRAPHICS_SIZE( displayInfo->width, displayInfo->height );
 
       /* Use the SMPTE ST 2046-1 5% safe area border */
       displayInfo->safeArea.x= displayInfo->width*DISPLAY_SAFE_BORDER_PERCENT/100;
@@ -2853,69 +3124,91 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
 
    if ( ctx )
    {
-      bool found= false;
-      int i, area, largestArea= 0;
-      int miPreferred= -1, miBest= -1;
-      int refresh;
-      const char *usePreferred= 0;
-      const char *useBest= 0;
-      if ( ctx->haveAtomic )
+      INFO("native window: wxh=%dx%d", width, height);
+
+      WSTGL_CHECK_GRAPHICS_SIZE( width, height );
+
+      if ( !ctx->modeSet && !ctx->modeSetPending )
       {
-         usePreferred= getenv("WESTEROS_GL_USE_PREFERRED_MODE");
-         useBest= getenv("WESTEROS_GL_USE_BEST_MODE");
-      }
-      for( i= 0; i < ctx->conn->count_modes; ++i )
-      {
-         if ( usePreferred )
+         bool found= false;
+         int i, area, largestArea= 0;
+         int miPreferred= -1, miBest= -1;
+         int refresh;
+         const char *usePreferred= 0;
+         const char *useBest= 0;
+         int maxArea= 0;
+         const char *env= getenv("WESTEROS_GL_MAX_MODE");
+         if ( env )
          {
-            if ( ctx->conn->modes[i].type & DRM_MODE_TYPE_PREFERRED )
+            int w= 0, h= 0;
+            if ( sscanf( env, "%dx%d", &w, &h ) == 2 )
             {
-               miPreferred= i;
+               DEBUG("max mode: %dx%d", w, h);
+               maxArea= w*h;
             }
          }
-         else if ( useBest )
+         if ( ctx->haveAtomic )
          {
-            area= ctx->conn->modes[i].hdisplay * ctx->conn->modes[i].vdisplay;
-            if ( area > largestArea )
+            usePreferred= getenv("WESTEROS_GL_USE_PREFERRED_MODE");
+            useBest= getenv("WESTEROS_GL_USE_BEST_MODE");
+         }
+         for( i= 0; i < ctx->conn->count_modes; ++i )
+         {
+            if ( usePreferred )
             {
-               largestArea= area;
-               miBest= i;
-               refresh= ctx->conn->modes[i].vrefresh;
-            }
-            else if ( area == largestArea )
-            {
-               if ( ctx->conn->modes[i].vrefresh > refresh )
+               if ( ctx->conn->modes[i].type & DRM_MODE_TYPE_PREFERRED )
                {
+                  miPreferred= i;
+               }
+            }
+            else if ( useBest )
+            {
+               area= ctx->conn->modes[i].hdisplay * ctx->conn->modes[i].vdisplay;
+               if ( (area > largestArea) && ((maxArea == 0) || (area <= maxArea)) )
+               {
+                  largestArea= area;
                   miBest= i;
                   refresh= ctx->conn->modes[i].vrefresh;
                }
+               else if ( area == largestArea )
+               {
+                  if ( ctx->conn->modes[i].vrefresh > refresh )
+                  {
+                     miBest= i;
+                     refresh= ctx->conn->modes[i].vrefresh;
+                  }
+               }
+            }
+            else if ( (ctx->conn->modes[i].hdisplay == width) &&
+                 (ctx->conn->modes[i].vdisplay == height) &&
+                 (ctx->conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
+            {
+               found= true;
+               ctx->modeCurrent= ctx->conn->modes[i];
+               ctx->modeInfo= &ctx->modeCurrent;
+               break;
             }
          }
-         else if ( (ctx->conn->modes[i].hdisplay == width) &&
-              (ctx->conn->modes[i].vdisplay == height) &&
-              (ctx->conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
+         if ( !found )
          {
-            found= true;
-            ctx->modeInfo= &ctx->conn->modes[i];
-            break;
+            if ( usePreferred && (miPreferred >= 0) )
+            {
+               ctx->modeCurrent= ctx->conn->modes[miPreferred];
+               ctx->modeInfo= &ctx->modeCurrent;
+            }
+            else if ( useBest && (miBest >= 0) )
+            {
+               ctx->modeCurrent= ctx->conn->modes[miBest];
+               ctx->modeInfo= &ctx->modeCurrent;
+            }
+            else
+            {
+               ctx->modeCurrent= ctx->conn->modes[0];
+               ctx->modeInfo= &ctx->modeCurrent;
+            }
          }
+         INFO("choosing output mode: %dx%dx%d", ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh);
       }
-      if ( !found )
-      {
-         if ( usePreferred && (miPreferred >= 0) )
-         {
-            ctx->modeInfo= &ctx->conn->modes[miPreferred];
-         }
-         else if ( useBest && (miBest >= 0) )
-         {
-            ctx->modeInfo= &ctx->conn->modes[miBest];
-         }
-         else
-         {
-            ctx->modeInfo= &ctx->conn->modes[0];
-         }
-      }
-      INFO("choosing output mode: %dx%dx%d", ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh);
 
       nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
       if ( nwItem )
@@ -3017,7 +3310,7 @@ void WstGLDestroyNativeWindow( WstGLCtx *ctx, void *nativeWindow )
                   ctx->nwLast= nwPrev;
                }
                free( nwIter );
-               if ( !ctx->nwFirst )
+               if ( !ctx->nwFirst && !ctx->usingSetDisplayMode )
                {
                   ctx->modeSet= false;
                }
