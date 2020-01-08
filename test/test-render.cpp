@@ -23,6 +23,10 @@
 #include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 #include "test-render.h"
 #include "test-egl.h"
@@ -41,6 +45,7 @@ typedef struct _TestCtx
    TestEGLCtx eglCtxS; // server / compositor
    struct wl_display *display;
    struct wl_compositor *compositor;
+   struct wl_shm *shm;
    struct wl_surface *surface;
    WstGLCtx *glCtx;
    struct wl_egl_window *wlEglWindow;
@@ -62,6 +67,9 @@ static void registryHandleGlobal(void *data,
    if ( (len==13) && !strncmp(interface, "wl_compositor", len) ) {
       ctx->compositor= (struct wl_compositor*)wl_registry_bind(registry, id, &wl_compositor_interface, 1);
       printf("compositor %p\n", ctx->compositor);
+   }
+   else if ( (len==6) && !strncmp(interface, "wl_shm", len)) {
+      ctx->shm= (struct wl_shm*)wl_registry_bind(registry, id, &wl_shm_interface, 1);
    }
 }
 
@@ -1287,6 +1295,339 @@ exit:
    WstCompositorDestroy( wctxRepeater );
 
    WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
+static void terminatedCallback( WstCompositor *ctx, void *userData )
+{
+   bool *terminated= (bool*)userData;
+
+   *terminated= true;
+}
+
+bool testCaseRenderShmRepeater( EMCTX *emctx )
+{
+   using namespace RenderTests;
+
+   bool testResult= false;
+   bool result;
+   const char *displayName= "display0";
+   const char *displayName2= "display1";
+   WstCompositor *wctx= 0;
+   struct wl_display *display= 0;
+   struct wl_registry *registry= 0;
+   TestCtx testCtx;
+   TestCtx *ctx= &testCtx;
+   unsigned char *imgData= 0;
+   int imgWidth, imgHeight;
+   int imgDataSize;
+   char filename[32];
+   int fd= -1;
+   int lenDidWrite;
+   void *data= 0;
+   struct wl_shm_pool *shmPool= 0;
+   struct wl_buffer *buffer= 0;
+   int expectedBufferId;
+   int pid;
+
+   memset( &testCtx, 0, sizeof(TestCtx) );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsNested failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   pid= fork();
+   if ( pid == 0 )
+   {
+      EMCTX *emctx2= 0;
+      WstCompositor *wctx2= 0;
+      bool terminated= false;
+
+      emctx2= EMCreateContext();
+      if ( !emctx2 )
+      {
+         goto repeater_exit;
+      }
+
+      wctx2= WstCompositorCreate();
+      if ( !wctx2 )
+      {
+         EMERROR( "WstCompositorCreate failed" );
+         goto repeater_exit;
+      }
+
+      result= WstCompositorSetDisplayName( wctx2, displayName2 );
+      if ( !result )
+      {
+         EMERROR( "WstCompositorSetDisplayName failed" );
+         goto repeater_exit;
+      }
+
+      result= WstCompositorSetIsRepeater( wctx2, true );
+      if ( !result )
+      {
+         EMERROR( "WstCompositorSetIsRepeater failed" );
+         goto repeater_exit;
+      }
+
+      result= WstCompositorSetNestedDisplayName( wctx2, displayName );
+      if ( !result )
+      {
+         EMERROR( "WstCompositorSetNestedDisplayName failed" );
+         goto repeater_exit;
+      }
+
+      result= WstCompositorSetTerminatedCallback( wctx2, terminatedCallback, &terminated );
+      if ( result == false )
+      {
+         EMERROR( "WstCompositorSetTerminatedCallback failed" );
+         goto repeater_exit;
+      }
+
+      result= WstCompositorStart( wctx2 );
+      if ( result == false )
+      {
+         EMERROR( "WstCompositorStart failed" );
+         goto repeater_exit;
+      }
+
+      while( !terminated )
+      {
+         usleep( 10000 );
+      }
+      printf("repeater ending\n");
+
+   repeater_exit:
+      if ( wctx2 )
+      {
+         WstCompositorDestroy( wctx2 );
+      }
+      if ( emctx2 )
+      {
+         EMDestroyContext( emctx2 );
+      }
+      printf("repeater ended\n");
+      exit(0);
+   }
+   else if ( pid == -1 )
+   {
+      EMERROR( "Failed to fork to start repeater" );
+      goto exit;
+   }
+   else
+   {
+      // wait for repeater to start
+      usleep( 100000 );
+   }
+
+   EMSetTextureCreatedCallback( emctx, textureCreated, ctx );
+
+   display= wl_display_connect(displayName2);
+   if ( !display )
+   {
+      int retries= 10;
+
+      while( retries-- > 0 )
+      {
+         display= wl_display_connect(displayName2);
+         if ( display )
+         {
+            break;
+         }
+         usleep( 100000 );
+      }
+      if ( !display )
+      {
+         EMERROR( "wl_display_connect failed" );
+         goto exit;
+      }
+   }
+   ctx->display= display;
+
+   registry= wl_display_get_registry(display);
+   if ( !registry )
+   {
+      EMERROR( "wl_display_get_registrty failed" );
+      goto exit;
+   }
+
+   wl_registry_add_listener(registry, &registryListener, ctx);
+
+   wl_display_roundtrip(display);
+
+   if ( !ctx->compositor || !ctx->shm )
+   {
+      EMERROR("Failed to acquire needed compositor items");
+      goto exit;
+   }
+
+   ctx->surface= wl_compositor_create_surface(ctx->compositor);
+   printf("surface=%p\n", ctx->surface);
+   if ( !ctx->surface )
+   {
+      EMERROR("error: unable to create wayland surface");
+      goto exit;
+   }
+
+   wl_display_roundtrip(display);
+
+   imgWidth= 32;
+   imgHeight= 32;
+   imgDataSize= imgWidth*imgHeight*4;
+
+   imgData= (unsigned char*)calloc( 1, imgDataSize );
+   if ( !imgData )
+   {
+      EMERROR("No memory for image data");
+      goto exit;
+   }
+
+   strcpy( filename, "/tmp/westeros-XXXXXX" );
+   fd= mkostemp( filename, O_CLOEXEC );
+   if ( fd < 0 )
+   {
+      EMERROR("Unable to create temp file");
+      goto exit;
+   }
+
+   lenDidWrite= write( fd, imgData, imgDataSize );
+   if ( lenDidWrite != imgDataSize )
+   {
+      EMERROR("Unable to write image data to temp file");
+      goto exit;
+   }
+
+   data= mmap(NULL, imgDataSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+   if ( data == MAP_FAILED )
+   {
+      EMERROR("Unable to mmap image data");
+      goto exit;
+   }
+
+   memcpy( data, imgData, imgDataSize );
+
+   shmPool= wl_shm_create_pool(ctx->shm, fd, imgDataSize);
+   if ( shmPool == 0 )
+   {
+      EMERROR("Unable to create shm pool");
+      goto exit;
+   }
+   wl_display_roundtrip(display);
+
+   buffer= wl_shm_pool_create_buffer(shmPool,
+                                     0, //offset
+                                     imgWidth,
+                                     imgHeight,
+                                     imgWidth*4, //stride
+                                     WL_SHM_FORMAT_ARGB8888 );
+   wl_display_roundtrip(display);
+   if ( !buffer )
+   {
+      EMERROR("Unable to create shm buffer");
+      goto exit;
+   }
+
+   expectedBufferId= (imgWidth<<16)|imgHeight;
+
+   wl_surface_attach( ctx->surface, buffer, 0, 0 );
+   wl_surface_damage( ctx->surface, 0, 0, imgWidth, imgHeight);
+   wl_surface_commit( ctx->surface );
+   wl_display_roundtrip(display);
+
+   usleep( 17000 );
+
+   if ( ctx->lastTextureBufferId != expectedBufferId )
+   {
+      EMERROR("Unexpected last texture bufferId: expected(%d) actual(%d)", expectedBufferId, ctx->lastTextureBufferId );
+      goto exit;
+   }
+
+
+   testResult= true;
+
+exit:
+
+   if ( ctx->surface )
+   {
+      wl_surface_destroy( ctx->surface );
+      ctx->surface= 0;
+   }
+
+   if ( ctx->shm )
+   {
+      wl_shm_destroy( ctx->shm );
+      ctx->shm= 0;
+   }
+
+   if ( ctx->compositor )
+   {
+      wl_compositor_destroy( ctx->compositor );
+      ctx->compositor= 0;
+   }
+
+   if ( registry )
+   {
+      wl_registry_destroy(registry);
+      registry= 0;
+   }
+
+   if ( display )
+   {
+      wl_display_roundtrip(display);
+      wl_display_disconnect(display);
+      display= 0;
+   }
+
+   if ( shmPool )
+   {
+      wl_shm_pool_destroy( shmPool);
+   }
+
+   if ( data )
+   {
+      munmap( data, imgDataSize );
+   }
+
+   if ( imgData )
+   {
+      free( imgData );
+   }
+
+   if ( fd != -1 )
+   {
+      close( fd );
+      remove( filename );
+   }
+
+   if ( wctx )
+   {
+      WstCompositorDestroy( wctx );
+   }
 
    return testResult;
 }
