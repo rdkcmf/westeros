@@ -1,0 +1,74 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.13 Release Notes
+------------------------------
+
+Date: Jan 8, 2020
+Revision hash: 7df197ef3141e6d6218b8d11229d4db334ce2142
+Changes:
+
+-Add test case for shm with repeater
+test: a new test case added to the automated unit test system to 
+cover client rendering with Wayland shared memory across a repeating 
+compositor.
+
+-Remove stop hang defence as root cause is fixed
+core compositor: a bug whereby the compositor display update timer can 
+be set to a hugh value upon system time change was fixed in version 
+1.01.12.  This change removes some defensive code that was temporarily 
+added before the root cause was known.
+
+-Mode setting enhancements
+essos: Provide EssContextSetDisplayMode and add convenience "--window-size" 
+cmdline arg to reference compositor.  The EssContextSetDisplayMode API uses 
+the new westeros-gl WstGLSetDisplayMode API (see below) when it is 
+available, which is on devices using KMS+DRM.  It is discouraged for the 
+reference compositor app to be used in deployments as its intended purpose 
+is as a simple example of how to use the Westeros API's to implement a 
+Wayland compositor.  However, this new command line argument allows 
+specifying a display resolution.  On devices using KMS this will set the 
+display mode on compositor startup.  On non-KMS devices it merely infoms 
+the compositor what display mode has been set by some external mechanism.
+
+
+-Mode setting enhancements
+drm: Add WstGLSetDisplayMode for explicit mode setting and enhance ability for 
+graphics resolution to differ from display resolution.  This change affects 
+Westeros built for devices using KMS+DRM.  The WstGLSetDisplayMode API takes 
+a mode string with the format "[wx]h[p|i][[x]r]".  For example:
+ 1920x1080i60
+ 720p
+ 1080i
+ 3840x2160
+ 1920x1080x24
+Support for graphics resolution to diff from display resolution enables 
+scenarios where the HDMI output resolution is 4K for full video quality 
+but graphics arek rendered at a lower resolution like 1080p.
+
+-Sink gets display size from compositor
+sink: The sink binds to wl_output in order to get display size information from 
+the compositor. This eliminates the need for any downstream patching related to 
+default screen size.  For usage without a compositor connection the rectangle 
+property must be used.
+
+-Act on rectangle property only when values change
+sink: to avoid overwhelming the wayland connection with traffic, the sink 
+element will now only act on its 'rectangle' property if the provided values 
+differ from the current values.
+
+-Avoid possible null dereference on error path
+core compositor: correcting an error path null dereference found via static 
+analysis.
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
