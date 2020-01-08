@@ -310,6 +310,10 @@ TESTCASE genericTests[]=
      "Test repeating compositor basic composition",
      testCaseRenderBasicCompositionRepeating
    },
+   { "testRenderShmRepeater",
+     "Test repeating compositor shm rendering",
+     testCaseRenderShmRepeater
+   },
    { "testRenderWaylandThreading",
      "Test compositor for wayland threading issues",
      testCaseRenderWaylandThreading
@@ -1801,7 +1805,7 @@ static bool testCaseAPISetDefaultCursor( EMCTX *emctx )
    result= WstCompositorSetDisplayName( wctx2, displayName2 );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetDisplayName failed" );
       goto exit;
    }
 
@@ -1815,7 +1819,7 @@ static bool testCaseAPISetDefaultCursor( EMCTX *emctx )
    result= WstCompositorSetNestedDisplayName( wctx2, displayName );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetNestedDisplayName failed" );
       goto exit;
    }
 
@@ -1852,7 +1856,7 @@ static bool testCaseAPISetDefaultCursor( EMCTX *emctx )
    result= WstCompositorSetDisplayName( wctx2, displayName2 );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetDisplayName failed" );
       goto exit;
    }
 
@@ -1873,7 +1877,7 @@ static bool testCaseAPISetDefaultCursor( EMCTX *emctx )
    result= WstCompositorSetNestedDisplayName( wctx2, displayName );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetNestedDisplayName failed" );
       goto exit;
    }
 
@@ -1967,7 +1971,7 @@ static bool testCaseAPISetDefaultCursorEmbedded( EMCTX *emctx )
    result= WstCompositorSetDisplayName( wctx, displayName );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetDisplayName failed" );
       goto exit;
    }
 
@@ -2009,7 +2013,7 @@ static bool testCaseAPISetDefaultCursorEmbedded( EMCTX *emctx )
    result= WstCompositorSetDisplayName( wctx2, displayName2 );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetDisplayName failed" );
       goto exit;
    }
 
@@ -2023,7 +2027,7 @@ static bool testCaseAPISetDefaultCursorEmbedded( EMCTX *emctx )
    result= WstCompositorSetNestedDisplayName( wctx2, displayName );
    if ( !result )
    {
-      EMERROR( "WstCompositorSetIsNested failed" );
+      EMERROR( "WstCompositorSetNestedDisplayName failed" );
       goto exit;
    }
 

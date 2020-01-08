@@ -4812,7 +4812,25 @@ GL_APICALL void GL_APIENTRY glTexImage2D (GLenum target,
                                           GLenum type, 
                                           const void *pixels)
 {
+   EMCTX *ctx= 0;
+
    TRACE1("glTexImage2D");
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("glTexImage2D: emGetContext failed");
+      goto exit;
+   }
+
+   if ( ctx->textureCreatedCB )
+   {
+      int bufferId= (width<<16)|(height);
+      ctx->textureCreatedCB( ctx, ctx->textureCreatedUserData, bufferId );
+   }
+
+exit:
+   return;
 }
 
 GL_APICALL void GL_APIENTRY glTexParameterf (GLenum target, GLenum pname, GLfloat param)
