@@ -1125,6 +1125,7 @@ static bool wstGetOutputFormats( GstWesterosSink *sink )
    struct v4l2_fmtdesc format;
    int i, rc;
    int32_t bufferType;
+   bool haveNV12= false;
 
    bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
@@ -1164,8 +1165,18 @@ static bool wstGetOutputFormats( GstWesterosSink *sink )
       {
          goto exit;
       }
+      if ( (sink->soc.outputFormats[i].pixelformat == V4L2_PIX_FMT_NV12) ||
+           (sink->soc.outputFormats[i].pixelformat == V4L2_PIX_FMT_NV12M) )
+      {
+         haveNV12= true;
+      }
       GST_DEBUG("output format %d: flags %08x pixelFormat: %x desc: %s",
              i, sink->soc.outputFormats[i].flags, sink->soc.outputFormats[i].pixelformat, sink->soc.outputFormats[i].description );
+   }
+
+   if ( !haveNV12 )
+   {
+      GST_WARNING("no support for NV12/NV12M output detected");
    }
 
    result= true;
@@ -1236,7 +1247,17 @@ static bool wstSetOutputFormat( GstWesterosSink *sink )
 
    if ( sink->soc.isMultiPlane )
    {
-      sink->soc.fmtOut.fmt.pix_mp.pixelformat= V4L2_PIX_FMT_NV12;
+      int i;
+      uint32_t pixelFormat= V4L2_PIX_FMT_NV12;
+      for( i= 0; i < sink->soc.numOutputFormats; ++i)
+      {
+         if ( sink->soc.outputFormats[i].pixelformat == V4L2_PIX_FMT_NV12M )
+         {
+            pixelFormat= V4L2_PIX_FMT_NV12M;
+            break;
+         }
+      }
+      sink->soc.fmtOut.fmt.pix_mp.pixelformat= pixelFormat;
       sink->soc.fmtOut.fmt.pix_mp.width= sink->soc.frameWidth;
       sink->soc.fmtOut.fmt.pix_mp.height= sink->soc.frameHeight;
       sink->soc.fmtOut.fmt.pix_mp.num_planes= 2;
@@ -1883,6 +1904,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       int fdToSend0= -1, fdToSend1= -1, fdToSend2= -1;
       int offset0, offset1, offset2;
       int stride0, stride1, stride2;
+      uint32_t pixelFormat;
 
       if ( buffIndex >= 0 )
       {
@@ -1925,6 +1947,18 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
             stride2= 0;
          }
 
+         pixelFormat= conn->sink->soc.fmtOut.fmt.pix.pixelformat;
+         switch( pixelFormat  )
+         {
+            case V4L2_PIX_FMT_NV12:
+            case V4L2_PIX_FMT_NV12M:
+               pixelFormat= V4L2_PIX_FMT_NV12;
+               break;
+            default:
+               GST_WARNING("unsupported pixel format: %X", conn->sink->soc.fmtOut.fmt.pix.pixelformat);
+               break;
+         }
+
          fdToSend0= fcntl( frameFd0, F_DUPFD_CLOEXEC, 0 );
          if ( fdToSend0 < 0 )
          {
@@ -1956,7 +1990,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          mbody[i++]= 'F';
          i += putU32( &mbody[i], conn->sink->soc.frameWidth );
          i += putU32( &mbody[i], conn->sink->soc.frameHeight );
-         i += putU32( &mbody[i], conn->sink->soc.fmtOut.fmt.pix.pixelformat );
+         i += putU32( &mbody[i], pixelFormat );
          i += putU32( &mbody[i], conn->sink->soc.videoX );
          i += putU32( &mbody[i], conn->sink->soc.videoY );
          i += putU32( &mbody[i], conn->sink->soc.videoWidth );
