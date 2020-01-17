@@ -1321,8 +1321,8 @@ AppCtx* initApp()
    appCtx= (AppCtx*)calloc( 1, sizeof(AppCtx) );
    if ( appCtx )
    {
-      appCtx->width= appCtx->windowWidth;
-      appCtx->height= appCtx->windowHeight;
+      appCtx->windowWidth= 1280;
+      appCtx->windowHeight= 720;
 
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       appCtx->inputCtx= (InputCtx*)calloc( 1, sizeof(InputCtx) );
@@ -1888,9 +1888,9 @@ int animationStart( AppCtx *appCtx )
          appCtx->animationDuration= 2000;
          appCtx->targetScale= (appCtx->targetScale == 1.0 ? 0.5 : 1.0);
          appCtx->startScale= appCtx->scale;
-         appCtx->targetTransX= (appCtx->targetTransX == 0 ? 620 : 0);
+         appCtx->targetTransX= (appCtx->targetTransX == 0 ? appCtx->width/2 : 0);
          appCtx->startTransX= appCtx->transX;
-         appCtx->targetTransY= (appCtx->targetTransY == 0 ? 340 : 0);
+         appCtx->targetTransY= (appCtx->targetTransY == 0 ? appCtx->height/2 : 0);
          appCtx->startTransY= appCtx->transY;
          break;
       case 2:
@@ -1898,9 +1898,9 @@ int animationStart( AppCtx *appCtx )
          appCtx->animationDuration= 5000;
          appCtx->targetScale= (appCtx->targetTransX == 0 ? 0.5 : 1.0);
          appCtx->startScale= (appCtx->targetTransX == 0 ? 1.0 : 0.5);;
-         appCtx->targetTransX= (appCtx->targetTransX == 0 ? 320 : 0);
+         appCtx->targetTransX= (appCtx->targetTransX == 0 ? appCtx->width/4 : 0);
          appCtx->startTransX= appCtx->transX;
-         appCtx->targetTransY= (appCtx->targetTransY == 0 ? 180 : 0);
+         appCtx->targetTransY= (appCtx->targetTransY == 0 ? appCtx->height/4 : 0);
          appCtx->startTransY= appCtx->transY;
          hints |= WstHints_noRotation;
          break;
@@ -2305,6 +2305,9 @@ int main( int argc, char** argv)
    
    if ( !error )
    {
+      appCtx->width= appCtx->windowWidth;
+      appCtx->height= appCtx->windowHeight;
+
       #if defined (WESTEROS_PLATFORM_EMBEDDED)
       if  ( !appCtx->showCursor )
       {
