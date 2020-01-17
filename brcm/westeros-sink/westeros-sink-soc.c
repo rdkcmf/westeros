@@ -2127,16 +2127,19 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       sink->soc.outputFormat= nxDspSettings.format;
    }
 
-   sink->soc.videoX= ((sink->windowX*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
-   sink->soc.videoY= ((sink->windowY*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
-   sink->soc.videoWidth= (sink->windowWidth*sink->scaleXNum)/sink->scaleXDenom;
-   sink->soc.videoHeight= (sink->windowHeight*sink->scaleYNum)/sink->scaleYDenom;
-   if ( !sink->windowSizeOverride )
+   if ( sink->windowSizeOverride )
    {
-      double sizeXFactor= ((double)sink->outputWidth)/DEFAULT_WINDOW_WIDTH;
-      double sizeYFactor= ((double)sink->outputHeight)/DEFAULT_WINDOW_HEIGHT;
-      sink->soc.videoWidth *= sizeXFactor;
-      sink->soc.videoHeight *= sizeYFactor;
+      sink->soc.videoX= ((sink->windowX*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
+      sink->soc.videoY= ((sink->windowY*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
+      sink->soc.videoWidth= (sink->windowWidth*sink->scaleXNum)/sink->scaleXDenom;
+      sink->soc.videoHeight= (sink->windowHeight*sink->scaleYNum)/sink->scaleYDenom;
+   }
+   else
+   {
+      sink->soc.videoX= sink->transX;
+      sink->soc.videoY= sink->transY;
+      sink->soc.videoWidth= (sink->outputWidth*sink->scaleXNum)/sink->scaleXDenom;
+      sink->soc.videoHeight= (sink->outputHeight*sink->scaleYNum)/sink->scaleYDenom;
    }
 
    if ( !sink->soc.captureEnabled )

@@ -265,12 +265,14 @@ static void outputHandleMode( void *data,
 
    if ( flags & WL_OUTPUT_MODE_CURRENT )
    {
+      LOCK( sink );
       if ( !sink->windowSizeOverride )
       {
          printf("westeros-sink: compositor sets window to (%dx%d)\n", width, height);
          sink->windowWidth= width;
          sink->windowHeight= height;
       }
+      UNLOCK( sink );
    }
 }
 
@@ -342,7 +344,9 @@ static void registryHandleGlobal(void *data,
    else if ((len==9) && !strncmp(interface, "wl_output", len) )
    {
       sink->output= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
-		wl_output_add_listener(sink->output, &outputListener, sink);
+      printf("westeros-sink: registry: output %p\n", (void*)sink->output);
+      wl_proxy_set_queue((struct wl_proxy*)sink->output, sink->queue);
+      wl_output_add_listener(sink->output, &outputListener, sink);
    }
    gst_westeros_sink_soc_registryHandleGlobal( sink, registry, id, interface, version );
 

@@ -1578,16 +1578,15 @@ exit:
       ctx->surface= 0;
    }
 
+   if ( shmPool )
+   {
+      wl_shm_pool_destroy( shmPool);
+   }
+
    if ( ctx->shm )
    {
       wl_shm_destroy( ctx->shm );
       ctx->shm= 0;
-   }
-
-   if ( ctx->compositor )
-   {
-      wl_compositor_destroy( ctx->compositor );
-      ctx->compositor= 0;
    }
 
    if ( registry )
@@ -1596,16 +1595,17 @@ exit:
       registry= 0;
    }
 
+   if ( ctx->compositor )
+   {
+      wl_compositor_destroy( ctx->compositor );
+      ctx->compositor= 0;
+   }
+
    if ( display )
    {
       wl_display_roundtrip(display);
       wl_display_disconnect(display);
       display= 0;
-   }
-
-   if ( shmPool )
-   {
-      wl_shm_pool_destroy( shmPool);
    }
 
    if ( data )

@@ -2222,16 +2222,19 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       
    if ( !sink->soc.useGfxPath )
    {
-      vx= ((wx*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
-      vy= ((wy*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
-      vw= ((ww)*sink->scaleXNum)/sink->scaleXDenom;
-      vh= ((wh)*sink->scaleYNum)/sink->scaleYDenom;
-      if ( !sink->windowSizeOverride )
+      if ( sink->windowSizeOverride )
       {
-         double sizeXFactor= ((double)sink->outputWidth)/DEFAULT_WINDOW_WIDTH;
-         double sizeYFactor= ((double)sink->outputHeight)/DEFAULT_WINDOW_HEIGHT;
-         vw *= sizeXFactor;
-         vh *= sizeYFactor;
+         vx= ((wx*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
+         vy= ((wy*sink->scaleYNum)/sink->scaleYDenom) + sink->transY;
+         vw= ((ww)*sink->scaleXNum)/sink->scaleXDenom;
+         vh= ((wh)*sink->scaleYNum)/sink->scaleYDenom;
+      }
+      else
+      {
+         vx= sink->transX;
+         vy= sink->transY;
+         vw= ((sink->outputWidth)*sink->scaleXNum)/sink->scaleXDenom;
+         vh= ((sink->outputHeigth)*sink->scaleYNum)/sink->scaleYDenom;
       }
       
       memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
