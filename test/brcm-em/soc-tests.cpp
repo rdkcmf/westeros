@@ -80,6 +80,7 @@ static bool testCaseSocSinkBasicPipelineGfx( EMCTX *ctx );
 static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
 static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
 static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
+static bool testCaseSocSinkVideoPosition( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx );
 
@@ -200,6 +201,10 @@ TESTCASE socTests[]=
    { "testSocSinkGfxTransition",
      "Test westerossink transition from HW to graphics path",
      testCaseSocSinkGfxTransition
+   },
+   { "testSocSinkVideoPosition",
+     "Test westerossink video positioning",
+     testCaseSocSinkVideoPosition
    },
    { "testSocRenderBasicCompositionEmbeddedFast",
      "Test embedded compositor basic composition with fast render delegation",
@@ -3624,6 +3629,919 @@ exit:
    testTermEGL( &ctx->eglCtx );
 
    unsetenv( "WAYLAND_DISPLAY" );
+
+   return testResult;
+}
+
+namespace SocSinkVideoPosition
+{
+typedef struct _TestCtx
+{
+   TestEGLCtx eglCtx;
+   WstGLCtx *glCtx;
+   void *eglNativeWindow;
+   int windowWidth;
+   int windowHeight;
+} TestCtx;
+
+static void outputHandleGeometry( void *,
+                                  int,
+                                  int,
+                                  int,
+                                  int,
+                                  int,
+                                  const char *,
+                                  const char *,
+                                  int )
+{
+}
+
+static void outputHandleMode( void *,
+                              uint32_t flags,
+                              int width,
+                              int height,
+                              int )
+{
+   if ( flags & WL_OUTPUT_MODE_CURRENT )
+   {
+      printf("nested mode listener: mode %dx%d\n", width, height);
+   }
+}
+
+static void outputHandleDone( void * )
+{
+}
+
+static void outputHandleScale( void *,
+                               int32_t )
+{
+}
+
+WstOutputNestedListener nestedOutputListener=
+{
+   outputHandleGeometry,
+   outputHandleMode,
+   outputHandleDone,
+   outputHandleScale,
+};
+
+} //namespace SocSinkGfxTransition
+
+static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
+{
+   using namespace SocSinkVideoPosition;
+
+   bool testResult= false;
+   WstCompositor *wctx= 0;
+   WstCompositor *wctx2= 0;
+   WstCompositor *wctx3= 0;
+   bool result;
+   const char *value;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   EMSurfaceClient *videoWindow= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   std::vector<WstRect> rects;
+   float matrix[16];
+   float alpha= 1.0;
+   bool needHolePunch;
+   int hints;
+   EGLBoolean b;
+   TestCtx testCtx;
+   TestCtx *ctx= &testCtx;
+   bool setRect= false;
+   bool useEmbedded= false;
+   bool isBridged= false;
+   bool isNested= false;
+   bool isRepeater= false;
+   float scale= 1.0, scale2= 1.0, scale3= 1.0;
+   float transx= 0, transx2= 0, transx3= 0;
+   float transy= 0, transy2= 0, transy3= 0;
+   int ow, oh, ow2= 0, oh2= 0, ow3= 0, oh3= 0;
+   int rx= 0, ry= 0, rw= 0, rh= 0;
+   int vx, vy, vw, vh;
+   int vxexp, vyexp, vwexp, vhexp;
+   int iteration;
+
+   for( iteration= 0; iteration < 24; ++iteration )
+   {
+      printf("iteration: %d\n", iteration);
+      memset( &testCtx, 0, sizeof(TestCtx) );
+
+      switch( iteration )
+      {
+         case 0:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= false;
+            isBridged= false;
+            setRect= false;
+            vxexp= 0;
+            vyexp= 0;
+            vwexp= 1280;
+            vhexp= 720;
+            break;
+         case 1:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= false;
+            isBridged= false;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 2:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= false;
+            isBridged= false;
+            setRect= false;
+            vxexp= 0;
+            vyexp= 0;
+            vwexp= 1920;
+            vhexp= 1080;
+            break;
+         case 3:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= false;
+            isBridged= false;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 4:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= false;
+            vxexp= 0;
+            vyexp= 0;
+            vwexp= 1280;
+            vhexp= 720;
+            break;
+         case 5:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 6:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= false;
+            vxexp= 0;
+            vyexp= 0;
+            vwexp= 1920;
+            vhexp= 1080;
+            break;
+         case 7:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 8:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= false;
+            vxexp= 0;
+            vyexp= 0;
+            vwexp= 1280;
+            vhexp= 720;
+            break;
+         case 9:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 10:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= false;
+            vxexp= 0;
+            vyexp= 0;
+            vwexp= 1920;
+            vhexp= 1080;
+            break;
+         case 11:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 12:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= false;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 640;
+            vhexp= 360;
+            break;
+         case 13:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 150;
+            vyexp= 150;
+            vwexp= 320;
+            vhexp= 180;
+            break;
+         case 14:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= false;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 960;
+            vhexp= 540;
+            break;
+         case 15:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= false;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 150;
+            vyexp= 150;
+            vwexp= 320;
+            vhexp= 180;
+            break;
+         case 16:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= false;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 960;
+            vhexp= 540;
+            break;
+         case 17:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 150;
+            vyexp= 150;
+            vwexp= 320;
+            vhexp= 180;
+            break;
+         case 18:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= false;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 960;
+            vhexp= 540;
+            break;
+         case 19:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= true;
+            rx= 100;
+            ry= 100;
+            rw= 640;
+            rh= 360;
+            scale= 0.5;
+            transx= 100;
+            transy= 100;
+            vxexp= 150;
+            vyexp= 150;
+            vwexp= 320;
+            vhexp= 180;
+            break;
+         case 20:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= 480;
+            oh= 270;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= false;
+            scale= 1.0;
+            transx= 200;
+            transy= 200;
+            vxexp= 200;
+            vyexp= 200;
+            vwexp= 480;
+            vhexp= 270;
+            break;
+         case 21:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= 480;
+            oh= 270;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            useEmbedded= true;
+            isBridged= true;
+            setRect= true;
+            rx= 25;
+            ry= 25;
+            rw= 160;
+            rh= 90;
+            scale= 1.0;
+            transx= 200;
+            transy= 200;
+            vxexp= 225;
+            vyexp= 225;
+            vwexp= 160;
+            vhexp= 90;
+            break;
+         case 22:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            ow3= 940;
+            oh3= 540;
+            useEmbedded= true;
+            isBridged= false;
+            isNested= true;
+            setRect= false;
+            scale= 1.0;
+            transx= 0;
+            transy= 0;
+            scale3= 1.0;
+            transx3= 100;
+            transy3= 100;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 940;
+            vhexp= 540;
+            break;
+         case 23:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            ow3= 940;
+            oh3= 540;
+            useEmbedded= true;
+            isBridged= false;
+            isNested= false;
+            isRepeater= true;
+            setRect= false;
+            scale= 1.0;
+            transx= 0;
+            transy= 0;
+            scale3= 1.0;
+            transx3= 100;
+            transy3= 100;
+            vxexp= 100;
+            vyexp= 100;
+            vwexp= 940;
+            vhexp= 540;
+            break;
+      }
+
+      EMSetDisplaySize( emctx, ctx->windowWidth, ctx->windowHeight );
+
+      result= testSetupEGL( &ctx->eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
+      ctx->glCtx= WstGLInit();
+      if ( !ctx->glCtx )
+      {
+         EMERROR("Unable to create westeros-gl context");
+         goto exit;
+      }
+
+      ctx->eglNativeWindow= WstGLCreateNativeWindow( ctx->glCtx, 0, 0, ctx->windowWidth, ctx->windowHeight );
+      if ( !ctx->eglNativeWindow )
+      {
+         EMERROR("error: unable to create egl native window");
+         goto exit;
+      }
+      printf("eglNativeWindow %p\n", ctx->eglNativeWindow);
+
+      ctx->eglCtx.eglSurfaceWindow= eglCreateWindowSurface( ctx->eglCtx.eglDisplay,
+                                                     ctx->eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)ctx->eglNativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", ctx->eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
+
+      wctx= WstCompositorCreate();
+      if ( !wctx )
+      {
+         EMERROR( "WstCompositorCreate failed" );
+         goto exit;
+      }
+
+      value= WstCompositorGetDisplayName( wctx );
+      if ( value == 0 )
+      {
+         EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+         goto exit;
+      }
+
+      if ( useEmbedded )
+      {
+         result= WstCompositorSetRendererModule( wctx, "libwesteros_render_embedded.so.0.0.0" );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorSetRenderedModule failed" );
+            goto exit;
+         }
+
+         result= WstCompositorSetIsEmbedded( wctx, true );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorSetIsEmbedded failed" );
+            goto exit;
+         }
+      }
+      else
+      {
+         result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorSetRenderedModule failed" );
+            goto exit;
+         }
+      }
+
+      result= WstCompositorSetOutputSize( wctx, ow, oh );
+      if ( !result )
+      {
+         EMERROR( "WstCompositorSetOutputSize failed" );
+         goto exit;
+      }
+
+      result= WstCompositorStart( wctx );
+      if ( result == false )
+      {
+         EMERROR( "WstCompositorStart failed" );
+         goto exit;
+      }
+
+      if ( isBridged )
+      {
+         setenv( "WESTEROS_VPC_BRIDGE", value, true );
+
+         wctx2= WstCompositorCreate();
+         if ( !wctx2 )
+         {
+            EMERROR( "WstCompositorCreate failed" );
+            goto exit;
+         }
+
+         value= WstCompositorGetDisplayName( wctx2 );
+         if ( value == 0 )
+         {
+            EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+            goto exit;
+         }
+
+         result= WstCompositorSetRendererModule( wctx2, "libwesteros_render_embedded.so.0.0.0" );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorSetRenderedModule failed" );
+            goto exit;
+         }
+
+         result= WstCompositorSetIsEmbedded( wctx2, true );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorSetIsEmbedded failed" );
+            goto exit;
+         }
+
+         result= WstCompositorSetOutputSize( wctx2, ow2, oh2 );
+         if ( !result )
+         {
+            EMERROR( "WstCompositorSetOutputSize failed" );
+            goto exit;
+         }
+
+         result= WstCompositorStart( wctx2 );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorStart failed" );
+            goto exit;
+         }
+      }
+
+      if ( isNested || isRepeater )
+      {
+         wctx3= WstCompositorCreate();
+         if ( !wctx3 )
+         {
+            EMERROR( "WstCompositorCreate failed" );
+            goto exit;
+         }
+
+         if ( isNested )
+         {
+            result= WstCompositorSetIsNested( wctx3, true );
+            if ( !result )
+            {
+               EMERROR( "WstCompositorSetIsNested failed" );
+               goto exit;
+            }
+         }
+         else
+         {
+            result= WstCompositorSetIsRepeater( wctx3, true );
+            if ( !result )
+            {
+               EMERROR( "WstCompositorSetIsRepeater failed" );
+               goto exit;
+            }
+         }
+
+         result= WstCompositorSetNestedDisplayName( wctx3, value );
+         if ( !result )
+         {
+            EMERROR( "WstCompositorSetNestedDisplayName failed" );
+            goto exit;
+         }
+
+         value= WstCompositorGetDisplayName( wctx3 );
+         if ( value == 0 )
+         {
+            EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+            goto exit;
+         }
+
+         result= WstCompositorSetRendererModule( wctx3, "libwesteros_render_gl.so.0.0.0" );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorSetRenderedModule failed" );
+            goto exit;
+         }
+
+         result= WstCompositorSetOutputNestedListener( wctx3, &nestedOutputListener, 0 );
+         if ( !result )
+         {
+            EMERROR( "WstCompositorSetOutputNestedListener failed" );
+            goto exit;
+         }
+
+         result= WstCompositorStart( wctx3 );
+         if ( result == false )
+         {
+            EMERROR( "WstCompositorStart failed" );
+            goto exit;
+         }
+      }
+
+      setenv( "WAYLAND_DISPLAY", value, true );
+
+      videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+      if ( !videoDecoder )
+      {
+         EMERROR("Failed to obtain test video decoder");
+         goto exit;
+      }
+
+      EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+      EMSetVideoCodec( emctx, bvideo_codec_h264 );
+      EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+      EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+      gst_init( &argc, &argv );
+
+      pipeline= gst_pipeline_new("pipeline");
+      if ( !pipeline )
+      {
+         EMERROR("Failed to create pipeline instance");
+         goto exit;
+      }
+
+      src= createVideoSrc( emctx, videoDecoder );
+      if ( !src )
+      {
+         EMERROR("Failed to create src instance");
+         goto exit;
+      }
+
+      sink= gst_element_factory_make( "westerossink", "vsink" );
+      if ( !sink )
+      {
+         EMERROR("Failed to create sink instance");
+         goto exit;
+      }
+
+      gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+      if ( gst_element_link( src, sink ) != TRUE )
+      {
+         EMERROR("Failed to link src and sink");
+         goto exit;
+      }
+
+      gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+      if ( setRect )
+      {
+         char work[64];
+         sprintf(work,"%d,%d,%d,%d", rx, ry, rw, rh);
+         g_object_set( G_OBJECT(sink), "rectangle", work, NULL );
+      }
+
+      // Allow pipeline to run briefly.
+      usleep( 200000 );
+
+      hints= WstHints_noRotation;
+      for( int i= 0; i < 6; ++i )
+      {
+         usleep( 17000 );
+
+         if ( isBridged )
+         {
+            memset( &matrix, 0, sizeof(matrix) );
+            matrix[10]= matrix[15]= 1.0;
+            matrix[0]= matrix[5]= scale2;
+            matrix[12]= transx2;
+            matrix[13]= transy2;
+
+            rects.clear();
+            WstCompositorComposeEmbedded( wctx2,
+                                          0, // x
+                                          0, // y
+                                          ow2, // width
+                                          oh2, // height
+                                          matrix,
+                                          alpha,
+                                          hints,
+                                          &needHolePunch,
+                                          rects );
+         }
+
+         if ( (isNested ||isRepeater) && (i == 2) )
+         {
+            ow= ow3;
+            oh= oh3;
+            scale= scale3;
+            transx= transx3;
+            transy= transy3;
+            result= WstCompositorSetOutputSize( wctx, ow, oh );
+            if ( !result )
+            {
+               EMERROR( "WstCompositorSetOutputSize failed" );
+               goto exit;
+            }
+         }
+
+         if ( useEmbedded )
+         {
+            memset( &matrix, 0, sizeof(matrix) );
+            matrix[10]= matrix[15]= 1.0;
+            matrix[0]= matrix[5]= scale;
+            matrix[12]= transx;
+            matrix[13]= transy;
+
+            rects.clear();
+            WstCompositorComposeEmbedded( wctx,
+                                          0, // x
+                                          0, // y
+                                          ow, // width
+                                          oh, // height
+                                          matrix,
+                                          alpha,
+                                          hints,
+                                          &needHolePunch,
+                                          rects );
+         }
+
+         eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+      }
+
+      videoWindow= EMGetVideoWindow( emctx, EM_TUNERID_MAIN );
+
+      EMSurfaceClientGetPosition( videoWindow, &vx, &vy, &vw, &vh );
+
+      gst_element_set_state( pipeline, GST_STATE_NULL );
+
+      if ( wctx )
+      {
+         WstCompositorDestroy( wctx );
+         wctx= 0;
+      }
+
+      if ( wctx2 )
+      {
+         WstCompositorDestroy( wctx2 );
+         wctx2= 0;
+      }
+
+      if ( wctx3 )
+      {
+         WstCompositorDestroy( wctx3 );
+         wctx3= 0;
+      }
+
+      if ( ctx->eglCtx.eglSurfaceWindow )
+      {
+         eglDestroySurface( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow );
+         ctx->eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+      }
+
+      if ( ctx->eglNativeWindow )
+      {
+         WstGLDestroyNativeWindow( ctx->glCtx, ctx->eglNativeWindow );
+         ctx->eglNativeWindow= 0;
+      }
+
+      if ( ctx->glCtx )
+      {
+         WstGLTerm( ctx->glCtx );
+         ctx->glCtx= 0;
+      }
+
+      testTermEGL( &ctx->eglCtx );
+
+      unsetenv( "WAYLAND_DISPLAY" );
+      unsetenv( "WESTEROS_VPC_BRIDGE" );
+
+      if ( (vx != vxexp) || (vy != vyexp) || (vw != vwexp) || (vh != vhexp) )
+      {
+         EMERROR("Unexpected video position: iteration %d expected (%d,%d,%d,%d) actual (%d,%d,%d,%d)",
+                  iteration, vxexp, vyexp, vwexp, vhexp, vx, vy, vw, vh );
+         goto exit;
+      }
+   }
+
+   testResult= true;
+
+exit:
 
    return testResult;
 }

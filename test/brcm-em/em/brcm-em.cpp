@@ -286,7 +286,7 @@ typedef struct _EMEGLDisplay
 #define DEFAULT_DISPLAY_HEIGHT (720)
 
 #define EM_MAX_ERROR (4096)
-#define EM_MAX_NXCLIENT (5)
+#define EM_MAX_NXCLIENT (100)
 
 typedef struct _EMWLBinding
 {

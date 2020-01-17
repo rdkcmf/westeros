@@ -3357,10 +3357,10 @@ static void simpleShellSetGeometry( void* userData, uint32_t surfaceId, int x, i
                
                vpcSurface->xTrans= x;
                vpcSurface->yTrans= y;
-               vpcSurface->xScaleNum= width*1000000/DEFAULT_OUTPUT_WIDTH;
-               vpcSurface->xScaleDenom= 1000000;
-               vpcSurface->yScaleNum= height*1000000/DEFAULT_OUTPUT_HEIGHT;
-               vpcSurface->yScaleDenom= 1000000;
+               vpcSurface->xScaleNum= width*100000/DEFAULT_OUTPUT_WIDTH;
+               vpcSurface->xScaleDenom= 100000;
+               vpcSurface->yScaleNum= height*100000/DEFAULT_OUTPUT_HEIGHT;
+               vpcSurface->yScaleDenom= 100000;
                vpcSurface->outputWidth= surface->compositor->outputWidth;
                vpcSurface->outputHeight= surface->compositor->outputHeight;
                
@@ -6982,7 +6982,7 @@ static void wstDefaultNestedKeyboardHandleEnter( void *userData, struct wl_array
       }
       else
       {
-         if ( ctx->seat )
+         if ( ctx->seat && ctx->wctx && ctx->wctx->keyboard )
          {
             pthread_mutex_lock( &ctx->mutex );
             wl_array_copy( &ctx->wctx->keyboard->keys, keys );
@@ -8132,8 +8132,9 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    vpcSurface->xScaleDenomVpcBridge= 1;
    vpcSurface->yScaleNumVpcBridge= 1;
    vpcSurface->yScaleDenomVpcBridge= 1;
-   vpcSurface->outputWidthVpcBridge= DEFAULT_OUTPUT_WIDTH;
-   vpcSurface->outputHeightVpcBridge= DEFAULT_OUTPUT_HEIGHT;
+   vpcSurface->outputWidthVpcBridge= compositor->outputWidth;
+   vpcSurface->outputHeightVpcBridge= compositor->outputHeight;
+
    pthread_mutex_lock( &compositor->ctx->mutex );
    compositor->ctx->vpcSurfaces.push_back( vpcSurface );
    pthread_mutex_unlock( &compositor->ctx->mutex );
@@ -8146,10 +8147,10 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    surface->height= DEFAULT_OUTPUT_HEIGHT;
    
    surface->vpcSurface= vpcSurface;
-   
-   if ( compositor->ctx->isRepeater || compositor->ctx->hasVpcBridge )
+
+   if ( compositor->ctx->isNested || compositor->ctx->hasVpcBridge )
    {
-      if ( compositor->ctx->hasVpcBridge && !surface->surfaceNested )
+      if ( !surface->surfaceNested )
       {
          surface->surfaceNested= WstNestedConnectionCreateSurface( compositor->ctx->nc );
       }
@@ -8159,6 +8160,15 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
                                                                          surface->surfaceNested );
       }
    }
+   wl_vpc_surface_send_video_xform_change( vpcSurface->resource,
+                                           vpcSurface->xTrans,
+                                           vpcSurface->yTrans,
+                                           vpcSurface->xScaleNum,
+                                           vpcSurface->xScaleDenom,
+                                           vpcSurface->yScaleNum,
+                                           vpcSurface->yScaleDenom,
+                                           vpcSurface->outputWidth,
+                                           vpcSurface->outputHeight );
    pthread_mutex_lock( &compositor->ctx->mutex);
    wstCompositorScheduleRepaint( compositor->ctx );
    pthread_mutex_unlock( &compositor->ctx->mutex);
@@ -8308,10 +8318,10 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
       scaleY= ctx->renderer->matrix[5];
    }
    
-   int scaleXNum= scaleX*1000000;
-   int scaleXDenom= 1000000; 
-   int scaleYNum= scaleY*1000000;
-   int scaleYDenom= 1000000;
+   int scaleXNum= scaleX*100000;
+   int scaleXDenom= 100000;
+   int scaleYNum= scaleY*100000;
+   int scaleYDenom= 100000;
    int transX= (int)ctx->renderer->matrix[12];
    int transY= (int)ctx->renderer->matrix[13];
    int outputWidth= wctx->outputWidth;
@@ -8333,8 +8343,13 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
          int scaleYDenomEffective= scaleYDenom;
          int transXEffective= (int)(transX*(double)vpcSurface->xScaleNumVpcBridge/(double)vpcSurface->xScaleDenomVpcBridge) + vpcSurface->xTransVpcBridge;
          int transYEffective= (int)(transY*(double)vpcSurface->yScaleNumVpcBridge/(double)vpcSurface->yScaleDenomVpcBridge) + vpcSurface->yTransVpcBridge;
-         int outputWidthEffective= outputWidth*vpcSurface->outputWidthVpcBridge/DEFAULT_OUTPUT_WIDTH;
-         int outputHeightEffective= outputHeight*vpcSurface->outputHeightVpcBridge/DEFAULT_OUTPUT_HEIGHT;
+         int outputWidthEffective= outputWidth;
+         int outputHeightEffective= outputHeight;
+         if ( ctx->hasVpcBridge )
+         {
+            outputWidthEffective *= (vpcSurface->outputWidthVpcBridge / outputWidth);
+            outputHeightEffective *= (vpcSurface->outputHeightVpcBridge / outputHeight);
+         }
 
          if ( !vpcSurface->videoPathSet || (useHWPathEffective != vpcSurface->useHWPath) )
          {
