@@ -51,6 +51,10 @@ struct _EMVideoSrc
    gdouble segRate;
    gdouble segAppliedRate;
    bool needSegment;
+   bool pushEOS;
+   bool haveEOS;
+   bool dataPaused;
+   long long dataPausedEndTime;
 };
 
 struct _EMVideoSrcClass
@@ -63,6 +67,8 @@ GType em_video_src_get_type() G_GNUC_CONST;
 GstElement* createVideoSrc( EMCTX *emctx, EMSimpleVideoDecoder *dec );
 int videoSrcGetFrameNumber( GstElement *element );
 void videoSrcSetFrameSize( GstElement *element, int width, int height );
+void videoSrcPauseData( GstElement *element, int pausePeriodMS );
+void videoSrcPushEOS( GstElement *element );
 
 #endif
 

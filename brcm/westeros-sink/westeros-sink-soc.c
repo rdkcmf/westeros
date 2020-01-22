@@ -1344,6 +1344,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
 
    sink->soc.presentationStarted= FALSE;
    sink->soc.frameCount= 0;
+   sink->eosEventSeen= FALSE;
    rc= NEXUS_SimpleVideoDecoder_Start(sink->soc.videoDecoder, &startSettings);
    if ( rc != NEXUS_SUCCESS )
    {
@@ -2103,9 +2104,9 @@ static void updateVideoStatus( GstWesterosSink *sink )
       }
    }
 
-   if ( videoPlaying && !eosDetected )
+   if ( videoPlaying && !eosDetected && checkForEOS )
    {
-      int limit= checkForEOS ? EOS_DETECT_DELAY : 4*EOS_DETECT_DELAY;
+      int limit= EOS_DETECT_DELAY;
       if ( sink->soc.noFrameCount*FRAME_POLL_TIME > limit )
       {
          GST_INFO_OBJECT(sink, "updateVideoStatus: eos detected: firstPTS %lld currentPTS %lld\n", sink->firstPTS, sink->currentPTS);
@@ -2328,13 +2329,15 @@ static void underflowCallback( void *userData, int n )
          {
             if ( videoStatus.queueDepth > 0 )
             {
-               sink->soc.checkForEOS= true;
+               sink->soc.checkForEOS= TRUE;
+               sink->eosEventSeen= FALSE;
                sink->soc.noFrameCount= 0;
             }
             else
             {
                GST_INFO("underflow: emitting EOS");
                sink->soc.emitEOS= TRUE;
+               sink->soc.checkForEOS= FALSE;
             }
          }
          else
@@ -2661,8 +2664,10 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
       /* Set need_preroll to FALSE so that base sink will not block in
          wait_preroll since this would prevent further buffering while in
          paused state.  This is because westerossink does both the decoding
-         and the display */
+         and the display.  Set have_preroll to TRUE so that the transition
+         from PAUSED to PLAYING is not forced to be async */
       GST_BASE_SINK(sink)->need_preroll= FALSE;
+      GST_BASE_SINK(sink)->have_preroll= TRUE;
    }
 
    GST_INFO("preroll ok");

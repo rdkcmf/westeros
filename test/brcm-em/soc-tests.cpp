@@ -81,6 +81,7 @@ static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
 static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
 static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
 static bool testCaseSocSinkVideoPosition( EMCTX *emctx );
+static bool testCaseSocSinkEOSTest1( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx );
 
@@ -205,6 +206,10 @@ TESTCASE socTests[]=
    { "testSocSinkVideoPosition",
      "Test westerossink video positioning",
      testCaseSocSinkVideoPosition
+   },
+   { "testSocSinkEOSTest1",
+     "Test sink EOS signalling",
+     testCaseSocSinkEOSTest1
    },
    { "testSocRenderBasicCompositionEmbeddedFast",
      "Test embedded compositor basic composition with fast render delegation",
@@ -4542,6 +4547,237 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
    testResult= true;
 
 exit:
+
+   return testResult;
+}
+
+
+namespace EOSTests
+{
+typedef struct _TestCtx
+{
+   bool gotUnderflow;
+   bool gotEOS;
+} TestCtx;
+
+static gboolean busCallback(GstBus *bus, GstMessage *message, gpointer data)
+{
+   TestCtx *ctx= (TestCtx*)data;
+
+   switch ( GST_MESSAGE_TYPE(message) )
+   {
+      case GST_MESSAGE_ERROR:
+         {
+            GError *error;
+            gchar *debug;
+
+            gst_message_parse_error(message, &error, &debug);
+            g_print("Error: %s\n", error->message);
+            if ( debug )
+            {
+               g_print("Debug info: %s\n", debug);
+            }
+            g_error_free(error);
+            g_free(debug);
+         }
+         break;
+     case GST_MESSAGE_EOS:
+         g_print( "EOS ctx %p\n", ctx );
+         ctx->gotEOS= true;
+         break;
+     default:
+         break;
+    }
+    return TRUE;
+}
+
+static void underflowCB(GstElement *sink, guint size, void *context, gpointer data)
+{
+   TestCtx *ctx= (TestCtx*)data;
+
+   g_print("received underflow signal\n");
+   ctx->gotUnderflow= true;
+}
+
+} // namespace EOSTests
+
+static bool testCaseSocSinkEOSTest1( EMCTX *emctx )
+{
+   using namespace EOSTests;
+
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstBus *bus= 0;
+   GMainLoop *loop= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   TestCtx testCtx;
+   int loopCount;
+
+   memset( &testCtx, 0, sizeof(testCtx) );
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   bus= gst_pipeline_get_bus( GST_PIPELINE(pipeline) );
+   if ( !bus )
+   {
+      EMERROR("Failed to get pipeline bus\n");
+      goto exit;
+   }
+   gst_bus_add_watch( bus, busCallback, &testCtx );
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   g_signal_connect( sink, "buffer-underflow-callback", G_CALLBACK(underflowCB), &testCtx);
+
+   loop= g_main_loop_new(NULL,FALSE);
+
+   testCtx.gotUnderflow= false;
+   testCtx.gotEOS= false;
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   // Allow pipeline to run briefly
+   usleep( 200000 );
+
+   videoSrcPauseData( src, 400 );
+   EMSimpleVideoDecoderSignalUnderflow( videoDecoder );
+
+   // Allow pipeline to run briefly
+   usleep( 600000 );
+
+   if ( !testCtx.gotUnderflow )
+   {
+      EMERROR("Failed to receive underflow signal");
+      goto exit;
+   }
+
+   if ( testCtx.gotEOS )
+   {
+      EMERROR("Received unexpected EOS");
+      goto exit;
+   }
+
+   testCtx.gotUnderflow= false;
+   testCtx.gotEOS= false;
+
+   videoSrcPauseData( src, 3000 );
+   EMSimpleVideoDecoderSignalUnderflow( videoDecoder );
+
+   // Allow pipeline to run briefly
+   loopCount= 400;
+   while( loopCount-- > 0 )
+   {
+      usleep( 10000 );
+      g_main_context_iteration( NULL, FALSE);
+      if ( testCtx.gotEOS )
+      {
+         break;
+      }
+   }
+
+   if ( !testCtx.gotUnderflow )
+   {
+      EMERROR("Failed to receive underflow signal");
+      goto exit;
+   }
+
+   if ( testCtx.gotEOS )
+   {
+      EMERROR("Received unexpected EOS");
+      goto exit;
+   }
+
+   testCtx.gotUnderflow= false;
+   testCtx.gotEOS= false;
+
+   videoSrcPushEOS( src );
+
+   // Allow pipeline to run briefly
+   loopCount= 400;
+   while( loopCount-- > 0 )
+   {
+      usleep( 10000 );
+      g_main_context_iteration( NULL, FALSE);
+      if ( testCtx.gotEOS )
+      {
+         break;
+      }
+   }
+
+   if ( !testCtx.gotEOS )
+   {
+      EMERROR("Failed to receive EOS");
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( pipeline )
+   {
+      gst_element_set_state( pipeline, GST_STATE_NULL );
+   }
+
+   if ( loop )
+   {
+      g_main_loop_unref( loop );
+   }
+
+   if ( bus )
+   {
+      gst_object_unref( bus );
+   }
+
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
 
    return testResult;
 }
