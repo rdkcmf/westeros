@@ -1451,6 +1451,9 @@ void gst_westeros_sink_eos_detected( GstWesterosSink *sink )
          GST_WARNING("gst_westeros_sink_eos_detected: no parentEventFunc: posting eos msg");
          gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
       }
+      LOCK( sink );
+      sink->eosEventSeen= FALSE;
+      UNLOCK( sink );
    }
 }
 

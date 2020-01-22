@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/time.h>
 
 #include <glib.h>
 #include <gst/gst.h>
@@ -38,6 +39,17 @@ static gboolean emVideoSrcUnlockStop( GstBaseSrc *baseSrc );
 static gboolean emVideoSrcIsSeekable( GstBaseSrc *baseSrc );
 static gboolean emVideoSrcDoSeek( GstBaseSrc *baseSrc, GstSegment *segment );
 static void emVideoSrcLoop( GstPad *pad );
+
+static long long getCurrentTimeMillis(void)
+{
+   struct timeval tv;
+   long long utcCurrentTimeMillis;
+
+   gettimeofday(&tv,0);
+   utcCurrentTimeMillis= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
+
+   return utcCurrentTimeMillis;
+}
 
 GST_DEBUG_CATEGORY_STATIC(EMVideoSrcDebug);
 #define GST_CAT_DEFAULT EMVideoSrcDebug
@@ -91,6 +103,10 @@ static void em_video_src_init(EMVideoSrc* src)
    src->paused= true;
    src->frameNumber= 0;
    src->needSegment= true;
+   src->pushEOS= false;
+   src->haveEOS= false;
+   src->dataPaused= false;
+   src->dataPausedEndTime= 0;
    src->segRate= 1.0;
    src->segAppliedRate= 1.0;
    src->segStartTime= 0;
@@ -318,6 +334,31 @@ static void emVideoSrcLoop( GstPad *pad )
    bool needStep= false;
 
    pthread_mutex_lock( &src->mutex );
+   if ( src->pushEOS )
+   {
+      src->pushEOS= false;
+      src->haveEOS= true;
+      gst_pad_push_event( pad, gst_event_new_eos() );
+   }
+
+   if ( src->haveEOS )
+   {
+      goto exit;
+   }
+
+   if ( src->dataPaused )
+   {
+      long long now= getCurrentTimeMillis();
+      if ( now >= src->dataPausedEndTime )
+      {
+         src->dataPaused= false;
+      }
+      if ( src->dataPaused )
+      {
+         goto exit;
+      }
+   }
+
    if ( src->paused  )
    {
       int decoderFrameNumber= EMSimpleVideoDecoderGetFrameNumber( src->dec );
@@ -387,6 +428,8 @@ static void emVideoSrcLoop( GstPad *pad )
          ++src->frameNumber;
       }
    }
+
+exit:
    pthread_mutex_unlock( &src->mutex );
 }
 
@@ -450,4 +493,27 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
          GST_PAD_STREAM_UNLOCK(pad);
       }
    }
+}
+
+void videoSrcPauseData( GstElement *element, int pausePeriodMS )
+{
+   EMVideoSrc *src= EM_VIDEO_SRC(element);
+
+   pthread_mutex_lock( &src->mutex );
+
+   src->dataPausedEndTime= getCurrentTimeMillis() + (long long)pausePeriodMS;
+   src->dataPaused= true;
+
+   pthread_mutex_unlock( &src->mutex );
+}
+
+void videoSrcPushEOS( GstElement *element )
+{
+   EMVideoSrc *src= EM_VIDEO_SRC(element);
+
+   pthread_mutex_lock( &src->mutex );
+
+   src->pushEOS= true;
+
+   pthread_mutex_unlock( &src->mutex );
 }
