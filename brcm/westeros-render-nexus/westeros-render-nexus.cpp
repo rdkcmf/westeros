@@ -122,7 +122,7 @@ static bool useSecureGraphics( void )
    {
       NEXUS_VideoDecoderCapabilities videoDecoderCap;
       NEXUS_GetVideoDecoderCapabilities(&videoDecoderCap);
-      useSecure=  (videoDecoderCap.memory[0].secure != NEXUS_SecureVideo_eUnsecure) ? true : false;
+      useSecure=  (videoDecoderCap.memory[0].secure == NEXUS_SecureVideo_eSecure) ? true : false;
    }
    #endif
 
