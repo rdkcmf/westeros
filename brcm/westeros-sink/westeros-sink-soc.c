@@ -323,8 +323,9 @@ static bool isSVPEnabled( void )
    #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
    NEXUS_VideoDecoderCapabilities videoDecoderCap;
    NEXUS_GetVideoDecoderCapabilities(&videoDecoderCap);
-   enabled=  (videoDecoderCap.memory[0].secure != NEXUS_SecureVideo_eUnsecure) ? true : false;
+   enabled=  (videoDecoderCap.memory[0].secure == NEXUS_SecureVideo_eSecure) ? true : false;
    #endif
+   printf("westerossink: using secure video: %d\n", enabled);
    return enabled;
 }
 
