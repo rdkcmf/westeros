@@ -1,0 +1,44 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.14 Release Notes
+------------------------------
+
+Date: Jan 28, 2020
+Tag: Westeros-1.01.14
+Changes:
+
+-Update method of detecting if secure video is enabled
+brcm: Update the method used to determine at runtime if
+a Broadcom SOC device has SVP (secure video path) enabled.
+
+-EOS fixes
+sink: don't generate eos during underflow without eos from upstream and
+ensure synchronous transition from PAUSED to PLAYING after preroll.  Add
+automated test case to cover this scenario
+
+-Ensure window size set for embedded
+reference app: fix bug where window size defaults to zero if
+no --window-size command line argument was supplied and running
+as embedded compositor
+
+-Video positioning fixes and related tests
+core compositor, sink: fix video positioning in vpc bridge
+configuration when running at various output resolutions.  Add 
+automated test case covering 23 video positioning scenarios.
+
+-Use NV12M for multiplane when available
+v4l2: preferentially use NV12M format for video on v4l2 devices which
+report support for this capture format.
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
