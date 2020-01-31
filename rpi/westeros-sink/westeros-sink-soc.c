@@ -2234,7 +2234,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
          vx= sink->transX;
          vy= sink->transY;
          vw= ((sink->outputWidth)*sink->scaleXNum)/sink->scaleXDenom;
-         vh= ((sink->outputHeigth)*sink->scaleYNum)/sink->scaleYDenom;
+         vh= ((sink->outputHeight)*sink->scaleYNum)/sink->scaleYDenom;
       }
       
       memset( &displayRegion, 0, sizeof(OMX_CONFIG_DISPLAYREGIONTYPE) );
