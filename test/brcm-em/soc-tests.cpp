@@ -3647,7 +3647,24 @@ typedef struct _TestCtx
    void *eglNativeWindow;
    int windowWidth;
    int windowHeight;
+   int hx;
+   int hy;
+   int hw;
+   int hh;
 } TestCtx;
+
+static void holePunched( EMCTX *emctx, void* userData, int hx, int hy, int hw, int hh )
+{
+   TestCtx *ctx= (TestCtx*)userData;
+
+   if ( ctx )
+   {
+      ctx->hx= hx;
+      ctx->hy= hy;
+      ctx->hw= hw;
+      ctx->hh= hh;
+   }
+}
 
 static void outputHandleGeometry( void *,
                                   int,
@@ -4165,6 +4182,8 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
 
       EMSetDisplaySize( emctx, ctx->windowWidth, ctx->windowHeight );
 
+      EMSetHolePunchedCallback( emctx, holePunched, ctx );
+
       result= testSetupEGL( &ctx->eglCtx, 0 );
       if ( !result )
       {
@@ -4424,7 +4443,7 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
       // Allow pipeline to run briefly.
       usleep( 200000 );
 
-      hints= WstHints_noRotation;
+      hints= WstHints_noRotation|WstHints_holePunch;
       for( int i= 0; i < 6; ++i )
       {
          usleep( 17000 );
@@ -4541,6 +4560,15 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
          EMERROR("Unexpected video position: iteration %d expected (%d,%d,%d,%d) actual (%d,%d,%d,%d)",
                   iteration, vxexp, vyexp, vwexp, vhexp, vx, vy, vw, vh );
          goto exit;
+      }
+      if ( useEmbedded )
+      {
+         if ( (ctx->hx != vxexp) || (ctx->hy != vyexp) || (ctx->hw != vwexp) || (ctx->hh != vhexp) )
+         {
+            EMERROR("Unexpected hole punch position: iteration %d expected (%d,%d,%d,%d) actual (%d,%d,%d,%d)",
+                     iteration, vxexp, vyexp, vwexp, vhexp, ctx->hx, ctx->hy, ctx->hw, ctx->hh );
+            goto exit;
+         }
       }
    }
 

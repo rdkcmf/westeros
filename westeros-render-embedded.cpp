@@ -1747,7 +1747,7 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
                {
                   rendererEMB->rendererFast->surfaceGetGeometry( rendererEMB->rendererFast, surface->surfaceFast, &sx, &sy, &sw, &sh );
 
-                  if ( sw && sw )
+                  if ( sw && sh )
                   {
                      WstRect r;
 

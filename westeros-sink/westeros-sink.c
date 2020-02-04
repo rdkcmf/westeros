@@ -271,6 +271,10 @@ static void outputHandleMode( void *data,
          printf("westeros-sink: compositor sets window to (%dx%d)\n", width, height);
          sink->windowWidth= width;
          sink->windowHeight= height;
+         if ( sink->vpcSurface )
+         {
+            wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+         }
       }
       UNLOCK( sink );
    }
