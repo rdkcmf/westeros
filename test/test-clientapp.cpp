@@ -178,6 +178,8 @@ void runClientApp(int argc, const char **argv)
       usleep( 17000 );
 
       eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+      wl_display_roundtrip(display);
    }
 
    error= false;

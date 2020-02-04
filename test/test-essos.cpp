@@ -1539,10 +1539,13 @@ bool testCaseEssosDisplaySizeChange( EMCTX *emctx )
    int targetIndex;
    int targetWidth[]= { 1920, 800, 1280, 0 };
    int targetHeight[]= { 1080, 400, 720, 0 };
+   char work[256];
 
    displayWidth= 640;
    displayHeight= 480;
    EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+   EMStart( emctx );
 
    ctx= EssContextCreate();
    if ( !ctx )
@@ -1606,7 +1609,14 @@ bool testCaseEssosDisplaySizeChange( EMCTX *emctx )
 
       if ( !displayWidth || !displayHeight ) break;
 
+      // Use EMSetDisplay size to emulate mode changing on non-KMS devices
       EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+      // Use EssContextSetDisplayMode for mode changing on KMS devices
+      sprintf(work,"%dx%d", displayWidth, displayHeight );
+      EssContextSetDisplayMode( ctx, work );
+
+      EssContextUpdateDisplay( ctx );
 
       for( int i= 0; i < 16; ++i )
       {
@@ -1688,10 +1698,13 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
    int targetWidth[]= { 1920, 800, 1280, 0 };
    int targetHeight[]= { 1080, 400, 720, 0 };
    int safeX, safeY, safeW, safeH;
+   char work[256];
 
    displayWidth= 640;
    displayHeight= 480;
    EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+   EMStart( emctx );
 
    ctx= EssContextCreate();
    if ( !ctx )
@@ -1762,7 +1775,14 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
 
       if ( !displayWidth || !displayHeight ) break;
 
+      // Use EMSetDisplay size to emulate mode changing on non-KMS devices
       EMSetDisplaySize( emctx, displayWidth, displayHeight );
+
+      // Use EssContextSetDisplayMode for mode changing on KMS devices
+      sprintf(work,"%dx%d", displayWidth, displayHeight );
+      EssContextSetDisplayMode( ctx, work );
+
+      EssContextUpdateDisplay( ctx );
 
       for( int i= 0; i < 16; ++i )
       {
@@ -1820,6 +1840,8 @@ bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx )
    int targetIndex;
    int targetWidth[]= { 1920, 800, 1280, 0 };
    int targetHeight[]= { 1080, 400, 720, 0 };
+
+   EMStart( emctx );
 
    displayWidth= 640;
    displayHeight= 480;
@@ -1984,6 +2006,8 @@ bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx )
    int targetWidth[]= { 1920, 800, 1280, 0 };
    int targetHeight[]= { 1080, 400, 720, 0 };
    int safeX, safeY, safeW, safeH;
+
+   EMStart( emctx );
 
    displayWidth= 640;
    displayHeight= 480;
@@ -2232,6 +2256,8 @@ bool testCaseEssosKeyboardBasicKeyInputWayland( EMCTX *emctx )
    EssCtx *ctx= 0;
    TestCtx tCtx;
    TestCtx *testCtx= &tCtx;
+
+   EMStart( emctx );
 
    memset( testCtx, 0, sizeof(TestCtx) );
 
@@ -2491,6 +2517,8 @@ bool testCaseEssosPointerBasicPointerInputWayland( EMCTX *emctx )
    TestCtx tCtx;
    TestCtx *testCtx= &tCtx;
 
+   EMStart( emctx );
+
    memset( testCtx, 0, sizeof(TestCtx) );
 
    wctx= WstCompositorCreate();
@@ -2685,6 +2713,8 @@ bool testCaseEssosTerminateListener( EMCTX *emctx )
    EssCtx *ctx= 0;
    TestCtx tCtx;
    TestCtx *testCtx= &tCtx;
+
+   EMStart( emctx );
 
    memset( testCtx, 0, sizeof(TestCtx) );
 

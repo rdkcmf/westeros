@@ -47,6 +47,7 @@ typedef void (*EMHolePunched)( EMCTX *ctx, void *userData, int x, int y, int w, 
 
 EMCTX* EMCreateContext( void );
 void EMDestroyContext( EMCTX* ctx );
+bool EMStart( EMCTX *ctx );
 bool EMSetDisplaySize( EMCTX *ctx, int width, int height );
 bool EMGetWaylandThreadingIssue( EMCTX *ctx );
 void EMSetWesterosModuleIntFail( EMCTX *ctx, bool initShouldFail );

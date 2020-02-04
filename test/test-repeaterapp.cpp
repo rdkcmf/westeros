@@ -329,6 +329,8 @@ static void client( int bufferIdBase )
       {
          break;
       }
+
+      wl_display_dispatch( display );
    }
 
    error= false;

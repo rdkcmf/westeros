@@ -42,38 +42,38 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <memory.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <signal.h>
 #include <syscall.h>
+#include <sys/ioctl.h>
 #include <sys/time.h>
 #include <stdint.h>
-#include "berr.h"
-#include "nexus_config.h"
-#include "default_nexus.h"
-#include "bmedia_types.h"
-#include "nexus_platform.h"
-#include "nexus_core_utils.h"
-#include "nexus_simple_stc_channel.h"
-#include "nexus_simple_video_decoder.h"
-#include "nexus_surface_client.h"
-#include "nxclient.h"
 #include "westeros-ut-em.h"
 #include "wayland-egl.h"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include "EGL/begl_displayplatform.h"
 
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
+#include <gbm.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#include <drm/drm_fourcc.h>
+
+#include <linux/videodev2.h>
+
 #include "wayland-client.h"
 #include "wayland-server.h"
-#include "bnxs-client-protocol.h"
-#include "bnxs-server-protocol.h"
+#include "drm-client-protocol.h"
+#include "drm-server-protocol.h"
 
 #include <vector>
 #include <map>
@@ -103,16 +103,16 @@
 // Section: internal types ------------------------------------------------------
 
 #define EM_WINDOW_MAGIC (0x55122131)
-#define EM_SIMPLE_VIDEO_DECODER_MAGIC (0x55122132)
 
-struct wl_bnxs_buffer 
+struct wl_drm_buffer 
 {
    struct wl_resource *resource;
    uint32_t format;
    int32_t width;
    int32_t height;
-   int32_t stride;
-   uint32_t nexusSurfaceHandle;
+   int32_t offset[3];  
+   int32_t stride[3];
+   int32_t bufferId;
 };
 
 struct wl_egl_window
@@ -121,7 +121,7 @@ struct wl_egl_window
    struct wl_display *wldisp;
    struct wl_surface *surface;
    struct wl_registry *registry;
-   struct wl_bnxs *bnxs;
+   struct wl_drm *drm;
    struct wl_event_queue *queue;
    bool windowDestroyPending;
    int activeBuffers;
@@ -145,32 +145,15 @@ struct wl_egl_window
    int eglSwapCount;
 };
 
-typedef struct _EMEvent
-{
-} EMEvent;
-
 typedef struct _EMGraphics
 {
 } EMGraphics;
 
 typedef struct _EMSurface
 {
-   NEXUS_PixelFormat pixelFormat;
    int width;
    int height;
-   NEXUS_SurfaceMemory mem;
 } EMSurface;
-
-typedef struct _EMSurfaceClient
-{
-   unsigned client_id;
-   NEXUS_SurfaceClientSettings settings;
-   bool isVideoWindow;
-   NEXUS_Rect pendingPosition;
-   NEXUS_Rect position;
-   bool positionIsPending;
-   long long pendingPositionTime;
-} EMSurfaceClient;
 
 typedef struct _EMNativeWindow
 {
@@ -180,6 +163,8 @@ typedef struct _EMNativeWindow
    int y;
    int width;
    int height;
+   int stride;
+   uint32_t format;
 } EMNativeWindow;
 
 typedef struct _EMNativePixmap
@@ -189,11 +174,6 @@ typedef struct _EMNativePixmap
    EMSurface *s;
 } EMNativePixmap;
 
-
-#define COLORIMETRY_MAX_LEN (20)
-#define MASTERINGMETA_MAX_LEN (100)
-#define CONTENTLIGHT_MAX_LEN (20)
-
 typedef struct _EMSimpleVideoDecoder
 {
    uint32_t magic;
@@ -201,13 +181,9 @@ typedef struct _EMSimpleVideoDecoder
    bool inUse;
    int type;
    uint32_t startPTS;
-   void *stcChannel;
    bool started;
    int videoWidth;
    int videoHeight;
-   char colorimetry[COLORIMETRY_MAX_LEN+1];
-   char masteringMeta[MASTERINGMETA_MAX_LEN+1];
-   char contentLight[CONTENTLIGHT_MAX_LEN+1];
    float videoFrameRate;  //FPS
    float videoBitRate;  // Mbps
    bool segmentsStartAtZero;
@@ -215,21 +191,79 @@ typedef struct _EMSimpleVideoDecoder
    unsigned frameNumber;
    uint32_t currentPTS;
    unsigned long long int basePTS;
-   NEXUS_SimpleVideoDecoderClientSettings clientSettings;
-   NEXUS_SimpleVideoDecoderStartSettings startSettings;
-   NEXUS_VideoDecoderSettings decoderSettings;
-   NEXUS_VideoDecoderTrickState trickState;
-   bool captureStarted;
-   int captureSurfaceCount;
-   int captureSurfaceGetNext;
-   int captureSurfacePutNext;
-   NEXUS_SimpleVideoDecoderStartCaptureSettings captureSettings;
 } EMSimpleVideoDecoder;
 
-typedef struct _EMNXClient
+
+#define EM_DEVICE_FD_BASE (1000000)
+#define EM_DEVICE_MAGIC (0x55112631)
+
+typedef enum _EM_DEVICE_TYPE
 {
-   NEXUS_SurfaceComposition composition;
-} EMNXClient;
+   EM_DEVICE_TYPE_NONE= 0,
+   EM_DEVICE_TYPE_DRM,
+   EM_DEVICE_TYPE_V4L2
+} EM_DEVICE_TYPE;
+
+#define EM_DRM_MODE_MAX 32
+
+typedef struct _EMDevice
+{
+   uint32_t magic;
+   int fd;
+   int fd_os;
+   int type;
+   const char *path;
+   EMCTX *ctx;
+   union _dev
+   {
+      struct _drm
+      {
+         uint32_t nextId;
+         int32_t countModes;
+         drmModeModeInfo modes[EM_DRM_MODE_MAX];
+         int32_t countCrtcs;
+         drmModeCrtc crtcs[1];
+         int32_t countEncoders;
+         drmModeEncoder encoders[1];
+         int32_t countConnectors;
+         drmModeConnector connectors[1];
+         int32_t countProperties;
+         drmModePropertyRes properties[256];
+         int32_t *crtcOutFenceFd;
+         int32_t countPlaneFormats;
+         uint32_t planeFormats[16];
+         uint32_t countPlaneTypeEnum;
+         struct drm_mode_property_enum planeTypeEnum[3];
+         int32_t countPlanes;
+         drmModePlane planes[3];
+      } drm;
+      struct _v4l2
+      {
+      } v4l2;
+   } dev;
+} EMDevice;
+
+struct gbm_device
+{
+   EMDevice *dev;
+   int refCount;
+};
+
+struct gbm_bo
+{
+   struct gbm_surface *surface;
+   bool locked;
+   union gbm_bo_handle handle;
+   uint32_t fbId;
+};
+
+struct gbm_surface
+{
+   EMNativeWindow nw;
+   struct gbm_device *gbm;
+   struct gbm_bo buffers[3];
+   int front;
+};
 
 #define EM_EGL_CONFIG_MAGIC (0x55112231)
 
@@ -281,33 +315,31 @@ typedef struct _EMEGLDisplay
    EGLint swapInterval;
 } EMEGLDisplay;
 
-
 #define DEFAULT_DISPLAY_WIDTH (1280)
 #define DEFAULT_DISPLAY_HEIGHT (720)
 
 #define EM_MAX_ERROR (4096)
-#define EM_MAX_NXCLIENT (100)
+#define EM_DEVICE_MAX (20)
 
 typedef struct _EMWLBinding
 {
    EGLDisplay wlBoundDpy;
    struct wl_display *display;
-   struct wl_bnxs *bnxs;
+   struct wl_drm *drm;
 } EMWLBinding;
 
-typedef struct _EMWLRemote
-{
-   struct wl_display *dspsrc;
-   struct wl_display *dspdest;
-   struct wl_bnxs *bnxsRemote;
-   struct wl_registry *registry;
-   struct wl_event_queue *queue;
-} EMWLRemote;
+typedef void* (*PFNWSTGLINIT)();
+typedef void (*PFNWSTGLTERM)( void* );
 
 typedef struct _EMCTX
 {
+   void *moduleWstGL;
+   PFNWSTGLINIT wstGLInit;
+   PFNWSTGLTERM wstGLTerm;
+   void *wstGLCtx;
    int displayWidth;
    int displayHeight;
+   struct gbm_device *gbm_device;
    EGLContext eglContext;
    EGLDisplay eglDisplayDefault;
    GLuint nextProgramId;
@@ -327,29 +359,24 @@ typedef struct _EMCTX
    GLint textureMagFilter;
    GLint textureMinFilter;
    std::map<struct wl_display*,EMWLBinding> wlBindings;
-   std::map<struct wl_display*,EMWLRemote> wlRemotes;
-   unsigned nextNxClientConnectId;
-   EMSimpleVideoDecoder simpleVideoDecoderMain;
-   NEXUS_VideoDecoderStatus simpleVideoDecoderStatusMain;
-   EMSurfaceClient *videoWindowMain;
-   void *stcChannel;
-   int videoCodec;
-   void *videoPidChannel;
    int waylandSendTid;
    bool waylandThreadingIssue;
    bool westerosModuleInitShouldFail;
    bool westerosModuleInitCalled;
    bool westerosModuleTermCalled;
-   int nextNxClientId;
-   EMNXClient nxclients[EM_MAX_NXCLIENT];
-   std::map<unsigned,EMSurfaceClient*> surfaceClients;
+   EMSimpleVideoDecoder simpleVideoDecoderMain;
 
    EMTextureCreated textureCreatedCB;
    void *textureCreatedUserData;
-   EMBufferPushed bufferPushedCB;
-   void *bufferPushedUserData;
    EMHolePunched holePunchedCB;
    void *holePunchedUserData;
+
+   uint32_t nextGbmBuffHandle;
+   std::vector<struct gbm_bo*> gbmBuffs;
+
+   int deviceCount;
+   int deviceNextFd;
+   EMDevice devices[EM_DEVICE_MAX];
 
    char errorDetail[EM_MAX_ERROR];
 } EMCTX;
@@ -357,6 +384,7 @@ typedef struct _EMCTX
 static EMCTX* emGetContext( void );
 static EMCTX* emCreate( void );
 static void emDestroy( EMCTX* ctx );
+static void EMDevicePruneOS();
 static EGLNativeWindowType wlGetNativeWindow( struct wl_egl_window *egl_window );
 static void wlSwapBuffers( struct wl_egl_window *egl_window );
 
@@ -390,13 +418,18 @@ static void emPrintf( int level, const char *fmt, ... )
 
 EMCTX* EMCreateContext( void )
 {
-   return emGetContext();
+   EMCTX *ctx= 0;
+
+   ctx= emGetContext();
+
+   return ctx;
 }
 
 void EMDestroyContext( EMCTX* ctx )
 {
    if ( ctx )
    {
+      EMDevicePruneOS();
       emDestroy( ctx );
       gCtx= 0;
    }
@@ -408,10 +441,25 @@ bool EMStart( EMCTX *ctx )
 
    if ( ctx )
    {
-      result= true;
-   }
+      void *module= 0;
+      module= dlopen( "libwesteros_gl.so.0.0.0", RTLD_NOW );
+      if ( module )
+      {
+         // Create a WstGLCtx here so that a context has been created
+         // prior to any call to eglGetDisplay. This ensures the global
+         // WstGLCtx is created and destroyed for each test context.
+         ctx->moduleWstGL= module;
+         ctx->wstGLInit= (PFNWSTGLINIT)dlsym( module, "WstGLInit" );
+         ctx->wstGLTerm= (PFNWSTGLTERM)dlsym( module, "WstGLTerm" );
+         if ( ctx->wstGLInit && ctx->wstGLTerm )
+         {
+            ctx->wstGLCtx= ctx->wstGLInit();
+         }
+         TRACE1("wstGLInit %d wstGLTerm %d", ctx->wstGLInit, ctx->wstGLTerm, ctx->wstGLCtx);
 
-   return result;
+         result= true;
+      }
+   }
 }
 
 bool EMSetDisplaySize( EMCTX *ctx, int width, int height )
@@ -423,21 +471,35 @@ bool EMSetDisplaySize( EMCTX *ctx, int width, int height )
       ctx->displayWidth= width;
       ctx->displayHeight= height;
 
-      // Generate display change event
-      for( std::map<unsigned,EMSurfaceClient*>::iterator it= ctx->surfaceClients.begin();
-           it != ctx->surfaceClients.end();
-           ++it )
+      for( int i= 0; i < EM_DEVICE_MAX; ++i )
       {
-         EMSurfaceClient *emsc= (*it).second;
-         if ( emsc->settings.displayStatusChanged.callback )
+         if ( (ctx->devices[i].fd != -1) && (ctx->devices[i].type == EM_DEVICE_TYPE_DRM) )
          {
-            emsc->settings.displayStatusChanged.callback( emsc->settings.displayStatusChanged.context,
-                                                          emsc->settings.displayStatusChanged.param );
+            EMDevice *d= &ctx->devices[i];
+            bool foundMode= false;
+
+            for( int j= 0; j < d->dev.drm.countModes; ++j )
+            {
+               if ( (d->dev.drm.modes[j].hdisplay == width) && (d->dev.drm.modes[j].vdisplay == height) )
+               {
+                  foundMode= true;
+                  d->dev.drm.crtcs[0].mode_valid= 1;
+                  d->dev.drm.crtcs[0].mode= d->dev.drm.modes[j];
+                  break;
+               }
+            }
+            if ( !foundMode )
+            {
+               ERROR("No matching mode for drm device");
+               goto exit;
+            }
          }
       }
 
       result= true;
    }
+
+exit:
 
    return result;
 }
@@ -490,60 +552,6 @@ long long EMGetCurrentTimeMicro(void)
    return utcCurrentTimeMicro;
 }
 
-void EMSetStcChannel( EMCTX *ctx, void *stcChannel )
-{
-   ctx->stcChannel= stcChannel;
-}
-
-void* EMGetStcChannel( EMCTX *ctx )
-{
-   return ctx->stcChannel;
-}
-
-void EMSetVideoCodec( EMCTX *ctx, int codec )
-{
-   ctx->videoCodec= codec;
-}
-
-int EMGetVideoCodec( EMCTX *ctx )
-{
-   return ctx->videoCodec;
-}
-
-void EMSetVideoPidChannel( EMCTX *ctx, void *videoPidChannel )
-{
-   ctx->videoPidChannel= videoPidChannel;
-}
-
-void* EMGetVideoPidChannel( EMCTX *ctx )
-{
-   return ctx->videoPidChannel;
-}
-
-EMSurfaceClient* EMGetVideoWindow( EMCTX *ctx, int id )
-{
-   // ignore id for now
-
-   return ctx->videoWindowMain;
-}
-
-void EMSurfaceClientGetPosition( EMSurfaceClient *emsc, int *x, int *y, int *width, int *height )
-{
-   NEXUS_Rect pendingPosition;
-   NEXUS_Rect position;
-   bool positionIsPending;
-   long long pendingPositionTime;
-   if ( emsc->positionIsPending && (getCurrentTimeMillis() > emsc->pendingPositionTime) )
-   {
-      emsc->positionIsPending= false;
-      emsc->position= emsc->pendingPosition;
-   }
-   if ( x ) *x= emsc->position.x;
-   if ( y ) *y= emsc->position.y;
-   if ( width ) *width= emsc->position.width;
-   if ( height ) *height= emsc->position.height;
-}
-
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id )
 {
    // ignore id for now
@@ -577,39 +585,6 @@ float EMSimpleVideoDecoderGetBitRate( EMSimpleVideoDecoder *dec )
    return dec->videoBitRate;
 }
 
-void EMSimpleVideoDecoderSetColorimetry( EMSimpleVideoDecoder *dec, const char *colorimetry )
-{
-   memset( dec->colorimetry, 0, sizeof(dec->colorimetry) );
-   strncpy( dec->colorimetry, colorimetry, COLORIMETRY_MAX_LEN );
-}
-
-const char* EMSimpleVideoDecoderGetColorimetry( EMSimpleVideoDecoder *dec )
-{
-   return dec->colorimetry;
-}
-
-void EMSimpleVideoDecoderSetMasteringMeta( EMSimpleVideoDecoder *dec, const char *masteringMeta )
-{
-   memset( dec->masteringMeta, 0, sizeof(dec->masteringMeta) );
-   strncpy( dec->masteringMeta, masteringMeta, MASTERINGMETA_MAX_LEN );
-}
-
-const char* EMSimpleVideoDecoderGetMasteringMeta( EMSimpleVideoDecoder *dec )
-{
-   return dec->masteringMeta;
-}
-
-void EMSimpleVideoDecoderSetContentLight( EMSimpleVideoDecoder *dec, const char *contentLight )
-{
-   memset( dec->contentLight, 0, sizeof(dec->contentLight) );
-   strncpy( dec->contentLight, contentLight, CONTENTLIGHT_MAX_LEN );
-}
-
-const char* EMSimpleVideoDecoderGetContentLight( EMSimpleVideoDecoder *dec )
-{
-   return dec->contentLight;
-}
-
 void EMSimpleVideoDecoderSetSegmentsStartAtZero( EMSimpleVideoDecoder *dec, bool startAtZero )
 {
    dec->segmentsStartAtZero= startAtZero;
@@ -641,37 +616,6 @@ unsigned long long EMSimpleVideoDecoderGetBasePTS( EMSimpleVideoDecoder *dec )
    return dec->basePTS;
 }
 
-void EMSimpleVideoDecoderSignalUnderflow( EMSimpleVideoDecoder *dec )
-{
-   if ( dec->decoderSettings.fifoEmpty.callback )
-   {
-      dec->decoderSettings.fifoEmpty.callback( dec->decoderSettings.fifoEmpty.context, 0 );
-   }
-}
-
-void EMSimpleVideoDecoderSignalPtsError( EMSimpleVideoDecoder *dec )
-{
-   if ( dec->decoderSettings.ptsError.callback )
-   {
-      dec->decoderSettings.ptsError.callback( dec->decoderSettings.ptsError.context, 0 );
-   }
-}
-
-void EMSimpleVideoDecoderSetTrickStateRate( EMSimpleVideoDecoder *dec, int rate )
-{
-   dec->trickState.rate= rate;
-}
-
-int EMSimpleVideoDecoderGetTrickStateRate( EMSimpleVideoDecoder *dec )
-{
-   return dec->trickState.rate;
-}
-
-int EMSimpleVideoDecoderGetHdrEotf( EMSimpleVideoDecoder *dec )
-{
-   return dec->startSettings.settings.eotf;
-}
-
 int EMWLEGLWindowGetSwapCount( struct wl_egl_window *w )
 {
    return w->eglSwapCount;
@@ -690,19 +634,11 @@ void EMSetTextureCreatedCallback( EMCTX *ctx, EMTextureCreated cb, void *userDat
    ctx->textureCreatedUserData= userData;
 }
 
-void EMSetBufferPushedCallback( EMCTX *ctx, EMBufferPushed cb, void *userData )
-{
-   ctx->bufferPushedCB= cb;
-   ctx->bufferPushedUserData= userData;
-}
-
 void EMSetHolePunchedCallback( EMCTX *ctx, EMHolePunched cb, void *userData )
 {
    ctx->holePunchedCB= cb;
    ctx->holePunchedUserData= userData;
 }
-
-
 
 
 
@@ -769,20 +705,15 @@ static EMCTX* emCreate( void )
       ctx->eglContext= EGL_NO_CONTEXT;
       
       ctx->wlBindings= std::map<struct wl_display*,EMWLBinding>();
-      ctx->wlRemotes= std::map<struct wl_display*,EMWLRemote>();
-      ctx->surfaceClients= std::map<unsigned,EMSurfaceClient*>();
+      ctx->gbmBuffs= std::vector<struct gbm_bo*>();
 
-      ctx->simpleVideoDecoderMain.magic= EM_SIMPLE_VIDEO_DECODER_MAGIC;
-      ctx->simpleVideoDecoderMain.inUse= false;
-      ctx->simpleVideoDecoderMain.type= NEXUS_DISPLAY_WINDOW_MAIN;
-      ctx->simpleVideoDecoderMain.ctx= ctx;
-      ctx->simpleVideoDecoderMain.videoFrameRate= 60.0;
-      ctx->simpleVideoDecoderMain.videoBitRate= 8.0;
-      ctx->simpleVideoDecoderMain.trickState.rate= NEXUS_NORMAL_DECODE_RATE;
-      ctx->simpleVideoDecoderMain.startSettings.settings.eotf= NEXUS_VideoEotf_eInvalid;
-      ctx->simpleVideoDecoderMain.basePTS= 0;
-
-      ctx->videoCodec= bvideo_codec_unknown;
+      ctx->deviceCount= 0;
+      ctx->deviceNextFd= EM_DEVICE_FD_BASE;
+      for( int i= 0; i < EM_DEVICE_MAX; ++i )
+      {
+         ctx->devices[i].type= EM_DEVICE_TYPE_NONE;
+         ctx->devices[i].fd= -1;
+      }
 
       env= getenv("WESTEROS_UT_DEBUG");
       if ( env )
@@ -803,1679 +734,1524 @@ static void emDestroy( EMCTX* ctx )
    if ( ctx )
    {
       // TBD
+      if ( ctx->wstGLCtx )
+      {
+         ctx->wstGLTerm( ctx->wstGLCtx );
+         ctx->wstGLCtx= 0;
+      }
+      if ( ctx->moduleWstGL )
+      {
+         dlclose( ctx->moduleWstGL );
+         ctx->moduleWstGL= 0;
+      }
       free( ctx );
    }
 }
 
-// Section: bdbg ------------------------------------------------------
+// Section: Base ------------------------------------------------------
 
-void BDBG_P_AssertFailed(const char *expr, const char *file, unsigned line)
+enum _EM_DRM_PROP_IDS
 {
-   ERROR("BDBG_P_AssertFailed: (%s) %s:%d", expr, file, line);
-}
+   EM_DRM_PROP_CRTC_ID= 0,
+   EM_DRM_PROP_ACTIVE,
+   EM_DRM_PROP_MODE_ID,
+   EM_DRM_PROP_OUT_FENCE_PTR,
+   EM_DRM_PROP_TYPE,
+   EM_DRM_PROP_IN_FENCE_FD,
+   EM_DRM_PROP_FB_ID,
+   EM_DRM_PROP_CRTC_X,
+   EM_DRM_PROP_CRTC_Y,
+   EM_DRM_PROP_CRTC_W,
+   EM_DRM_PROP_CRTC_H,
+   EM_DRM_PROP_SRC_X,
+   EM_DRM_PROP_SRC_Y,
+   EM_DRM_PROP_SRC_W,
+   EM_DRM_PROP_SRC_H
+};
 
-// Section: bkni ------------------------------------------------------
-
-void *BKNI_Memset(void *mem, int ch, size_t n)
+void EMDrmDeviceInit( EMDevice *d )
 {
-   memset( mem, ch, n );
-}
+   int i= 0;
 
-BERR_Code BKNI_CreateEvent(BKNI_EventHandle *event)
-{
-   BERR_Code rc= BERR_UNKNOWN;
-   struct BKNI_EventObj *ev= 0;
+   d->dev.drm.modes[i].hdisplay= 3840;
+   d->dev.drm.modes[i].vdisplay= 2160;
+   d->dev.drm.modes[i].vrefresh= 30;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER|DRM_MODE_TYPE_PREFERRED;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
 
-   TRACE1("BKNI_CreateEvent");
-   ev= (struct BKNI_EventObj *)calloc( 1, sizeof(EMEvent) );
-   if ( !ev )
+   d->dev.drm.modes[i].hdisplay= 3840;
+   d->dev.drm.modes[i].vdisplay= 2160;
+   d->dev.drm.modes[i].vrefresh= 24;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 1920;
+   d->dev.drm.modes[i].vdisplay= 1080;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 1920;
+   d->dev.drm.modes[i].vdisplay= 1080;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC | DRM_MODE_FLAG_INTERLACE;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 1920;
+   d->dev.drm.modes[i].vdisplay= 1080;
+   d->dev.drm.modes[i].vrefresh= 50;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC | DRM_MODE_FLAG_INTERLACE;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 1920;
+   d->dev.drm.modes[i].vdisplay= 1080;
+   d->dev.drm.modes[i].vrefresh= 30;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 1920;
+   d->dev.drm.modes[i].vdisplay= 1080;
+   d->dev.drm.modes[i].vrefresh= 24;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 1280;
+   d->dev.drm.modes[i].vdisplay= 720;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 720;
+   d->dev.drm.modes[i].vdisplay= 480;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 720;
+   d->dev.drm.modes[i].vdisplay= 480;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC | DRM_MODE_FLAG_INTERLACE;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 800;
+   d->dev.drm.modes[i].vdisplay= 400;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.modes[i].hdisplay= 640;
+   d->dev.drm.modes[i].vdisplay= 480;
+   d->dev.drm.modes[i].vrefresh= 60;
+   d->dev.drm.modes[i].type= DRM_MODE_TYPE_DRIVER;
+   d->dev.drm.modes[i].flags= DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+   ++i;
+
+   d->dev.drm.countModes= i;
+
+   d->dev.drm.countCrtcs= 1;
+   d->dev.drm.crtcs[0].crtc_id= ++d->dev.drm.nextId;
+   d->dev.drm.crtcs[0].mode_valid= 1;
+   d->dev.drm.crtcs[0].mode= d->dev.drm.modes[0];
+
+   TRACE1("EMDrmDeviceInit: looking for mode to match display size %dx%d", d->ctx->displayWidth, d->ctx->displayHeight);
+   for( int mi= 0; mi < d->dev.drm.countModes; ++mi )
    {
-      rc= BERR_OUT_OF_SYSTEM_MEMORY;
-      goto exit;
-   }
-
-   *event= (BKNI_EventHandle)ev;
-   rc= BERR_SUCCESS;
-
-exit:
-   return rc;
-}
-
-void BKNI_DestroyEvent(BKNI_EventHandle event)
-{
-   TRACE1("BKNI_DestroyEvent");
-   if ( event )
-   {
-      struct BKNI_EventObj *ev= (struct BKNI_EventObj *)event;
-      free( ev );
-   }
-}
-
-void BKNI_SetEvent(BKNI_EventHandle event)
-{
-   TRACE1(" BKNI_SetEvent");
-}
-
-BERR_Code BKNI_WaitForEvent(BKNI_EventHandle event, int timeoutMsec)
-{
-   TRACE1("BKNI_WaitForEvent");
-}
-
-
-// Section: default_nexus ------------------------------------------------------
-
-void NXPL_RegisterNexusDisplayPlatform(NXPL_PlatformHandle *handle, NEXUS_DISPLAYHANDLE display)
-{
-   TRACE1("NXPL_RegisterNexusDisplayPlatform");
-   *handle= emGetContext();
-}
-
-void NXPL_UnregisterNexusDisplayPlatform(NXPL_PlatformHandle handle)
-{
-   TRACE1("NXPL_UnregisterNexusDisplayPlatform");
-}
-
-void *NXPL_CreateNativeWindow(const NXPL_NativeWindowInfo *info)
-{
-   void *nativeWindow= 0;
-   EMCTX *ctx= 0;
-   EMNativeWindow *nw= 0;
-
-   TRACE1("NXPL_CreateNativeWindow");
-
-   ctx= emGetContext();
-   if ( !ctx )
-   {
-      ERROR("NXPL_CreateNativeWindow: emGetContext failed");
-      goto exit;
-   }
-
-   nw= (EMNativeWindow*)calloc( 1, sizeof(EMNativeWindow) );
-   if ( !nw )
-   {
-      ERROR("NXPL_CreateNativeWindow: no memory");
-      goto exit;
-   }
-
-   nw->magic= EM_WINDOW_MAGIC;
-   nw->ctx= ctx;
-   nw->width= info->width;
-   nw->height= info->height;
-
-   nativeWindow= nw;
-
-   TRACE1("NXPL_CreateNativeWindow: nw %p", nativeWindow );
-
-exit:
-   return nativeWindow;
-}
-
-void NXPL_DestroyNativeWindow(void *nativeWindow)
-{
-   TRACE1("NXPL_DestroyNativeWindow");
-
-   if ( nativeWindow )
-   {
-      EMNativeWindow *nw= (EMNativeWindow*)nativeWindow;
-      free( nw );
-   }
-}
-
-void NXPL_ResizeNativeWindow( void *nativeWindow, int width, int height, int dx, int dy )
-{
-   TRACE1("NXPL_DestroyNativeWindow");
-
-   if ( nativeWindow )
-   {
-      EMNativeWindow *nw= (EMNativeWindow*)nativeWindow;
-      nw->x += dx;
-      nw->y += dy;
-      nw->width = width;
-      nw->height = height;
-   }
-}
-
-NXPL_EXPORT void NXPL_GetDefaultPixmapInfoEXT(struct BEGL_PixmapInfoEXT *info)
-{
-   memset( info, 0, sizeof(info));
-   info->secure= false;
-}
-
-bool NXPL_CreateCompatiblePixmapEXT(NXPL_PlatformHandle handle, void **pixmapHandle,
-                                    NEXUS_SURFACEHANDLE *surface, struct BEGL_PixmapInfoEXT *info)
-{
-   bool result= false;
-   EMNativePixmap *npm= 0;
-   EMSurface *ns= 0;
-
-   TRACE1("NXPL_CreateCompatiblePixmapEXT");
-
-   ns= (EMSurface*)calloc( 1, sizeof(EMSurface) );
-   if ( ns )
-   {
-      ns->width= info->width;
-      ns->height= info->height;
-      ns->mem.pitch= info->width*4;
-      ns->mem.buffer= calloc( 1, ns->mem.pitch*ns->height );
-   }
-
-   npm= (EMNativePixmap*)calloc( 1, sizeof(EMNativePixmap) );
-   if ( npm )
-   {
-      npm->width= info->width;
-      npm->height= info->height;
-      npm->s= ns;
-   }
-
-   if ( ns && npm )
-   {
-      *pixmapHandle= npm;
-      *surface= (NEXUS_SurfaceHandle)ns;
-      result= true;
-   }
-
-   return result;
-}
-
-bool NXPL_CreateCompatiblePixmap(NXPL_PlatformHandle handle, void **pixmapHandle,
-                                 NEXUS_SurfaceHandle *surface, struct BEGL_PixmapInfo *info)
-{
-   BEGL_PixmapInfoEXT extInfo;
-
-   TRACE1("NXPL_CreateCompatiblePixmap");
-
-   NXPL_GetDefaultPixmapInfoEXT(&extInfo);
-
-   extInfo.format= info->format;
-   extInfo.width= info->width;
-   extInfo.height= info->height;
-
-   return NXPL_CreateCompatiblePixmapEXT(handle, pixmapHandle, surface, &extInfo);
-}
-
-void NXPL_DestroyCompatiblePixmap(NXPL_PlatformHandle handle, void *pixmapHandle)
-{
-   EMNativePixmap *npm= (EMNativePixmap*)pixmapHandle;
-
-   TRACE1("NXPL_DestroyCompatiblePixmap");
-
-   if ( npm )
-   {
-      EMSurface *ns= npm->s;
-      if ( ns )
+      if ( (d->dev.drm.modes[mi].hdisplay == d->ctx->displayWidth) && (d->dev.drm.modes[mi].vdisplay == d->ctx->displayHeight) )
       {
-         if ( ns->mem.buffer )
-         {
-            free( ns->mem.buffer );
-         }
-         free( ns );
-         npm->s= 0;
+         TRACE1("EMDrmDeviceInit: found matching mode %d", mi);
+         d->dev.drm.crtcs[0].mode= d->dev.drm.modes[mi];
+         break;
       }
-      free( npm );
-   }
-}
-
-// Section: nexus_misc --------------------------------------------------------
-
-void NEXUS_StartCallbacks_tagged(void *interfaceHandle, const char *pFileName, unsigned lineNumber, const char *pFunctionName)
-{
-   TRACE1("NEXUS_StartCallbacks");
-}
-
-void NEXUS_StopCallbacks_tagged(void *interfaceHandle, const char *pFileName, unsigned lineNumber, const char *pFunctionName)
-{
-   TRACE1("NEXUS_StopCallbacks");
-}
-
-// Section: nexus_platform --------------------------------------------------------
-
-NEXUS_HeapHandle NEXUS_Platform_GetFramebufferHeap( unsigned displayIndex )
-{
-   return (NEXUS_HeapHandle)displayIndex;
-}
-
-// Section: nexus_graphics2d ------------------------------------------------------
-
-void NEXUS_Graphics2D_GetDefaultOpenSettings(
-   NEXUS_Graphics2DOpenSettings *pSettings
-   )
-{
-   TRACE1("NEXUS_Graphics2D_GetDefaultOpenSettings");
-}
-
-NEXUS_Graphics2DHandle NEXUS_Graphics2D_Open(
-    unsigned index,
-    const NEXUS_Graphics2DOpenSettings *pSettings
-    )
-{
-   NEXUS_Graphics2D *gfx= 0;
-
-   TRACE1("NEXUS_Graphics2D_Open");
-   gfx= (NEXUS_Graphics2D*)calloc( 1, sizeof(EMGraphics) );
-   if ( gfx )
-   {
-      //TBD
    }
 
-   return (NEXUS_Graphics2DHandle)gfx;
+   d->dev.drm.countEncoders= 1;
+   d->dev.drm.encoders[0].encoder_id= ++d->dev.drm.nextId;
+   d->dev.drm.encoders[0].crtc_id= d->dev.drm.crtcs[0].crtc_id;
+   d->dev.drm.encoders[0].possible_crtcs= 0x1;
+
+   d->dev.drm.countConnectors= 1;
+   d->dev.drm.connectors[0].connector_id= ++d->dev.drm.nextId;
+   d->dev.drm.connectors[0].encoder_id= d->dev.drm.encoders[0].encoder_id;
+   d->dev.drm.connectors[0].connection= DRM_MODE_CONNECTED;
+   d->dev.drm.connectors[0].count_modes= d->dev.drm.countModes;
+   d->dev.drm.connectors[0].modes= d->dev.drm.modes;
+
+   i= 0;
+   d->dev.drm.planeFormats[i++]= DRM_FORMAT_ARGB8888;
+   d->dev.drm.planeFormats[i++]= DRM_FORMAT_NV12;
+   d->dev.drm.countPlaneFormats= i;
+
+   d->dev.drm.countPlaneTypeEnum= 3;
+   strcpy(d->dev.drm.planeTypeEnum[0].name, "Overlay" );
+   d->dev.drm.planeTypeEnum[0].value= DRM_PLANE_TYPE_OVERLAY;
+   strcpy(d->dev.drm.planeTypeEnum[1].name, "Primary" );
+   d->dev.drm.planeTypeEnum[1].value= DRM_PLANE_TYPE_PRIMARY;
+   strcpy(d->dev.drm.planeTypeEnum[2].name, "Cursor" );
+   d->dev.drm.planeTypeEnum[2].value= DRM_PLANE_TYPE_CURSOR;
+
+   d->dev.drm.countPlanes= 3;
+   i= 0;
+   d->dev.drm.planes[i].plane_id= ++d->dev.drm.nextId;
+   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats;
+   d->dev.drm.planes[i].formats= d->dev.drm.planeFormats;
+   d->dev.drm.planes[i].crtc_id= 0;
+   d->dev.drm.planes[i].fb_id= 0;
+   d->dev.drm.planes[i].crtc_x= 0;
+   d->dev.drm.planes[i].crtc_y= 0;
+   d->dev.drm.planes[i].x= 0;
+   d->dev.drm.planes[i].y= 0;
+   d->dev.drm.planes[i].possible_crtcs= 0x1;
+   d->dev.drm.planes[i].gamma_size= 0;
+   ++i;   
+   d->dev.drm.planes[i].plane_id= ++d->dev.drm.nextId;
+   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats;
+   d->dev.drm.planes[i].formats= d->dev.drm.planeFormats;
+   d->dev.drm.planes[i].crtc_id= 0;
+   d->dev.drm.planes[i].fb_id= 0;
+   d->dev.drm.planes[i].crtc_x= 0;
+   d->dev.drm.planes[i].crtc_y= 0;
+   d->dev.drm.planes[i].x= 0;
+   d->dev.drm.planes[i].y= 0;
+   d->dev.drm.planes[i].possible_crtcs= 0x1;
+   d->dev.drm.planes[i].gamma_size= 0;
+   ++i;   
+   d->dev.drm.planes[i].plane_id= ++d->dev.drm.nextId;
+   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats;
+   d->dev.drm.planes[i].formats= d->dev.drm.planeFormats;
+   d->dev.drm.planes[i].crtc_id= 0;
+   d->dev.drm.planes[i].fb_id= 0;
+   d->dev.drm.planes[i].crtc_x= 0;
+   d->dev.drm.planes[i].crtc_y= 0;
+   d->dev.drm.planes[i].x= 0;
+   d->dev.drm.planes[i].y= 0;
+   d->dev.drm.planes[i].possible_crtcs= 0x1;
+   d->dev.drm.planes[i].gamma_size= 0;
+
+   i= 0;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "CRTC_ID" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "ACTIVE" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "MODE_ID" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "OUT_FENCE_PTR" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "type" );
+   d->dev.drm.properties[i].count_enums= d->dev.drm.countPlaneTypeEnum;
+   d->dev.drm.properties[i].enums= d->dev.drm.planeTypeEnum;
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "FB_ID" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "IN_FENCE_FD" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "CRTC_X" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "CRTC_Y" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "CRTC_W" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "CRTC_H" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "SRC_X" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "SRC_Y" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "SRC_W" );
+   ++i;
+   d->dev.drm.properties[i].prop_id= ++d->dev.drm.nextId;
+   strcpy( d->dev.drm.properties[i].name, "SRC_H" );
+   ++i;
+   d->dev.drm.countProperties= i;
 }
 
-void NEXUS_Graphics2D_Close(
-    NEXUS_Graphics2DHandle handle
-    )
+#define EMFDOSFILE_PREFIX "em-drm-"
+#define EMFDOSFILE_TEMPLATE "/tmp/" EMFDOSFILE_PREFIX "%d-XXXXXX"
+
+int EMDeviceOpenOS( int fd )
 {
-   NEXUS_Graphics2D *gfx= (NEXUS_Graphics2D*)handle;
-   TRACE1("NEXUS_Graphics2D_Close");
-   if ( gfx )
+   int fd_os= -1;
+   char work[34];
+
+   snprintf( work, sizeof(work), EMFDOSFILE_TEMPLATE, getpid() );
+   fd_os= mkostemp( work, O_CLOEXEC );
+   if ( fd_os >= 0 )
    {
-      free( gfx );
+     int len, lenwritten;
+     len= snprintf( work, sizeof(work), "%d", fd );
+     lenwritten= write( fd_os, work, len );
+     if ( lenwritten != len )
+     {
+        ERROR("Unable to write to fd_os file");
+        close( fd_os );
+        fd_os= -1;
+     }
    }
-}
-
-void NEXUS_Graphics2D_GetSettings(
-    NEXUS_Graphics2DHandle handle,
-    NEXUS_Graphics2DSettings *pSettings
-    )
-{
-   TRACE1("NEXUS_Graphics2D_GetSettings");
-}
-
-NEXUS_Error NEXUS_Graphics2D_SetSettings(
-    NEXUS_Graphics2DHandle handle,
-    const NEXUS_Graphics2DSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_Graphics2D_SetSettings");
-
-   return rc;
-}
-
-void NEXUS_Graphics2D_GetDefaultBlitSettings(
-    NEXUS_Graphics2DBlitSettings *pSettings
-    )
-{
-   TRACE1("NEXUS_Graphics2D_GetDefaultBlitSettings");
-}
-
-NEXUS_Error NEXUS_Graphics2D_Blit(
-    NEXUS_Graphics2DHandle handle,
-    const NEXUS_Graphics2DBlitSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_Graphics2D_Blit");
-
-   return rc;
-}
-
-NEXUS_Error NEXUS_Graphics2D_Checkpoint(
-    NEXUS_Graphics2DHandle handle,
-    const NEXUS_CallbackDesc *pLegacyCallback
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_Graphics2D_Checkpoint");
-
-   return rc;
-}
-
-
-// Section: nexus_surface ------------------------------------------------------
-
-void NEXUS_Surface_GetDefaultCreateSettings(
-    NEXUS_SurfaceCreateSettings *pCreateSettings
-    )
-{
-   TRACE1("NEXUS_Surface_GetDefaultCreateSettings");
-   memset( pCreateSettings, 0, sizeof(NEXUS_SurfaceCreateSettings) );
-}
-
-NEXUS_SurfaceHandle NEXUS_Surface_Create(
-    const NEXUS_SurfaceCreateSettings *pCreateSettings
-    )
-{
-   EMSurface *ns= 0;
-
-   TRACE1("NEXUS_Surface_Create");
-
-   ns= (EMSurface*)calloc( 1, sizeof(EMSurface) );
-   if ( ns )
+   else
    {
-      ns->pixelFormat= pCreateSettings->pixelFormat;
-      ns->width= pCreateSettings->width;
-      ns->height= pCreateSettings->height;
-      switch( ns->pixelFormat )
+      ERROR("Unable to create fd_os temp file");
+   }
+
+   return fd_os;
+}
+
+static void EMDeviceCloseOS( int fd_os )
+{
+   int pid= getpid();
+   int len, prefixlen;
+   char path[32];
+   char link[256];
+   bool haveTempFilename= false;
+   
+   prefixlen= strlen(EMFDOSFILE_PREFIX);
+   sprintf(path, "/proc/%d/fd/%d", pid, fd_os );
+   len= readlink( path, link, sizeof(link)-1 );
+   if ( len > prefixlen )
+   {
+      link[len]= '\0';
+      if ( strstr( link, EMFDOSFILE_PREFIX ) )
       {
-         default:
-         case NEXUS_PixelFormat_eUnknown:
-         case NEXUS_PixelFormat_eA8_R8_G8_B8:
-         case NEXUS_PixelFormat_eX8_R8_G8_B8:
-         case NEXUS_PixelFormat_eB8_G8_R8_A8:
-         case NEXUS_PixelFormat_eB8_G8_R8_X8:
-            ns->mem.pitch= ns->width*4;
-            break;
-         case NEXUS_PixelFormat_eR5_G6_B5:
-         case NEXUS_PixelFormat_eA4_R4_G4_B4:
-            ns->mem.pitch= ns->width*2;
-            break;
+         haveTempFilename= true;
       }
-      ns->mem.buffer= calloc( 1, ns->mem.pitch*ns->height );
    }
-
-   return (NEXUS_SurfaceHandle)ns;
-}
-
-NEXUS_Error NEXUS_Surface_GetMemory(
-    NEXUS_SurfaceHandle surface,
-    NEXUS_SurfaceMemory *pMemory
-    )
-{
-   NEXUS_Error rc;
-   EMSurface *ns;
-
-   TRACE1("NEXUS_Surface_GetMemory");
-
-   if ( !surface || ! pMemory )
+   
+   close( fd_os );
+   
+   if ( haveTempFilename )
    {
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
+      remove( link );
    }
-
-   ns= (EMSurface*)surface;
-   *pMemory= ns->mem;
-
-   rc= NEXUS_SUCCESS;
-
-exit:
-   return rc;
 }
 
-void NEXUS_Surface_GetStatus(
-    NEXUS_SurfaceHandle surface,
-    NEXUS_SurfaceStatus *pStatus
-    )
+int EMDeviceGetFdFromFdOS( int fd_os )
 {
-   TRACE1("NEXUS_Surface_GetStatus");
-}
-
-void NEXUS_Surface_Flush(
-    NEXUS_SurfaceHandle surface
-    )
-{
-   TRACE1("NEXUS_Surface_Flush");
-}
-
-void NEXUS_Surface_Destroy(
-    NEXUS_SurfaceHandle surface
-    )
-{
-   EMSurface *ns;
-
-   TRACE1("NEXUS_Surface_Destroy");
-
-   ns= (EMSurface*)surface;
-   if ( ns->mem.buffer )
+   int fd= -1;
+   int rc;
+   char work[34];
+   rc= lseek( fd_os, 0, SEEK_SET );
+   if ( rc >= 0 )
    {
-      free( ns->mem.buffer );
-      ns->mem.buffer= 0;
-   }
-   free( ns );
-}
-
-NEXUS_Error NEXUS_Surface_Lock( NEXUS_SurfaceHandle surface, void **ppMemory )
-{
-   NEXUS_Error rc;
-   EMSurface *ns;
-
-   TRACE1("NEXUS_Surface_Lock");
-
-   if ( !surface || ! ppMemory )
-   {
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   ns= (EMSurface*)surface;
-
-   *ppMemory= (void*)ns->mem.buffer;
-
-   rc= NEXUS_SUCCESS;
-
-exit:
-   return rc;
-}
-
-void NEXUS_Surface_Unlock( NEXUS_SurfaceHandle surface )
-{
-   TRACE1("NEXUS_Surface_Unlock");
-}
-
-// Section: nexus_surface_client ------------------------------------------------------
-
-NEXUS_Error NEXUS_SurfaceClient_GetStatus(
-    NEXUS_SurfaceClientHandle handle,
-    NEXUS_SurfaceClientStatus *pStatus
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMCTX *ctx= 0;
-
-   TRACE1("NEXUS_SurfaceClient_GetStatus");
-
-   ctx= emGetContext();
-   if ( !ctx )
-   {
-      ERROR("NEXUS_SurfaceClient_GetStatus: emGetContext failed");
-      goto exit;
-   }
-
-   pStatus->display.framebuffer.width= ctx->displayWidth;
-   pStatus->display.framebuffer.height= ctx->displayHeight;
-
-exit:
-   return rc;
-}
-
-NEXUS_SurfaceClientHandle NEXUS_SurfaceClient_Acquire(
-    NEXUS_SurfaceCompositorClientId client_id
-    )
-{
-   struct NEXUS_SurfaceClient *sc= 0;
-   EMSurfaceClient *emsc= 0;
-   EMCTX *ctx= 0;
-
-   TRACE1("NEXUS_SurfaceClient_Acquire");
-
-   ctx= emGetContext();
-   if ( !ctx )
-   {
-      ERROR("NEXUS_SurfaceClient_Acquire: emGetContext failed");
-      goto exit;
-   }
-
-   emsc= (EMSurfaceClient*)calloc( 1, sizeof(EMSurfaceClient));
-   if ( !emsc )
-   {
-      ERROR("NEXUS_SurfaceClient_Acquire: no memory for EMSurfaceClient");
-      goto exit;
-   }
-   emsc->client_id= client_id;
-
-   ctx->surfaceClients.insert( std::pair<unsigned,EMSurfaceClient*>( client_id, emsc ) );
-
-   sc= (struct NEXUS_SurfaceClient*)emsc;
-
-exit:
-   return (NEXUS_SurfaceClientHandle)sc;
-}
-
-void NEXUS_SurfaceClient_Release(
-    NEXUS_SurfaceClientHandle client
-    )
-{
-   EMSurfaceClient *emsc= (EMSurfaceClient*)client;
-   EMCTX *ctx= 0;
-
-   TRACE1("NEXUS_SurfaceClient_Release");
-
-   if ( emsc )
-   {
-      ctx= emGetContext();
-      if ( !ctx )
+      memset( work, 0, sizeof(work) );
+      rc= read( fd_os, work, sizeof(work)-1 );
+      if ( rc > 0 )
       {
-         ERROR("NEXUS_SurfaceClient_Release: emGetContext failed");
-      }
-      else
-      {
-         std::map<unsigned,EMSurfaceClient*>::iterator it= ctx->surfaceClients.find( emsc->client_id );
-         if ( it != ctx->surfaceClients.end() )
-         {
-            ctx->surfaceClients.erase(it);
-         }
-      }
-
-      free( emsc );
-   }
-}
-
-void NEXUS_SurfaceClient_GetSettings(
-    NEXUS_SurfaceClientHandle handle,
-    NEXUS_SurfaceClientSettings *pSettings
-    )
-{
-   EMSurfaceClient *emsc= (EMSurfaceClient*)handle;
-
-   TRACE1("NEXUS_SurfaceClient_GetSettings");
-
-   *pSettings= emsc->settings;
-}
-
-NEXUS_Error NEXUS_SurfaceClient_SetSettings(
-    NEXUS_SurfaceClientHandle handle,
-    const NEXUS_SurfaceClientSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSurfaceClient *emsc= (EMSurfaceClient*)handle;
-
-   TRACE1("NEXUS_SurfaceClient_SetSettings");
-
-   if ( emsc->isVideoWindow )
-   {
-      // Emulate settings change on next vertical
-      emsc->positionIsPending= true;
-      emsc->pendingPosition= pSettings->composition.position;
-      emsc->pendingPositionTime= getCurrentTimeMillis()+8;
-   }
-   emsc->settings= *pSettings;
-
-   return rc;
-}
-
-NEXUS_Error NEXUS_SurfaceClient_PushSurface(
-    NEXUS_SurfaceClientHandle handle,
-    NEXUS_SurfaceHandle surface,
-    const NEXUS_Rect *pUpdateRect,
-    bool infront
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_SurfaceClient_PushSurface");
-
-   EMCTX *ctx= 0;
-   ctx= emGetContext();
-   if ( ctx )
-   {
-      if ( ctx->bufferPushedCB )
-      {
-         int bufferId= (int)surface;
-         ctx->bufferPushedCB( ctx, ctx->bufferPushedUserData, bufferId );
+         fd= atoi(work);
       }
    }
    else
    {
-      ERROR("glEGLImageTargetTexture2DOES: emGetContext failed");
+      ERROR("Unable to seek to start of fd_os %d", fd_os);
    }
 
-   return rc;
+   return fd;
 }
 
-NEXUS_Error NEXUS_SurfaceClient_RecycleSurface(
-    NEXUS_SurfaceClientHandle handle,
-    NEXUS_SurfaceHandle *recycled,
-    size_t num_entries,
-    size_t *num_returned
-    )
+static void EMDevicePruneOS()
 {
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_SurfaceClient_RecycleSurface");
-
-   return rc;
-}
-
-void NEXUS_SurfaceClient_Clear(
-    NEXUS_SurfaceClientHandle handle
-    )
-{
-   TRACE1("NEXUS_SurfaceClient_Clear");
-}
-
-NEXUS_SurfaceClientHandle NEXUS_SurfaceClient_AcquireVideoWindow(
-    NEXUS_SurfaceClientHandle parent_handle,
-    unsigned window_id
-    )
-{
-   EMSurfaceClient *emsc= 0;
-   EMCTX *ctx= 0;
-
-   TRACE1("NEXUS_SurfaceClient_AcquireVideoWindow");
-
-   ctx= emGetContext();
-   if ( !ctx )
+   DIR *dir;
+   struct dirent *result;
+   struct stat fileinfo;
+   int prefixLen;
+   int pid, rc;
+   char work[34];
+   if ( NULL != (dir = opendir( "/tmp" )) )
    {
-      ERROR("NEXUS_SurfaceClient_AcquireVideoWindow: emGetContext failed");
-      goto exit;
-   }
-
-   emsc= (EMSurfaceClient*)calloc( 1, sizeof(EMSurfaceClient));
-   if ( !emsc )
-   {
-      ERROR("NEXUS_SurfaceClient_AcquireVideoWindow: no memory for EMSurfaceClient");
-      goto exit;
-   }
-   emsc->isVideoWindow= true;
-   emsc->client_id= window_id;
-
-   ctx->videoWindowMain= emsc;
-
-exit:
-
-   return (NEXUS_SurfaceClientHandle)emsc;
-}
-
-void NEXUS_SurfaceClient_ReleaseVideoWindow(
-    NEXUS_SurfaceClientHandle window_handle
-    )
-{
-   EMSurfaceClient *emsc= 0;
-   EMCTX *ctx= 0;
-
-   TRACE1("NEXUS_SurfaceClient_ReleaseVideoWindow");
-
-   emsc= (EMSurfaceClient*)window_handle;
-
-   if ( !emsc->isVideoWindow )
-   {
-      ERROR("NEXUS_SurfaceClient_ReleaseVideoWindow: not a video window");
-      goto exit;
-   }
-
-   free( emsc );
-
-   ctx= emGetContext();
-   if ( !ctx )
-   {
-      ERROR("NEXUS_SurfaceClient_ReleaseVideoWindow: emGetContext failed");
-      goto exit;
-   }
-
-   ctx->videoWindowMain= 0;
-
-exit:
-   return;
-}
-
-// Section: nexus_video_decoder ------------------------------------------------------
-
-void NEXUS_GetVideoDecoderCapabilities(
-    NEXUS_VideoDecoderCapabilities *pCapabilities
-    )
-{
-   TRACE1("NEXUS_GetVideoDecoderCapabilities");
-   memset( pCapabilities, 0, sizeof(pCapabilities));
-   pCapabilities->memory[0].maxFormat= NEXUS_VideoFormat_e3840x2160p24hz;
-}
-
-// Section: nexus_simple_stc_channel ------------------------------------------------------
-
-NEXUS_Error NEXUS_SimpleStcChannel_Freeze(
-    NEXUS_SimpleStcChannelHandle handle,
-    bool frozen
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_SimpleStcChannel_Freeze: stc %p frozen %d", handle, frozen);
-
-   return rc;
-}
-
-NEXUS_Error NEXUS_SimpleStcChannel_Invalidate(
-    NEXUS_SimpleStcChannelHandle handle
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NEXUS_SimpleStcChannel_Invalidate: stc %p", handle);
-
-   return rc;
-}
-
-
-// Section: nexus_simple_video_decoder ------------------------------------------------------
-
-void NEXUS_SimpleVideoDecoder_GetDefaultStartSettings(
-    NEXUS_SimpleVideoDecoderStartSettings *pSettings
-    )
-{
-   TRACE1("NEXUS_SimpleVideoDecoder_GetDefauiltStartSettings");
-   pSettings->settings.eotf= NEXUS_VideoEotf_eInvalid;
-}
-
-NEXUS_SimpleVideoDecoderHandle NEXUS_SimpleVideoDecoder_Acquire( 
-    unsigned index
-    )
-{
-   NEXUS_SimpleVideoDecoderHandle handle= 0;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_Acquire");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_Acquire: emGetContext failed");
-      goto exit;
-   }
-
-   emctx->simpleVideoDecoderMain.inUse= true;
-
-   handle= (NEXUS_SimpleVideoDecoderHandle)&emctx->simpleVideoDecoderMain;
-
-exit:
-   return handle;
-}
-
-void NEXUS_SimpleVideoDecoder_Release(
-    NEXUS_SimpleVideoDecoderHandle handle
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_Release");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_Release: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_Release: bad decoder handle");
-      goto exit;
-   }
-
-   dec->inUse= false;
-
-exit:
-   return;
-}
-
-void NEXUS_SimpleVideoDecoder_GetStreamInformation(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_VideoDecoderStreamInformation *pStreamInfo
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetStreamInformation");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetStreamInformation: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetStreamInformation: bad decoder handle");
-      goto exit;
-   }
-
-exit:
-   return;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_GetClientStatus(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_SimpleVideoDecoderClientStatus *pStatus
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetClientStatus");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetClientStatus: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetClientStatus: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   pStatus->enabled= dec->inUse;
-
-   rc= NEXUS_SUCCESS;
-
-exit:
-   return rc;
-}
-
-void NEXUS_SimpleVideoDecoder_GetClientSettings(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_SimpleVideoDecoderClientSettings *pSettings
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetClientSettings");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetClientSettings: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetClientSettings: bad decoder handle");
-      goto exit;
-   }
-
-   *pSettings= dec->clientSettings;
-
-exit:
-   return;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_SetClientSettings(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_SimpleVideoDecoderClientSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_SetClientSettings");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_SetClientSettings: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_SetClientSettings: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   dec->clientSettings= *pSettings;
-
-   if ( dec->clientSettings.resourceChanged.callback )
-   {
-      dec->clientSettings.resourceChanged.callback( dec->clientSettings.resourceChanged.context, 0 );
-   }
-
-exit:
-   return rc;
-}
-
-void NEXUS_SimpleVideoDecoder_GetSettings(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_VideoDecoderSettings *pSettings
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetSettings");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetSettings: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetSettings: bad decoder handle");
-      goto exit;
-   }
-
-   *pSettings= dec->decoderSettings;
-
-exit:
-   return;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_SetSettings(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_VideoDecoderSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_SetSettings");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_SetSettings: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_SetSettings: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   dec->decoderSettings= *pSettings;
-
-exit:
-   return rc;
-}
-
-void NEXUS_SimpleVideoDecoder_GetExtendedSettings(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_VideoDecoderExtendedSettings *pSettings
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetExtendedSettings");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetExtendedSettings: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetExtendedSettings: bad decoder handle");
-      goto exit;
-   }
-
-exit:
-   return;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_SetExtendedSettings(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_VideoDecoderExtendedSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_SetExtendedSettings");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_SetExtendedSettings: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_SetExtendedSettings: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-exit:
-   return rc;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_SetStartPts(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    uint32_t pts
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_SetStartPts");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_SetStartPts: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_SetStartPts: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   dec->startPTS= pts;
-
-exit:
-   return rc;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_SetStcChannel(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_SimpleStcChannelHandle stcChannel
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_SetStcChannel: decoder handle %p stc handle %p", handle, stcChannel);
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_SetStcChannel: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_SetStcChannel: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   dec->stcChannel= stcChannel;
-
-exit:
-   return rc;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_GetStatus(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_VideoDecoderStatus *pStatus
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetStatus");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetStatus: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetStatus: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   pStatus->started= dec->started;
-   pStatus->source.width= dec->videoWidth;
-   pStatus->source.height= dec->videoHeight;
-   pStatus->pts= (dec->basePTS/2) + ((dec->frameNumber/dec->videoFrameRate)*45000);
-   pStatus->numDecoded= dec->frameNumber;
-   pStatus->numDisplayed= dec->frameNumber;
-   pStatus->firstPtsPassed= dec->firstPtsPassed;
-   pStatus->numBytesDecoded= dec->frameNumber*1000;
-
-exit:
-   return rc;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_Start(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_SimpleVideoDecoderStartSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_Start");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_Start: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_Start: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   dec->startSettings= *pSettings;
-
-   dec->started= true;
-
-exit:
-   return rc;
-}
-
-void NEXUS_SimpleVideoDecoder_Stop(
-    NEXUS_SimpleVideoDecoderHandle handle
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_Stop");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_Stop: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_Stop: bad decoder handle");
-      goto exit;
-   }
-
-   dec->started= false;
-
-exit:
-   return;
-}
-
-void NEXUS_SimpleVideoDecoder_Flush(
-    NEXUS_SimpleVideoDecoderHandle handle
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_Flush");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_Flush: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_Flush: bad decoder handle");
-      goto exit;
-   }
-
-exit:
-   return;
-}
-
-void NEXUS_SimpleVideoDecoder_GetTrickState(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_VideoDecoderTrickState *pSettings
-    )
-{
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetTrickState");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetTrickState: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetTrickState: bad decoder handle");
-      goto exit;
-   }
-
-   *pSettings= dec->trickState;
-
-exit:
-   return;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_SetTrickState(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_VideoDecoderTrickState *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_SetTrickState");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_SetTrickState: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_SetTrickState: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   dec->trickState= *pSettings;
-
-exit:
-   return rc;
-}
-
-void NEXUS_SimpleVideoDecoder_GetDefaultStartCaptureSettings(
-    NEXUS_SimpleVideoDecoderStartCaptureSettings *pSettings
-    )
-{
-   TRACE1("NEXUS_SimpleVideoDecoder_GetDefaultStartCaptureSettings");
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_StartCapture(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_SimpleVideoDecoderStartCaptureSettings *pSettings
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_StartCapture");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_StartCapture: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_StartCapture: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   for( int i= 0; i < NEXUS_SIMPLE_DECODER_MAX_SURFACES; ++i )
-   {
-      if ( pSettings->surface[i] == NULL )
+      prefixLen= strlen(EMFDOSFILE_PREFIX);
+      while( NULL != (result = readdir( dir )) )
       {
-         EMERROR("NEXUS_SimpleVideoDecoder_StartCapture: bad surface handle");
-         rc= NEXUS_INVALID_PARAMETER;
+         if ( (result->d_type != DT_DIR) &&
+             !strncmp(result->d_name, EMFDOSFILE_PREFIX, prefixLen) )
+         {
+            snprintf( work, sizeof(work), "%s/%s", "/tmp", result->d_name);
+            if ( sscanf( work, EMFDOSFILE_TEMPLATE, &pid ) == 1 )
+            {
+               rc= kill( pid, 0 );
+               if ( (pid == getpid()) || (rc != 0) )
+               {
+                  // Remove file since owned by us or owning process nolonger exists
+                  snprintf( work, sizeof(work), "%s/%s", "/tmp", result->d_name);
+                  remove( work );
+               }
+            }
+         }
+      }
+
+      closedir( dir );
+   }
+}
+
+int EMDeviceOpen( int type, const char *pathname, int flags )
+{
+   int fd= -1;
+   EMCTX *ctx= 0;
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceOpen: emGetContext failed");
+      goto exit;
+   }
+
+   if ( ctx->deviceCount < EM_DEVICE_MAX-1 )
+   {
+      for( int i= 0; i < EM_DEVICE_MAX; ++i )
+      {
+         if ( ctx->devices[i].fd == -1 )
+         {
+            ++ctx->deviceCount;
+            fd= ctx->deviceNextFd++;
+            TRACE1("EMDeviceOpen: open %s as fd %d type %d slot %d", pathname, fd, type, i);
+            ctx->devices[i].magic= EM_DEVICE_MAGIC;
+            ctx->devices[i].fd= fd;
+            ctx->devices[i].fd_os= EMDeviceOpenOS(fd);
+            ctx->devices[i].type= type;
+            ctx->devices[i].path= strdup(pathname);
+            ctx->devices[i].ctx= ctx;
+            EMDrmDeviceInit( &ctx->devices[i] );
+            break;
+         }
+      }
+      
+   }
+
+exit:
+   return fd;
+}
+
+int EMDeviceClose( int fd )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceClose: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         TRACE1("EMDeviceClose: closing device fd %d, %s", fd, ctx->devices[i].path );
+         if ( ctx->devices[i].path )
+         {
+            free( (void*)ctx->devices[i].path );
+            ctx->devices[i].path= 0;
+         }
+         if ( ctx->devices[i].fd_os >= 0 )
+         {
+            EMDeviceCloseOS( ctx->devices[i].fd_os );
+            ctx->devices[i].fd_os= -1;
+         }
+         ctx->devices[i].fd= -1;
+         ctx->devices[i].type= EM_DEVICE_TYPE_NONE;
+         ctx->devices[i].magic= 0;
+         rc= 0;
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+int EMDrmIOctl( EMDevice *dev, int fd, int request, void *arg )
+{
+   int rc= -1;
+   switch( request )
+   {
+      case DRM_IOCTL_SET_CLIENT_CAP:
+         {
+            struct drm_set_client_cap *clientCap= (struct drm_set_client_cap *)arg;
+            if ( clientCap )
+            {
+               switch( clientCap->capability )
+               {
+                  case DRM_CLIENT_CAP_UNIVERSAL_PLANES:
+                     rc= 0;
+                     break;
+                  case DRM_CLIENT_CAP_ATOMIC:
+                     rc= 0;
+                     break;
+                  default:
+                     break;
+               }
+            }
+         }
+         break;
+      default:
+         break;
+   }
+   return rc;
+}
+
+int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
+{
+   int rc= -1;
+   switch( request )
+   {
+      case VIDIOC_QUERYCAP:
+         {
+            struct v4l2_capability *caps= (struct v4l2_capability*)arg;
+
+            TRACE1("VIDIOC_QUERYCAP");
+
+            if ( !strcmp( dev->path, "/dev/video10") )
+            { 
+               memset( caps, 0, sizeof(struct v4l2_capability));
+               caps->device_caps= V4L2_CAP_STREAMING|V4L2_CAP_EXT_PIX_FORMAT|V4L2_CAP_VIDEO_M2M_MPLANE;
+               caps->capabilities= V4L2_CAP_DEVICE_CAPS | caps->device_caps;
+               caps->version= 1;
+               strncpy( caps->driver, "WesterosUTEM", 16 );
+               strncpy( caps->card, "WesterosUTEM", 32 );
+               strncpy( caps->bus_info, "WesterosUTEM", 32 );
+               rc= 0;
+            }
+         }
+         break;
+      case VIDIOC_EXPBUF:
+         {
+            struct v4l2_exportbuffer *eb= (struct v4l2_exportbuffer*)arg;
+
+            TRACE1("VIDIOC_EXPBUF");
+
+            rc= -1;
+            errno= EINVAL;
+         }
+         break;
+
+      //TBD
+
+      default:
+         break;
+   }
+   return rc;
+}
+
+int EMDeviceIOctl( int fd, int request, void *arg )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceIOctl: fd %d request %d arg %p", fd, request, arg );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceIOctl: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_DRM:
+               rc= EMDrmIOctl( &ctx->devices[i], fd, request, arg );
+               break;
+            case EM_DEVICE_TYPE_V4L2:
+               rc= EMV4l2IOctl( &ctx->devices[i], fd, request, arg );
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+extern "C"
+{
+#undef open
+#undef close
+#undef ioctl
+
+int EMIOctl( int fd, int request, void *arg )
+{
+   int rc= -1;
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDeviceIOctl( fd, request, arg );
+   }
+   else
+   {
+      rc= ioctl( fd, request, arg );
+   }
+   return rc;
+}
+
+int EMOpen2( const char *pathname, int flags )
+{
+   int fd= -1;
+   int type= EM_DEVICE_TYPE_NONE;
+
+   TRACE1("open name %s flags %x", pathname, flags);
+
+   if ( strstr( pathname, "/dev/dri/card" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_DRM;
+   }
+   else if ( strstr( pathname, "/dev/video" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_V4L2;
+   }
+   else
+   {
+      goto passthru;
+   }
+
+   fd= EMDeviceOpen( type, pathname, flags );
+   goto exit;
+
+passthru:
+  fd= open( pathname, flags );
+
+exit:
+   return fd;
+}
+
+int EMOpen3( const char *pathname, int flags, mode_t mode )
+{
+   int fd= -1;
+   int type= EM_DEVICE_TYPE_NONE;
+
+   TRACE1("open name %s flags %x mode %x\n", pathname, flags, mode);
+
+   if ( strstr( pathname, "/dev/dri/card" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_DRM;
+   }
+   else if ( strstr( pathname, "/dev/video" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_V4L2;
+   }
+   else
+   {
+      goto passthru;
+   }
+
+   fd= EMDeviceOpen( type, pathname, flags );
+   goto exit;
+
+passthru:
+   fd= open( pathname, flags, mode );
+
+exit:
+   return fd;
+}
+
+int EMClose( int fd )
+{
+   int rc;
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDeviceClose( fd );
+   }
+   else
+   {
+      rc= close( fd );
+   }
+   return rc;
+}
+
+} //extern "C"
+
+// Section DRM -------------------------------------------------------
+
+extern "C"
+{
+
+EMDevice *EMDrmGetDevice( int fd )
+{
+   EMDevice *dev= 0;
+   EMCTX *ctx= 0;
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDrmGetDevice: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_DRM:
+               dev= &ctx->devices[i];
+               break;
+            default:
+               ERROR("Bad EM device fd %d", fd);
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return dev;
+}
+
+drmModeResPtr drmModeGetResources(int fd)
+{
+   drmModeRes *res= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeGetResources: fd %d", fd);
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      res= (drmModeRes*)calloc( 1, sizeof(drmModeRes) );
+      if ( res )
+      {
+         res->count_crtcs= dev->dev.drm.countCrtcs;
+         res->crtcs= (uint32_t*)calloc( 1, res->count_crtcs*sizeof(uint32_t));
+         if ( !res->crtcs )
+         {
+            goto error;
+         }
+         for( i= 0; i < res->count_crtcs; ++i )
+         {
+            res->crtcs[i]= dev->dev.drm.crtcs[i].crtc_id;
+         }
+
+         res->count_connectors= dev->dev.drm.countConnectors;
+         res->connectors= (uint32_t*)calloc( 1, res->count_connectors*sizeof(uint32_t));
+         if ( !res->connectors )
+         {
+            goto error;
+         }
+         for( i= 0; i < res->count_connectors; ++i )
+         {
+            res->connectors[i]= dev->dev.drm.connectors[i].connector_id;
+         }
+
+         res->count_encoders= dev->dev.drm.countEncoders;
+         res->encoders= (uint32_t*)calloc( 1, res->count_encoders*sizeof(uint32_t));
+         if ( !res->encoders )
+         {
+            goto error;
+         }
+         for( i= 0; i < res->count_encoders; ++i )
+         {
+            res->encoders[i]= dev->dev.drm.encoders[i].encoder_id;
+         }
+
          goto exit;
       }
    }
 
-   pthread_mutex_lock( &gMutex );
-   dec->captureSettings= *pSettings;
-   dec->captureSurfaceGetNext= 0;
-   dec->captureSurfacePutNext= 0;
-   dec->captureSurfaceCount= NEXUS_SIMPLE_DECODER_MAX_SURFACES;
-   dec->captureStarted= true;
-   pthread_mutex_unlock( &gMutex );
+error:
+   drmModeFreeResources( res );
+   res= 0;
 
 exit:
-   return rc;
+   return res;
 }
 
-void NEXUS_SimpleVideoDecoder_StopCapture(
-    NEXUS_SimpleVideoDecoderHandle handle
-    )
+void drmModeFreeResources( drmModeResPtr ptr )
 {
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_StopCapture");
-
-   emctx= emGetContext();
-   if ( !emctx )
+   TRACE1("drmModeFreeResources: ptr %p");
+   if ( ptr )
    {
-      ERROR("NEXUS_SimpleVideoDecoder_StopCapture: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_StopCapture: bad decoder handle");
-      goto exit;
-   }
-
-   pthread_mutex_lock( &gMutex );
-   dec->captureStarted= false;
-   pthread_mutex_unlock( &gMutex );
-
-exit:
-   return;
-}
-
-NEXUS_Error NEXUS_SimpleVideoDecoder_GetCapturedSurfaces(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    NEXUS_SurfaceHandle *pSurface,
-    NEXUS_VideoDecoderFrameStatus *pStatus,
-    unsigned numEntries,
-    unsigned *pNumReturned
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_GetCapturedSurfaces");
-
-   emctx= emGetContext();
-   if ( !emctx )
-   {
-      ERROR("NEXUS_SimpleVideoDecoder_GetCapturedSurfaces: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetCapturedSurfaces: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   if ( numEntries < 1 )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_GetCapturedSurfaces: bad numEntries");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
-   }
-
-   pthread_mutex_lock( &gMutex );
-   *pNumReturned= 0;
-   if ( !dec->captureStarted )
-   {
-      rc= NEXUS_NOT_AVAILABLE;
-      pthread_mutex_unlock( &gMutex );
-      goto exit;
-   }
-   if ( dec->captureSurfaceCount > 0 )
-   {
-      --dec->captureSurfaceCount;
-      *pSurface= dec->captureSettings.surface[dec->captureSurfaceGetNext];
-      dec->captureSurfaceGetNext += 1;
-      if ( dec->captureSurfaceGetNext >= NEXUS_SIMPLE_DECODER_MAX_SURFACES )
+      if ( ptr->crtcs )
       {
-         dec->captureSurfaceGetNext= 0;;
+         free( ptr->crtcs );
       }
-      *pNumReturned= 1;
+      free( ptr );
    }
-   pthread_mutex_unlock( &gMutex );
-
-   if ( *pNumReturned == 1 )
-   {
-      usleep(9000);
-   }
-
-exit:
-   return rc;
 }
 
-void NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(
-    NEXUS_SimpleVideoDecoderHandle handle,
-    const NEXUS_SurfaceHandle *pSurface,
-    unsigned numEntries
-    )
+drmModeConnectorPtr drmModeGetConnector( int fd, uint32_t connectorId )
 {
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
+   drmModeConnector *conn= 0;
+   EMDevice *dev= 0;
+   int i;
 
-   TRACE1("NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces");
+   TRACE1("drmModeGetConnector: fd %d, connectorId %u", fd, connectorId);
 
-   emctx= emGetContext();
-   if ( !emctx )
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
    {
-      ERROR("NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces: emGetContext failed");
-      goto exit;
-   }
-
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
-   {
-      EMERROR("NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces: bad decoder handle");
-      goto exit;
-   }
-
-   pthread_mutex_lock( &gMutex );
-   for( int i= 0; i < numEntries; ++i )
-   {
-      if ( pSurface[i] && (dec->captureSurfaceCount < NEXUS_SIMPLE_DECODER_MAX_SURFACES) )
+      for( i= 0; i < dev->dev.drm.countConnectors; ++i )
       {
-         ++dec->captureSurfaceCount;
-         dec->captureSettings.surface[dec->captureSurfacePutNext]= pSurface[i];
-         dec->captureSurfacePutNext += 1;
-         if ( dec->captureSurfacePutNext >= NEXUS_SIMPLE_DECODER_MAX_SURFACES )
+         if ( dev->dev.drm.connectors[i].connector_id == connectorId )
          {
-            dec->captureSurfacePutNext= 0;
+            conn= (drmModeConnector*)calloc( 1, sizeof(drmModeConnector) );
+            if ( conn )
+            {
+               *conn= dev->dev.drm.connectors[i];
+               break;
+            }
          }
       }
    }
-   pthread_mutex_unlock( &gMutex );
 
-exit:
-   return;
+   return conn;
 }
 
-NEXUS_Error NEXUS_SimpleVideoDecoder_FrameAdvance(
-    NEXUS_SimpleVideoDecoderHandle handle
-    )
+void drmModeFreeConnector( drmModeConnectorPtr ptr )
 {
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMSimpleVideoDecoder *dec= (EMSimpleVideoDecoder*)handle;
-   EMCTX *emctx= 0;
-
-   TRACE1("NEXUS_SimpleVideoDecoder_FrameAdvance");
-
-   emctx= emGetContext();
-   if ( !emctx )
+   TRACE1("drmModeFreeConnector: ptr %p", ptr);
+   if ( ptr )
    {
-      ERROR("NEXUS_SimpleVideoDecoder_FrameAdvance: emGetContext failed");
-      goto exit;
+      free( ptr );
+   }
+}
+
+drmModeEncoderPtr drmModeGetEncoder( int fd, uint32_t encoderId )
+{
+   drmModeEncoder *enc= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeGetEncoder: fd %d encoderId %u", fd, encoderId);
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      for( i= 0; i < dev->dev.drm.countEncoders; ++i )
+      {
+         if ( dev->dev.drm.encoders[i].encoder_id == encoderId )
+         {
+            enc= (drmModeEncoder*)calloc( 1, sizeof(drmModeEncoder) );
+            if ( enc )
+            {
+               *enc= dev->dev.drm.encoders[i];
+               break;
+            }
+         }
+      }
    }
 
-   if ( !dec || (dec->magic != EM_SIMPLE_VIDEO_DECODER_MAGIC) )
+   return enc;
+}
+
+void drmModeFreeEncoder( drmModeEncoderPtr ptr )
+{
+   TRACE1("drmModeFreeEncoder: ptr %p", ptr);
+   if ( ptr )
    {
-      EMERROR("NEXUS_SimpleVideoDecoder_FrameAdvance: bad decoder handle");
-      rc= NEXUS_INVALID_PARAMETER;
-      goto exit;
+      free( ptr );
+   }
+}
+
+drmModeCrtcPtr drmModeGetCrtc( int fd, uint32_t crtcId )
+{
+   drmModeCrtc *crtc= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeGetCrtc: fd %d crtcId %u", fd, crtcId);
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      for( i= 0; i < dev->dev.drm.countCrtcs; ++i )
+      {
+         if ( dev->dev.drm.crtcs[i].crtc_id == crtcId )
+         {
+            crtc= (drmModeCrtc*)calloc( 1, sizeof(drmModeCrtc) );
+            if ( crtc )
+            {
+               *crtc= dev->dev.drm.crtcs[i];
+               break;
+            }
+         }
+      }
    }
 
-   dec->frameNumber= dec->frameNumber+1;
-   TRACE1("NEXUS_SimpleVideoDecoder_FrameAdvance: frameNumber now %d", dec->frameNumber);
+   return crtc;
+}
+
+void drmModeFreeCrtc( drmModeCrtcPtr ptr )
+{
+   TRACE1("drmModeFreeCrtc: ptr %p", ptr);
+   if ( ptr )
+   {
+      free( ptr );
+   }
+}
+
+drmModeObjectPropertiesPtr drmModeObjectGetProperties( int fd, uint32_t objectId, uint32_t objectType )
+{
+   drmModeObjectProperties *props= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeObjectGetProperties: fd %d objectId %u objectType %u", fd, objectId, objectType );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      switch( objectType )
+      {
+         case DRM_MODE_OBJECT_CONNECTOR:
+            for( i= 0; i < dev->dev.drm.countConnectors; ++i )
+            {
+               if ( dev->dev.drm.connectors[i].connector_id == objectId )
+               {
+                  props= (drmModeObjectProperties*)calloc( 1, sizeof(drmModeObjectProperties));
+                  if ( props )
+                  {
+                     props->count_props= 1;
+                     props->props= (uint32_t*)calloc( props->count_props, sizeof(uint32_t) );
+                     props->prop_values= (uint64_t*)calloc( props->count_props, sizeof(uint64_t) );
+                     if ( props->props && props->prop_values )
+                     {
+                        if ( props->props )
+                        {
+                           props->props[0]= dev->dev.drm.properties[EM_DRM_PROP_CRTC_ID].prop_id;
+                        }
+                        if ( props->prop_values )
+                        {               
+                           props->prop_values[0]= dev->dev.drm.crtcs[0].crtc_id;
+                        }
+                     }
+                     else
+                     {
+                        drmModeFreeObjectProperties( props );
+                        props= 0;
+                     }
+                  }
+                  break;
+               }
+            }
+            break;
+         case DRM_MODE_OBJECT_CRTC:
+            for( i= 0; i < dev->dev.drm.countCrtcs; ++i )
+            {
+               if ( dev->dev.drm.crtcs[i].crtc_id == objectId )
+               {
+                  props= (drmModeObjectProperties*)calloc( 1, sizeof(drmModeObjectProperties));
+                  if ( props )
+                  {
+                     props->count_props= 3;
+                     props->props= (uint32_t*)calloc( props->count_props, sizeof(uint32_t) );
+                     props->prop_values= (uint64_t*)calloc( props->count_props, sizeof(uint64_t) );
+                     if ( props->props && props->prop_values )
+                     {
+                        if ( props->props )
+                        {
+                           props->props[0]= dev->dev.drm.properties[EM_DRM_PROP_ACTIVE].prop_id;
+                           props->props[1]= dev->dev.drm.properties[EM_DRM_PROP_MODE_ID].prop_id;
+                           props->props[2]= dev->dev.drm.properties[EM_DRM_PROP_OUT_FENCE_PTR].prop_id;
+                        }
+                        if ( props->prop_values )
+                        {               
+                           props->prop_values[0]= 1;
+                           props->prop_values[1]= 0;
+                           props->prop_values[2]= dev->dev.drm.crtcOutFenceFd;
+                        }
+                     }
+                     else
+                     {
+                        drmModeFreeObjectProperties( props );
+                        props= 0;
+                     }
+                  }
+                  break;
+               }
+            }
+            break;
+         case DRM_MODE_OBJECT_PLANE:
+            for( i= 0; i < dev->dev.drm.countPlanes; ++i )
+            {
+               if ( dev->dev.drm.planes[i].plane_id == objectId )
+               {
+                  props= (drmModeObjectProperties*)calloc( 1, sizeof(drmModeObjectProperties));
+                  if ( props )
+                  {
+                     props->count_props= 12;
+                     props->props= (uint32_t*)calloc( props->count_props, sizeof(uint32_t) );
+                     props->prop_values= (uint64_t*)calloc( props->count_props, sizeof(uint64_t) );
+                     if ( props->props && props->prop_values )
+                     {
+                        if ( props->props )
+                        {
+                           props->props[0]= dev->dev.drm.properties[EM_DRM_PROP_TYPE].prop_id;
+                           props->props[1]= dev->dev.drm.properties[EM_DRM_PROP_FB_ID].prop_id;
+                           props->props[2]= dev->dev.drm.properties[EM_DRM_PROP_IN_FENCE_FD].prop_id;
+                           props->props[3]= dev->dev.drm.properties[EM_DRM_PROP_CRTC_ID].prop_id;
+                           props->props[4]= dev->dev.drm.properties[EM_DRM_PROP_CRTC_X].prop_id;
+                           props->props[5]= dev->dev.drm.properties[EM_DRM_PROP_CRTC_Y].prop_id;
+                           props->props[6]= dev->dev.drm.properties[EM_DRM_PROP_CRTC_W].prop_id;
+                           props->props[7]= dev->dev.drm.properties[EM_DRM_PROP_CRTC_H].prop_id;
+                           props->props[8]= dev->dev.drm.properties[EM_DRM_PROP_SRC_X].prop_id;
+                           props->props[9]= dev->dev.drm.properties[EM_DRM_PROP_SRC_Y].prop_id;
+                           props->props[10]= dev->dev.drm.properties[EM_DRM_PROP_SRC_W].prop_id;
+                           props->props[11]= dev->dev.drm.properties[EM_DRM_PROP_SRC_H].prop_id;
+                        }
+                        if ( props->prop_values )
+                        {
+                           if ( objectId == dev->dev.drm.planes[0].plane_id )
+                           {
+                              props->prop_values[0]= DRM_PLANE_TYPE_PRIMARY;
+                           }
+                           else if ( objectId == dev->dev.drm.planes[1].plane_id )
+                           {
+                              props->prop_values[0]= DRM_PLANE_TYPE_OVERLAY;
+                           }
+                           else if ( objectId == dev->dev.drm.planes[2].plane_id )
+                           {
+                              props->prop_values[0]= DRM_PLANE_TYPE_CURSOR;
+                           }
+                           else
+                           {
+                              props->prop_values[0]= DRM_PLANE_TYPE_OVERLAY;
+                           }
+                           props->prop_values[1]= 0;
+                           props->prop_values[2]= -1;
+                           props->prop_values[3]= 0;
+                           props->prop_values[4]= 0;
+                           props->prop_values[5]= 0;
+                           props->prop_values[6]= 0;
+                           props->prop_values[7]= 0;
+                           props->prop_values[8]= 0;
+                           props->prop_values[9]= 0;
+                           props->prop_values[10]= 0;
+                           props->prop_values[11]= 0;
+                        }
+                     }
+                     else
+                     {
+                        drmModeFreeObjectProperties( props );
+                        props= 0;
+                     }
+                  }
+                  break;
+               }
+            }
+            break;
+         default:
+            ERROR("unexpected object type: %u", objectType);
+            break;
+      }
+   }
+
+   return props;
+}
+
+void drmModeFreeObjectProperties( drmModeObjectPropertiesPtr ptr )
+{
+   TRACE1("drmModeFreeObjectProperties: ptr %p", ptr);
+   if ( ptr )
+   {
+      if ( ptr->props )
+      {
+         free( ptr->props );
+      }
+      if ( ptr->prop_values )
+      {
+         free( ptr->prop_values );
+      }
+      free( ptr );
+   }
+}
+
+drmModePropertyPtr drmModeGetProperty( int fd, uint32_t propertyId )
+{
+   drmModePropertyRes *propres= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeGetProperty: fd %d propertyId %u", fd, propertyId );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      for( i= 0; i < dev->dev.drm.countProperties; ++i )
+      {
+         if ( dev->dev.drm.properties[i].prop_id == propertyId )
+         {
+            propres= (drmModePropertyRes*)malloc( sizeof(drmModePropertyRes) );
+            if ( propres )
+            {
+               *propres= dev->dev.drm.properties[i];
+            }
+            break;
+         }
+      }
+   }
+
+   return propres;
+}
+
+void drmModeFreeProperty( drmModePropertyPtr ptr )
+{
+   TRACE1("drmModeFreeProperty: ptr %p", ptr);
+   if ( ptr )
+   {
+      free( ptr );
+   }
+}
+
+drmModePlaneResPtr drmModeGetPlaneResources( int fd )
+{
+   drmModePlaneRes *planeres= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeGetPlaneRes: fd %d", fd );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      planeres= (drmModePlaneRes*)calloc( 1, sizeof(drmModePlaneRes));
+      if ( planeres )
+      {
+         planeres->count_planes= dev->dev.drm.countPlanes;
+         planeres->planes= (uint32_t*)malloc( sizeof(uint32_t)*dev->dev.drm.countPlanes );
+         if ( !planeres->planes )
+         {
+            goto error;
+         }
+         for( i= 0; i < dev->dev.drm.countPlanes; ++i )
+         {
+            planeres->planes[i]= dev->dev.drm.planes[i].plane_id;
+         }
+
+         goto exit;
+      }
+   }
+
+error:
+   drmModeFreePlaneResources( planeres );
+   planeres= 0;
 
 exit:
+   return planeres;
+}
+
+void drmModeFreePlaneResources( drmModePlaneResPtr ptr )
+{
+   TRACE1("drmModeFreePlaneResources: ptr %p", ptr);
+   if ( ptr )
+   {
+      if ( ptr->planes )
+      {
+         free( ptr->planes );
+      }
+   }
+}
+
+drmModePlanePtr drmModeGetPlane( int fd, uint32_t planeId )
+{
+   drmModePlane *plane= 0;
+   EMDevice *dev= 0;
+   int i;
+
+   TRACE1("drmModeGetPlane: fd %d planeId %u", fd, planeId );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      for( i= 0; i < dev->dev.drm.countPlanes; ++i )
+      {
+         if ( dev->dev.drm.planes[i].plane_id == planeId )
+         {
+            plane= (drmModePlane*)calloc( 1, sizeof(drmModePlane) );
+            if ( plane )
+            {
+               *plane= dev->dev.drm.planes[i];
+            }
+            break;
+         }
+      }
+   }
+
+   return plane;
+}
+
+void drmModeFreePlane( drmModePlanePtr ptr )
+{
+   TRACE1("drmModeFreePlane: ptr %p", ptr);
+   if ( ptr )
+   {
+      free( ptr );
+   }
+}
+
+int drmModeAddFB( int fd, uint32_t width, uint32_t height,
+                  uint8_t depth, uint8_t bpp, uint32_t pitch,
+                  uint32_t bo_handle, uint32_t *buf_id )
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+
+   TRACE1("drmModeAddFB: fd %d bo_handle %u", fd, bo_handle );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      struct gbm_bo *bo= 0;
+      for( std::vector<struct gbm_bo*>::iterator it= dev->ctx->gbmBuffs.begin();
+           it != dev->ctx->gbmBuffs.end();
+           ++it )
+      {
+         if ( (*it)->handle.u32 == bo_handle )
+         {
+            bo= (*it);
+            *buf_id= bo->fbId;
+            break;
+         }
+      }
+      if ( bo )
+      {
+         TRACE1("bo_handle %u is bo %p", bo_handle, bo);
+         rc= 0;
+      }
+   }
+
    return rc;
 }
 
-
-// Section: nxclient ------------------------------------------------------
-
-void NxClient_Uninit(void)
+#define EM_DRM_ATOMIC_MAGIC (0x98126527)
+struct _drmModeAtomicReq
 {
-   TRACE1("NxClient_Uninit");
+   uint32_t magic;
+};
+
+drmModeAtomicReqPtr drmModeAtomicAlloc(void)
+{
+   drmModeAtomicReq *req= 0;
+   TRACE1("drmModeAtomicAlloc");
+   req= (drmModeAtomicReq*)calloc(1, sizeof(drmModeAtomicReq));
+   if ( req )
+   {
+      req->magic= EM_DRM_ATOMIC_MAGIC;
+   }
+   return req;
 }
 
-void NxClient_GetDefaultJoinSettings(
-    NxClient_JoinSettings *pSettings
-    )
+void drmModeAtomicFree( drmModeAtomicReqPtr ptr )
 {
-   TRACE1("NxClient_GetDefaultJoinSettings");
+   TRACE1("drmModeAtomicFree: ptr %p", ptr);
+   if ( ptr )
+   {
+      if ( ptr->magic == EM_DRM_ATOMIC_MAGIC )
+      {
+         ptr->magic= 0;
+      }
+      free( ptr );
+   }
 }
 
-NEXUS_Error NxClient_Join(
-    const NxClient_JoinSettings *pSettings
-    )
+int drmModeAtomicAddProperty( drmModeAtomicReqPtr req,
+                              uint32_t objectId, uint32_t propertyId,
+                              uint64_t value )
 {
-   NEXUS_Error rc= NEXUS_SUCCESS;
+   int rc= -1;
+   TRACE1("drmModeAtomicAddProperty: req %p objectId %u propertyId %u value %llu", req, objectId, propertyId, value);
+   if ( req )
+   {
+      rc= 0;
+   }
+   return rc;
+}
 
-   TRACE1("NxClient_Join");
+int drmModeCreatePropertyBlob( int fd, const void *data, size_t size, uint32_t *id )
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+
+   TRACE1("drmModeCreatePropertyBlob");
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      *id= ++dev->dev.drm.nextId;
+      rc= 0;
+   }   
 
    return rc;
 }
 
-void NxClient_GetDefaultAllocSettings(
-    NxClient_AllocSettings *pSettings
-    )
+int drmModeAtomicCommit( int fd, drmModeAtomicReqPtr req, uint32_t flags, void *user_data )
 {
-   TRACE1("NxClient_GetDefaultAllocSettings");
+   int rc= -1;
+   EMDevice *dev= 0;
+
+   TRACE1("drmModeAtomicCommit");
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      if ( req && (req->magic == EM_DRM_ATOMIC_MAGIC) )
+      {
+         rc= 0;
+      }
+   }
+
+   return rc;
 }
 
-NEXUS_Error NxClient_Alloc(
-    const NxClient_AllocSettings *pSettings,
-    NxClient_AllocResults *pResults
-    )
+} //extern "C"
+
+
+// Section gbm -------------------------------------------------------
+
+extern "C"
 {
-   NEXUS_Error rc= NEXUS_SUCCESS;
+
+#define GBM_DEV_REF( gbm ) ++gbm->refCount
+#define GBM_DEV_UNREF( gbm ) gbm_device_destroy(gbm)
+
+struct gbm_device *gbm_create_device( int fd )
+{
+   struct gbm_device *gbm= 0;
+   EMDevice *dev= 0;
    EMCTX *ctx= 0;
 
-   TRACE1("NxClient_Alloc");
+   TRACE1("gbm_create_device: fd %d", fd);
 
-   ctx= emGetContext();
-   if ( !ctx )
+   dev= EMDrmGetDevice(fd);
+   TRACE1("gbm_create_device: fd %d dev %p", fd, dev);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
    {
-      ERROR("NxClient_Alloc: emGetContext failed");
-      goto exit;
+      TRACE1("gbm_create_device: fd %d dev %p type %d", fd, dev, dev->type);
+      gbm= (struct gbm_device*)calloc( 1, sizeof(struct gbm_device) );
+      if ( gbm )
+      {
+         gbm->dev= dev;
+         gbm->refCount= 1;
+         ctx= emGetContext();
+         if ( ctx )
+         {
+            TRACE1("gbm_create_device: fd %d settig em ctx gbm_device to %p", fd, gbm);
+            ctx->gbm_device= gbm;
+         }
+      }
    }
 
-   if ( pSettings->surfaceClient )
-   {
-      pResults->surfaceClient[0].id= ++ctx->nextNxClientId;
-   }
+   TRACE1("gbm_create_device: fd %d gbm %p", fd, gbm);
 
-   assert( ctx->nextNxClientId < EM_MAX_NXCLIENT );
-
-exit:
-   return rc;
+   return gbm;
 }
 
-void NxClient_Free(
-    const NxClient_AllocResults *pResults
-    )
-{
-   TRACE1("NxClient_Free");
-}
-
-void NxClient_GetDefaultConnectSettings(
-    NxClient_ConnectSettings *pSettings
-    )
-{
-   TRACE1("NxClient_GetDefaultConnectSettings");
-}
-
-NEXUS_Error NxClient_Connect(
-    const NxClient_ConnectSettings *pSettings,
-    unsigned *pConnectId
-    )
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMCTX *ctx= 0;
-
-   TRACE1("NxClient_Connect");
-
-   ctx= emGetContext();
-   if ( !ctx )
-   {
-      ERROR("NxClient_Connect: emGetContext failed");
-      goto exit;
-   }
-
-   *pConnectId= ++ctx->nextNxClientConnectId;
-
-exit:
-   return rc;
-}
-
-void NxClient_Disconnect(unsigned connectId)
-{
-   TRACE1("NxClient_Disconnect");
-}
-
-NEXUS_Error NxClient_RefreshConnect(unsigned connectId)
-{
-   NEXUS_Error rc= NEXUS_SUCCESS;
-
-   TRACE1("NxClient_RefreshConnect");
-
-   return rc;
-}
-
-void NxClient_GetSurfaceClientComposition(
-    unsigned surfaceClientId,
-    NEXUS_SurfaceComposition *pSettings
-    )
+void gbm_device_destroy( struct gbm_device *gbm )
 {
    EMCTX *ctx= 0;
 
-   TRACE1("NxClient_GetSurfaceClientComposition");
+   TRACE1("gbm_destroy_device: gbm %p", gbm);
 
-   ctx= emGetContext();
-   if ( !ctx )
+   if ( gbm )
    {
-      ERROR("NxClient_GetSurfaceClientComposition: emGetContext failed");
-      goto exit;
+      if ( gbm->refCount > 0 )
+      {
+         --gbm->refCount;
+      }
+      if ( gbm->refCount == 0 )
+      {
+         TRACE1("gbm_destroy_device: gbm %p reCount 0: destroying", gbm);
+         ctx= emGetContext();
+         if ( ctx && ctx->gbm_device == gbm )
+         {
+            ctx->gbm_device= 0;
+         }
+         free( gbm );
+      }
+   }
+}
+
+struct gbm_surface *gbm_surface_create( struct gbm_device *gbm,
+                                        uint32_t width, uint32_t height,
+                                        uint32_t format, uint32_t flags )
+{
+   struct gbm_surface *surface= 0;
+
+   TRACE1("gbm_surface_create: gbm %p", gbm);
+
+   if ( gbm )
+   {
+      if ( gbm->dev->type == EM_DEVICE_TYPE_DRM )
+      {
+         surface= (struct gbm_surface*)calloc( 1, sizeof(struct gbm_surface));
+         if ( surface )
+         {
+            surface->gbm= gbm;
+            GBM_DEV_REF(surface->gbm);
+            surface->nw.magic= EM_WINDOW_MAGIC;
+            surface->nw.ctx= emGetContext();
+            surface->nw.x= 0;
+            surface->nw.y= 0;
+            surface->nw.width= width;
+            surface->nw.height= height;
+            surface->nw.format= format;
+            surface->nw.stride= width*4;
+
+            for( int i= 0; i < 3; ++i )
+            {
+               surface->buffers[i].surface= surface;
+               surface->buffers[i].locked= false;
+               surface->buffers[i].handle.u32= ++gbm->dev->ctx->nextGbmBuffHandle;
+               surface->buffers[i].fbId= ++gbm->dev->dev.drm.nextId;
+               gbm->dev->ctx->gbmBuffs.push_back( &surface->buffers[i] );
+            }
+         }
+      }
    }
 
-   *pSettings= ctx->nxclients[surfaceClientId].composition;
+   TRACE1("gbm_surface_create: gbm %p surface %p", gbm, surface);
 
-exit:
-   return;
+   return surface;
 }
 
-NEXUS_Error NxClient_SetSurfaceClientComposition(
-    unsigned surfaceClientId,
-    const NEXUS_SurfaceComposition *pSettings
-    )
+void gbm_surface_destroy( struct gbm_surface *surface )
 {
-   NEXUS_Error rc= NEXUS_SUCCESS;
-   EMCTX *ctx= 0;
-
-   TRACE1("NxClient_SetSurfaceClientComposition");
-
-   ctx= emGetContext();
-   if ( !ctx )
+   TRACE1("gbm_surface_destroy: gbm_surface %p", surface);
+   if ( surface )
    {
-      ERROR("NxClient_SetSurfaceClientComposition: emGetContext failed");
-      goto exit;
+      TRACE1("gbm_surface_destroy: gbm_surface %p gbm %p dev %p", surface, surface->gbm), surface->gbm->dev;
+      for( int i= 0; i < 3; ++i )
+      {
+         for( std::vector<struct gbm_bo*>::iterator it= surface->gbm->dev->ctx->gbmBuffs.begin();
+              it != surface->gbm->dev->ctx->gbmBuffs.end();
+              ++it )
+         {
+            if ( (*it)->handle.u32 == surface->buffers[i].handle.u32 )
+            {
+               surface->gbm->dev->ctx->gbmBuffs.erase( it );
+               break;
+            }
+         }
+      }
+      GBM_DEV_UNREF(surface->gbm);
+      free( surface );
+   }
+}
+
+struct gbm_bo* gbm_surface_lock_front_buffer( struct gbm_surface *surface )
+{
+   struct gbm_bo *bo= 0;
+
+   TRACE1("gbm_surface_lock_front_buffer: surface %p", surface);
+
+   if ( surface->nw.magic == EM_WINDOW_MAGIC )
+   {
+      int front= surface->front;
+      if ( ++surface->front >= 3 )
+      {
+         surface->front= 0;
+      }
+      bo= &surface->buffers[front];
+      if ( !bo->locked )
+      {
+         bo->locked= true;
+      }
+      else
+      {
+         ERROR("gbm_surface_lock_front_buffer: already locked: surface %p front %d", surface, front);
+         bo= 0;
+      }
+   }
+   else
+   {
+      ERROR("gbm_surface_lock_front_buffer: bad gbm surface: %p", surface);
    }
 
-   ctx->nxclients[surfaceClientId].composition= *pSettings;
-
-exit:
-   return rc;
+   return bo;
 }
 
-void NxClient_GetDisplaySettings(
-    NxClient_DisplaySettings *pSettings
-    )
+void gbm_surface_release_buffer( struct gbm_surface *surface, struct gbm_bo *bo )
 {
-   TRACE1("NxClient_GetDisplaySettings");
+   TRACE1("gbm_surface_release_buffer: surface %p bo %p", surface, bo);
+
+   if ( surface->nw.magic == EM_WINDOW_MAGIC )
+   {
+      if ( bo->surface == surface )
+      {
+         if ( bo->locked )
+         {
+            bo->locked= false;
+         }
+         else
+         {
+            ERROR("gbm_surface_release_buffer: buffer not locked: gbm bo: %p", bo);
+         }
+      }
+      else
+      {
+         ERROR("gbm_surface_release_buffer: bad gbm bo: %p", bo);
+      }
+   }
+   else
+   {
+      ERROR("gbm_surface_release_buffer: bad gbm surface: %p", surface);
+   }
 }
 
-NEXUS_Error NxClient_SetDisplaySettings(
-    const NxClient_DisplaySettings *pSettings
-    )
+union gbm_bo_handle gbm_bo_get_handle( struct gbm_bo *bo )
 {
-   NEXUS_Error rc= NEXUS_SUCCESS;
+   union gbm_bo_handle handle;
 
-   TRACE1("NxClient_SetDisplaySettings");
+   handle.u32= 0;
 
-   return rc;
+   if ( bo->surface->nw.magic == EM_WINDOW_MAGIC )
+   {
+      handle= bo->handle;
+   }
+   else
+   {
+      ERROR("gbm_bo_get_handle: bad gbm_bo %p", bo);
+   }
+
+   return handle;
 }
+
+uint32_t gbm_bo_get_stride( struct gbm_bo *bo )
+{
+   uint32_t stride= 0;
+
+   if ( bo->surface->nw.magic == EM_WINDOW_MAGIC )
+   {
+      stride= bo->surface->nw.stride;
+   }
+   else
+   {
+      ERROR("gbm_bo_get_stride: bad gbm_bo %p", bo);
+   }
+
+   return stride;
+}
+
+} //extern "C"
+
 
 // Section: EGL ------------------------------------------------------
 
@@ -2502,7 +2278,7 @@ EGLAPI EGLDisplay EGLAPIENTRY eglGetDisplay(EGLNativeDisplayType displayId)
    EMCTX *ctx= 0;
    EMEGLDisplay *dsp= 0;
 
-   TRACE1("eglGetDisplay");
+   TRACE1("eglGetDisplay: displayId %p", displayId);
 
    ctx= emGetContext();
    if ( !ctx )
@@ -2512,8 +2288,15 @@ EGLAPI EGLDisplay EGLAPIENTRY eglGetDisplay(EGLNativeDisplayType displayId)
       goto exit;
    }
 
-   if ( (displayId == EGL_DEFAULT_DISPLAY) && (ctx->eglDisplayDefault != EGL_NO_DISPLAY) )
+   if ( 
+        ( 
+          (displayId == EGL_DEFAULT_DISPLAY) ||
+          (displayId == ctx->gbm_device) 
+        ) && 
+        (ctx->eglDisplayDefault != EGL_NO_DISPLAY)
+      )
    {
+      TRACE1("eglGetDisplay: displayId %p using default display", displayId);
       eglDisplay= ctx->eglDisplayDefault;
       goto exit;
    }
@@ -2534,12 +2317,21 @@ EGLAPI EGLDisplay EGLAPIENTRY eglGetDisplay(EGLNativeDisplayType displayId)
 
    eglDisplay= (EGLDisplay)dsp;
 
-   if ( (displayId == EGL_DEFAULT_DISPLAY) && (ctx->eglDisplayDefault == EGL_NO_DISPLAY) )
+   if ( 
+        ( 
+          (displayId == EGL_DEFAULT_DISPLAY) ||
+          (displayId == ctx->gbm_device) 
+        ) && 
+        (ctx->eglDisplayDefault == EGL_NO_DISPLAY)
+      )
    {
+      TRACE1("eglGetDisplay: displayId %p setting default display %p", displayId, eglDisplay);
       ctx->eglDisplayDefault= eglDisplay;
    }
 
 exit:
+
+   TRACE1("eglGetDisplay: displayId %p return eglDisplay %p", displayId, eglDisplay);
 
    return eglDisplay;
 }
@@ -2680,7 +2472,7 @@ EGLAPI const char * EGLAPIENTRY eglQueryString(EGLDisplay dpy, EGLint name)
    switch( name )
    {
       case EGL_EXTENSIONS:
-         s= "EGL_WL_bind_wayland_display";
+         s= "EGL_WL_bind_wayland_display EGL_EXT_image_dma_buf_import";
          break;
    }
 
@@ -2867,11 +2659,11 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay display,
    EGLSurface surface= EGL_NO_SURFACE;
    EMEGLDisplay *dsp= (EMEGLDisplay*)display;
    EMEGLConfig *cfg= (EMEGLConfig*)config;
-   EMNativeWindow *nw= (EMNativeWindow*)native_window;
+   EMNativeWindow *nw= &((struct gbm_surface*)native_window)->nw;
    EMEGLSurface *surf= 0;
    struct wl_egl_window *egl_window= 0;
 
-   TRACE1("eglCreateWindowSurface" );
+   TRACE1("eglCreateWindowSurface: native_window %p, nw %p", native_window, nw );
 
    if ( display == EGL_NO_DISPLAY )
    {
@@ -2910,18 +2702,6 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay display,
    }
    pthread_mutex_unlock( &gMutex );
 
-   if ( egl_window )
-   {
-      nw= (EMNativeWindow*)wlGetNativeWindow( egl_window );
-   }
-   printf("wayland-egl: eglCreateWindowSurface: nativeWindow=%p\n", nw );
-
-   if ( nw->magic != EM_WINDOW_MAGIC )
-   {
-      gEGLError= EGL_BAD_NATIVE_WINDOW;
-      goto exit;
-   }
-
    surf= (EMEGLSurface*)calloc( 1, sizeof(EMEGLSurface) );
    if ( !surf )
    {
@@ -2932,10 +2712,12 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay display,
 
    surf->magic= EM_EGL_SURFACE_MAGIC;
    surf->egl_window= egl_window;
+   gEGLError= EGL_SUCCESS;
 
    surface= (EGLSurface)surf;
 
 exit:
+   TRACE1("eglCreateWindowSurface: native_window %p, nw %p surface %p eglError %X", native_window, nw, surface, gEGLError );
    return surface;
 }
 
@@ -3158,7 +2940,7 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay display, EGLSurface surface )
    EMEGLSurface *surf= (EMEGLSurface*)surface;
    struct wl_egl_window *egl_window= 0;
 
-   TRACE1("eglSwapBuffers");
+   TRACE1("eglSwapBuffers: display %p surface %p", display, surface);
 
    if ( display == EGL_NO_DISPLAY )
    {
@@ -3193,6 +2975,7 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay display, EGLSurface surface )
    egl_window= surf->egl_window;
    if ( egl_window )
    {
+      TRACE1("eglSwapBuffers: display %p surface %p egl_window %p", display, surface, egl_window);
       wlSwapBuffers( egl_window );
    }
    else
@@ -3203,6 +2986,7 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay display, EGLSurface surface )
    result= EGL_TRUE;
 
 exit:
+   TRACE1("eglSwapBuffers: display %p surface %p rc %d", display, surface, result);
    return result;
 }
 
@@ -3288,7 +3072,9 @@ exit:
 
 // Section: wayland ------------------------------------------------------
 
+#ifndef WL_EXPORT
 #define WL_EXPORT
+#endif
 
 typedef void (*WLRESOURCEPOSTEVENTARRAY)( struct wl_resource *resource, uint32_t opcode, union wl_argument *args );
 
@@ -3344,15 +3130,39 @@ WL_EXPORT void wl_resource_post_event_array(struct wl_resource *resource, uint32
 
 void wl_egl_window_destroy(struct wl_egl_window *egl_window);
 
-static void bnxsFormat(void *data, struct wl_bnxs *bnxs, uint32_t format)
+static void wlDrmDevice(void *data, struct wl_drm *drm, const char *name)
 {
    WAYEGL_UNUSED(data);
-   WAYEGL_UNUSED(bnxs);
-   printf("wayland-egl: registry: bnxsFormat: %X\n", format);
+   WAYEGL_UNUSED(drm);
+   printf("wayland-egl: registry: wlDrmDevice: %s\n", name);
 }
 
-struct wl_bnxs_listener bnxsListener = {
-	bnxsFormat
+static void wlDrmFormat(void *data, struct wl_drm *drm, uint32_t format)
+{
+   WAYEGL_UNUSED(data);
+   WAYEGL_UNUSED(drm);
+   printf("wayland-egl: registry: wlDrmFormat: %X\n", format);
+}
+
+static void wlDrmAuthenticated(void *data, struct wl_drm *drm)
+{
+   WAYEGL_UNUSED(data);
+   WAYEGL_UNUSED(drm);
+   printf("wayland-egl: registry: wlDrmAuthenticated\n");
+}
+
+static void wlDrmCapabilities(void *data, struct wl_drm *drm, uint32_t value)
+{
+   WAYEGL_UNUSED(data);
+   WAYEGL_UNUSED(drm);
+   printf("wayland-egl: registry: wlDrmCapabilities: %X\n", value);
+}
+
+struct wl_drm_listener drmListener = {
+   wlDrmDevice,
+	wlDrmFormat,
+	wlDrmAuthenticated,
+	wlDrmCapabilities
 };
 
 static void winRegistryHandleGlobal(void *data,
@@ -3363,12 +3173,13 @@ static void winRegistryHandleGlobal(void *data,
    printf("wayland-egl: registry: id %d interface (%s) version %d\n", id, interface, version );
    
    int len= strlen(interface);
-   if ( (len==7) && !strncmp(interface, "wl_bnxs", len) ) {
-      egl_window->bnxs= (struct wl_bnxs*)wl_registry_bind(registry, id, &wl_bnxs_interface, 1);
-      printf("wayland-egl: registry: bnxs %p\n", (void*)egl_window->bnxs);
-      wl_proxy_set_queue((struct wl_proxy*)egl_window->bnxs, egl_window->queue);
-		wl_bnxs_add_listener(egl_window->bnxs, &bnxsListener, egl_window);
-		printf("wayland-egl: registry: done add bnxs listener\n");
+   if ( (len==6) && !strncmp(interface, "wl_drm", len) ) {
+      egl_window->drm= (struct wl_drm*)wl_registry_bind(registry, id, &wl_drm_interface, version);
+      printf("wayland-egl: registry: drm %p\n", (void*)egl_window->drm);
+      wl_proxy_set_queue((struct wl_proxy*)egl_window->drm, egl_window->queue);
+		wl_drm_add_listener(egl_window->drm, &drmListener, egl_window);
+      wl_display_roundtrip_queue(egl_window->wldisp, egl_window->queue);
+		printf("wayland-egl: registry: done add drm listener\n");
    }
 }
 
@@ -3387,39 +3198,57 @@ static const struct wl_registry_listener winRegistryListener =
 	winRegistryHandleGlobalRemove
 };
 
-static void bnxsIBufferDestroy(struct wl_client *client, struct wl_resource *resource)
+static void drmIBufferDestroy(struct wl_client *client, struct wl_resource *resource)
 {
    wl_resource_destroy(resource);
 }
 
 const static struct wl_buffer_interface bufferInterface = {
-   bnxsIBufferDestroy
+   drmIBufferDestroy
 };
 
 
-static void bnxsDestroyBuffer(struct wl_resource *resource)
+static void drmDestroyBuffer(struct wl_resource *resource)
 {
-   struct wl_bnxs_buffer *buffer = (struct wl_bnxs_buffer*)resource->data;
+   struct wl_drm_buffer *buffer = (struct wl_drm_buffer*)resource->data;
 
    free(buffer);
 }
 
-static void bnxsICreateBuffer(struct wl_client *client, struct wl_resource *resource,
-                              uint32_t id, uint32_t nexus_surface_handle, int32_t width, int32_t height,
-                              uint32_t stride, uint32_t format)
+static void drmIAuthenticate( struct wl_client *client, struct wl_resource *resource, uint32_t id )
 {
-   struct wl_bnxs_buffer *buff;
-   
-   switch (format) 
-   {
-      case WL_BNXS_FORMAT_ARGB8888:
-         break;
-      default:
-         wl_resource_post_error(resource, WL_BNXS_ERROR_INVALID_FORMAT, "invalid format");
-         return;
-   }
+   TRACE1("drmIAuthenticate");
+   //TBD
+}
 
-   buff= (wl_bnxs_buffer*)calloc(1, sizeof *buff);
+static void drmICreateBuffer( struct wl_client *client, struct wl_resource *resource, uint32_t id,
+                              uint32_t name, int32_t width, int32_t height, 
+                              uint32_t stride, uint32_t format )
+{
+   TRACE1("drmICreateBuffer");
+   //TBD
+}
+
+static void drmICreatePlanarBuffer( struct wl_client *client, struct wl_resource *resource, uint32_t id,
+                                    uint32_t name, int32_t width, int32_t height, uint32_t format, 
+                                    int32_t offset0, int32_t stride0,
+                                    int32_t offset1, int32_t stride1,
+                                    int32_t offset2, int32_t stride2 )
+{
+   TRACE1("drmICreatePlanarBuffer");
+   //TBD
+}
+
+static void drmICreatePrimeBuffer( struct wl_client *client, struct wl_resource *resource, uint32_t id,
+                                   int32_t name, int32_t width, int32_t height, uint32_t format, 
+                                   int32_t offset0, int32_t stride0,
+                                   int32_t offset1, int32_t stride1,
+                                   int32_t offset2, int32_t stride2 )
+{
+   struct wl_drm_buffer *buff;
+
+   TRACE1("drmICreatePrimeBuffer: client %p name %d", client, name);
+   buff= (wl_drm_buffer*)calloc(1, sizeof *buff);
    if (!buff) 
    {
       wl_resource_post_no_memory(resource);
@@ -3427,7 +3256,7 @@ static void bnxsICreateBuffer(struct wl_client *client, struct wl_resource *reso
    }
 
    buff->resource= wl_resource_create(client, &wl_buffer_interface, 1, id);
-   if (!buff->resource) 
+   if (!buff->resource)
    {
       wl_resource_post_no_memory(resource);
       free(buff);
@@ -3437,31 +3266,38 @@ static void bnxsICreateBuffer(struct wl_client *client, struct wl_resource *reso
    buff->width= width;
    buff->height= height;
    buff->format= format;
-   buff->stride= stride;
-   buff->nexusSurfaceHandle= nexus_surface_handle;
+   buff->bufferId= EMDeviceGetFdFromFdOS(name);
+   buff->offset[0]= offset0;
+   buff->stride[0]= stride0;
+   buff->offset[1]= offset1;
+   buff->stride[1]= stride1;
+   buff->offset[2]= offset2;
+   buff->stride[2]= stride2;
 
    wl_resource_set_implementation(buff->resource,
                                  (void (**)(void)) &bufferInterface,
-                                 buff, bnxsDestroyBuffer);
-
+                                 buff, drmDestroyBuffer);
 }
 
-static struct wl_bnxs_interface bnxs_interface = 
+static struct wl_drm_interface drm_interface = 
 {
-   bnxsICreateBuffer
+   drmIAuthenticate,
+   drmICreateBuffer,
+   drmICreatePlanarBuffer,
+   drmICreatePrimeBuffer
 };
 
-static void bind_bnxs(struct wl_client *client, void *data, uint32_t version, uint32_t id)
+static void bind_drm(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 {
    struct wl_resource *resource;
    EMCTX *ctx= (EMCTX*)data;
    struct wl_display *display;
-   struct wl_bnxs *bnxs= 0;
+   struct wl_drm *drm= 0;
 
-	printf("wayland-egl: bind_bnxs: enter: client %p data %p version %d id %d\n", (void*)client, data, version, id);
+	printf("wayland-egl: bind_drm: enter: client %p data %p version %d id %d\n", (void*)client, data, version, id);
 
-   resource= wl_resource_create(client, &wl_bnxs_interface, MIN(version, 1), id);
-   if (!resource) 
+   resource= wl_resource_create(client, &wl_drm_interface, MIN(version, 2), id);
+   if (!resource)
    {
       wl_client_post_no_memory(client);
       return;
@@ -3472,21 +3308,21 @@ static void bind_bnxs(struct wl_client *client, void *data, uint32_t version, ui
    std::map<struct wl_display*,EMWLBinding>::iterator it= ctx->wlBindings.find( display );
    if ( it != ctx->wlBindings.end() )
    {
-      bnxs= it->second.bnxs;
+      drm= it->second.drm;
    }
 
-   if ( !bnxs )
+   if ( !drm )
    {
-      printf("wayland-egl: bind_bnxs: no valid EGL for compositor\n" );
+      printf("wayland-egl: bind_drm: no valid EGL for compositor\n" );
       wl_client_post_no_memory(client);
       return;
    }
 
-   wl_resource_set_implementation(resource, &bnxs_interface, data, NULL);
+   wl_resource_set_implementation(resource, &drm_interface, data, NULL);
 
-   wl_resource_post_event(resource, WL_BNXS_FORMAT, WL_BNXS_FORMAT_ARGB8888);      
+   wl_resource_post_event(resource, WL_DRM_FORMAT, WL_DRM_FORMAT_ARGB8888);      
 	
-	printf("wayland-egl: bind_bnxs: exit: client %p id %d\n", (void*)client, id);
+	printf("wayland-egl: bind_drm: exit: client %p id %d\n", (void*)client, id);
 }
 
 EGLBoolean eglBindWaylandDisplayWL( EGLDisplay dpy,
@@ -3510,7 +3346,7 @@ EGLBoolean eglBindWaylandDisplayWL( EGLDisplay dpy,
       if ( it != ctx->wlBindings.end() )
       {
          binding= it->second;
-         if ( binding.bnxs )
+         if ( binding.drm )
          {
             result= EGL_TRUE;
          }
@@ -3520,12 +3356,12 @@ EGLBoolean eglBindWaylandDisplayWL( EGLDisplay dpy,
          memset( &binding, 0, sizeof(binding) );
          binding.wlBoundDpy= dpy;
          binding.display= display;
-         binding.bnxs= (wl_bnxs*)wl_global_create( display,
-                                           &wl_bnxs_interface,
-                                           1,
+         binding.drm= (wl_drm*)wl_global_create( display,
+                                           &wl_drm_interface,
+                                           2,
                                            ctx,
-                                           bind_bnxs );
-         if ( binding.bnxs )
+                                           bind_drm );
+         if ( binding.drm )
          {
             ctx->wlBindings.insert( std::pair<struct wl_display*,EMWLBinding>( display, binding ) );
             result= EGL_TRUE;
@@ -3558,9 +3394,9 @@ EGLBoolean eglUnbindWaylandDisplayWL( EGLDisplay dpy,
       if ( it != ctx->wlBindings.end() )
       {
          binding= it->second;
-         if ( binding.bnxs )
+         if ( binding.drm )
          {
-            wl_global_destroy( (wl_global*)binding.bnxs );
+            wl_global_destroy( (wl_global*)binding.drm );
             ctx->wlBindings.erase( it );
             result= EGL_TRUE;
          }
@@ -3576,30 +3412,30 @@ EGLBoolean eglQueryWaylandBufferWL( EGLDisplay dpy,
                                     EGLint attribute, EGLint *value )
 {
    EGLBoolean result= EGL_FALSE;
-   struct wl_bnxs_buffer *bnxsBuffer;
-   int bnxsFormat;
+   struct wl_drm_buffer *drmBuffer;
+   int drmFormat;
 
    TRACE1("eglQueryWaylandBufferWL");
    
    if( wl_resource_instance_of( resource, &wl_buffer_interface, &bufferInterface ) ) 
    {
-      bnxsBuffer= (wl_bnxs_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
-      if ( bnxsBuffer )
+      drmBuffer= (wl_drm_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
+      if ( drmBuffer )
       {
          result= EGL_TRUE;
          switch( attribute )
          {
             case EGL_WIDTH:
-               *value= bnxsBuffer->width;
+               *value= drmBuffer->width;
                break;
             case EGL_HEIGHT:
-               *value= bnxsBuffer->height;
+               *value= drmBuffer->height;
                break;
             case EGL_TEXTURE_FORMAT:
-               bnxsFormat= bnxsBuffer->format;
-               switch( bnxsFormat )
+               drmFormat= drmBuffer->format;
+               switch( drmFormat )
                {
-                  case WL_BNXS_FORMAT_ARGB8888:
+                  case WL_DRM_FORMAT_ARGB8888:
                      *value= EGL_TEXTURE_RGBA;
                      break;
                   default:
@@ -3657,7 +3493,11 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR (EGLDisplay display, EGLContext
                img->target= target;
             }
             image= (EGLImageKHR)img;
+            gEGLError= EGL_SUCCESS;
          }
+         break;
+      case EGL_LINUX_DMA_BUF_EXT:
+         TRACE1("eglCreateImageKHR: target EGL_LINUX_DMA_BUF_EXT");
          break;
       default:
          WARNING("eglCreateImageKHR: unsupported target %X", target);
@@ -3741,8 +3581,8 @@ static EGLNativeWindowType wlGetNativeWindow( struct wl_egl_window *egl_window )
 typedef struct bufferInfo
 {
    struct wl_egl_window *egl_window;
-   //void *bufferCtx;
    int deviceBuffer;
+   int fd_os;
 } bufferInfo;
 
 static void buffer_release( void *data, struct wl_buffer *buffer )
@@ -3750,12 +3590,12 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
    bufferInfo *binfo= (bufferInfo*)data;
 
    --binfo->egl_window->activeBuffers;
-   //if ( binfo->bufferCtx )
-   //{
-   //   // Signal buffer is available again
-   //   NXPL_ReleaseBuffer( (void*)binfo->bufferCtx );
-   //}
-   
+
+   if ( binfo->fd_os >= 0 )
+   {
+      EMDeviceCloseOS( binfo->fd_os );
+   }   
+
    wl_buffer_destroy( buffer );
    
    if ( binfo->egl_window->windowDestroyPending && (binfo->egl_window->activeBuffers <= 0) )
@@ -3773,11 +3613,12 @@ static struct wl_buffer_listener wl_buffer_listener=
 static void wlSwapBuffers( struct wl_egl_window *egl_window )
 {
    TRACE1("wlSwapBuffers");
-   if ( egl_window->bnxs && !egl_window->windowDestroyPending )
+   if ( egl_window->drm && !egl_window->windowDestroyPending )
    {
       int buffer;
       struct wl_buffer *wlBuff= 0;
       bufferInfo *binfo= 0;
+      int fd_os= -1;
 
       egl_window->eglSwapCount += 1;
 
@@ -3788,21 +3629,28 @@ static void wlSwapBuffers( struct wl_egl_window *egl_window )
       }
       buffer= egl_window->bufferId;
 
-      wl_proxy_set_queue((struct wl_proxy*)egl_window->bnxs, egl_window->queue);
-      wlBuff= wl_bnxs_create_buffer( egl_window->bnxs, 
-                                    (uint32_t)buffer,
-                                    egl_window->width, 
-                                    egl_window->height, 
-                                    egl_window->width*4,
-                                    WL_BNXS_FORMAT_ARGB8888 );
+      fd_os= EMDeviceOpenOS(buffer);
+      wl_proxy_set_queue((struct wl_proxy*)egl_window->drm, egl_window->queue);
+      wlBuff= wl_drm_create_prime_buffer( egl_window->drm,
+                                          fd_os,
+                                          egl_window->width,
+                                          egl_window->height,
+                                          WL_DRM_FORMAT_ARGB8888,
+                                          0,
+                                          egl_window->width*4,
+                                          0,
+                                          0,
+                                          buffer,
+                                          0
+                                        );
       if ( wlBuff )
       {
          binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
          if ( binfo )
          {
             binfo->egl_window= egl_window;
-            //binfo->bufferCtx= bufferCtx;
             binfo->deviceBuffer= buffer;
+            binfo->fd_os= fd_os;
 
             ++egl_window->activeBuffers;
             wl_buffer_add_listener( wlBuff, &wl_buffer_listener, binfo );
@@ -3827,7 +3675,6 @@ static void wlSwapBuffers( struct wl_egl_window *egl_window )
          }
          else
          {
-            //NXPL_ReleaseBuffer( bufferCtx );
             wl_buffer_destroy( wlBuff );
          }
       }
@@ -3841,7 +3688,6 @@ extern "C" {
 struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width, int height)
 {
    struct wl_egl_window *egl_window= 0;
-   NXPL_NativeWindowInfo windowInfo;
    //WEGLNativeWindowListener windowListener;
    struct wl_display *wldisp;
    EMCTX *ctx= 0;
@@ -3893,35 +3739,14 @@ struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width
          wl_registry_add_listener(egl_window->registry, &winRegistryListener, egl_window);
          wl_display_roundtrip_queue(egl_window->wldisp, egl_window->queue);
          
-         if ( !egl_window->bnxs )
+         if ( !egl_window->drm )
          {
-            printf("wayland-egl: wl_egl_window_create: no wl_bnxs protocol available\n");
+            printf("wayland-egl: wl_egl_window_create: no wl_drm protocol available\n");
             wl_egl_window_destroy( egl_window );
             egl_window= 0;
             goto exit;
          }
 
-         memset( &windowInfo, 0, sizeof(windowInfo) );
-         windowInfo.x= 0;
-         windowInfo.y= 0;
-         windowInfo.width= width;
-         windowInfo.height= height;
-         windowInfo.stretch= false;
-         windowInfo.clientID= 0;
-         windowInfo.zOrder= 10000000;
-      
-         egl_window->nativeWindow= (EGLNativeWindowType)NXPL_CreateNativeWindow( &windowInfo );
-         if ( egl_window->nativeWindow )
-         {
-            printf("wayland-egl: wl_egl_window_create: egl_window %p nativeWindow %p\n", (void*)egl_window, (void*)egl_window->nativeWindow );
-         
-            //windowListener.referenceBuffer= bnxsReferenceBuffer;
-            //windowListener.newSingleBuffer= bnxsNewSingleBuffer;
-            //windowListener.dispatchPending= bnxsDispatchPending;
-
-            //NXPL_AttachNativeWindow( egl_window->nativeWindow, egl_window, &windowListener );
-         }
-                 
          pthread_mutex_lock( &gMutex );
          gNativeWindows.push_back( egl_window );
          pthread_mutex_unlock( &gMutex );
@@ -3930,12 +3755,14 @@ struct wl_egl_window *wl_egl_window_create(struct wl_surface *surface, int width
 
 exit:   
 
+   TRACE1("wl_egl_window_create: egl_window %p", egl_window);
+
    return egl_window;
 }
 
 void wl_egl_window_destroy(struct wl_egl_window *egl_window)
 {
-   TRACE1("wl_egl_window_destroy");
+   TRACE1("wl_egl_window_destroy: egl_window %p", egl_window);
 
    if ( egl_window )
    {
@@ -3957,18 +3784,12 @@ void wl_egl_window_destroy(struct wl_egl_window *egl_window)
             }
          }
          pthread_mutex_unlock( &gMutex );
-
-         if ( egl_window->nativeWindow )
-         {
-            NXPL_DestroyNativeWindow( egl_window->nativeWindow );
-            egl_window->nativeWindow= 0;
-         }
          
-         if ( egl_window->bnxs )
+         if ( egl_window->drm )
          {
-            wl_proxy_set_queue((struct wl_proxy*)egl_window->bnxs, 0);
-            wl_bnxs_destroy( egl_window->bnxs );
-            egl_window->bnxs= 0;
+            wl_proxy_set_queue((struct wl_proxy*)egl_window->drm, 0);
+            wl_drm_destroy( egl_window->drm );
+            egl_window->drm= 0;
          }
 
          if ( egl_window->registry )
@@ -3993,13 +3814,12 @@ void wl_egl_window_resize(struct wl_egl_window *egl_window, int width, int heigh
 {
    TRACE1("wl_egl_window_resize");
 
-   if ( egl_window->nativeWindow )
+   if ( egl_window )
    {
       egl_window->dx += dx;
       egl_window->dy += dy;
       egl_window->width= width;
       egl_window->height= height;
-      NXPL_ResizeNativeWindow( egl_window->nativeWindow, width, height, dx, dy );
    }
 }
 
@@ -4020,196 +3840,28 @@ void wl_egl_window_get_attached_size(struct wl_egl_window *egl_window, int *widt
 
 } /* extern "C" */
 
-void *wl_egl_get_device_buffer(struct wl_resource *resource)
+static void *wlEglGetDeviceBuffer(struct wl_resource *resource)
 {
    void *deviceBuffer= 0;
 
    if( wl_resource_instance_of( resource, &wl_buffer_interface, &bufferInterface ) ) 
    {
-      struct wl_bnxs_buffer *bnxsBuffer;
+      struct wl_drm_buffer *drmBuffer;
       
-      bnxsBuffer= (wl_bnxs_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
-      if ( bnxsBuffer )
+      drmBuffer= (wl_drm_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
+      if ( drmBuffer )
       {
-         deviceBuffer= (void *)bnxsBuffer->nexusSurfaceHandle;
+         // The bufferId is passed both via fd and as offset2 in this
+         // emulation.  The value passed via fd is only reliable when the client
+         // and server are in the main emulation process.  The value passed via 
+         // offset2 is always reliable so we use it.
+         deviceBuffer= (void *)(intptr_t)drmBuffer->offset[2];
       }
    }
    
    return deviceBuffer;
 }
 
-struct wl_egl_window *getWlEglWindow( struct wl_display *display )
-{
-   struct wl_egl_window *egl_window= 0;
-
-   pthread_mutex_lock( &gMutex );
-   for( std::vector<struct wl_egl_window*>::iterator it= gNativeWindows.begin();
-        it != gNativeWindows.end();
-        ++it )
-   {
-      if ( (*it)->wldisp == display )
-      {
-         egl_window= (*it);
-         break;
-      }
-   }
-   pthread_mutex_unlock( &gMutex );
-
-   return egl_window;
-}
-
-static void wayRegistryHandleGlobal(void *data,
-                                    struct wl_registry *registry, uint32_t id,
-		                              const char *interface, uint32_t version)
-{
-   EMWLRemote *r= (EMWLRemote*)data;
-
-   int len= strlen(interface);
-   if ( (len==7) && !strncmp(interface, "wl_bnxs", len) ) {
-      r->bnxsRemote= (struct wl_bnxs*)wl_registry_bind(registry, id, &wl_bnxs_interface, 1);
-      printf("wayland-egl: registry: bnxs %p\n", (void*)r->bnxsRemote);
-      wl_proxy_set_queue((struct wl_proxy*)r->bnxsRemote, 0);
-   }
-}
-
-static void wayRegistryHandleGlobalRemove(void *data,
-                                          struct wl_registry *registry,
-			                                 uint32_t name)
-{
-   WAYEGL_UNUSED(data);
-   WAYEGL_UNUSED(registry);
-   WAYEGL_UNUSED(name);
-}
-
-static const struct wl_registry_listener wayRegistryListener =
-{
-	wayRegistryHandleGlobal,
-	wayRegistryHandleGlobalRemove
-};
-
-extern "C" {
-
-bool wl_egl_remote_begin( struct wl_display *dspsrc, struct wl_display *dspdest )
-{
-   bool result= false;
-   EMCTX *ctx= 0;
-   EMWLRemote remote;
-
-   TRACE1("wl_egl_remote_begin");
-   ctx= emGetContext();
-   if ( ctx )
-   {
-      std::map<struct wl_display*,EMWLRemote>::iterator it= ctx->wlRemotes.find( dspsrc );
-      if ( it == ctx->wlRemotes.end() )
-      {
-         EMWLRemote *r= &remote;
-         memset( &remote, 0, sizeof(remote) );
-         r->dspsrc= dspsrc;
-         r->dspdest= dspdest;
-         r->registry= wl_display_get_registry( dspdest );
-         if ( r->registry )
-         {
-            r->queue= wl_display_create_queue(dspdest);
-            if ( r->queue )
-            {
-               wl_proxy_set_queue((struct wl_proxy*)r->registry, r->queue);
-               wl_registry_add_listener(r->registry, &wayRegistryListener, r);
-               wl_display_roundtrip_queue(dspdest, r->queue);
-
-               if ( r->bnxsRemote )
-               {
-                  ctx->wlRemotes.insert( std::pair<struct wl_display*,EMWLRemote>( dspsrc, remote ) );
-                  result= true;
-               }
-            }
-         }
-      }
-   }
-
-   return result;
-}
-
-void wl_egl_remote_end( struct wl_display *dspsrc, struct wl_display *dspdest )
-{
-   EMCTX *ctx= 0;
-
-   TRACE1("wl_egl_remote_end");
-   ctx= emGetContext();
-   if ( ctx )
-   {
-      std::map<struct wl_display*,EMWLRemote>::iterator it= ctx->wlRemotes.find( dspsrc );
-      if ( it != ctx->wlRemotes.end() )
-      {
-         EMWLRemote *r= &it->second;
-
-         if ( r->bnxsRemote )
-         {
-            wl_bnxs_destroy( r->bnxsRemote );
-            r->bnxsRemote= 0;
-         }
-         if ( r->registry )
-         {
-            wl_registry_destroy(r->registry);
-            r->registry= 0;
-         }
-         if ( r->queue )
-         {
-            wl_event_queue_destroy( r->queue );
-            r->queue= 0;
-         }
-         ctx->wlRemotes.erase( it );
-      }
-   }
-}
-
-struct wl_buffer* wl_egl_remote_buffer_clone( struct wl_display *dspsrc,
-                                              struct wl_resource *resource,
-                                              struct wl_display *dspdest,
-                                              int *width,
-                                              int *height )
-{
-   EMCTX *ctx= 0;
-   struct wl_buffer *clone= 0;
-
-   TRACE1("wl_egl_remote_buffer_clone");
-   if( wl_resource_instance_of( resource, &wl_buffer_interface, &bufferInterface ) )
-   {
-      struct wl_bnxs_buffer *bnxsBuffer;
-
-      bnxsBuffer= (wl_bnxs_buffer *)wl_resource_get_user_data( (wl_resource*)resource );
-      if ( bnxsBuffer )
-      {
-         ctx= emGetContext();
-         if ( ctx )
-         {
-            std::map<struct wl_display*,EMWLRemote>::iterator it= ctx->wlRemotes.find( dspsrc );
-            if ( it != ctx->wlRemotes.end() )
-            {
-               EMWLRemote *r= &it->second;
-
-               if ( r->bnxsRemote )
-               {
-                  clone= wl_bnxs_create_buffer( r->bnxsRemote,
-                                                bnxsBuffer->nexusSurfaceHandle,
-                                                bnxsBuffer->width,
-                                                bnxsBuffer->height,
-                                                bnxsBuffer->stride,
-                                                bnxsBuffer->format );
-                  if ( clone )
-                  {
-                     if ( width ) *width= bnxsBuffer->width;
-                     if ( height ) *height= bnxsBuffer->height;
-                  }
-               }
-            }
-         }
-      }
-   }
-
-   return clone;
-}
-
-}
 
 // Section: GLES ------------------------------------------------------
 
@@ -4472,7 +4124,7 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
                   if ( img->target == EGL_WAYLAND_BUFFER_WL )
                   {
                      struct wl_resource *resource= (struct wl_resource*)img->clientBuffer;
-                     void *deviceBuffer= wl_egl_get_device_buffer( resource );
+                     void *deviceBuffer= wlEglGetDeviceBuffer( resource );
                      if( (long long)deviceBuffer < 0 )
                      {
                         ERROR("glEGLImageTargetTexture2DOES: image %p had bad device buffer %d", img, deviceBuffer);
@@ -4510,6 +4162,9 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
                }
             }
          }
+         break;
+      case GL_TEXTURE_EXTERNAL_OES:
+         TRACE1("glEGLImageTargetTexture2DOES: target GL_TEXTURE_EXTERNAL_OES");
          break;
       default:
          WARNING("glEGLImageTargetTexture2DOES: unsupported target %X", target);
@@ -4771,7 +4426,7 @@ GL_APICALL const GLubyte *GL_APIENTRY glGetString (GLenum name)
    switch( name )
    {
       case GL_EXTENSIONS:
-         s= "";
+         s= "GL_OES_EGL_image_external";
          break;
    }
 
@@ -4779,7 +4434,7 @@ exit:
 
    TRACE1("glGetString for %X: (%s)", name, s );
 
-   return s;
+   return (const GLubyte*)s;
 }
 
 GL_APICALL GLint GL_APIENTRY glGetUniformLocation (GLuint program, const GLchar *name)

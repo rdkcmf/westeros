@@ -17,7 +17,10 @@
 # limitations under the License.
 #
 
-WID=$(shell pwd)/external/install
+BASE=$(shell pwd)/../
+CID=$(BASE)/common/external/install
+WID=$(BASE)/brcm/external/install
+
 XDGOPT ?= xdgv4
 
 all:  externals \
@@ -37,10 +40,10 @@ clean: init
 cleanall: initall
 
 setenv= \
-	export PATH=$(WID)/bin:$(PATH) && \
-	export LD_LIBRARY_PATH=$(WID)/lib && \
-	export PKG_CONFIG_PATH=$(WID)/lib/pkgconfig:$(WID)/share/pkgconfig && \
-	export PKG_CONFIG=$(WID)/bin/pkg-config &&  \
+	export PATH=$(CID)/bin:$(WID)/bin:$(PATH) && \
+	export LD_LIBRARY_PATH=$(CID)/lib:$(WID)/lib && \
+	export PKG_CONFIG_PATH=$(CID)/lib/pkgconfig:$(CID)/share/pkgconfig && \
+	export PKG_CONFIG=$(CID)/bin/pkg-config &&  \
 	export ACLOCAL_PATH=$(WID)/share/aclocal && \
 	export ACLOCAL="aclocal -I $ACLOCAL_PATH"
 
@@ -68,27 +71,6 @@ init:
 	rm -f external/install/include/vpc*.h	
 	
 externals: external \
-           external/.pkgconfig \
-           external/.libffi \
-           external/.libpcre \
-           external/.zlib \
-           external/.glib2.0 \
-           external/.pthread-stubs \
-           external/.xproto \
-           external/.xau \
-           external/.bison \
-           external/.expat \
-           external/.gettext-tools \
-           external/.flex \
-           external/.intltool \
-           external/.proto \
-           external/.macros \
-           external/.xkbconfig \
-           external/.libxcd \
-           external/.libxkbcommon \
-           external/.wayland \
-           external/.gstreamer \
-           external/.gst-plugins-base \
            external/.brcm-refsw
 	rm -f $(WID)/share/config.site
 
@@ -96,266 +78,6 @@ external:
 	mkdir -p external
 	mkdir -p external/install
 	
-external/.pkgconfig:	
-	$(call setenv) && \
-	cd external && \
-	git clone git://anongit.freedesktop.org/pkg-config && \
-	cd pkg-config && \
-	git checkout pkg-config-0.29 && \
-	./autogen.sh --prefix $(WID) --no-configure && \
-	./configure --prefix $(WID) --with-internal-glib && \
-	make && make install && \
-	cd .. && \
-	touch .pkgconfig
-
-external/.libffi:
-	$(call setenv) && \
-	cd external && \
-	mkdir libffi && \
-	cd libffi && \
-	wget http://sourceware.org/pub/libffi/libffi-3.2.1.tar.gz && \
-	tar xzvf libffi-3.2.1.tar.gz && \
-	cd libffi-3.2.1 && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .libffi
-
-external/.libpcre:
-	$(call setenv) && \
-	cd external && \
-	mkdir libpcre && \
-	cd libpcre && \
-	wget https://sourceforge.net/projects/pcre/files/pcre/8.39/pcre-8.39.tar.bz2 && \
-	tar xjvf pcre-8.39.tar.bz2 && \
-	cd pcre-8.39 && \
-	./configure --prefix $(WID) --enable-newline-is-lf --enable-rebuild-chartables --enable-utf --enable-unicode-properties --with-link-size=2 --with-match-limit=10000000 && \
-	make && make install && \
-	cd ../.. && \
-	touch .libpcre	
-
-external/.zlib:
-	$(call setenv) && \
-	cd external && \
-	mkdir zlib && \
-	cd zlib && \
-	wget http://www.zlib.net/zlib-1.2.11.tar.xz && \
-	tar xf zlib-1.2.11.tar.xz && \
-	cd zlib-1.2.11/ && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .zlib
-
-external/.glib2.0:
-	$(call setenv) && \
-	cd external && \
-	mkdir glib2.0 && \
-	cd glib2.0 && \
-	wget http://ftp.gnome.org/pub/gnome/sources/glib/2.58/glib-2.58.2.tar.xz && \
-	tar xf glib-2.58.2.tar.xz && \
-	cd glib-2.58.2/ && \
-	./autogen.sh --prefix $(WID) --enable-libmount=no && \
-	make && make install && \
-	cd ../.. && \
-	touch .glib2.0
-
-external/.pthread-stubs:
-	$(call setenv) && \
-	cd external && \
-	mkdir pthread-stubs && \
-	cd pthread-stubs && \
-	wget http://cgit.freedesktop.org/xcb/pthread-stubs/snapshot/pthread-stubs-0.3.tar.gz && \
-	tar xzvf pthread-stubs-0.3.tar.gz && \
-	cd pthread-stubs-0.3 && \
-	./autogen.sh --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .pthread-stubs
-
-external/.xproto:
-	$(call setenv) && \
-	cd external && \
-	mkdir xproto && \
-	cd xproto && \
-	wget http://www.x.org/archive/individual/proto/xproto-7.0.29.tar.bz2 && \
-	tar xjvf xproto-7.0.29.tar.bz2 && \
-	cd xproto-7.0.29/ && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .xproto
-
-external/.xau:
-	$(call setenv) && \
-	cd external && \
-	mkdir xau && \
-	cd xau && \
-	wget http://www.x.org/pub/individual/lib/libXau-1.0.8.tar.bz2 && \
-	tar xjvf libXau-1.0.8.tar.bz2 && \
-	cd libXau-1.0.8 && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .xau	
-
-external/.bison:
-	$(call setenv) && \
-	cd external && \
-	mkdir bison && \
-	cd bison && \
-	wget http://ftp.gnu.org/gnu/bison/bison-3.0.4.tar.xz && \
-	tar xf bison-3.0.4.tar.xz && \
-	cd bison-3.0.4/ && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .bison	
-
-external/.expat:
-	$(call setenv) && \
-	cd external && \
-	mkdir expat && \
-	cd expat && \
-	wget https://sourceforge.net/projects/expat/files/expat/2.2.0/expat-2.2.0.tar.bz2 && \
-	tar xjvf expat-2.2.0.tar.bz2 && \
-	cd expat-2.2.0/ && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .expat	
-
-external/.gettext-tools:
-	$(call setenv) && \
-	cd external && \
-	mkdir gettext-tools && \
-	cd gettext-tools && \
-	wget http://ftp.gnu.org/pub/gnu/gettext/gettext-0.19.5.1.tar.gz && \
-	tar xzvf gettext-0.19.5.1.tar.gz && \
-	cd gettext-0.19.5.1/ && \
-	./configure --prefix $(WID) --without-lispdir --disable-csharp --disable-libasprintf --disable-java --disable-native-java --disable-openmp --disable-acl --with-included-glib --without-emacs --without-cvs --without-git --with-included-libxml --with-included-libcroco --with-included-libunistring && \
-	make && make install && \
-	cd ../.. && \
-	touch .gettext-tools	
-
-external/.flex:
-	$(call setenv) && \
-	cd external && \
-	mkdir flex && \
-	cd flex && \
-	wget http://github.com/westes/flex/releases/download/v2.6.3/flex-2.6.3.tar.gz && \
-	tar xzvf flex-2.6.3.tar.gz && \
-	cd flex-2.6.3/ && \
-	./autogen.sh --prefix $(WID) && \
-	./configure --prefix $(WID) && make && make install && \
-	cd ../.. && \
-	touch .flex	
-
-external/.intltool:
-	$(call setenv) && \
-	cd external && \
-	mkdir intltool && \
-	cd intltool && \
-	wget https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/intltool/0.51.0-2/intltool_0.51.0.orig.tar.gz && \
-	tar xzvf intltool_0.51.0.orig.tar.gz && \
-	cd intltool-0.51.0 && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .intltool
-
-external/.proto:	
-	$(call setenv) && \
-	cd external && \
-	git clone git://anongit.freedesktop.org/xcb/proto && \
-	cd proto && \
-	./autogen.sh --prefix $(WID) && \
-	make && make install && \
-	cd .. && \
-	touch .proto
-
-external/.macros:
-	$(call setenv) && \
-	cd external && \
-	git clone git://anongit.freedesktop.org/xorg/util/macros && \
-	cd macros && \
-	./autogen.sh --prefix $(WID) && \
-	make && make install && \
-	cd .. && \
-	touch .macros
-
-external/.xkbconfig:
-	$(call setenv) && \
-	cd external && \
-	mkdir xkbconfig && \
-	cd xkbconfig && \
-	wget http://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-2.18.tar.bz2 && \
-	tar xjvf xkeyboard-config-2.18.tar.bz2 && \
-	cd xkeyboard-config-2.18 && \
-	./autogen.sh --prefix $(WID) --disable-runtime-deps && \
-	make && make install && \
-	cd ../.. && \
-	touch .xkbconfig
-
-external/.libxcd:
-	$(call setenv) && \
-	cd external && \
-	git clone git://anongit.freedesktop.org/xcb/libxcb && \
-	cd libxcb && \
-	./autogen.sh --prefix $(WID) && \
-	make && make install && \
-	cd .. && \
-	touch .libxcd
-	
-external/.libxkbcommon:
-	$(call setenv) && \
-	cd external && \
-	git clone git://github.com/xkbcommon/libxkbcommon && \
-	cd libxkbcommon && \
-	./autogen.sh --prefix $(WID) && \
-	make && make install && \
-	cd .. && \
-	touch .libxkbcommon
-
-external/.wayland:
-	$(call setenv) && \
-	cd external && \
-	mkdir wayland && \
-	cd wayland && \
-	wget http://wayland.freedesktop.org/releases/wayland-1.6.0.tar.xz && \
-	tar xf wayland-1.6.0.tar.xz && \
-	cd wayland-1.6.0 && \
-	./configure --prefix $(WID) --with-expat=$(WID) --disable-documentation && \
-	make && make install && \
-	cd ../.. && \
-	touch .wayland
-
-external/.gstreamer:
-	$(call setenv) && \
-	cd external && \
-	mkdir gstreamer1.0 && \
-	cd gstreamer1.0 && \
-	wget https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.10.4.tar.xz && \
-	tar xf gstreamer-1.10.4.tar.xz && \
-	cd gstreamer-1.10.4 && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .gstreamer
-
-external/.gst-plugins-base:
-	$(call setenv) && \
-	cd external && \
-	mkdir gst-plugins-base && \
-	cd gst-plugins-base && \
-	wget https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.10.4.tar.xz && \
-	tar xf gst-plugins-base-1.10.4.tar.xz && \
-	cd gst-plugins-base-1.10.4 && \
-	./configure --prefix $(WID) && \
-	make && make install && \
-	cd ../.. && \
-	touch .gst-plugins-base
-
 external/.brcm-refsw:
 	cd external && \
 	mkdir brcm-refsw && \
@@ -509,6 +231,7 @@ external/.brcm-refsw:
 	touch .brcm-refsw
 
 site:
+	mkdir -p $(WID)/share && \
 	cp ../brcm-em/config.site $(WID)/share
 
 westeros-protocols: xdg-shell-v4 xdg-shell-v5 simpleshell simplebuffer
@@ -517,22 +240,22 @@ xdg-shell-v4: protocol/version4/xdg-shell-server-protocol.h \
               protocol/version4/xdg-shell-protocol.c
 
 protocol/version4/xdg-shell-server-protocol.h: protocol/version4/xdg-shell.xml
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C protocol
 
 protocol/version4/xdg-shell-protocol.c: protocol/version4/xdg-shell.xml
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C protocol
 
 xdg-shell-v5: protocol/version5/xdg-shell-server-protocol.h \
               protocol/version5/xdg-shell-protocol.c
 
 protocol/version5/xdg-shell-server-protocol.h: protocol/version5/xdg-shell.xml
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C protocol
 
 protocol/version5/xdg-shell-protocol.c: protocol/version5/xdg-shell.xml
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C protocol
 	
 simpleshell: simpleshell/protocol/simpleshell-client-protocol.h \
@@ -540,15 +263,15 @@ simpleshell: simpleshell/protocol/simpleshell-client-protocol.h \
              simpleshell/protocol/simpleshell-protocol.c
 
 simpleshell/protocol/simpleshell-client-protocol.h:
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C simpleshell/protocol
 
 simpleshell/protocol/simpleshell-server-protocol.h:
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C simpleshell/protocol
 
 simpleshell/protocol/simpleshell-protocol.c:
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C simpleshell/protocol
 
 westeros-simpleshell: .simpleshell
@@ -573,15 +296,15 @@ simplebuffer: simplebuffer/protocol/simplebuffer-client-protocol.h \
              simplebuffer/protocol/simplebuffer-protocol.c
 
 simplebuffer/protocol/simplebuffer-client-protocol.h:
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C simplebuffer/protocol
 
 simplebuffer/protocol/simplebuffer-server-protocol.h:
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C simplebuffer/protocol
 
 simplebuffer/protocol/simplebuffer-protocol.c:
-	export SCANNER_TOOL=${WID}/bin/wayland-scanner && \
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
 	make -C simplebuffer/protocol
 
 westeros-simplebuffer: .simplebuffer
@@ -603,13 +326,13 @@ westeros-simplebuffer: .simplebuffer
 
 .brcm-em:
 	mkdir -p $(WID)/usr/include && \
-	cp ../brcm-em/wayland-egl.pc $(WID)/share/pkgconfig && \
+	cp ../brcm-em/wayland-egl.pc $(CID)/share/pkgconfig && \
 	cp ../brcm-em/include/platform_app.inc $(WID)/usr/include && \
 	cp ../brcm-em/include/* $(WID)/include -r && \
 	cp ./external/brcm-refsw/include/* $(WID)/include -r && \
 	cd ../brcm-em/em && \
 	$(call setenv) && \
-	export SCANNER_TOOL=$(WID)/bin/wayland-scanner && \
+	export SCANNER_TOOL=$(CID)/bin/wayland-scanner && \
 	make -C protocol && \
 	mkdir -p m4 && \
 	aclocal -I cfg && \
@@ -646,6 +369,7 @@ westeros-soc: .brcm-em
 
 westeros-core:
 	$(call setenv) && \
+	mkdir -p m4 && \
 	aclocal -I cfg && \
 	libtoolize --automake && \
 	autoheader && \
