@@ -348,6 +348,8 @@ typedef struct _EMCTX
    void *textureCreatedUserData;
    EMBufferPushed bufferPushedCB;
    void *bufferPushedUserData;
+   EMHolePunched holePunchedCB;
+   void *holePunchedUserData;
 
    char errorDetail[EM_MAX_ERROR];
 } EMCTX;
@@ -681,6 +683,13 @@ void EMSetBufferPushedCallback( EMCTX *ctx, EMBufferPushed cb, void *userData )
    ctx->bufferPushedCB= cb;
    ctx->bufferPushedUserData= userData;
 }
+
+void EMSetHolePunchedCallback( EMCTX *ctx, EMHolePunched cb, void *userData )
+{
+   ctx->holePunchedCB= cb;
+   ctx->holePunchedUserData= userData;
+}
+
 
 
 
@@ -4242,12 +4251,51 @@ GL_APICALL GLenum GL_APIENTRY glCheckFramebufferStatus (GLenum target)
 
 GL_APICALL void GL_APIENTRY glClear (GLbitfield mask)
 {
+   EMCTX *ctx= 0;
+
    TRACE1("glClear");
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("glClear: emGetContext failed");
+      goto exit;
+   }
+
+   if ( ctx->holePunchedCB && (ctx->clearColor[3] == 0.0) )
+   {
+      int hx, hy, hw, hh;
+      hx= ctx->scissorBox[0];
+      hy= ctx->viewport[3]-ctx->scissorBox[1]-ctx->scissorBox[3];
+      hw= ctx->scissorBox[2];
+      hh= ctx->scissorBox[3];
+      ctx->holePunchedCB( ctx, ctx->holePunchedUserData, hx, hy, hw, hh );
+   }
+
+exit:
+   return;
 }
 
 GL_APICALL void GL_APIENTRY glClearColor (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 {
+   EMCTX *ctx= 0;
+
    TRACE1("glClearColor");
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("glClearColor: emGetContext failed");
+      goto exit;
+   }
+
+   ctx->clearColor[0]= red;
+   ctx->clearColor[1]= green;
+   ctx->clearColor[2]= blue;
+   ctx->clearColor[3]= alpha;
+
+exit:
+   return;
 }
 
 GL_APICALL void GL_APIENTRY glCompileShader (GLuint shader)
@@ -4779,7 +4827,7 @@ GL_APICALL void GL_APIENTRY glScissor (GLint x, GLint y, GLsizei width, GLsizei 
 {
    EMCTX *ctx= 0;
 
-   TRACE1("glScissor");
+   TRACE1("glScissor: (%d, %d, %d, %d)", x, y, width, height);
 
    ctx= emGetContext();
    if ( !ctx )
@@ -4927,7 +4975,7 @@ GL_APICALL void GL_APIENTRY glUseProgram (GLuint program)
    ctx= emGetContext();
    if ( !ctx )
    {
-      ERROR("glViewport: emGetContext failed");
+      ERROR("glUseProgram: emGetContext failed");
       goto exit;
    }
 
@@ -4946,7 +4994,7 @@ GL_APICALL void GL_APIENTRY glViewport (GLint x, GLint y, GLsizei width, GLsizei
 {
    EMCTX *ctx= 0;
 
-   TRACE1("glViewport");
+   TRACE1("glViewport: (%d, %d, %d, %d)", x, y, width, height);
 
    ctx= emGetContext();
    if ( !ctx )
@@ -4955,10 +5003,10 @@ GL_APICALL void GL_APIENTRY glViewport (GLint x, GLint y, GLsizei width, GLsizei
       goto exit;
    }
 
-   ctx->viewport[0]= x;
-   ctx->viewport[1]= y;
-   ctx->viewport[2]= width;
-   ctx->viewport[3]= height;
+   ctx->viewport[0]= ctx->scissorBox[0]= x;
+   ctx->viewport[1]= ctx->scissorBox[1]= y;
+   ctx->viewport[2]= ctx->scissorBox[2]= width;
+   ctx->viewport[3]= ctx->scissorBox[3]= height;
 
 exit:
    return;
