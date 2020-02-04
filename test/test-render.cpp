@@ -36,6 +36,25 @@
 #include "wayland-client.h"
 #include "wayland-egl.h"
 
+static bool checkForRepeatingSupport( void )
+{
+   bool result= false;
+   WstCompositor *wctx;
+
+   wctx= WstCompositorCreate();
+   if ( wctx )
+   {
+      WstCompositorSetIsRepeater( wctx, true );
+      if ( WstCompositorGetIsRepeater( wctx ) )
+      {
+         result= true;
+      }
+
+      WstCompositorDestroy( wctx );
+   }
+
+   return result;
+}
 namespace RenderTests
 {
 
@@ -52,6 +71,7 @@ typedef struct _TestCtx
    void *eglNativeWindow;
    int windowWidth;
    int windowHeight;
+   int textureCallbackCount;
    int lastTextureBufferId;
 } TestCtx;
 
@@ -89,6 +109,7 @@ void textureCreated( EMCTX *ctx, void *userData, int bufferId )
 {
    TestCtx *testCtx= (TestCtx*)userData;
 
+   ++testCtx->textureCallbackCount;
    testCtx->lastTextureBufferId= bufferId;
 }
 
@@ -113,6 +134,8 @@ bool testCaseRenderBasicComposition( EMCTX *emctx )
    int bufferIdBase= 500;
    int bufferIdCount= 3;
    int expectedBufferId= bufferIdBase;
+
+   EMStart( emctx );
 
    memset( &testCtx, 0, sizeof(TestCtx) );
 
@@ -235,6 +258,8 @@ bool testCaseRenderBasicComposition( EMCTX *emctx )
       {
          expectedBufferId= bufferIdBase;
       }
+
+      wl_display_dispatch( display );
    }
 
    testResult= true;
@@ -306,6 +331,8 @@ bool testCaseRenderBasicCompositionEmbedded( EMCTX *emctx )
    int bufferIdBase= 500;
    int bufferIdCount= 3;
    int expectedBufferId= bufferIdBase;
+
+   EMStart( emctx );
 
    memset( &testCtx, 0, sizeof(TestCtx) );
 
@@ -604,11 +631,14 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
    LaunchCtx lctx2;
    EGLBoolean b;
    int rc, retryCount;
+   int callbackCount;
    std::vector<WstRect> rects;
    float matrix[16];
    float alpha= 1.0;
    bool needHolePunch;
    int hints;
+
+   EMStart( emctx );
 
    EMSetTextureCreatedCallback( emctx, textureCreated, ctx );
 
@@ -720,6 +750,7 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
       }
    }
 
+   callbackCount=-1;
    hints= WstHints_noRotation;
    for( int i= 0; i < 20; ++i )
    {
@@ -735,11 +766,13 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
                                     hints,
                                     &needHolePunch,
                                     rects );
-      if ( (ctx->lastTextureBufferId < 600) || (ctx->lastTextureBufferId > 603) )
+      if ( (callbackCount != ctx->textureCallbackCount) &&
+           ((ctx->lastTextureBufferId < 600) || (ctx->lastTextureBufferId > 603)) )
       {
          EMERROR("Unexpected last texture bufferId: expected(600-603) actual(%d) iteration %d", ctx->lastTextureBufferId, i );
          goto exit;
       }
+      callbackCount= ctx->textureCallbackCount;
 
       WstCompositorComposeEmbedded( virt2,
                                     0, // x
@@ -751,11 +784,13 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
                                     hints,
                                     &needHolePunch,
                                     rects );
-      if ( (ctx->lastTextureBufferId < 700) || (ctx->lastTextureBufferId > 703) )
+      if ( (callbackCount != ctx->textureCallbackCount) &&
+           ((ctx->lastTextureBufferId < 700) || (ctx->lastTextureBufferId > 703)) )
       {
          EMERROR("Unexpected last texture bufferId: expected(700-703) actual(%d) iteration %d", ctx->lastTextureBufferId, i );
          goto exit;
       }
+      callbackCount= ctx->textureCallbackCount;
 
       eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
    }
@@ -854,6 +889,8 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
    int bufferIdBase= 500;
    int bufferIdCount= 3;
    int expectedBufferId= 1;
+
+   EMStart( emctx );
 
    memset( &testCtx, 0, sizeof(TestCtx) );
 
@@ -1019,6 +1056,8 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
       {
          expectedBufferId= 1;
       }
+
+      wl_display_dispatch( display );
    }
 
    testResult= true;
@@ -1088,9 +1127,18 @@ bool testCaseRenderBasicCompositionRepeating( EMCTX *emctx )
    EGLBoolean b;
    int bufferIdBase= 500;
    int bufferIdCount= 3;
-   int expectedBufferId= bufferIdBase;
+   int expectedBufferId;
+
+   EMStart( emctx );
 
    memset( &testCtx, 0, sizeof(TestCtx) );
+
+   if ( !checkForRepeatingSupport() )
+   {
+      // If we cannot repeat, expect default buffer id range
+      bufferIdBase= 1;
+   }
+   expectedBufferId= bufferIdBase;
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -1247,6 +1295,8 @@ bool testCaseRenderBasicCompositionRepeating( EMCTX *emctx )
       {
          expectedBufferId= bufferIdBase;
       }
+
+      wl_display_dispatch( display );
    }
 
    testResult= true;
@@ -1317,6 +1367,7 @@ bool testCaseRenderShmRepeater( EMCTX *emctx )
    WstCompositor *wctx= 0;
    struct wl_display *display= 0;
    struct wl_registry *registry= 0;
+   bool repeatingSupported;
    TestCtx testCtx;
    TestCtx *ctx= &testCtx;
    unsigned char *imgData= 0;
@@ -1331,7 +1382,11 @@ bool testCaseRenderShmRepeater( EMCTX *emctx )
    int expectedBufferId;
    int pid;
 
+   EMStart( emctx );
+
    memset( &testCtx, 0, sizeof(TestCtx) );
+
+   repeatingSupported= checkForRepeatingSupport();
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -1552,7 +1607,7 @@ bool testCaseRenderShmRepeater( EMCTX *emctx )
       goto exit;
    }
 
-   expectedBufferId= (imgWidth<<16)|imgHeight;
+   expectedBufferId= repeatingSupported ? (imgWidth<<16)|imgHeight : 2;
 
    wl_surface_attach( ctx->surface, buffer, 0, 0 );
    wl_surface_damage( ctx->surface, 0, 0, imgWidth, imgHeight);
@@ -1645,6 +1700,8 @@ bool testCaseRenderWaylandThreading( EMCTX *emctx )
    TestCtx testCtx;
    TestCtx *ctx= &testCtx;
    EGLBoolean b;
+
+   EMStart( emctx );
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -1751,6 +1808,8 @@ bool testCaseRenderWaylandThreading( EMCTX *emctx )
       usleep( 17000 );
 
       eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+      wl_display_dispatch( display );
    }
    
    if ( EMGetWaylandThreadingIssue( emctx ) )
@@ -1825,6 +1884,8 @@ bool testCaseRenderWaylandThreadingEmbedded( EMCTX *emctx )
    float alpha= 1.0;
    bool needHolePunch;
    int hints;
+
+   EMStart( emctx );
 
    memset( &testCtx, 0, sizeof(TestCtx) );
 
@@ -1964,8 +2025,6 @@ bool testCaseRenderWaylandThreadingEmbedded( EMCTX *emctx )
                                     hints,
                                     &needHolePunch,
                                     rects );
-                                    
-                                    
    }
    
    if ( EMGetWaylandThreadingIssue( emctx ) )
@@ -2176,7 +2235,15 @@ bool testCaseRenderBasicCompositionEmbeddedRepeater( EMCTX *emctx )
    int bufferIdCount= 3;
    int retryCount;
 
+   EMStart( emctx );
+
    memset( &testCtx, 0, sizeof(TestCtx) );
+
+   if ( !checkForRepeatingSupport() )
+   {
+      // If we cannot repeat, expect default buffer id range
+      bufferIdBase= 1;
+   }
 
    result= testSetupEGL( &ctx->eglCtx, 0 );
    if ( !result )

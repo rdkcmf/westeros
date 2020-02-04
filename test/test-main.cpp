@@ -294,7 +294,7 @@ TESTCASE genericTests[]=
      "Test embedded compositor basic composition",
      testCaseRenderBasicCompositionEmbedded
    },
-   { "testRenderBasicCompositionEmbeddedFastRepeater",
+   { "testRenderBasicCompositionEmbeddedRepeater",
      "Test embedded compositor basic composition with repeater client",
      testCaseRenderBasicCompositionEmbeddedRepeater
    },

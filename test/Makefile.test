@@ -17,36 +17,54 @@
 # limitations under the License.
 #
 
-WID=$(shell pwd)/external/install
-
-all:  parse-coverage test-brcm
+all:  parse-coverage test-common test-brcm test-drm
 
 clean:
 	rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda && \
 	rm -f parse-coverage && \
+	cd common && \
+	make -f Makefile.common clean && \
+	cd .. && \
 	cd brcm && \
 	make -f Makefile.brcm clean && \
 	cp ../Makefile.brcm . && \
+	cd .. && \
+	cd drm && \
+	make -f Makefile.drm clean && \
+	cp ../Makefile.drm . && \
 	cd ..
 
 cleanall: initall
 
-setenv= \
-	export PKG_CONFIG_PATH=$(WID)/lib/pkgconfig:$(WID)/share/pkgconfig && \
-	export ACLOCAL_PATH=$(WID)/share/aclocal && \
-	export ACLOCAL="aclocal -I $ACLOCAL_PATH"
-
 initall: init
-	rm -rf brcm
+	rm -rf common && \
+	rm -rf brcm && \
+	rm -rf drm
    
 init:
-	rm -f .brcm
+	rm -f .common && \
+	rm -f .brcm && \
+	rm -f .drm
 
 parse-coverage:
 	g++ parse-coverage.cpp -O2 -o parse-coverage
 
+test-common: .common
+	cd common && \
+	make -f Makefile.common && \
+	cd ..
+
+.common:
+	mkdir -p common && \
+	cd common && \
+	cp ../Makefile.common . && \
+	make -f Makefile.common && \
+	cd .. && \
+	touch .common
+
 test-brcm: .brcm
 	cd brcm && \
+	unset CFLAGS && \
 	make -f Makefile.brcm && \
 	cd ..
 
@@ -56,4 +74,17 @@ test-brcm: .brcm
 	cp ../Makefile.brcm . && \
 	cd .. && \
 	touch .brcm
+
+test-drm: .drm
+	cd drm && \
+	unset CFLAGS && \
+	make -f Makefile.drm && \
+	cd ..
+
+.drm:
+	git clone https://code.rdkcentral.com/r/a/components/opensource/westeros drm && \
+	cd drm && \
+	cp ../Makefile.drm . && \
+	cd .. && \
+	touch .drm
 
