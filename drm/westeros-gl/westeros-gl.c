@@ -142,6 +142,8 @@ typedef struct _WstOverlayPlane
    struct _WstOverlayPlane *next;
    struct _WstOverlayPlane *prev;
    bool inUse;
+   bool supportsVideo;
+   bool supportsGraphics;
    int zOrder;
    uint32_t crtc_id;
    drmModePlane *plane;
@@ -198,9 +200,11 @@ typedef struct _WstGLCtx
    bool modeSet;
    bool modeSetPending;
    bool notifySizeChange;
+   bool useVideoServer;
    bool usePlanes;
    bool haveAtomic;
    bool haveNativeFence;
+   bool graphicsPreferPrimary;
    drmModeObjectProperties *connectorProps;
    drmModePropertyRes **connectorPropRes;
    drmModeObjectProperties *crtcProps;
@@ -346,7 +350,7 @@ static void wstOverlayAppendUnused( WstOverlayPlanes *planes, WstOverlayPlane *o
 
    if ( insertAfter )
    {
-      if ( overlay->zOrder <= insertAfter->zOrder )
+      if ( overlay->zOrder < insertAfter->zOrder )
       {
          insertAfter= 0;
       }
@@ -389,22 +393,77 @@ static void wstOverlayAppendUnused( WstOverlayPlanes *planes, WstOverlayPlane *o
    overlay->prev= insertAfter;
 }
 
-static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool fromTop )
+static WstOverlayPlane *wstOverlayAllocPrimary( WstOverlayPlanes *planes )
 {
    WstOverlayPlane *overlay= 0;
 
    pthread_mutex_lock( &gCtx->mutex );
 
-   if ( planes->totalCount < 2 )
+   if ( planes->primary )
    {
-      pthread_mutex_unlock( &gCtx->mutex );
-      return 0;
+      if ( !planes->primary->inUse )
+      {
+         ++planes->usedCount;
+
+         overlay= planes->primary;
+         if ( overlay->next )
+         {
+            overlay->next->prev= overlay->prev;
+         }
+         else
+         {
+            planes->availTail= overlay->prev;
+         }
+         if ( overlay->prev )
+         {
+            overlay->prev->next= overlay->next;
+         }
+         else
+         {
+            planes->availHead= overlay->next;
+         }
+
+         overlay->next= 0;
+         overlay->prev= planes->usedTail;
+         if ( planes->usedTail )
+         {
+            planes->usedTail->next= overlay;
+         }
+         else
+         {
+            planes->usedHead= overlay;
+         }
+         planes->usedTail= overlay;
+         overlay->inUse= true;
+      }
+      else
+      {
+         WARNING("primary plane already in use");
+      }
+   }
+   else
+   {
+      ERROR("no primary plane found");
    }
 
-   if ( planes->usedCount < planes->totalCount )
+   pthread_mutex_unlock( &gCtx->mutex );
+
+   return overlay;
+}
+
+static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool graphics )
+{
+   WstOverlayPlane *overlay= 0;
+
+   pthread_mutex_lock( &gCtx->mutex );
+
+   if (
+         (planes->usedCount < planes->totalCount) &&
+         (graphics || planes->availHead->supportsVideo)
+      )
    {
       ++planes->usedCount;
-      if ( fromTop )
+      if ( graphics )
       {
          overlay= planes->availTail;
          planes->availTail= overlay->prev;
@@ -456,6 +515,10 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
       pthread_mutex_lock( &gCtx->mutex );
 
       overlay->inUse= false;
+      if ( planes->usedCount <= 0 )
+      {
+         ERROR("wstOverlayFree: unmatched free");
+      }
       --planes->usedCount;
       if ( overlay->next )
       {
@@ -677,7 +740,9 @@ static void *wstVideoServerConnectionThread( void *arg )
                            conn->videoPlane->videoFrameNext.rectH= rectH-rectSkipY;
                            pthread_mutex_unlock( &gCtx->mutex );
 
+                           pthread_mutex_lock( &gMutex );
                            wstSwapDRMBuffers( gCtx, 0 );
+                           pthread_mutex_unlock( &gMutex );
                         }
                         else
                         {
@@ -694,7 +759,9 @@ static void *wstVideoServerConnectionThread( void *arg )
             case 'H':
                DEBUG("got hide video plane %d", conn->videoPlane->plane->plane_id);
                conn->videoPlane->videoFrameNext.hide= true;
+               pthread_mutex_lock( &gMutex );
                wstSwapDRMBuffers( gCtx, 0 );
+               pthread_mutex_unlock( &gMutex );
                break;
             default:
                ERROR("got unknown video server message");
@@ -771,6 +838,12 @@ exit:
          drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbId );
          conn->videoPlane->fbId= 0;
          conn->videoPlane->handle= 0;
+      }
+      if ( conn->videoPlane->fbIdPrev )
+      {
+         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbIdPrev, __LINE__);
+         drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbIdPrev );
+         conn->videoPlane->fbIdPrev= 0;
       }
       if ( conn->prevFrameFd0 >= 0 )
       {
@@ -1402,6 +1475,7 @@ static WstGLCtx *wstInitCtx( void )
    if ( ctx )
    {
       pthread_mutex_init( &ctx->mutex, 0 );
+      ctx->refCnt= 1;
       #ifndef WESTEROS_GL_NO_PLANES
       ctx->usePlanes= true;
       #endif
@@ -1416,6 +1490,12 @@ static WstGLCtx *wstInitCtx( void )
       {
          INFO("westeros-gl: no planes");
          ctx->usePlanes= false;
+      }
+      ctx->useVideoServer= true;
+      if ( getenv("WESTEROS_GL_NO_VIDEOSERVER") )
+      {
+         INFO("westeros-gl: no video server");
+         ctx->useVideoServer= false;
       }
       #ifdef DRM_USE_NATIVE_FENCE
       ctx->nativeOutputFenceFd= -1;
@@ -1585,10 +1665,13 @@ static WstGLCtx *wstInitCtx( void )
       #ifndef WESTEROS_GL_NO_PLANES
       if ( ctx->usePlanes && (crtc_idx >= 0) )
       {
+         bool haveVideoPlanes= false;
+
          planeRes= drmModeGetPlaneResources( ctx->drmFd );
          if ( planeRes )
          {
-            bool isOverlay, isPrimary;
+            bool isOverlay, isPrimary, isVideo, isGraphics;
+            int zpos;
 
             DEBUG("wstInitCtx: planeRes %p count_planes %d", planeRes, planeRes->count_planes );
             for( n= 0; n < planeRes->count_planes; ++n )
@@ -1596,7 +1679,8 @@ static WstGLCtx *wstInitCtx( void )
                plane= drmModeGetPlane( ctx->drmFd, planeRes->planes[n] );
                if ( plane )
                {
-                  isOverlay= isPrimary= false;
+                  isOverlay= isPrimary= isVideo= isGraphics= false;
+                  zpos= 0;
 
                   props= drmModeObjectGetProperties( ctx->drmFd, planeRes->planes[n], DRM_MODE_OBJECT_PLANE );
                   if ( props )
@@ -1620,6 +1704,10 @@ static WstGLCtx *wstInitCtx( void )
                                     isOverlay= true;
                                  }
                               }
+                              else if ( (len == 4) && !strncmp( prop->name, "zpos", len) )
+                              {
+                                 zpos= props->prop_values[j];
+                              }
                            }
                         }
                      }
@@ -1632,20 +1720,33 @@ static WstGLCtx *wstInitCtx( void )
                      {
                         int rc;
                         int pfi;
+
                         DEBUG("plane %d count_formats %d", plane->plane_id, plane->count_formats);
                         for( pfi= 0; pfi < plane->count_formats; ++pfi )
                         {
-                           DEBUG("plane %d format %d: %x", plane->plane_id, pfi, plane->formats[pfi]);
+                           DEBUG("plane %d format %d: %x (%.*s)", plane->plane_id, pfi, plane->formats[pfi], 4, &plane->formats[pfi]);
+                           switch( plane->formats[pfi] )
+                           {
+                              case DRM_FORMAT_NV12:
+                                 isVideo= true;
+                                 haveVideoPlanes= true;
+                                 break;
+                              case DRM_FORMAT_ARGB8888:
+                                 isGraphics= true;
+                                 break;
+                              default:
+                                 break;
+                           }
                         }
-                        if ( isOverlay )
-                        {
-                           ++ctx->overlayPlanes.totalCount;
-                        }
+                        ++ctx->overlayPlanes.totalCount;
                         newPlane->plane= plane;
-                        newPlane->zOrder= ctx->overlayPlanes.totalCount;
+                        newPlane->supportsVideo= isVideo;
+                        newPlane->supportsGraphics= isGraphics;
+                        newPlane->zOrder= n + zpos*16+((isVideo && !isGraphics) ? 0 : 256);
                         newPlane->inUse= false;
                         newPlane->crtc_id= ctx->enc->crtc_id;
-                        TRACE3("plane zorder %d primary %d overlay %d crtc_id %d", newPlane->zOrder, isPrimary, isOverlay, newPlane->crtc_id);
+                        TRACE3("plane zorder %d primary %d overlay %d video %d gfx %d crtc_id %d",
+                               newPlane->zOrder, isPrimary, isOverlay, isVideo, isGraphics, newPlane->crtc_id);
                         if ( ctx->haveAtomic )
                         {
                            if ( wstAcquirePlaneProperties( ctx, newPlane ) )
@@ -1656,12 +1757,13 @@ static WstGLCtx *wstInitCtx( void )
                               }
                            }
                         }
-                        if ( isOverlay )
-                        {
-                           wstOverlayAppendUnused( &ctx->overlayPlanes, newPlane );
-                        }
+                        wstOverlayAppendUnused( &ctx->overlayPlanes, newPlane );
 
                         plane= 0;
+                     }
+                     else
+                     {
+                        ERROR("No memory for WstOverlayPlane");
                      }
                   }
                   if ( prop )
@@ -1692,14 +1794,27 @@ static WstGLCtx *wstInitCtx( void )
 
          INFO( "wstInitCtx; found %d overlay planes", ctx->overlayPlanes.totalCount );
 
-         if ( ctx->overlayPlanes.totalCount >= 2 )
+         if (
+              haveVideoPlanes &&
+              ctx->overlayPlanes.primary &&
+              (ctx->overlayPlanes.availHead != ctx->overlayPlanes.primary)
+            )
          {
-            gServer= (VideoServerCtx*)calloc( 1, sizeof(VideoServerCtx) );
-            if ( gServer )
+            ctx->graphicsPreferPrimary= true;
+         }
+
+         if ( haveVideoPlanes && (ctx->overlayPlanes.totalCount >= 2) )
+         {
+            if ( ctx->useVideoServer )
             {
-               if ( !wstInitVideoServer( gServer ) )
+               gServer= (VideoServerCtx*)calloc( 1, sizeof(VideoServerCtx) );
+               if ( gServer )
                {
-                  ERROR("wstInitCtx: failed to initialize video server");
+                  ctx->haveNativeFence= false;
+                  if ( !wstInitVideoServer( gServer ) )
+                  {
+                     ERROR("wstInitCtx: failed to initialize video server");
+                  }
                }
             }
          }
@@ -1750,12 +1865,6 @@ static void wstTermCtx( WstGLCtx *ctx )
             free( toFree );
          }
       }
-      if ( ctx->overlayPlanes.primary )
-      {
-         wstReleasePlaneProperties( ctx, ctx->overlayPlanes.primary );
-         drmModeFreePlane( ctx->overlayPlanes.primary->plane );
-         free( ctx->overlayPlanes.primary );
-      }
       pthread_mutex_unlock( &ctx->mutex );
 
       if ( ctx->gbm )
@@ -1790,6 +1899,13 @@ static void wstTermCtx( WstGLCtx *ctx )
       }
       pthread_mutex_destroy( &ctx->mutex );
       free( ctx );
+
+      pthread_mutex_unlock( &gMutex );
+      while( gSizeListeners )
+      {
+         WstGLRemoveDisplaySizeListener( ctx, gSizeListeners->listener );
+      }
+      pthread_mutex_lock( &gMutex );
 
       pthread_mutex_lock( &resMutex );
       if ( gResources )
@@ -2023,9 +2139,8 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
             int rectW= iter->videoFrameNext.rectW;
             int rectH= iter->videoFrameNext.rectH;
             uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
+            int modeWidth, modeHeight, gfxWidth, gfxHeight;
 
-            /* TODO: adjust video target rect based on output resolution.  sink will be working
-               with graphics resolution coordinates which may differ from output resolution */
             iter->fbIdPrev= iter->fbId;
             iter->handlePrev= iter->handle;
             iter->fbId= fbId;
@@ -2064,6 +2179,26 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
                     rectX, rectY, rectW, rectH,
                     sx, sy, sw, sh,
                     dx, dy, dw, dh );
+
+            /* Adjust video target rect based on output resolution.  Sink will be working
+               with graphics resolution coordinates which may differ from output resolution */
+            modeWidth= ctx->modeInfo->hdisplay;
+            modeHeight= ctx->modeInfo->vdisplay;
+            gfxWidth= ctx->nwFirst ? ctx->nwFirst->width : modeWidth;
+            gfxHeight= ctx->nwFirst ? ctx->nwFirst->height : modeWidth;
+
+            if ( (gfxWidth != modeWidth) || (gfxHeight != modeHeight) )
+            {
+               dx= dx*modeWidth/gfxWidth;
+               dy= dy*modeHeight/gfxHeight;
+               dw= dw*modeWidth/gfxWidth;
+               dh= dh*modeHeight/gfxHeight;
+
+               TRACE3("m %dx%d g %dx%d d(%d,%d,%d,%d)",
+                       modeWidth, modeHeight,
+                       gfxWidth, gfxHeight,
+                       dx, dy, dw, dh );
+            }
 
             wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
                                   iter->planeProps->count_props, iter->planePropRes,
@@ -2109,6 +2244,24 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
                                   iter->planeProps->count_props, iter->planePropRes,
                                   "IN_FENCE_FD", -1 );
          }
+         else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
+         {
+            iter->fbIdPrev= iter->fbId;
+            iter->handlePrev= iter->handle;
+
+            iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
+            DEBUG("hiding video plane %d", iter->plane->plane_id);
+
+            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                  iter->planeProps->count_props, iter->planePropRes,
+                                  "FB_ID", 0 );
+
+            iter->fbId= 0;
+            iter->handle= 0;
+            iter->videoFrameNext.hide= false;
+            iter->videoFrameNext.hidden= true;
+         }
+
          iter= iter->next;
       }
    }
@@ -2292,6 +2445,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
                int rectW= iter->videoFrameNext.rectW;
                int rectH= iter->videoFrameNext.rectH;
                uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
+               int modeWidth, modeHeight, gfxWidth, gfxHeight;
 
                iter->fbIdPrev= iter->fbId;
                iter->handlePrev= iter->handle;
@@ -2327,6 +2481,27 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
                        rectX, rectY, rectW, rectH,
                        sx, sy, sw, sh,
                        dx, dy, dw, dh );
+
+               /* Adjust video target rect based on output resolution.  Sink will be working
+                  with graphics resolution coordinates which may differ from output resolution */
+               modeWidth= ctx->modeInfo->hdisplay;
+               modeHeight= ctx->modeInfo->vdisplay;
+               gfxWidth= ctx->nwFirst ? ctx->nwFirst->width : modeWidth;
+               gfxHeight= ctx->nwFirst ? ctx->nwFirst->height : modeWidth;
+
+               if ( (gfxWidth != modeWidth) || (gfxHeight != modeHeight) )
+               {
+                  dx= dx*modeWidth/gfxWidth;
+                  dy= dy*modeHeight/gfxHeight;
+                  dw= dw*modeWidth/gfxWidth;
+                  dh= dh*modeHeight/gfxHeight;
+
+                  TRACE3("m %dx%d g %dx%d d(%d,%d,%d,%d)",
+                          modeWidth, modeHeight,
+                          gfxWidth, gfxHeight,
+                          dx, dy, dw, dh );
+               }
+
                plane= iter->plane;
                plane->crtc_id= ctx->enc->crtc_id;
                rc= drmModeSetPlane( ctx->drmFd,
@@ -2381,6 +2556,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
                }
                iter->fbId= 0;
                iter->handle= 0;
+               iter->videoFrameNext.hide= true;
                iter->videoFrameNext.hidden= true;
             }
 
@@ -2536,6 +2712,7 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig 
             {
                if ( strstr( extensions, "EGL_ANDROID_native_fence_sync" ) &&
                     strstr( extensions, "EGL_KHR_wait_sync" ) &&
+                    (gServer == 0 ) &&
                     gRealEGLCreateSyncKHR &&
                     gRealEGLDestroySyncKHR &&
                     gRealEGLClientWaitSyncKHR &&
@@ -3223,27 +3400,15 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
             nwItem->width= width;
             nwItem->height= height;
 
-            if ( ctx->usePlanes )
+            if ( ctx->usePlanes && !ctx->graphicsPreferPrimary )
             {
                nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
                INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
             }
             else if ( ctx->haveAtomic )
             {
-               pthread_mutex_lock( &gMutex );
-               if ( ctx->overlayPlanes.primary )
-               {
-                  if ( !ctx->overlayPlanes.primary->inUse )
-                  {
-                     nwItem->windowPlane= ctx->overlayPlanes.primary;
-                     ctx->overlayPlanes.primary->inUse= true;
-                  }
-                  else
-                  {
-                     WARNING("primary plane already in use");
-                  }
-               }
-               pthread_mutex_unlock( &gMutex );
+               nwItem->windowPlane= wstOverlayAllocPrimary( &ctx->overlayPlanes );
+               INFO("plane %p : primary: zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
             }
 
             if ( !nwItem->windowPlane )
