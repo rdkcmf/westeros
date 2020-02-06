@@ -71,7 +71,8 @@ static guint g_signals[MAX_SIGNAL]= {0};
 
 static gboolean (*queryOrg)(GstElement *element, GstQuery *query)= 0;
 
-static void wstDiscoverVideoDecoder( void );
+static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dummySink );
+static void wstDiscoverVideoDecoder( GstWesterosSinkClass *klass );
 static void wstGetMaxFrameSize( GstWesterosSink *sink );
 static bool wstGetInputFormats( GstWesterosSink *sink );
 static bool wstGetOutputFormats( GstWesterosSink *sink );
@@ -125,7 +126,7 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                           "Codec/Decoder/Video/Sink/Video",
                                           "Writes buffers to the westeros wayland compositor",
                                           "Comcast" );
-   wstDiscoverVideoDecoder();
+   wstDiscoverVideoDecoder(klass);
 
    g_object_class_install_property (gobject_class, PROP_DEVICE,
    g_param_spec_string ("device",
@@ -643,6 +644,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
               (sink->soc.frameHeight > 0) &&
               (sink->soc.frameRate > 0.0) )
          {
+            wstGetMaxFrameSize( sink );
             wstSetInputFormat( sink );
             wstSetupInputBuffers( sink );
             sink->soc.formatsSet= TRUE;
@@ -891,7 +893,110 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
    return FALSE;
 }
 
-static void wstDiscoverVideoDecoder( void )
+static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dummySink )
+{
+   GstCaps *caps= 0;
+   GstCaps *capsTemp= 0;
+   GstPadTemplate *padTemplate= 0;
+   int i;
+
+   caps= gst_caps_new_empty();
+   if ( caps )
+   {
+      for( i= 0; i < dummySink->soc.numInputFormats; ++i )
+      {
+         switch( dummySink->soc.inputFormats[i].pixelformat )
+         {
+            case V4L2_PIX_FMT_MPEG:
+               capsTemp= gst_caps_from_string(
+                                                "video/mpeg, " \
+                                                "systemstream = (boolean) true ; "
+                                             );
+               break;
+            case V4L2_PIX_FMT_MPEG1:
+               capsTemp= gst_caps_from_string(
+                                                "video/mpeg, " \
+                                                "mpegversion=(int) 1, " \
+                                                "parsed=(boolean) true, " \
+                                                "systemstream = (boolean) false ; "
+                                             );
+               break;
+            case V4L2_PIX_FMT_MPEG2:
+               capsTemp= gst_caps_from_string(
+                                                "video/mpeg, " \
+                                                "mpegversion=(int) 2, " \
+                                                "parsed=(boolean) true, " \
+                                                "systemstream = (boolean) false ; "
+                                             );
+               break;
+            case V4L2_PIX_FMT_MPEG4:
+               capsTemp= gst_caps_from_string(
+                                                "video/mpeg, " \
+                                                "mpegversion=(int) 4, " \
+                                                "parsed=(boolean) true, " \
+                                                "systemstream = (boolean) false ; "
+                                             );
+               break;
+            case V4L2_PIX_FMT_H264:
+               capsTemp= gst_caps_from_string(
+                                                "video/x-h264, " \
+                                                "parsed=(boolean) true, " \
+                                                "alignment=(string) au, " \
+                                                "stream-format=(string) byte-stream, " \
+                                                "width=(int) [1,MAX], " "height=(int) [1,MAX] ; " \
+                                             );
+               break;
+            case V4L2_PIX_FMT_VP9:
+               capsTemp= gst_caps_from_string(
+                                                "video/x-vp9, " \
+                                                "width=(int) [1,MAX], " \
+                                                "height=(int) [1,MAX] ; "
+                                             );
+               break;
+            case V4L2_PIX_FMT_HEVC:
+               capsTemp= gst_caps_from_string(
+                                                "video/x-h265, " \
+                                                "parsed=(boolean) true, " \
+                                                "alignment=(string) au, " \
+                                                "stream-format=(string) byte-stream, " \
+                                                "width=(int) [1,MAX], " \
+                                                "height=(int) [1,MAX] ; "
+                                             );
+               break;
+            default:
+               break;
+         }
+         if ( capsTemp )
+         {
+            gst_caps_append( caps, capsTemp );
+            capsTemp =0;
+         }
+      }
+
+      padTemplate= gst_pad_template_new( "sink",
+                                         GST_PAD_SINK,
+                                         GST_PAD_ALWAYS,
+                                         caps );
+      if ( padTemplate )
+      {
+         GstElementClass *gstelement_class= (GstElementClass *)klass;
+         gst_element_class_add_pad_template(gstelement_class, padTemplate);
+         padTemplate= 0;
+      }
+      else
+      {
+         GST_ERROR("wstBuildSinkCaps: gst_pad_template_new failed");
+      }
+
+      gst_caps_unref( caps );
+   }
+   else
+   {
+      GST_ERROR("wstBuildSinkCaps: gst_caps_new_empty failed");
+   }
+}
+
+static void wstDiscoverVideoDecoder( GstWesterosSinkClass *klass )
 {
    int rc, len, i, fd;
    bool acceptsCompressed;
@@ -977,6 +1082,7 @@ static void wstDiscoverVideoDecoder( void )
                if ( dummySink.soc.inputFormats[i].flags & V4L2_FMT_FLAG_COMPRESSED )
                {
                   acceptsCompressed= true;
+                  wstBuildSinkCaps( klass, &dummySink );
                   break;
                }
             }
@@ -1017,7 +1123,7 @@ static void wstGetMaxFrameSize( GstWesterosSink *sink )
 
    memset( &framesize, 0, sizeof(struct v4l2_frmsizeenum) );
    framesize.index= 0;
-   framesize.pixel_format= V4L2_PIX_FMT_NV12;
+   framesize.pixel_format= ((sink->soc.inputFormat != 0) ? sink->soc.inputFormat : V4L2_PIX_FMT_H264);
 
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_ENUM_FRAMESIZES, &framesize);
    if ( rc == 0 )
@@ -1049,8 +1155,8 @@ static void wstGetMaxFrameSize( GstWesterosSink *sink )
       }
       else if ( framesize.type == V4L2_FRMSIZE_TYPE_STEPWISE )
       {
-         sink->maxWidth= framesize.stepwise.max_width;
-         sink->maxHeight= framesize.stepwise.max_height;
+         maxWidth= framesize.stepwise.max_width;
+         maxHeight= framesize.stepwise.max_height;
       }
    }
    else
@@ -2678,6 +2784,25 @@ static int ioctl_wrapper( int fd, int request, void* arg )
                g_print("westerossink-ioctl: buff: p0: bu %d len %d moff %d doff %d p1: bu %d len %d moff %d doff %d\n",
                       buf->m.planes[0].bytesused, buf->m.planes[0].length, buf->m.planes[0].m.mem_offset, buf->m.planes[0].data_offset,
                       buf->m.planes[1].bytesused, buf->m.planes[1].length, buf->m.planes[1].m.mem_offset, buf->m.planes[1].data_offset );
+            }
+         }
+         else if ( request == VIDIOC_ENUM_FRAMESIZES )
+         {
+            struct v4l2_frmsizeenum *frmsz= (struct v4l2_frmsizeenum*)arg;
+            g_print("westerossink-ioctl: fmt %x idx %d type %d\n", frmsz->pixel_format, frmsz->index, frmsz->type);
+            if ( frmsz->type == V4L2_FRMSIZE_TYPE_DISCRETE )
+            {
+               g_print("westerossink-ioctl: discrete %dx%d\n", frmsz->discrete.width, frmsz->discrete.height);
+            }
+            else if ( frmsz->type == V4L2_FRMSIZE_TYPE_STEPWISE )
+            {
+               g_print("westerossink-ioctl: stepwise minw %d maxw %d stepw %d minh %d maxh %d steph %d\n",
+                       frmsz->stepwise.min_width, frmsz->stepwise.max_width, frmsz->stepwise.step_width,
+                       frmsz->stepwise.min_height, frmsz->stepwise.max_height, frmsz->stepwise.step_height );
+            }
+            else
+            {
+               g_print("westerossink-ioctl: continuous\n");
             }
          }
       }
