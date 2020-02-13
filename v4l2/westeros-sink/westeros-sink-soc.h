@@ -91,6 +91,7 @@ struct _GstWesterosSinkSoc
    struct v4l2_format fmtIn;
    struct v4l2_format fmtOut;
    gboolean formatsSet;
+   int bufferCohort;
    uint32_t minBuffersIn;
    uint32_t minBuffersOut;
    int numBuffersIn;
@@ -102,6 +103,8 @@ struct _GstWesterosSinkSoc
    int prevFrameFd;
 
    gboolean videoPlaying;
+   gboolean hasEvents;
+   gboolean needCaptureRestart;
    gboolean quitVideoOutputThread;
    GThread *videoOutputThread;
    gboolean quitEOSDetectionThread;
