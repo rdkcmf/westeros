@@ -161,11 +161,15 @@ typedef struct _EMSurface
    NEXUS_SurfaceMemory mem;
 } EMSurface;
 
+typedef struct _EMSurfaceClient EMSurfaceClient;
+
 typedef struct _EMSurfaceClient
 {
    unsigned client_id;
    NEXUS_SurfaceClientSettings settings;
    bool isVideoWindow;
+   EMSurfaceClient *parent;
+   EMSurfaceClient *video;
    NEXUS_Rect pendingPosition;
    NEXUS_Rect position;
    bool positionIsPending;
@@ -1432,6 +1436,7 @@ NEXUS_SurfaceClientHandle NEXUS_SurfaceClient_AcquireVideoWindow(
     )
 {
    EMSurfaceClient *emsc= 0;
+   EMSurfaceClient *emscParent= (EMSurfaceClient*)parent_handle;
    EMCTX *ctx= 0;
 
    TRACE1("NEXUS_SurfaceClient_AcquireVideoWindow");
@@ -1451,6 +1456,11 @@ NEXUS_SurfaceClientHandle NEXUS_SurfaceClient_AcquireVideoWindow(
    }
    emsc->isVideoWindow= true;
    emsc->client_id= window_id;
+   emsc->parent= emscParent;
+   if ( emscParent )
+   {
+      emscParent->video= emsc;
+   }
 
    ctx->videoWindowMain= emsc;
 
@@ -1474,6 +1484,10 @@ void NEXUS_SurfaceClient_ReleaseVideoWindow(
    {
       ERROR("NEXUS_SurfaceClient_ReleaseVideoWindow: not a video window");
       goto exit;
+   }
+   if ( emsc->parent )
+   {
+      emsc->parent->video= 0;
    }
 
    free( emsc );
@@ -2454,6 +2468,21 @@ NEXUS_Error NxClient_SetSurfaceClientComposition(
    }
 
    ctx->nxclients[surfaceClientId].composition= *pSettings;
+
+   {
+      std::map<unsigned,EMSurfaceClient*>::iterator it= ctx->surfaceClients.find( surfaceClientId );
+      if ( it != ctx->surfaceClients.end() )
+      {
+         EMSurfaceClient *emsc= it->second;
+         if ( emsc && emsc->video )
+         {
+            // Emulate settings change on next vertical
+            emsc->video->positionIsPending= true;
+            emsc->video->pendingPosition= pSettings->position;
+            emsc->video->pendingPositionTime= getCurrentTimeMillis()+8;
+         }
+      }
+   }
 
 exit:
    return rc;

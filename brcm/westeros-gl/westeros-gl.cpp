@@ -119,9 +119,18 @@ static void wstGLGetDisplaySize( void )
       rc= NEXUS_SurfaceClient_GetStatus( gDisplayCtx->surfaceClient, &scStatus );
       if ( rc == NEXUS_SUCCESS )
       {
+         const char *env= 0;
          gDisplayCtx->displayWidth= scStatus.display.framebuffer.width;
          gDisplayCtx->displayHeight= scStatus.display.framebuffer.height;
          printf("WstGLGetDisplaySize: display %dx%d\n", gDisplayCtx->displayWidth, gDisplayCtx->displayHeight);
+         env= getenv("WESTEROS_GL_GRAPHICS_SD_USE_720");
+         if ( !env &&
+              (gDisplayCtx->displayWidth == 720) &&
+              (gDisplayCtx->displayHeight == 480) )
+         {
+            gDisplayCtx->displayWidth= 640;
+            printf("WstGLGetDisplaySize: using SD display %dx%d\n", gDisplayCtx->displayWidth, gDisplayCtx->displayHeight);
+         }
       }
    }
    pthread_mutex_unlock( &g_mutex );
