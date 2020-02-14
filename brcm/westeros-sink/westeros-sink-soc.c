@@ -1835,15 +1835,15 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    }
    else if ( !useGfxPath && sink->soc.captureEnabled )
    {
-      NEXUS_SurfaceClientSettings vClientSettings;
+      NEXUS_SurfaceComposition vComposition;
 
       /* Move HW path video back on-screen */
-      NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-      vClientSettings.composition.position.x= sink->soc.videoX;
-      vClientSettings.composition.position.y= sink->soc.videoY;
-      vClientSettings.composition.position.width= sink->soc.videoWidth;
-      vClientSettings.composition.position.height= sink->soc.videoHeight;
-      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+      NxClient_GetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition);
+      vComposition.position.x= sink->soc.videoX;
+      vComposition.position.y= sink->soc.videoY;
+      vComposition.position.width= sink->soc.videoWidth;
+      vComposition.position.height= sink->soc.videoHeight;
+      NxClient_SetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition);
 
       /* Stop video frame capture */
       NEXUS_SimpleVideoDecoder_StopCapture(sink->soc.videoDecoder);
@@ -1986,10 +1986,10 @@ static void processFrame( GstWesterosSink *sink )
                 * so seems to cause HW path video to never present again when capture is disabled.
                 * Similarly, hiding the HW path video by setting its opacity to 0 seems to not work.
                 */
-               NEXUS_SurfaceClientSettings vClientSettings;
-               NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-               vClientSettings.composition.position.y= -vClientSettings.composition.position.height;
-               NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+               NEXUS_SurfaceComposition vComposition;
+               NxClient_GetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition);
+               vComposition.position.y= -vComposition.position.height;
+               NxClient_SetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition);
             }
          }
          if ( captureSurface )
@@ -2120,7 +2120,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 {
-   NEXUS_SurfaceClientSettings vClientSettings;
+   NEXUS_SurfaceComposition vComposition;
    NxClient_DisplaySettings nxDspSettings;
 
    NxClient_GetDisplaySettings( &nxDspSettings );
@@ -2146,37 +2146,37 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 
    if ( !sink->soc.captureEnabled )
    {
-      NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+      NxClient_GetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition);
       switch ( sink->soc.outputFormat )
       {
          case NEXUS_VideoFormat_e480p:
          case NEXUS_VideoFormat_eNtsc:
-            vClientSettings.composition.virtualDisplay.width= 640;
-            vClientSettings.composition.virtualDisplay.height= 480;
+            vComposition.virtualDisplay.width= 640;
+            vComposition.virtualDisplay.height= 480;
             break;
          default:
-            vClientSettings.composition.virtualDisplay.width= 1280;
-            vClientSettings.composition.virtualDisplay.height= 720;
+            vComposition.virtualDisplay.width= 1280;
+            vComposition.virtualDisplay.height= 720;
             break;
       }
 
-      vClientSettings.composition.position.x= sink->soc.videoX;
-      vClientSettings.composition.position.y= sink->soc.videoY;
-      vClientSettings.composition.position.width= sink->soc.videoWidth;
-      vClientSettings.composition.position.height= sink->soc.videoHeight;
+      vComposition.position.x= sink->soc.videoX;
+      vComposition.position.y= sink->soc.videoY;
+      vComposition.position.width= sink->soc.videoWidth;
+      vComposition.position.height= sink->soc.videoHeight;
       if ( sink->soc.usePip )
       {
          // Restrict PIP window size
          if ( sink->soc.videoWidth > MAX_PIP_WIDTH )
          {
-            vClientSettings.composition.position.width= MAX_PIP_WIDTH;
+            vComposition.position.width= MAX_PIP_WIDTH;
          }
          if ( sink->soc.videoHeight > MAX_PIP_HEIGHT )
          {
-            vClientSettings.composition.position.height= MAX_PIP_HEIGHT;
+            vComposition.position.height= MAX_PIP_HEIGHT;
          }
       }
-      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+      NxClient_SetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition );
 
       // Send a buffer to compositor to update hole punch geometry
       if ( sink->soc.sb )

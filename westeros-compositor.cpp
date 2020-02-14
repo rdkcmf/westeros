@@ -8347,8 +8347,8 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
          int outputHeightEffective= outputHeight;
          if ( ctx->hasVpcBridge )
          {
-            outputWidthEffective *= (vpcSurface->outputWidthVpcBridge / outputWidth);
-            outputHeightEffective *= (vpcSurface->outputHeightVpcBridge / outputHeight);
+            outputWidthEffective= (outputWidthEffective*vpcSurface->outputWidthVpcBridge / outputWidth);
+            outputHeightEffective= (outputHeightEffective*vpcSurface->outputHeightVpcBridge / outputHeight);
          }
 
          if ( !vpcSurface->videoPathSet || (useHWPathEffective != vpcSurface->useHWPath) )
