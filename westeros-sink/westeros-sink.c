@@ -95,15 +95,18 @@ static void shellSurfaceId(void *data,
    WESTEROS_UNUSED(wl_simple_shell);
    WESTEROS_UNUSED(surface);
 
-	sprintf( name, "westeros-sink-surface-%x", surfaceId );	
-	wl_simple_shell_set_name( sink->shell, surfaceId, name );
+   sprintf( name, "westeros-sink-surface-%x", surfaceId );
+   wl_simple_shell_set_name( sink->shell, surfaceId, name );
    if ( (sink->windowWidth == 0) || (sink->windowHeight == 0) )
    {
       wl_simple_shell_set_visible( sink->shell, sink->surfaceId, false);
    }
    else
    {
-      wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
+      if ( sink->show )
+      {
+         wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
+      }
       if ( !sink->vpc )
       {
          wl_simple_shell_set_geometry( sink->shell, sink->surfaceId, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
@@ -161,7 +164,10 @@ static void shellSurfaceStatus(void *data,
    WESTEROS_UNUSED(y);
    WESTEROS_UNUSED(width);
    WESTEROS_UNUSED(height);
-   sink->visible= visible;
+   if ( sink->show )
+   {
+      sink->visible= visible;
+   }
    sink->windowChange= true;
    sink->opacity= opacity;
    sink->zorder= zorder;
@@ -557,6 +563,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->windowY= DEFAULT_WINDOW_Y;
    sink->windowWidth= DEFAULT_WINDOW_WIDTH;
    sink->windowHeight= DEFAULT_WINDOW_HEIGHT;
+   sink->show= true;
    sink->windowChange= false;
    sink->windowSizeOverride= false;
    
@@ -778,7 +785,7 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
                if ( sink->shell && sink->surfaceId )
                {
                   wl_simple_shell_set_geometry( sink->shell, sink->surfaceId,sink->windowX, sink->windowY,sink->windowWidth, sink->windowHeight );
-                  if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) )
+                  if ( (sink->windowWidth > 0) && (sink->windowHeight > 0 ) && sink->show )
                   {
                      wl_simple_shell_set_visible( sink->shell, sink->surfaceId, true);
 
