@@ -80,6 +80,7 @@ static bool testCaseSocSinkBasicPipelineGfx( EMCTX *ctx );
 static bool testCaseSocSinkVP9NonHDR( EMCTX *emctx );
 static bool testCaseSocSinkVP9HDRColorParameters( EMCTX *emctx );
 static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
+static bool testCaseSocSinkVisibility( EMCTX *emctx );
 static bool testCaseSocSinkVideoPosition( EMCTX *emctx );
 static bool testCaseSocSinkEOSTest1( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
@@ -202,6 +203,10 @@ TESTCASE socTests[]=
    { "testSocSinkGfxTransition",
      "Test westerossink transition from HW to graphics path",
      testCaseSocSinkGfxTransition
+   },
+   { "testSocSinkVisibility",
+     "Test westerossink video visibility",
+     testCaseSocSinkVisibility
    },
    { "testSocSinkVideoPosition",
      "Test westerossink video positioning",
@@ -3597,6 +3602,294 @@ static bool testCaseSocSinkGfxTransition( EMCTX *emctx )
    }
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   if ( texturesBeforeHidden < 1 )
+   {
+      EMERROR("Video hidden during animation too soon: texturesBeforeHidden: %d", texturesBeforeHidden);
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( wctx )
+   {
+      WstCompositorDestroy( wctx );
+   }
+
+   if ( ctx->eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow );
+      ctx->eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
+
+   if ( ctx->eglNativeWindow )
+   {
+      WstGLDestroyNativeWindow( ctx->glCtx, ctx->eglNativeWindow );
+      ctx->eglNativeWindow= 0;
+   }
+
+   if ( ctx->glCtx )
+   {
+      WstGLTerm( ctx->glCtx );
+      ctx->glCtx= 0;
+   }
+
+   testTermEGL( &ctx->eglCtx );
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   return testResult;
+}
+
+static bool testCaseSocSinkVisibility( EMCTX *emctx )
+{
+   using namespace SocSinkGfxTransition;
+
+   bool testResult= false;
+   WstCompositor *wctx= 0;
+   bool result;
+   const char *value;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   EMSurfaceClient *videoWindow= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   std::vector<WstRect> rects;
+   float matrix[16];
+   float alpha= 1.0;
+   bool needHolePunch;
+   int hints;
+   EGLBoolean b;
+   TestCtx testCtx;
+   TestCtx *ctx= &testCtx;
+   int vx, vy, vw, vh;
+   int textureCount, texturesBeforeHidden;
+   int iteration;
+   bool show;
+   bool videoVisible;
+
+   memset( &testCtx, 0, sizeof(TestCtx) );
+
+   result= testSetupEGL( &ctx->eglCtx, 0 );
+   if ( !result )
+   {
+      EMERROR("testSetupEGL failed");
+      goto exit;
+   }
+
+   ctx->windowWidth= WINDOW_WIDTH;
+   ctx->windowHeight= WINDOW_HEIGHT;
+
+   ctx->glCtx= WstGLInit();
+   if ( !ctx->glCtx )
+   {
+      EMERROR("Unable to create westeros-gl context");
+      goto exit;
+   }
+
+   ctx->eglNativeWindow= WstGLCreateNativeWindow( ctx->glCtx, 0, 0, ctx->windowWidth, ctx->windowHeight );
+   if ( !ctx->eglNativeWindow )
+   {
+      EMERROR("error: unable to create egl native window");
+      goto exit;
+   }
+   printf("eglNativeWindow %p\n", ctx->eglNativeWindow);
+
+   ctx->eglCtx.eglSurfaceWindow= eglCreateWindowSurface( ctx->eglCtx.eglDisplay,
+                                                  ctx->eglCtx.eglConfig,
+                                                  (EGLNativeWindowType)ctx->eglNativeWindow,
+                                                  NULL );
+   printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", ctx->eglCtx.eglSurfaceWindow );
+
+   b= eglMakeCurrent( ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglSurfaceWindow, ctx->eglCtx.eglContext );
+   if ( !b )
+   {
+      EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+      goto exit;
+   }
+
+   eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_embedded.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRenderedModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( wctx, true );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   value= WstCompositorGetDisplayName( wctx );
+   if ( value == 0 )
+   {
+      EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   memset( &matrix, 0, sizeof(matrix) );
+   matrix[0]= matrix[5]= matrix[10]= matrix[15]= 1.0;
+
+   gst_init( &argc, &argv );
+
+   for( iteration= 0; iteration < 4; ++iteration )
+   {
+      if ( iteration < 2 )
+      {
+         unsetenv( "WAYLAND_DISPLAY" );
+      }
+      else
+      {
+         setenv( "WAYLAND_DISPLAY", value, true );
+      }
+
+      pipeline= gst_pipeline_new("pipeline");
+      if ( !pipeline )
+      {
+         EMERROR("Failed to create pipeline instance");
+         goto exit;
+      }
+
+      src= createVideoSrc( emctx, videoDecoder );
+      if ( !src )
+      {
+         EMERROR("Failed to create src instance");
+         goto exit;
+      }
+
+      sink= gst_element_factory_make( "westerossink", "vsink" );
+      if ( !sink )
+      {
+         EMERROR("Failed to create sink instance");
+         goto exit;
+      }
+
+      gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+      if ( gst_element_link( src, sink ) != TRUE )
+      {
+         EMERROR("Failed to link src and sink");
+         goto exit;
+      }
+
+      show= (((iteration & 1) == 0) ? false : true);
+      fprintf(stderr,"set show to %d\n", show);
+
+      g_object_set( G_OBJECT(sink), "show-video-window", show, NULL );
+
+      gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+      // Allow pipeline to run briefly.
+      hints= WstHints_noRotation;
+      for( int i= 0; i < 2; ++i )
+      {
+         usleep( 17000 );
+
+         rects.clear();
+         WstCompositorComposeEmbedded( wctx,
+                                       0, // x
+                                       0, // y
+                                       WINDOW_WIDTH, // width
+                                       WINDOW_HEIGHT, // height
+                                       matrix,
+                                       alpha,
+                                       hints,
+                                       &needHolePunch,
+                                       rects );
+
+         eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+      }
+
+
+      videoWindow= EMGetVideoWindow( emctx, EM_TUNERID_MAIN );
+
+      videoVisible= EMSurfaceClientGetVisible( videoWindow );
+      if ( videoVisible != show )
+      {
+         EMERROR("Unexpected video visibility: iteration %d expected: %d actual: %d", iteration, show, videoVisible);
+         goto exit;
+      }
+
+      EMSetTextureCreatedCallback( emctx, textureCreated, &textureCount );
+
+      // Switch to graphics path
+      textureCount= 0;
+      texturesBeforeHidden= -1;
+      hints= WstHints_animating;
+      for( int i= 0; i < 20; ++i )
+      {
+         usleep( 17000 );
+
+         rects.clear();
+         WstCompositorComposeEmbedded( wctx,
+                                       0, // x
+                                       0, // y
+                                       WINDOW_WIDTH, // width
+                                       WINDOW_HEIGHT, // height
+                                       matrix,
+                                       alpha,
+                                       hints,
+                                       &needHolePunch,
+                                       rects );
+
+         eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+         EMSurfaceClientGetPosition( videoWindow, &vx, &vy, &vw, &vh );
+         if ( (vy == -vh) && (texturesBeforeHidden == -1) )
+         {
+            texturesBeforeHidden= textureCount;
+         }
+      }
+
+      videoVisible= EMSurfaceClientGetVisible( videoWindow );
+      if ( videoVisible != show )
+      {
+         EMERROR("Unexpected video visibility: iteration %d expected: %d actual: %d", iteration, show, videoVisible);
+         goto exit;
+      }
+
+      gst_element_set_state( pipeline, GST_STATE_NULL );
+
+      pipeline= 0;
+      src= 0;
+      sink= 0;
+   }
 
    if ( texturesBeforeHidden < 1 )
    {

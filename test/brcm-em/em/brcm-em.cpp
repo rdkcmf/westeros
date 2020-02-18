@@ -548,6 +548,15 @@ void EMSurfaceClientGetPosition( EMSurfaceClient *emsc, int *x, int *y, int *wid
    if ( height ) *height= emsc->position.height;
 }
 
+bool EMSurfaceClientGetVisible( EMSurfaceClient *emsc )
+{
+   bool visible= false;
+
+   visible= emsc->settings.composition.visible;
+
+   return visible;
+}
+
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id )
 {
    // ignore id for now

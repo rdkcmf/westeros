@@ -628,12 +628,13 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
          break;
       case PROP_WINDOW_SHOW:
          {
-            sink->visible= g_value_get_boolean(value);
+            sink->show= g_value_get_boolean(value);
 
             if ( sink->soc.videoWindow )
             {
                NEXUS_SurfaceClientSettings settings;
 
+               sink->visible= sink->show;
                NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &settings );
                if ( settings.composition.visible != sink->visible )
                {
@@ -833,7 +834,7 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          g_value_set_boolean(value, sink->soc.enableCCPassthru);
          break;
       case PROP_WINDOW_SHOW:
-         g_value_set_boolean(value, sink->visible);
+         g_value_set_boolean(value, sink->show);
          break;
       case PROP_ZOOM_MODE:
          {
@@ -2120,6 +2121,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 {
+   NEXUS_SurfaceClientSettings vClientSettings;
    NEXUS_SurfaceComposition vComposition;
    NxClient_DisplaySettings nxDspSettings;
 
@@ -2142,6 +2144,13 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       sink->soc.videoY= sink->transY;
       sink->soc.videoWidth= (sink->outputWidth*sink->scaleXNum)/sink->scaleXDenom;
       sink->soc.videoHeight= (sink->outputHeight*sink->scaleYNum)/sink->scaleYDenom;
+   }
+
+   NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+   if ( vClientSettings.composition.visible != sink->visible )
+   {
+      vClientSettings.composition.visible= sink->visible;
+      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
    }
 
    if ( !sink->soc.captureEnabled )
@@ -2877,6 +2886,8 @@ static int sinkAcquireResources( GstWesterosSink *sink )
          NEXUS_SurfaceClientSettings clientSettings;
          NEXUS_SurfaceClient_GetSettings(sink->soc.videoWindow, &clientSettings);
          clientSettings.composition.contentMode= sink->soc.zoomMode;
+         sink->visible= sink->show;
+         clientSettings.composition.visible= sink->visible;
          NEXUS_SurfaceClient_SetSettings(sink->soc.videoWindow, &clientSettings);
 
          result= 1;

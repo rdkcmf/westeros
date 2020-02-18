@@ -67,6 +67,7 @@ void* EMGetVideoPidChannel( EMCTX *ctx );
 
 EMSurfaceClient* EMGetVideoWindow( EMCTX *ctx, int id );
 void EMSurfaceClientGetPosition( EMSurfaceClient *emsc, int *x, int *y, int *width, int *height );
+bool EMSurfaceClientGetVisible( EMSurfaceClient *emsc );
 
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id );
 void EMSimpleVideoDecoderSetVideoSize( EMSimpleVideoDecoder *dec, int width, int height );
