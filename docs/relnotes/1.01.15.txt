@@ -1,0 +1,56 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.15 Release Notes
+------------------------------
+
+Date: Feb 19, 2020
+Tag: Westeros-1.01.15
+Changes:
+
+-Fix typo breaking rpi build
+rpi (useland+omx): fix typo in code causing a build failure
+
+-Video hole punch fix and related tests
+sink: Fix some video issues with video alpha hole punching and updating releated test cases
+
+-Expand automated test to drm+v4l2
+test: Expanded automated test system to include emulation for testing configurations based
+on KMS+drm+v4l2
+
+-V4l2 updates
+sink (v4l2): Fix max frame size detection and make sink caps based on format support
+discovered from v4l2 driver.
+
+-Drm updates
+drm: Updates to westeros-gl for drm: 
+-Support zpos plane attribute
+-Prefer primary plane for graphics
+-Video server adjusts frame size based on mode and gfx res
+-Suppress video server with 'export WESTEROS_GL_NO_VIDEOSERVER=1'
+-No native fence if video server used
+
+-Add support for v4l2 events
+sink (v4l2): Add support to v4l2 sink for using v4l2 events
+
+-Fixes for brcm video positioning at various resolutions
+core compositor, sink: Fixes for video positioning with VPC bridge
+
+-Update method of detecting if secure video is enabled
+brcm: Update the method used to determine at runtime if
+a Broadcom SOC device has SVP (secure video path) enabled.
+
+-Fix brcm video show property and add test case
+sink (brcm): fix operation of the show-video-window property
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
