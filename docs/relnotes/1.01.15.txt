@@ -43,6 +43,9 @@ a Broadcom SOC device has SVP (secure video path) enabled.
 -Fix brcm video show property and add test case
 sink (brcm): fix operation of the show-video-window property
 
+-Fix video scaling with emb output size with vpc bridge
+core compositor: remove code breaking vpc propagation of output size
+when running in a bridged configuration.
 
 Depedencies
 ------------

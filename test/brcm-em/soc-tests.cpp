@@ -3952,10 +3952,7 @@ static void holePunched( EMCTX *emctx, void* userData, int hx, int hy, int hw, i
 
    if ( ctx )
    {
-      ctx->hx= hx;
-      ctx->hy= hy;
-      ctx->hw= hw;
-      ctx->hh= hh;
+      //printf("holePunched: (%d, %d, %d, %d)\n", hx, hy, hw, hh);
    }
 }
 
@@ -4030,6 +4027,7 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
    TestCtx testCtx;
    TestCtx *ctx= &testCtx;
    bool setRect= false;
+   bool setSize= false;
    bool useEmbedded= false;
    bool isBridged= false;
    bool isNested= false;
@@ -4043,7 +4041,7 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
    int vxexp, vyexp, vwexp, vhexp;
    int iteration;
 
-   for( iteration= 0; iteration < 24; ++iteration )
+   for( iteration= 0; iteration < 28; ++iteration )
    {
       printf("iteration: %d\n", iteration);
       memset( &testCtx, 0, sizeof(TestCtx) );
@@ -4471,6 +4469,110 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
             vwexp= 940;
             vhexp= 540;
             break;
+         case 24:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            ow3= 940;
+            oh3= 540;
+            useEmbedded= true;
+            isBridged= false;
+            isNested= false;
+            isRepeater= true;
+            setRect= false;
+            setSize= true;
+            scale= 1.0;
+            transx= 0;
+            transy= 0;
+            scale3= 1.0;
+            transx3= 50;
+            transy3= 100;
+            vxexp= 50;
+            vyexp= 100;
+            vwexp= 940;
+            vhexp= 540;
+            break;
+         case 25:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            ow3= 940;
+            oh3= 540;
+            useEmbedded= true;
+            isBridged= false;
+            isNested= true;
+            isRepeater= false;
+            setRect= false;
+            setSize= true;
+            scale= 1.0;
+            transx= 0;
+            transy= 0;
+            scale3= 1.0;
+            transx3= 50;
+            transy3= 200;
+            vxexp= 50;
+            vyexp= 200;
+            vwexp= 940;
+            vhexp= 540;
+            break;
+         case 26:
+            ctx->windowWidth= 1280;
+            ctx->windowHeight= 720;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            ow3= 940;
+            oh3= 540;
+            useEmbedded= true;
+            isBridged= true;
+            isNested= false;
+            isRepeater= true;
+            setRect= false;
+            setSize= true;
+            scale= 1.0;
+            transx= 0;
+            transy= 0;
+            scale3= 1.0;
+            transx3= 50;
+            transy3= 100;
+            vxexp= 50;
+            vyexp= 100;
+            vwexp= 940;
+            vhexp= 540;
+            break;
+         case 27:
+            ctx->windowWidth= 1920;
+            ctx->windowHeight= 1080;
+            ow= ctx->windowWidth;
+            oh= ctx->windowHeight;
+            ow2= ctx->windowWidth;
+            oh2= ctx->windowHeight;
+            ow3= 940;
+            oh3= 540;
+            useEmbedded= true;
+            isBridged= true;
+            isNested= true;
+            isRepeater= false;
+            setRect= false;
+            setSize= true;
+            scale= 1.0;
+            transx= 0;
+            transy= 0;
+            scale3= 1.0;
+            transx3= 50;
+            transy3= 200;
+            vxexp= 50;
+            vyexp= 200;
+            vwexp= 940;
+            vhexp= 540;
+            break;
       }
 
       EMSetDisplaySize( emctx, ctx->windowWidth, ctx->windowHeight );
@@ -4736,7 +4838,7 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
       // Allow pipeline to run briefly.
       usleep( 200000 );
 
-      hints= WstHints_noRotation|WstHints_holePunch;
+      hints= WstHints_noRotation;
       for( int i= 0; i < 6; ++i )
       {
          usleep( 17000 );
@@ -4760,16 +4862,32 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
                                           hints,
                                           &needHolePunch,
                                           rects );
+            if ( needHolePunch )
+            {
+               ctx->hx= rects[0].x;
+               ctx->hy= rects[0].y;
+               ctx->hw= rects[0].width;
+               ctx->hh= rects[0].height;
+            }
          }
 
-         if ( (isNested ||isRepeater) && (i == 2) )
+         if ( (isNested || isRepeater) && (i == 2) )
          {
             ow= ow3;
             oh= oh3;
             scale= scale3;
-            transx= transx3;
-            transy= transy3;
-            result= WstCompositorSetOutputSize( wctx, ow, oh );
+            if ( setSize && isBridged )
+            {
+               transx2= transx3;
+               transy2= transy3;
+               result= WstCompositorSetOutputSize( wctx2, ow, oh );
+            }
+            else
+            {
+               transx= transx3;
+               transy= transy3;
+               result= WstCompositorSetOutputSize( wctx, ow, oh );
+            }
             if ( !result )
             {
                EMERROR( "WstCompositorSetOutputSize failed" );
@@ -4796,6 +4914,13 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
                                           hints,
                                           &needHolePunch,
                                           rects );
+            if ( !(isBridged && isNested) && needHolePunch )
+            {
+               ctx->hx= rects[0].x;
+               ctx->hy= rects[0].y;
+               ctx->hw= rects[0].width;
+               ctx->hh= rects[0].height;
+            }
          }
 
          eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
