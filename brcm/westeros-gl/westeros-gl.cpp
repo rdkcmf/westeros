@@ -624,7 +624,9 @@ bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixma
             else
             #endif
             {
-               BEGL_PixmapInfo pixmapInfo;
+               BEGL_PixmapInfoEXT pixmapInfo;
+
+               NXPL_GetDefaultPixmapInfoEXT(&pixmapInfo);
 
                pixmapInfo.width= surfaceStatusIn.width;
                pixmapInfo.height= surfaceStatusIn.height;
@@ -633,9 +635,10 @@ bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixma
                #else
                pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
                #endif
-               if ( !NXPL_CreateCompatiblePixmap(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
+
+               if ( !NXPL_CreateCompatiblePixmapEXT(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
                {
-                  printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmap failed\n");
+                  printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmapEXT failed\n");
                   free( npm );
                   npm= 0;
                }
