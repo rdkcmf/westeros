@@ -600,45 +600,34 @@ bool WstGLGetNativePixmap( WstGLCtx *ctx, void *nativeBuffer, void **nativePixma
              * Create a new Nexus surface/native pixmap pair
              */   
             #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+            BEGL_PixmapInfoEXT pixmapInfo;
+            NXPL_GetDefaultPixmapInfoEXT(&pixmapInfo);
+
             if ( ctx->secureGraphics )
             {
-               BEGL_PixmapInfoEXT pixmapInfo;
-
-               NXPL_GetDefaultPixmapInfoEXT(&pixmapInfo);
-
-               pixmapInfo.width= surfaceStatusIn.width;
-               pixmapInfo.height= surfaceStatusIn.height;
-               #ifdef BIG_ENDIAN_CPU
-               pixmapInfo.format= BEGL_BufferFormat_eR8G8B8A8;
-               #else
-               pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
-               #endif
                pixmapInfo.secure= true;
-               if ( !NXPL_CreateCompatiblePixmapEXT(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
-               {
-                  printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmapEXT failed\n");
-                  free( npm );
-                  npm= 0;
-               }
             }
-            else
+            #else
+            BEGL_PixmapInfo pixmapInfo;
+            #endif
+
+            pixmapInfo.width= surfaceStatusIn.width;
+            pixmapInfo.height= surfaceStatusIn.height;
+            #ifdef BIG_ENDIAN_CPU
+            pixmapInfo.format= BEGL_BufferFormat_eR8G8B8A8;
+            #else
+            pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
+            #endif
+
+            #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+            if ( !NXPL_CreateCompatiblePixmapEXT(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
+            #else
+            if ( !NXPL_CreateCompatiblePixmap(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
             #endif
             {
-               BEGL_PixmapInfo pixmapInfo;
-
-               pixmapInfo.width= surfaceStatusIn.width;
-               pixmapInfo.height= surfaceStatusIn.height;
-               #ifdef BIG_ENDIAN_CPU
-               pixmapInfo.format= BEGL_BufferFormat_eR8G8B8A8;
-               #else
-               pixmapInfo.format= BEGL_BufferFormat_eA8B8G8R8;
-               #endif
-               if ( !NXPL_CreateCompatiblePixmap(ctx->nxplHandle, &npm->pixmap, &npm->surface, &pixmapInfo) )
-               {
-                  printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmap failed\n");
-                  free( npm );
-                  npm= 0;
-               }
+               printf("WstGLGetNativePixmap: NXPL_CreateCompatiblePixmapEXT failed\n");
+               free( npm );
+               npm= 0;
             }
          }
 
