@@ -19,6 +19,8 @@
 #ifndef _WESTEROS_UT_OPEN_H
 #define _WESTEROS_UT_OPEN_H
 
+#include <poll.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,11 +30,21 @@ extern "C" {
 /* Hooks to allow drm-em.cpp to intercept ioctl calls */
 #define ioctl( d, r, p ) EMIOctl( d, r, p )
 
+/* Hooks to allow drm-em.cpp to intercept mmap calls */
+#define mmap( addr, length, prot, flags, fd, offset ) EMMmap( addr, length, prot, flags, fd, offset)
+#define munmap( addr, length ) EMMunmap( addr, length )
+
+/* Hooks to allow drm-em.cpp to intercept poll calls */
+#define poll( pollfd, nfds, timeout ) EMPoll( pollfd, nfds, timeout )
+
 /* Hooks to allow drm-em.cpp to intercept open calls */
 int EMOpen2( const char *pathname, int flags );
 int EMOpen3( const char *pathname, int flags, mode_t mode );
 int EMClose( int fd );
 int EMIOctl( int fd, int request, void *arg );
+void *EMMmap( void *addr, size_t length, int prot, int flags, int fd, off_t offset ) __THROW;
+int EMMunmap( void *addr, size_t length ) __THROW;
+int EMPoll( struct pollfd *fds, nfds_t nfds, int timeout );
 
 #define GET_OPEN_MACRO(_1,_2,_3,NAME,...) NAME
 #define open(...) GET_OPEN_MACRO(__VA_ARGS__, EMOpen3, EMOpen2)(__VA_ARGS__)
