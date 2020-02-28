@@ -71,6 +71,7 @@ bool EMSurfaceClientGetVisible( EMSurfaceClient *emsc );
 
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id );
 void EMSimpleVideoDecoderSetVideoSize( EMSimpleVideoDecoder *dec, int width, int height );
+void EMSimpleVideoDecoderGetVideoSize( EMSimpleVideoDecoder *dec, int *width, int *height );
 void EMSimpleVideoDecoderSetFrameRate( EMSimpleVideoDecoder *dec, float fps );
 float EMSimpleVideoDecoderGetFrameRate( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSetBitRate( EMSimpleVideoDecoder *dec, float MBps );

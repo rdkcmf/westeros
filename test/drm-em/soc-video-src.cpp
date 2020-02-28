@@ -31,6 +31,7 @@ static void emVideoSrcFinalize(GObject *object);
 static GstStateChangeReturn emVideoSrcChangeState(GstElement *element, GstStateChange transition);
 static gboolean emVideoSrcQuery(GstElement *element, GstQuery *query);
 static gboolean emVideoSrcPadQuery(GstPad *pad, GstObject *parent, GstQuery *query);
+static GstCaps *emVideoSrcGetCaps(GstBaseSrc *baseSrc, GstCaps *filter);
 static gboolean emVideoSrcStart( GstBaseSrc *baseSrc );
 static gboolean emVideoSrcStop( GstBaseSrc *baseSrc );
 static gboolean emVideoSrcUnlock( GstBaseSrc *baseSrc );
@@ -65,6 +66,7 @@ static void em_video_src_class_init(EMVideoSrcClass* klass)
    gstelement_class->change_state= emVideoSrcChangeState;
    gstelement_class->query= emVideoSrcQuery;
 
+   basesrc_class->get_caps= emVideoSrcGetCaps;
    basesrc_class->start= emVideoSrcStart;
    basesrc_class->stop= emVideoSrcStop;
    basesrc_class->unlock= emVideoSrcUnlock;
@@ -225,6 +227,40 @@ static gboolean emVideoSrcPadQuery(GstPad *pad, GstObject *parent, GstQuery *que
    return rv;
 }
 
+static GstCaps *emVideoSrcGetCaps(GstBaseSrc *baseSrc, GstCaps *filter)
+{
+   GstCaps *caps= 0;
+   EMVideoSrc *src= EM_VIDEO_SRC(baseSrc);
+   float rate= 0;
+   int width= 0, height= 0;
+   int rate_num= 24, rate_denom= 1;
+
+   GST_DEBUG("getcaps");
+
+   rate= EMSimpleVideoDecoderGetFrameRate( src->dec );
+   EMSimpleVideoDecoderGetVideoSize( src->dec, &width, &height );
+
+   rate_num= (int)(rate*10.0);
+   rate_denom= 10;
+
+   caps= gst_caps_new_simple( "video/x-h264",
+                              "width", G_TYPE_INT, width,
+                              "height", G_TYPE_INT, height,
+                              "framerate", GST_TYPE_FRACTION, rate_num, rate_denom,
+                               NULL );
+   if ( caps )
+   {
+      if ( filter )
+      {
+         GstCaps *intersection= gst_caps_intersect_full(filter, caps, GST_CAPS_INTERSECT_FIRST);
+         gst_caps_unref( caps );
+         caps= intersection;
+      }
+   }
+
+   return caps;
+}
+
 static gboolean emVideoSrcStart( GstBaseSrc *baseSrc )
 {
    gboolean rv= TRUE;
@@ -344,6 +380,25 @@ static void emVideoSrcLoop( GstPad *pad )
                                        0 ); // no allocation parameters
       if ( buffer )
       {
+         GstMapInfo map;
+         int width, height;
+
+         EMSimpleVideoDecoderGetVideoSize( src->dec, &width, &height );
+         gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READWRITE);
+         if ( map.data && (map.size >= 8) )
+         {
+            map.data[0]= ((width>>24)&0xFF);
+            map.data[1]= ((width>>16)&0xFF);
+            map.data[2]= ((width>>8)&0xFF);
+            map.data[3]= (width&0xFF);
+
+            map.data[4]= ((height>>24)&0xFF);
+            map.data[5]= ((height>>16)&0xFF);
+            map.data[6]= ((height>>8)&0xFF);
+            map.data[7]= (height&0xFF);
+         }
+         gst_buffer_unmap(buffer, &map);
+
          if ( src->needSegment )
          {
             GstSegment segment;
@@ -430,14 +485,23 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
    GstCaps *caps= 0;
    GstPad *pad= 0;
    GstEvent *event= 0;
+   float rate= 0;
+   int rate_num= 24, rate_denom= 1;
 
    GST_DEBUG("set frame size: %dx%d", width, height);
 
+   rate= EMSimpleVideoDecoderGetFrameRate( src->dec );
+   EMSimpleVideoDecoderGetVideoSize( src->dec, &width, &height );
+
+   rate_num= (int)(rate*10.0);
+   rate_denom= 10;
+
    pad= GST_BASE_SRC_PAD(src);
 
-   caps= gst_caps_new_simple( "video/x-brcm-avd",
+   caps= gst_caps_new_simple( "video/x-h264",
                               "width", G_TYPE_INT, width,
                               "height", G_TYPE_INT, height,
+                              "framerate", GST_TYPE_FRACTION, rate_num, rate_denom,
                                NULL );
    if ( caps )
    {
