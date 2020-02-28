@@ -87,6 +87,7 @@ enum
 
 static guint g_signals[MAX_SIGNAL]= {0, 0, 0};
 
+static void sinkSocStopVideo( GstWesterosSink *sink );
 static void freeCaptureSurfaces( GstWesterosSink *sink );
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink );
 static gboolean queryPeerHandles(GstWesterosSink *sink);
@@ -1115,36 +1116,8 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
 gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
    WESTEROS_UNUSED(passToDefault);
-   LOCK( sink );
-   if ( sink->soc.captureThread )
-   {
-      sink->soc.quitCaptureThread= TRUE;
-      UNLOCK( sink );
-      g_thread_join( sink->soc.captureThread );  
-      LOCK( sink );
-      sink->soc.captureThread= NULL;
-   }
 
-   if ( sink->videoStarted )
-   {
-      NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
-   }
-   
-   sink->videoStarted= FALSE;
-   sink->soc.presentationStarted= FALSE;
-   sink->soc.serverPlaySpeed= 1.0;
-   sink->soc.clientPlaySpeed= 1.0;
-   sink->soc.stoppedForPlaySpeedChange= FALSE;
-   sink->soc.numDecoded= 0;
-   sink->soc.prevQueueDepth= 0;
-   sink->soc.prevFifoDepth= 0;
-   sink->soc.prevNumDecoded= 0;
-   sink->soc.checkForEOS= FALSE;
-   sink->soc.emitEOS= FALSE;
-   sink->soc.emitUnderflow= FALSE;
-   sink->soc.emitPTSError= FALSE;
-   sink->soc.emitResourceChange= FALSE;
-   UNLOCK( sink );
+   sinkSocStopVideo( sink );
    
    return TRUE;
 }
@@ -1152,6 +1125,8 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
 gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *passToDefault )
 {
    *passToDefault= false;
+
+   sinkSocStopVideo( sink );
 
    if ( sink->soc.sb )
    {
@@ -1420,6 +1395,40 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
    {
       gst_westeros_sink_eos_detected( sink );
    }
+}
+
+static void sinkSocStopVideo( GstWesterosSink *sink )
+{
+   LOCK( sink );
+   if ( sink->soc.captureThread )
+   {
+      sink->soc.quitCaptureThread= TRUE;
+      UNLOCK( sink );
+      g_thread_join( sink->soc.captureThread );
+      LOCK( sink );
+      sink->soc.captureThread= NULL;
+   }
+
+   if ( sink->videoStarted && sink->soc.videoDecoder )
+   {
+      NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
+   }
+
+   sink->videoStarted= FALSE;
+   sink->soc.presentationStarted= FALSE;
+   sink->soc.serverPlaySpeed= 1.0;
+   sink->soc.clientPlaySpeed= 1.0;
+   sink->soc.stoppedForPlaySpeedChange= FALSE;
+   sink->soc.numDecoded= 0;
+   sink->soc.prevQueueDepth= 0;
+   sink->soc.prevFifoDepth= 0;
+   sink->soc.prevNumDecoded= 0;
+   sink->soc.checkForEOS= FALSE;
+   sink->soc.emitEOS= FALSE;
+   sink->soc.emitUnderflow= FALSE;
+   sink->soc.emitPTSError= FALSE;
+   sink->soc.emitResourceChange= FALSE;
+   UNLOCK( sink );
 }
 
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
