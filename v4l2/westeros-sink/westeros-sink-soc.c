@@ -532,12 +532,12 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
 {
    WESTEROS_UNUSED(sink);
 
+   LOCK(sink);
    if ( sink->soc.conn )
    {
       wstDestroyVideoClientConnection( sink->soc.conn );
    }
 
-   LOCK(sink);
    sink->soc.quitVideoOutputThread= TRUE;
    sink->soc.quitEOSDetectionThread= TRUE;
    sink->soc.quitDispatchThread= TRUE;
@@ -2494,7 +2494,6 @@ capture_start:
          {
             int resubFd= -1;
 
-            LOCK(sink);
             currFrameTime= getCurrentTimeMillis();
             if ( prevFrameTime )
             {
@@ -2509,6 +2508,12 @@ capture_start:
             }
             prevFrameTime= currFrameTime;
 
+            LOCK(sink);
+            if ( sink->soc.quitVideoOutputThread )
+            {
+               UNLOCK(sink);
+               break;
+            }
             if (sink->soc.frameOutCount == 0)
             {
                 GST_DEBUG("wstVideoOutputThread: emit first frame signal");
