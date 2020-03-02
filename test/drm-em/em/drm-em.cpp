@@ -47,11 +47,13 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <memory.h>
+#include <poll.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <signal.h>
 #include <syscall.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/time.h>
 #include <stdint.h>
 #include "westeros-ut-em.h"
@@ -103,6 +105,7 @@
 // Section: internal types ------------------------------------------------------
 
 #define EM_WINDOW_MAGIC (0x55122131)
+#define EM_SIMPLE_VIDEO_DECODER_MAGIC (0x55122132)
 
 struct wl_drm_buffer 
 {
@@ -204,7 +207,23 @@ typedef enum _EM_DEVICE_TYPE
    EM_DEVICE_TYPE_V4L2
 } EM_DEVICE_TYPE;
 
-#define EM_DRM_MODE_MAX 32
+#define EM_DRM_MODE_MAX (32)
+#define EM_V4L2_FMT_MAX (32)
+#define EM_V4L2_INBUFF_MAX (2)
+#define EM_V4L2_OUTBUFF_MAX (6)
+#define EM_V4L2_MAP_MAX (EM_V4L2_INBUFF_MAX+(2*EM_V4L2_OUTBUFF_MAX))
+#define EM_V4L2_MIN_WIDTH (64)
+#define EM_V4L2_MAX_WIDTH (3840)
+#define EM_V4L2_STEP_WIDTH (8)
+#define EM_V4L2_MIN_HEIGHT (64)
+#define EM_V4L2_MAX_HEIGHT (2160)
+#define EM_V4L2_STEP_HEIGHT (8)
+
+typedef struct _EMFd
+{
+   int fd;
+   int fd_os;
+} EMFd;
 
 typedef struct _EMDevice
 {
@@ -239,6 +258,29 @@ typedef struct _EMDevice
       } drm;
       struct _v4l2
       {
+         int countInputFormats;
+         struct v4l2_fmtdesc inputFormats[EM_V4L2_FMT_MAX];
+         int countOutputFormats;
+         struct v4l2_fmtdesc outputFormats[EM_V4L2_FMT_MAX];
+         int subscribeSourceChange;
+         struct v4l2_format fmtIn;
+         struct v4l2_format fmtOut;
+         int inputMemoryMode;
+         int countInputBuffers;
+         struct v4l2_plane inputBufferPlanes[EM_V4L2_INBUFF_MAX];
+         struct v4l2_buffer inputBuffers[EM_V4L2_INBUFF_MAX];
+         int outputMemoryMode;
+         int countOutputBuffers;
+         EMFd outputBufferFds[EM_V4L2_OUTBUFF_MAX*2];
+         struct v4l2_plane outputBufferPlanes[EM_V4L2_OUTBUFF_MAX*2];
+         struct v4l2_buffer outputBuffers[EM_V4L2_OUTBUFF_MAX];
+         unsigned char *map[EM_V4L2_MAP_MAX];
+         bool inputStreaming;
+         bool outputStreaming;
+         int frameWidthSrc;
+         int frameHeightSrc;
+         int frameWidth;
+         int frameHeight;
       } v4l2;
    } dev;
 } EMDevice;
@@ -359,6 +401,7 @@ typedef struct _EMCTX
    GLint textureMagFilter;
    GLint textureMinFilter;
    std::map<struct wl_display*,EMWLBinding> wlBindings;
+   int videoCodec;
    int waylandSendTid;
    bool waylandThreadingIssue;
    bool westerosModuleInitShouldFail;
@@ -384,9 +427,14 @@ typedef struct _EMCTX
 static EMCTX* emGetContext( void );
 static EMCTX* emCreate( void );
 static void emDestroy( EMCTX* ctx );
+static int EMDeviceOpenOS( int fd );
+static void EMDeviceCloseOS( int fd_os );
 static void EMDevicePruneOS();
+static void EMV4l2FreeInputBuffers( EMDevice *dev );
+static void EMV4l2FreeOutputBuffers( EMDevice *dev );
 static EGLNativeWindowType wlGetNativeWindow( struct wl_egl_window *egl_window );
 static void wlSwapBuffers( struct wl_egl_window *egl_window );
+
 
 static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
 static EMCTX *gCtx= 0;
@@ -552,6 +600,16 @@ long long EMGetCurrentTimeMicro(void)
    return utcCurrentTimeMicro;
 }
 
+void EMSetVideoCodec( EMCTX *ctx, int codec )
+{
+   ctx->videoCodec= codec;
+}
+
+int EMGetVideoCodec( EMCTX *ctx )
+{
+   return ctx->videoCodec;
+}
+
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id )
 {
    // ignore id for now
@@ -563,6 +621,15 @@ void EMSimpleVideoDecoderSetVideoSize( EMSimpleVideoDecoder *dec, int width, int
 {
    dec->videoWidth= width;
    dec->videoHeight= height;
+}
+
+void EMSimpleVideoDecoderGetVideoSize( EMSimpleVideoDecoder *dec, int *width, int *height )
+{
+   if ( dec )
+   {
+      if ( width ) *width= dec->videoWidth;
+      if ( height ) *height= dec->videoHeight;
+   }
 }
 
 void EMSimpleVideoDecoderSetFrameRate( EMSimpleVideoDecoder *dec, float fps )
@@ -715,6 +782,15 @@ static EMCTX* emCreate( void )
          ctx->devices[i].fd= -1;
       }
 
+      ctx->simpleVideoDecoderMain.magic= EM_SIMPLE_VIDEO_DECODER_MAGIC;
+      ctx->simpleVideoDecoderMain.inUse= false;
+      ctx->simpleVideoDecoderMain.ctx= ctx;
+      ctx->simpleVideoDecoderMain.videoFrameRate= 60.0;
+      ctx->simpleVideoDecoderMain.videoBitRate= 8.0;
+      ctx->simpleVideoDecoderMain.basePTS= 0;
+
+      ctx->videoCodec= 0;
+
       env= getenv("WESTEROS_UT_DEBUG");
       if ( env )
       {
@@ -769,9 +845,11 @@ enum _EM_DRM_PROP_IDS
    EM_DRM_PROP_SRC_H
 };
 
-void EMDrmDeviceInit( EMDevice *d )
+static void EMDrmDeviceInit( EMDevice *d )
 {
    int i= 0;
+
+   TRACE1("EMDrmDeviceInit");
 
    d->dev.drm.modes[i].hdisplay= 3840;
    d->dev.drm.modes[i].vdisplay= 2160;
@@ -989,10 +1067,91 @@ void EMDrmDeviceInit( EMDevice *d )
    d->dev.drm.countProperties= i;
 }
 
+static void EMDrmDeviceTerm( EMDevice *d )
+{
+   TRACE1("EMDrmDeviceTerm");
+}
+
+static void EMV4l2DeviceInit( EMDevice *d )
+{
+   int i;
+
+   TRACE1("EMV4l2DeviceInit");
+
+   memset( d->dev.v4l2.inputFormats, 0, EM_V4L2_FMT_MAX*sizeof(struct v4l2_fmtdesc) );
+
+   i= 0;
+   d->dev.v4l2.inputFormats[i].index= i;
+   d->dev.v4l2.inputFormats[i].type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+   d->dev.v4l2.inputFormats[i].flags= V4L2_FMT_FLAG_COMPRESSED;
+   d->dev.v4l2.inputFormats[i].pixelformat= V4L2_PIX_FMT_H264;
+   strcpy( (char*)d->dev.v4l2.inputFormats[i].description, "H.264" );
+   ++i;
+
+   d->dev.v4l2.inputFormats[i].index= i;
+   d->dev.v4l2.inputFormats[i].type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+   d->dev.v4l2.inputFormats[i].flags= V4L2_FMT_FLAG_COMPRESSED;
+   d->dev.v4l2.inputFormats[i].pixelformat= V4L2_PIX_FMT_HEVC;
+   strcpy( (char*)d->dev.v4l2.inputFormats[i].description, "HEVC" );
+   ++i;
+
+   d->dev.v4l2.inputFormats[i].index= i;
+   d->dev.v4l2.inputFormats[i].type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+   d->dev.v4l2.inputFormats[i].flags= V4L2_FMT_FLAG_COMPRESSED;
+   d->dev.v4l2.inputFormats[i].pixelformat= V4L2_PIX_FMT_VP8;
+   strcpy( (char*)d->dev.v4l2.inputFormats[i].description, "VP8" );
+   ++i;
+
+   d->dev.v4l2.inputFormats[i].index= i;
+   d->dev.v4l2.inputFormats[i].type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+   d->dev.v4l2.inputFormats[i].flags= V4L2_FMT_FLAG_COMPRESSED;
+   d->dev.v4l2.inputFormats[i].pixelformat= V4L2_PIX_FMT_VP9;
+   strcpy( (char*)d->dev.v4l2.inputFormats[i].description, "VP9" );
+   ++i;
+
+   d->dev.v4l2.countInputFormats= i;
+
+
+   i= 0;
+   d->dev.v4l2.outputFormats[i].index= i;
+   d->dev.v4l2.outputFormats[i].type= V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+   d->dev.v4l2.outputFormats[i].flags= 0;
+   d->dev.v4l2.outputFormats[i].pixelformat= V4L2_PIX_FMT_NV12;
+   strcpy( (char*)d->dev.v4l2.outputFormats[i].description, "Y/CbCr 4:2:0" );
+   ++i;
+
+   d->dev.v4l2.outputFormats[i].index= i;
+   d->dev.v4l2.outputFormats[i].type= V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+   d->dev.v4l2.outputFormats[i].flags= 0;
+   d->dev.v4l2.outputFormats[i].pixelformat= V4L2_PIX_FMT_NV12M;
+   strcpy( (char*)d->dev.v4l2.outputFormats[i].description, "Y/CbCr 4:2:0 (N-C)" );
+   ++i;
+
+   d->dev.v4l2.countOutputFormats= i;
+
+   for( i= 0; i < EM_V4L2_OUTBUFF_MAX; ++i )
+   {
+      d->dev.v4l2.outputBufferFds[i*2].fd= -1;
+      d->dev.v4l2.outputBufferFds[i*2].fd_os= -1;
+      d->dev.v4l2.outputBufferFds[i*2+1].fd= -1;
+      d->dev.v4l2.outputBufferFds[i*2+1].fd_os= -1;
+   }
+}
+
+static void EMV4l2DeviceTerm( EMDevice *d )
+{
+   TRACE1("EMV4l2DeviceTerm");
+   if ( d )
+   {
+      EMV4l2FreeInputBuffers( d );
+      EMV4l2FreeOutputBuffers( d );
+   }
+}
+
 #define EMFDOSFILE_PREFIX "em-drm-"
 #define EMFDOSFILE_TEMPLATE "/tmp/" EMFDOSFILE_PREFIX "%d-XXXXXX"
 
-int EMDeviceOpenOS( int fd )
+static int EMDeviceOpenOS( int fd )
 {
    int fd_os= -1;
    char work[34];
@@ -1104,7 +1263,7 @@ static void EMDevicePruneOS()
    }
 }
 
-int EMDeviceOpen( int type, const char *pathname, int flags )
+static int EMDeviceOpen( int type, const char *pathname, int flags )
 {
    int fd= -1;
    EMCTX *ctx= 0;
@@ -1131,7 +1290,18 @@ int EMDeviceOpen( int type, const char *pathname, int flags )
             ctx->devices[i].type= type;
             ctx->devices[i].path= strdup(pathname);
             ctx->devices[i].ctx= ctx;
-            EMDrmDeviceInit( &ctx->devices[i] );
+            switch( type )
+            {
+               case EM_DEVICE_TYPE_DRM:
+                  EMDrmDeviceInit( &ctx->devices[i] );
+                  break;
+               case EM_DEVICE_TYPE_V4L2:
+                  EMV4l2DeviceInit( &ctx->devices[i] );
+                  break;
+               default:
+                  assert(false);
+                  break;
+            }
             break;
          }
       }
@@ -1142,7 +1312,7 @@ exit:
    return fd;
 }
 
-int EMDeviceClose( int fd )
+static int EMDeviceClose( int fd )
 {
    int rc= -1;
    EMCTX *ctx= 0;
@@ -1169,6 +1339,18 @@ int EMDeviceClose( int fd )
             EMDeviceCloseOS( ctx->devices[i].fd_os );
             ctx->devices[i].fd_os= -1;
          }
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_DRM:
+               EMDrmDeviceTerm( &ctx->devices[i] );
+               break;
+            case EM_DEVICE_TYPE_V4L2:
+               EMV4l2DeviceTerm( &ctx->devices[i] );
+               break;
+            default:
+               assert(false);
+               break;
+         }
          ctx->devices[i].fd= -1;
          ctx->devices[i].type= EM_DEVICE_TYPE_NONE;
          ctx->devices[i].magic= 0;
@@ -1181,7 +1363,7 @@ exit:
    return rc;
 }
 
-int EMDrmIOctl( EMDevice *dev, int fd, int request, void *arg )
+static int EMDrmIOctl( EMDevice *dev, int fd, int request, void *arg )
 {
    int rc= -1;
    switch( request )
@@ -1211,7 +1393,122 @@ int EMDrmIOctl( EMDevice *dev, int fd, int request, void *arg )
    return rc;
 }
 
-int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
+static int EMV4l2MapBuffer( EMDevice *dev, int length )
+{
+   int offset= -1;
+   int i;
+   for ( i= 0; i < EM_V4L2_MAP_MAX; ++i )
+   {
+      if ( dev->dev.v4l2.map[i] == 0 )
+      {
+         dev->dev.v4l2.map[i]= (unsigned char*)malloc( length );
+         if ( dev->dev.v4l2.map[i] )
+         {
+            offset= i;
+            break;
+         }
+      }
+   }
+   return offset;
+}
+
+static void *EMV4l2GetMap( EMDevice *dev, int offset )
+{
+   void *map= MAP_FAILED;
+   if ( (offset >= 0) && (offset < EM_V4L2_MAP_MAX) )
+   {
+      map= dev->dev.v4l2.map[offset];
+   }
+   return map;
+}
+
+static int EMV4l2ReleaseMap( EMDevice *dev, void *addr )
+{
+   int rc= -1;
+   int i;
+   for ( i= 0; i < EM_V4L2_MAP_MAX; ++i )
+   {
+      if ( dev->dev.v4l2.map[i] == addr )
+      {
+         free( addr );
+         dev->dev.v4l2.map[i]= 0;
+         rc= 0;
+         break;
+      }
+   }
+   return rc;
+}
+
+static void EMV4l2FreeInputBuffers( EMDevice *dev )
+{
+   if ( dev )
+   {
+      for( int i= 0; i < dev->dev.v4l2.countInputBuffers; ++i )
+      {
+         void *addr= EMV4l2GetMap(dev, dev->dev.v4l2.inputBuffers[i].m.planes[0].m.mem_offset );
+         if ( addr != MAP_FAILED )
+         {
+            EMV4l2ReleaseMap( dev, addr );
+         }
+      }
+      dev->dev.v4l2.countInputBuffers= 0;
+   }
+}
+
+static void EMV4l2FreeOutputBuffers( EMDevice *dev )
+{
+   if ( dev )
+   {
+      for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+      {
+         void *addr= EMV4l2GetMap(dev, dev->dev.v4l2.outputBuffers[i].m.planes[0].m.mem_offset );
+         if ( addr != MAP_FAILED )
+         {
+            EMV4l2ReleaseMap( dev, addr );
+         }
+      }
+      for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+      {
+         int fd= dev->dev.v4l2.outputBufferFds[i].fd;
+         if ( fd >= 0 )
+         {
+            int fd_os= dev->dev.v4l2.outputBufferFds[i].fd_os;
+            if ( fd_os >= 0 )
+            {
+               EMDeviceCloseOS( fd_os );
+            }
+            dev->dev.v4l2.outputBufferFds[i].fd= -1;
+            dev->dev.v4l2.outputBufferFds[i].fd_os= -1;
+         }
+      }
+      dev->dev.v4l2.countOutputBuffers= 0;
+   }
+}
+
+static void EMV4l2CheckFrameSize( EMDevice *dev, int *frameWidth, int *frameHeight )
+{
+   int w, h, width, height;
+
+   width= *frameWidth;
+   w= EM_V4L2_MIN_WIDTH + ((width-EM_V4L2_MIN_WIDTH)/EM_V4L2_STEP_WIDTH)*EM_V4L2_STEP_WIDTH;
+   if ( w < width ) w += EM_V4L2_STEP_WIDTH;
+   if ( w > EM_V4L2_MAX_WIDTH )
+   {
+      w= EM_V4L2_MAX_WIDTH;
+   }
+   *frameWidth= w;
+
+   height= *frameHeight;
+   h= EM_V4L2_MIN_HEIGHT + ((height-EM_V4L2_MIN_HEIGHT)/EM_V4L2_STEP_HEIGHT)*EM_V4L2_STEP_HEIGHT;
+   if ( h < height ) h += EM_V4L2_STEP_HEIGHT;
+   if ( h > EM_V4L2_MAX_HEIGHT )
+   {
+      h= EM_V4L2_MAX_HEIGHT;
+   }
+   *frameHeight= h;
+}
+
+static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
 {
    int rc= -1;
    switch( request )
@@ -1228,21 +1525,648 @@ int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                caps->device_caps= V4L2_CAP_STREAMING|V4L2_CAP_EXT_PIX_FORMAT|V4L2_CAP_VIDEO_M2M_MPLANE;
                caps->capabilities= V4L2_CAP_DEVICE_CAPS | caps->device_caps;
                caps->version= 1;
-               strncpy( caps->driver, "WesterosUTEM", 16 );
-               strncpy( caps->card, "WesterosUTEM", 32 );
-               strncpy( caps->bus_info, "WesterosUTEM", 32 );
+               strncpy( (char*)caps->driver, "WesterosUTEM", 16 );
+               strncpy( (char*)caps->card, "WesterosUTEM", 32 );
+               strncpy( (char*)caps->bus_info, "WesterosUTEM", 32 );
                rc= 0;
+            }
+         }
+         break;
+      case VIDIOC_ENUM_FMT:
+         {
+            struct v4l2_fmtdesc *fmt= (struct v4l2_fmtdesc *)arg;
+
+            TRACE1("VIDIOC_ENUM_FMT");
+
+            switch( fmt->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  if ( fmt->index < dev->dev.v4l2.countInputFormats )
+                  {
+                     fmt->flags= dev->dev.v4l2.inputFormats[fmt->index].flags;
+                     fmt->pixelformat= dev->dev.v4l2.inputFormats[fmt->index].pixelformat;
+                     strcpy( (char*)fmt->description, (char*)dev->dev.v4l2.inputFormats[fmt->index].description );
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  if ( fmt->index < dev->dev.v4l2.countOutputFormats )
+                  {
+                     fmt->flags= dev->dev.v4l2.outputFormats[fmt->index].flags;
+                     fmt->pixelformat= dev->dev.v4l2.outputFormats[fmt->index].pixelformat;
+                     strcpy( (char*)fmt->description, (char*)dev->dev.v4l2.outputFormats[fmt->index].description );
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_ENUM_FRAMESIZES:
+         {
+            struct v4l2_frmsizeenum *fsz= (struct v4l2_frmsizeenum*)arg;
+
+            TRACE1("VIDIOC_ENUM_FRAMESIZES");
+
+            if ( fsz->index == 0 )
+            {
+               switch ( fsz->pixel_format )
+               {
+                  case V4L2_PIX_FMT_H264:
+                  case V4L2_PIX_FMT_HEVC:
+                  case V4L2_PIX_FMT_VP8:
+                  case V4L2_PIX_FMT_VP9:
+                     fsz->type= V4L2_FRMIVAL_TYPE_STEPWISE;
+                     fsz->stepwise.min_width= EM_V4L2_MIN_WIDTH;
+                     fsz->stepwise.max_width= EM_V4L2_MAX_WIDTH;
+                     fsz->stepwise.step_width= EM_V4L2_STEP_WIDTH;
+                     fsz->stepwise.min_height= EM_V4L2_MIN_HEIGHT;
+                     fsz->stepwise.max_height= EM_V4L2_MAX_HEIGHT;
+                     fsz->stepwise.step_height= EM_V4L2_STEP_HEIGHT;
+                     rc= 0;
+                     break;
+                  default:
+                     rc= -1;
+                     errno= EINVAL;
+                     break;
+               }
+            }
+            else
+            {
+               rc= -1;
+               errno= EINVAL;
+            }
+         }
+         break;
+      case VIDIOC_SUBSCRIBE_EVENT:
+         {
+            struct v4l2_event_subscription *sub= (struct v4l2_event_subscription*)arg;
+
+            TRACE1("VIDIOC_SUBSCRIBE_EVENT");
+
+            switch( sub->type )
+            {
+               case V4L2_EVENT_SOURCE_CHANGE:
+                  dev->dev.v4l2.subscribeSourceChange= true;
+                  rc= 0;
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+
+         }
+         break;
+      case VIDIOC_UNSUBSCRIBE_EVENT:
+         {
+            struct v4l2_event_subscription *sub= (struct v4l2_event_subscription*)arg;
+
+            TRACE1("VIDIOC_UNSUBSCRIBE_EVENT");
+
+            switch( sub->type )
+            {
+               case V4L2_EVENT_SOURCE_CHANGE:
+                  dev->dev.v4l2.subscribeSourceChange= false;
+                  rc= 0;
+                  break;
+               case V4L2_EVENT_ALL:
+                  dev->dev.v4l2.subscribeSourceChange= false;
+                  rc= 0;
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+
+         }
+         break;
+      case VIDIOC_G_CTRL:
+         {
+            struct v4l2_control *ctrl= (struct v4l2_control*)arg;
+
+            TRACE1("VIDIOC_G_CTRL");
+
+            rc= 0;
+            switch( ctrl->id )
+            {
+               case V4L2_CID_MIN_BUFFERS_FOR_CAPTURE:
+                  ctrl->value= EM_V4L2_OUTBUFF_MAX-1;
+                  break;
+               case V4L2_CID_MIN_BUFFERS_FOR_OUTPUT:
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_G_SELECTION:
+         {
+            struct v4l2_selection *selection= (struct v4l2_selection*)arg;
+
+            TRACE1("VIDIOC_G_SELECTION");
+
+            switch( selection->type )
+            {
+               // Some drivers fail with V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE
+               // so use V4L2_BUF_TYPE_VIDEO_CAPTURE in emulation
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+                  switch( selection->target )
+                  {
+                     case V4L2_SEL_TGT_COMPOSE:
+                     case V4L2_SEL_TGT_COMPOSE_DEFAULT:
+                        selection->r.left= 0;
+                        selection->r.top= 0;
+                        selection->r.width= dev->dev.v4l2.frameWidthSrc;
+                        selection->r.height= dev->dev.v4l2.frameHeightSrc;
+                        rc= 0;
+                        break;
+                     default:
+                        rc= -1;
+                        errno= EINVAL;
+                        break;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_G_FMT:
+         {
+            struct v4l2_format *fmt= (struct v4l2_format*)arg;
+
+            TRACE1("VIDIOC_G_FMT");
+
+            switch( fmt->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  *fmt= dev->dev.v4l2.fmtIn;
+                  fmt->type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+                  rc= 0;
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  *fmt= dev->dev.v4l2.fmtOut;
+                  fmt->type= V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+                  rc= 0;
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_S_FMT:
+         {
+            struct v4l2_format *fmt= (struct v4l2_format*)arg;
+
+            TRACE1("VIDIOC_S_FMT");
+
+            switch( fmt->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  {
+                     bool found= false;
+                     for( int i= 0; i < dev->dev.v4l2.countInputFormats; ++i )
+                     {
+                        if ( fmt->fmt.pix_mp.pixelformat == dev->dev.v4l2.inputFormats[i].pixelformat )
+                        {
+                           found= true;
+                           break;
+                        }
+                     }
+                     if ( found )
+                     {
+                        dev->dev.v4l2.fmtIn= *fmt;
+                        rc= 0;
+                     }
+                     else
+                     {
+                        rc= -1;
+                        errno= EINVAL;
+                     }
+                  }
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  {
+                     bool found= false;
+                     for( int i= 0; i < dev->dev.v4l2.countOutputFormats; ++i )
+                     {
+                        if ( fmt->fmt.pix_mp.pixelformat == dev->dev.v4l2.outputFormats[i].pixelformat )
+                        {
+                           found= true;
+                           break;
+                        }
+                     }
+                     if ( found )
+                     {
+                        int w, h;
+
+                        dev->dev.v4l2.fmtOut= *fmt;
+
+                        w= dev->dev.v4l2.fmtOut.fmt.pix_mp.width;
+                        h= dev->dev.v4l2.fmtOut.fmt.pix_mp.height;
+
+                        EMV4l2CheckFrameSize( dev, &w, &h );
+
+                        dev->dev.v4l2.fmtOut.fmt.pix_mp.width= w;
+                        dev->dev.v4l2.fmtOut.fmt.pix_mp.height= h;
+                        rc= 0;
+                     }
+                     else
+                     {
+                        rc= -1;
+                        errno= EINVAL;
+                     }
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_REQBUFS:
+         {
+            struct v4l2_requestbuffers *reqbuf= (struct v4l2_requestbuffers *)arg;
+
+            TRACE1("VIDIOC_REQBUFS");
+
+            switch( reqbuf->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  switch( reqbuf->memory )
+                  {
+                     case V4L2_MEMORY_MMAP:
+                        if ( reqbuf->count > EM_V4L2_INBUFF_MAX )
+                        {
+                           reqbuf->count= EM_V4L2_INBUFF_MAX;
+                        }
+                        if ( reqbuf->count == 0 )
+                        {
+                           EMV4l2FreeInputBuffers( dev );
+                        }
+                        dev->dev.v4l2.inputMemoryMode= reqbuf->memory;
+                        dev->dev.v4l2.countInputBuffers= reqbuf->count;
+                        for( int i= 0; i < reqbuf->count; ++i )
+                        {
+                           dev->dev.v4l2.inputBuffers[i].type= reqbuf->type;
+                           dev->dev.v4l2.inputBuffers[i].index= i;
+                           dev->dev.v4l2.inputBuffers[i].length= 1;
+                           dev->dev.v4l2.inputBuffers[i].memory= dev->dev.v4l2.inputMemoryMode;
+                           dev->dev.v4l2.inputBuffers[i].m.planes= &dev->dev.v4l2.inputBufferPlanes[i];
+                           dev->dev.v4l2.inputBuffers[i].m.planes[0].length= dev->dev.v4l2.fmtIn.fmt.pix_mp.plane_fmt[0].sizeimage;
+                           dev->dev.v4l2.inputBuffers[i].m.planes[0].bytesused= 0;
+                           dev->dev.v4l2.inputBuffers[i].m.planes[0].m.mem_offset= EMV4l2MapBuffer( dev, dev->dev.v4l2.inputBuffers[i].m.planes[0].length );
+                        }
+                        rc= 0;
+                        break;
+                     case V4L2_MEMORY_DMABUF:
+                     case V4L2_MEMORY_USERPTR:
+                     default:
+                        rc= -1;
+                        errno= EINVAL;
+                        break;
+                  }
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  switch( reqbuf->memory )
+                  {
+                     case V4L2_MEMORY_MMAP:
+                        if ( reqbuf->count > EM_V4L2_OUTBUFF_MAX )
+                        {
+                           reqbuf->count= EM_V4L2_OUTBUFF_MAX;
+                        }
+                        if ( reqbuf->count == 0 )
+                        {
+                           EMV4l2FreeOutputBuffers( dev );
+                        }
+                        dev->dev.v4l2.outputMemoryMode= reqbuf->memory;
+                        dev->dev.v4l2.countOutputBuffers= reqbuf->count;
+                        for( int i= 0; i < reqbuf->count; ++i )
+                        {
+                           dev->dev.v4l2.outputBuffers[i].type= reqbuf->type;
+                           dev->dev.v4l2.outputBuffers[i].index= i;
+                           dev->dev.v4l2.outputBuffers[i].length= 2;
+                           dev->dev.v4l2.outputBuffers[i].memory= dev->dev.v4l2.outputMemoryMode;
+                           dev->dev.v4l2.outputBuffers[i].m.planes= &dev->dev.v4l2.outputBufferPlanes[i*2];
+                           for ( int j= 0; j < dev->dev.v4l2.outputBuffers[i].length; ++j )
+                           {
+                              dev->dev.v4l2.outputBuffers[i].m.planes[j].length= dev->dev.v4l2.fmtOut.fmt.pix_mp.plane_fmt[j].sizeimage;
+                              dev->dev.v4l2.outputBuffers[i].m.planes[j].bytesused= 0;
+                              dev->dev.v4l2.outputBuffers[i].m.planes[j].m.mem_offset= EMV4l2MapBuffer( dev, dev->dev.v4l2.outputBuffers[i].m.planes[j].length );
+                           }
+                        }
+                        rc= 0;
+                        break;
+                     case V4L2_MEMORY_DMABUF:
+                     case V4L2_MEMORY_USERPTR:
+                     default:
+                        rc= -1;
+                        errno= EINVAL;
+                        break;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_QUERYBUF:
+         {
+            struct v4l2_buffer *buf= (struct v4l2_buffer*)arg;
+
+            TRACE1("VIDIOC_QUERYBUF");
+
+            switch( buf->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  if ( buf->index < dev->dev.v4l2.countInputBuffers )
+                  {
+                     buf->length= dev->dev.v4l2.inputBuffers[buf->index].length;
+                     buf->flags= dev->dev.v4l2.inputBuffers[buf->index].flags;
+                     buf->field= dev->dev.v4l2.inputBuffers[buf->index].field;
+                     buf->memory= dev->dev.v4l2.inputBuffers[buf->index].memory;
+                     buf->m.planes[0]= dev->dev.v4l2.inputBuffers[buf->index].m.planes[0];
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  if ( buf->index < dev->dev.v4l2.countOutputBuffers )
+                  {
+                     buf->length= dev->dev.v4l2.outputBuffers[buf->index].length;
+                     buf->flags= dev->dev.v4l2.outputBuffers[buf->index].flags;
+                     buf->field= dev->dev.v4l2.outputBuffers[buf->index].field;
+                     buf->memory= dev->dev.v4l2.outputBuffers[buf->index].memory;
+                     for( int j= 0; j < buf->length; ++j )
+                     {
+                        buf->m.planes[j]= dev->dev.v4l2.outputBuffers[buf->index].m.planes[j];
+                     }
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
             }
          }
          break;
       case VIDIOC_EXPBUF:
          {
-            struct v4l2_exportbuffer *eb= (struct v4l2_exportbuffer*)arg;
+            struct v4l2_exportbuffer *expb= (struct v4l2_exportbuffer*)arg;
 
             TRACE1("VIDIOC_EXPBUF");
 
-            rc= -1;
-            errno= EINVAL;
+            switch( expb->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  if (
+                       (expb->index < dev->dev.v4l2.countOutputBuffers) &&
+                       (expb->plane < 2)
+                     )
+                  {
+                     int fd= dev->ctx->deviceNextFd++;
+                     dev->dev.v4l2.outputBufferFds[expb->index*2+expb->plane].fd= fd;
+                     dev->dev.v4l2.outputBufferFds[expb->index*2+expb->plane].fd_os= EMDeviceOpenOS(fd);
+                     expb->fd= dev->dev.v4l2.outputBufferFds[expb->index*2+expb->plane].fd_os;
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_QBUF:
+         {
+            struct v4l2_buffer *buf= (struct v4l2_buffer*)arg;
+
+            TRACE1("VIDIOC_QBUF");
+
+            switch( buf->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  if ( buf->index < dev->dev.v4l2.countInputBuffers )
+                  {
+                     int i;
+                     buf->flags |= V4L2_BUF_FLAG_QUEUED;
+                     dev->dev.v4l2.inputBuffers[buf->index].flags |= V4L2_BUF_FLAG_QUEUED;
+                     i= ((buf->index+1) % dev->dev.v4l2.countInputBuffers);
+                     while( i != buf->index )
+                     {
+                        if ( dev->dev.v4l2.inputBuffers[i].flags & V4L2_BUF_FLAG_QUEUED )
+                        {
+                           dev->dev.v4l2.inputBuffers[i].flags &= ~V4L2_BUF_FLAG_QUEUED;
+                           dev->dev.v4l2.inputBuffers[i].flags |= V4L2_BUF_FLAG_DONE;
+                           break;
+                        }
+                        i= ((i+1) % dev->dev.v4l2.countInputBuffers);
+                     }
+                     if ( buf->m.planes[0].bytesused >= 8 )
+                     {
+                        int width, height;
+                        unsigned char *data= (unsigned char*)EMV4l2GetMap( dev, buf->m.planes[0].m.mem_offset );
+                        if ( data != MAP_FAILED )
+                        {
+                           width= ((data[0]<<24)|(data[1]<<16)|(data[2]<<8)|(data[3]));
+                           height= ((data[4]<<24)|(data[5]<<16)|(data[6]<<8)|(data[7]));
+                           if ( (width != dev->dev.v4l2.frameWidthSrc) || (height != dev->dev.v4l2.frameHeightSrc) )
+                           {
+                              int w, h;
+
+                              dev->dev.v4l2.frameWidthSrc= width;
+                              dev->dev.v4l2.frameHeightSrc= height;
+
+                              w= width;
+                              h= height;
+                              EMV4l2CheckFrameSize( dev, &w, &h );
+
+                              dev->dev.v4l2.frameWidth= w;
+                              dev->dev.v4l2.frameHeight= h;
+
+                              TRACE1("source frame %dx%d device frame %dx%d", width, height, w, h);
+
+                              dev->dev.v4l2.fmtOut.fmt.pix_mp.width= w;
+                              dev->dev.v4l2.fmtOut.fmt.pix_mp.height= h;
+
+                              // TBD: source change event
+                           }
+                        }
+                     }
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  if ( buf->index < dev->dev.v4l2.countOutputBuffers )
+                  {
+                     int i;
+                     buf->flags |= V4L2_BUF_FLAG_QUEUED;
+                     dev->dev.v4l2.outputBuffers[buf->index].flags |= V4L2_BUF_FLAG_QUEUED;
+                     i= ((buf->index+1) % dev->dev.v4l2.countOutputBuffers);
+                     while( i != buf->index )
+                     {
+                        if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_QUEUED )
+                        {
+                           dev->dev.v4l2.outputBuffers[i].flags &= ~V4L2_BUF_FLAG_QUEUED;
+                           dev->dev.v4l2.outputBuffers[i].flags |= V4L2_BUF_FLAG_DONE;
+                           break;
+                        }
+                        i= ((i+1) % dev->dev.v4l2.countOutputBuffers);
+                     }
+                     rc= 0;
+                  }
+                  else
+                  {
+                     rc= -1;
+                     errno= EINVAL;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_DQBUF:
+         {
+            struct v4l2_buffer *buf= (struct v4l2_buffer*)arg;
+
+            TRACE1("VIDIOC_DQBUF");
+
+            switch( buf->type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  rc= -1;
+                  for( int i= 0; i < dev->dev.v4l2.countInputBuffers; ++i )
+                  {
+                     if ( dev->dev.v4l2.inputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+                     {
+                        dev->dev.v4l2.inputBuffers[i].flags &= ~(V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE);
+                        *buf= dev->dev.v4l2.inputBuffers[i];
+                        rc= 0;
+                        break;
+                     }
+                  }
+                  if ( rc < 0 )
+                  {
+                     errno= EINVAL;
+                  }
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  rc= -1;
+                  for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+                  {
+                     if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+                     {
+                        dev->dev.v4l2.outputBuffers[i].flags &= ~(V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE);
+                        *buf= dev->dev.v4l2.outputBuffers[i];
+                        rc= 0;
+                        break;
+                     }
+                  }
+                  if ( rc < 0 )
+                  {
+                     errno= EINVAL;
+                  }
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_STREAMON:
+         {
+            int *type= (int*)arg;
+
+            TRACE1("VIDIOC_STREAMON");
+
+            switch( *type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  dev->dev.v4l2.inputStreaming= true;
+                  rc= 0;
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  dev->dev.v4l2.outputStreaming= true;
+                  rc= 0;
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
+         }
+         break;
+      case VIDIOC_STREAMOFF:
+         {
+            int *type= (int*)arg;
+
+            TRACE1("VIDIOC_STREAMOFF");
+
+            switch( *type )
+            {
+               case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+                  dev->dev.v4l2.inputStreaming= false;
+                  EMV4l2FreeInputBuffers( dev );
+                  rc= 0;
+                  break;
+               case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+                  dev->dev.v4l2.outputStreaming= false;
+                  EMV4l2FreeOutputBuffers( dev );
+                  rc= 0;
+                  break;
+               default:
+                  rc= -1;
+                  errno= EINVAL;
+                  break;
+            }
          }
          break;
 
@@ -1254,7 +2178,23 @@ int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
    return rc;
 }
 
-int EMDeviceIOctl( int fd, int request, void *arg )
+static int EMV4l2Poll( EMDevice *dev, struct pollfd *fds, int nfds, int timeout )
+{
+   int rc= 0;
+   for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+   {
+      if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+      {
+         rc= 1;
+         fds->revents |= (POLLIN|POLLRDNORM);
+         break;
+      }
+   }
+   // TBD: events
+   return rc;
+}
+
+static int EMDeviceIOctl( int fd, int request, void *arg )
 {
    int rc= -1;
    EMCTX *ctx= 0;
@@ -1289,11 +2229,122 @@ exit:
    return rc;
 }
 
+static void *EMDeviceMmap( void *addr, size_t length, int prot, int flags, int fd, off_t offset )
+{
+   void *map= MAP_FAILED;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceMmap: fd %d length %d offset %d", fd, length, offset );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceMmap: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_DRM:
+               break;
+            case EM_DEVICE_TYPE_V4L2:
+               map= EMV4l2GetMap( &ctx->devices[i], offset );
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return map;
+}
+
+static int EMDeviceMunmap( void *addr, size_t length )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceMunmap: addr %p length %d", addr, length );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceMunmap: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd >= 0 )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_DRM:
+               break;
+            case EM_DEVICE_TYPE_V4L2:
+               if ( EMV4l2ReleaseMap( &ctx->devices[i], addr ) == 0 )
+               {
+                  rc= 0;
+               }
+               break;
+         }
+      }
+      if ( rc == 0 )
+      {
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+static int EMDevicePoll( struct pollfd *fds, int nfds, int timeout )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDevicePoll: fd %d nfds %d timeout %d", fds->fd, nfds, timeout );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDevicePoll: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fds->fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_DRM:
+               break;
+            case EM_DEVICE_TYPE_V4L2:
+               rc= EMV4l2Poll( &ctx->devices[i], fds, nfds, timeout );
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
 extern "C"
 {
 #undef open
 #undef close
 #undef ioctl
+#undef mmap
+#undef munmap
+#undef poll
 
 int EMIOctl( int fd, int request, void *arg )
 {
@@ -1305,6 +2356,45 @@ int EMIOctl( int fd, int request, void *arg )
    else
    {
       rc= ioctl( fd, request, arg );
+   }
+   return rc;
+}
+
+void *EMMmap( void *addr, size_t length, int prot, int flags, int fd, off_t offset ) __THROW
+{
+   void *map= 0;
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      map= EMDeviceMmap( addr, length, prot, flags, fd, offset );
+   }
+   else
+   {
+      map= mmap( addr, length, prot, flags, fd, offset );
+   }
+   return map;
+}
+
+int EMMunmap( void *addr, size_t length ) __THROW
+{
+   int rc= -1;
+   rc= EMDeviceMunmap( addr, length );
+   if ( rc < 0 )
+   {
+      rc= munmap( addr, length );
+   }
+   return rc;
+}
+
+int EMPoll( struct pollfd *fds, nfds_t nfds, int timeout )
+{
+   int rc= -1;
+   if ( fds->fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDevicePoll( fds, nfds, timeout );
+   }
+   else
+   {
+      rc= poll( fds, nfds, timeout );
    }
    return rc;
 }

@@ -570,6 +570,15 @@ void EMSimpleVideoDecoderSetVideoSize( EMSimpleVideoDecoder *dec, int width, int
    dec->videoHeight= height;
 }
 
+void EMSimpleVideoDecoderGetVideoSize( EMSimpleVideoDecoder *dec, int *width, int *height )
+{
+   if ( dec )
+   {
+      if ( width ) *width= dec->videoWidth;
+      if ( height ) *height= dec->videoWidth;
+   }
+}
+
 void EMSimpleVideoDecoderSetFrameRate( EMSimpleVideoDecoder *dec, float fps )
 {
    dec->videoFrameRate= fps;
