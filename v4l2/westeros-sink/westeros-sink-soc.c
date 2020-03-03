@@ -610,7 +610,34 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
          }
          else if ( (len == 10) && !strncmp("video/mpeg", mime, len) )
          {
-            sink->soc.inputFormat= V4L2_PIX_FMT_MPEG2;
+            int version;
+            sink->soc.inputFormat= V4L2_PIX_FMT_MPEG;
+            if ( gst_structure_get_int(structure, "mpegversion", &version) )
+            {
+               switch( version )
+               {
+                  case 1:
+                     sink->soc.inputFormat= V4L2_PIX_FMT_MPEG1;
+                     break;
+                  default:
+                  case 2:
+                     sink->soc.inputFormat= V4L2_PIX_FMT_MPEG2;
+                     break;
+                  case 4:
+                     sink->soc.inputFormat= V4L2_PIX_FMT_MPEG4;
+                     break;
+               }
+            }
+            result= TRUE;
+         }
+         else if ( (len == 12) && !strncmp("video/x-h265", mime, len) )
+         {
+            sink->soc.inputFormat= V4L2_PIX_FMT_HEVC;
+            result= TRUE;
+         }
+         else if ( (len == 11) && !strncmp("video/x-vp9", mime, len) )
+         {
+            sink->soc.inputFormat= V4L2_PIX_FMT_VP9;
             result= TRUE;
          }
          else
