@@ -394,6 +394,7 @@ westeros-essos:
 westeros-render-nexus:
 	$(call setenv) && \
 	cd brcm/westeros-render-nexus && \
+	mkdir -p m4 && \
 	aclocal -I cfg && \
 	libtoolize --automake && \
 	autoheader && \
@@ -408,6 +409,7 @@ westeros-soc-sink:
 	cp westeros-sink/westeros-sink.c brcm/westeros-sink/westeros-sink.c && \
 	cp westeros-sink/westeros-sink.h brcm/westeros-sink/westeros-sink.h && \
 	cd brcm/westeros-sink && \
+	mkdir -p m4 && \
 	aclocal -I cfg && \
 	libtoolize --automake && \
 	autoheader && \

@@ -114,6 +114,24 @@ static bool testCaseSocSinkBasicPipeline( EMCTX *emctx )
    GstElement *src= 0;
    GstElement *sink= 0;
    EMSimpleVideoDecoder *videoDecoder= 0;
+   int windowWidth= 1920;
+   int windowHeight= 1080;
+   WstGLCtx *glCtx= 0;
+   void  *nativeWindow= 0;
+
+   glCtx= WstGLInit();
+   if ( !glCtx )
+   {
+      EMERROR("Unable to create westeros-gl context");
+      goto exit;
+   }
+
+   nativeWindow= WstGLCreateNativeWindow( glCtx, 0, 0, windowWidth, windowHeight );
+   if ( !nativeWindow )
+   {
+      EMERROR("Unable to create westeros-gl native window");
+      goto exit;
+   }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
    if ( !videoDecoder )
@@ -170,6 +188,14 @@ exit:
    if ( pipeline )
    {
       gst_object_unref( pipeline );
+   }
+   if ( nativeWindow )
+   {
+      WstGLDestroyNativeWindow( glCtx, nativeWindow );
+   }
+   if ( glCtx )
+   {
+      WstGLTerm( glCtx );
    }
 
    return testResult;
