@@ -208,6 +208,7 @@ typedef enum _EM_DEVICE_TYPE
 } EM_DEVICE_TYPE;
 
 #define EM_DRM_MODE_MAX (32)
+#define EM_DRM_HANDLE_MAX (32)
 #define EM_V4L2_FMT_MAX (32)
 #define EM_V4L2_INBUFF_MAX (2)
 #define EM_V4L2_OUTBUFF_MAX (6)
@@ -224,6 +225,13 @@ typedef struct _EMFd
    int fd;
    int fd_os;
 } EMFd;
+
+typedef struct _EMDrmHandle
+{
+   uint32_t handle;
+   int fd;
+   uint32_t fbId;
+} EMDrmHandle;
 
 typedef struct _EMDevice
 {
@@ -255,6 +263,7 @@ typedef struct _EMDevice
          struct drm_mode_property_enum planeTypeEnum[3];
          int32_t countPlanes;
          drmModePlane planes[3];
+         EMDrmHandle handles[EM_DRM_HANDLE_MAX];
       } drm;
       struct _v4l2
       {
@@ -1065,6 +1074,13 @@ static void EMDrmDeviceInit( EMDevice *d )
    strcpy( d->dev.drm.properties[i].name, "SRC_H" );
    ++i;
    d->dev.drm.countProperties= i;
+
+   for( i= 0; i < EM_DRM_HANDLE_MAX; ++i )
+   {
+      d->dev.drm.handles[i].handle= i+1;
+      d->dev.drm.handles[i].fd= -1;
+      d->dev.drm.handles[i].fbId= 0;
+   }
 }
 
 static void EMDrmDeviceTerm( EMDevice *d )
@@ -1383,6 +1399,22 @@ static int EMDrmIOctl( EMDevice *dev, int fd, int request, void *arg )
                      break;
                   default:
                      break;
+               }
+            }
+         }
+         break;
+      case DRM_IOCTL_GEM_CLOSE:
+         {
+            struct drm_gem_close *close= (struct drm_gem_close *)arg;
+            TRACE1("DRM_IOCTL_GEM_CLOSE: handle %u", close->handle );
+            for( int i= 0; i < EM_DRM_HANDLE_MAX; ++i )
+            {
+               if ( dev->dev.drm.handles[i].handle == close->handle )
+               {
+                  dev->dev.drm.handles[i].fd= -1;
+                  dev->dev.drm.handles[i].fbId= 0;
+                  rc= 0;
+                  break;
                }
             }
          }
@@ -2999,6 +3031,35 @@ void drmModeFreePlane( drmModePlanePtr ptr )
    }
 }
 
+int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+   uint32_t hndl= 0;
+
+   TRACE1("drmPrimeFDToHandle: fd %d prime_fd %d", fd, prime_fd);
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      for( int i= 0; i < EM_DRM_HANDLE_MAX; ++i )
+      {
+         if ( dev->dev.drm.handles[i].fd == -1 )
+         {
+            hndl= dev->dev.drm.handles[i].handle;
+            dev->dev.drm.handles[i].fd= prime_fd;
+            dev->dev.drm.handles[i].fbId= 0;
+            rc= 0;
+            break;
+         }
+      }
+   }
+
+   *handle= hndl;
+
+   return rc;
+}
+
 int drmModeAddFB( int fd, uint32_t width, uint32_t height,
                   uint8_t depth, uint8_t bpp, uint32_t pitch,
                   uint32_t bo_handle, uint32_t *buf_id )
@@ -3027,6 +3088,103 @@ int drmModeAddFB( int fd, uint32_t width, uint32_t height,
       {
          TRACE1("bo_handle %u is bo %p", bo_handle, bo);
          rc= 0;
+      }
+   }
+
+   return rc;
+}
+
+int drmModeAddFB2( int fd, uint32_t width, uint32_t height,
+                   uint32_t pixel_format, const uint32_t bo_handles[4],
+                   const uint32_t pitches[4], const uint32_t offsets[4],
+                   uint32_t *buf_id, uint32_t flags )
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+   uint32_t fbId= 0;
+
+   TRACE1("drmModeAddFB2: fd %d %dx%d handles (%u, %u, %u, %u)",
+          fd, width, height, bo_handles[0], bo_handles[1], bo_handles[2], bo_handles[3] );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      bool haveHandle[4];
+      bool foundHandle[4];
+      rc= 0;
+      for( int i= 0; i < 4; ++i )
+      {
+         haveHandle[i]= false;
+         foundHandle[i]= false;
+         if ( bo_handles[i] != 0 )
+         {
+            haveHandle[i]= true;
+            for( int j= 0; j < EM_DRM_HANDLE_MAX; ++j )
+            {
+               if ( dev->dev.drm.handles[j].handle == bo_handles[i] )
+               {
+                  foundHandle[i]= true;
+                  break;
+               }
+            }
+         }
+         if ( haveHandle[i] && !foundHandle[i] )
+         {
+            rc= -1;
+            break;
+         }
+      }
+      if ( rc == 0 )
+      {
+         fbId= ++dev->dev.drm.nextId;
+         for( int i= 0; i < 4; ++i )
+         {
+            for( int j= 0; j < EM_DRM_HANDLE_MAX; ++j )
+            {
+               if ( dev->dev.drm.handles[j].handle == bo_handles[i] )
+               {
+                  dev->dev.drm.handles[j].fbId= fbId;
+               }
+            }
+         }
+      }
+   }
+
+   *buf_id= fbId;
+
+   return rc;
+}
+
+int drmModeRmFB( int fd, uint32_t bufferId )
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+
+   TRACE1("drmModeRmFB: fd %d bufferId %u", fd, bufferId );
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      for( std::vector<struct gbm_bo*>::iterator it= dev->ctx->gbmBuffs.begin();
+           it != dev->ctx->gbmBuffs.end();
+           ++it )
+      {
+         if ( (*it)->fbId == bufferId )
+         {
+            rc= 0;
+            break;
+         }
+      }
+      if ( rc != 0 )
+      {
+         for( int i= 0; i < EM_DRM_HANDLE_MAX; ++i )
+         {
+            if ( bufferId= dev->dev.drm.handles[i].fbId )
+            {
+               dev->dev.drm.handles[i].fbId= 0;
+               rc= 0;
+            }
+         }
       }
    }
 
