@@ -2549,6 +2549,68 @@ exit:
    return dev;
 }
 
+drmVersionPtr drmGetVersion(int fd)
+{
+   drmVersionPtr ver= 0;
+   EMDevice *dev= 0;
+
+   TRACE1("drmGetVersion: fd %d", fd);
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      ver= calloc( 1, sizeof(struct drm_version) );
+      if ( ver )
+      {
+         ver->version_major= 1;
+         ver->version_minor= 0;
+         ver->version_patchlevel= 0;
+
+         ver->name= strdup("meson");
+         if ( ver->name )
+         {
+            ver->name_len= strlen(ver->name);
+         }
+
+         ver->date= strdup("20180321");
+         if ( ver->date )
+         {
+            ver->date_len= strlen(ver->date);
+         }
+
+         ver->desc= strdup("Amlogic Meson DRM driver");
+         if ( ver->desc )
+         {
+            ver->desc_len= strlen(ver->desc);
+         }
+      }
+   }
+
+   return ver;
+}
+
+void drmFreeVersion( drmVersionPtr ver )
+{
+   TRACE1("drmFreeVersion: ver %p", ver);
+
+   if ( ver )
+   {
+      if ( ver->name )
+      {
+         free( ver->name );
+      }
+      if ( ver->date )
+      {
+         free( ver->date );
+      }
+      if ( ver->desc )
+      {
+         free( ver->desc );
+      }
+      free( ver );
+   }
+}
+
 drmModeResPtr drmModeGetResources(int fd)
 {
    drmModeRes *res= 0;

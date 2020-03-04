@@ -1532,6 +1532,8 @@ static WstGLCtx *wstInitCtx( void )
    ctx= (WstGLCtx*)calloc( 1, sizeof(WstGLCtx) );
    if ( ctx )
    {
+      drmVersionPtr drmver= 0;
+
       pthread_mutex_init( &ctx->mutex, 0 );
       ctx->refCnt= 1;
       #ifndef WESTEROS_GL_NO_PLANES
@@ -1558,6 +1560,17 @@ static WstGLCtx *wstInitCtx( void )
       #ifdef DRM_USE_NATIVE_FENCE
       ctx->nativeOutputFenceFd= -1;
       #endif
+
+      drmver= drmGetVersion( ctx->drmFd );
+      if ( drmver )
+      {
+         DEBUG("westeros-gl: drmGetVersion: %d.%d.%d name (%.*s) date (%.*s) desc (%.*s)",
+               drmver->version_major, drmver->version_minor, drmver->version_patchlevel,
+               drmver->name_len, drmver->name,
+               drmver->date_len, drmver->date,
+               drmver->desc_len, drmver->desc );
+         drmFreeVersion( drmver );
+      }
 
       if ( ctx->usePlanes )
       {
