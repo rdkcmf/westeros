@@ -1074,7 +1074,6 @@ static gboolean gst_westeros_sink_query(GstElement *element, GstQuery *query)
                     if ( GST_FORMAT_TIME == format )
                     {
                        GST_DEBUG_OBJECT(sink, "POSITION: %" GST_TIME_FORMAT, GST_TIME_ARGS (position));
-                       g_print("POSITION: %" GST_TIME_FORMAT, GST_TIME_ARGS (position));
                     }
                  }
                  return rc;
