@@ -1,0 +1,56 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.16 Release Notes
+------------------------------
+
+Date: Mar 6, 2020
+Tag: Westeros-1.01.16
+Changes:
+
+-Fix compilation error
+brcm: allow building with new Broadcom SDK versions where NXPL_CreateCompatiblePixmap no longer
+exists while still supporting older SDK versions still in use.
+
+-Fix handle leak in drm video server
+drm: use DRM_IOCTL_GEM_CLOSE to release handles obtained from drmPrimeFDToHandle
+
+-Changes for building with Yocto 3.1
+build: Changes to configure.ac files to fix build issues with Yocto 3.1
+
+-V4l2 updates:
+v4l2: updates to v4l2 westerossink:
+-handle caps received prior to opening driver
+-fix munumap issue
+-fix sync issue on shutdown
+
+-Ensure capture thread is stopped
+brcm: with brcm westerossink, if capture thread is started and the transition to paused state
+doesn't complete it needs to be stopped before the element is finalized
+
+-Adjust locking in v4l2 sink
+v4l2: Adjust locking in v4l2 westerosisnk to fix some crashes
+
+-Enhance drm emulation for videoserver automated testing
+test: expand drm emulation in automated test to support testing of westeros video server
+
+-v4l2 update: fix input format selection from caps
+v4l2: Fix v4l2 westerossink abilit to set v4l2 input format based on set caps
+
+-Query and log drm version
+drm: Add code to query and log detected drm version
+
+-Remove unconditional position log
+sink: remove an unconditional debug log
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
