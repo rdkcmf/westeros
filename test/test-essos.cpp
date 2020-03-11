@@ -2812,6 +2812,8 @@ bool testCaseEssosTerminateListener( EMCTX *emctx )
 
 exit:
 
+   unsetenv( "WAYLAND_DISPLAY" );
+
    EssContextDestroy( ctx );
 
    if ( wctx )

@@ -1063,21 +1063,6 @@ static gboolean gst_westeros_sink_query(GstElement *element, GstQuery *query)
                        return TRUE;
                    }
                }
-               if ( gst_base_sink_get_sync(GST_BASE_SINK(sink)) )
-               {
-                 gboolean rc= GST_ELEMENT_CLASS(parent_class)->query (element, query);
-                 if ( rc == TRUE )
-                 {
-                    GstFormat format;
-                    gint64 position;
-                    gst_query_parse_position( query, &format, &position );
-                    if ( GST_FORMAT_TIME == format )
-                    {
-                       GST_DEBUG_OBJECT(sink, "POSITION: %" GST_TIME_FORMAT, GST_TIME_ARGS (position));
-                    }
-                 }
-                 return rc;
-               }
                LOCK( sink );
                gint64 position= sink->position;
                UNLOCK( sink );
