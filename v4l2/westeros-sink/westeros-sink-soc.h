@@ -121,6 +121,8 @@ struct _GstWesterosSinkSoc
    int videoWidth;
    int videoHeight;
 
+   gboolean frameStepOnPreroll;
+
    #ifdef GLIB_VERSION_2_32 
    GMutex mutex;
    #else

@@ -58,6 +58,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
+  PROP_FRAME_STEP_ON_PREROLL,
   PROP_ENABLE_TEXTURE
 };
 enum
@@ -97,6 +98,7 @@ static void wstDecoderReset( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
+static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static int ioctl_wrapper( int fd, int request, void* arg );
 
 static long long getCurrentTimeMillis(void)
@@ -125,6 +127,7 @@ static const struct wl_sb_listener sbListener = {
 void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
 {
    GObjectClass *gobject_class= (GObjectClass *) klass;
+   GstBaseSinkClass *gstbasesink_class= (GstBaseSinkClass *) klass;
 
    gst_element_class_set_static_metadata( GST_ELEMENT_CLASS(klass),
                                           "Westeros Sink",
@@ -133,10 +136,17 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                           "Comcast" );
    wstDiscoverVideoDecoder(klass);
 
+   gstbasesink_class->preroll= GST_DEBUG_FUNCPTR(prerollSinkSoc);
+
    g_object_class_install_property (gobject_class, PROP_DEVICE,
    g_param_spec_string ("device",
                          "device location",
                          "Location of the device", gDeviceName, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_FRAME_STEP_ON_PREROLL,
+     g_param_spec_boolean ("frame-step-on-preroll",
+                           "frame step on preroll",
+                           "allow frame stepping on preroll into pause", FALSE, G_PARAM_READWRITE));
 
    g_object_class_install_property (gobject_class, PROP_ENABLE_TEXTURE,
      g_param_spec_boolean ("enable-texture",
@@ -240,6 +250,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoY= sink->windowY;
    sink->soc.videoWidth= sink->windowWidth;
    sink->soc.videoHeight= sink->windowHeight;
+   sink->soc.frameStepOnPreroll= FALSE;
 
    /* Request caps updates */
    sink->passCaps= TRUE;
@@ -302,6 +313,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
          }
          break;
+      case PROP_FRAME_STEP_ON_PREROLL:
+         {
+            sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
+            break;
+         }
       case PROP_ENABLE_TEXTURE:
          {
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
@@ -323,6 +339,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
    {
       case PROP_DEVICE:
          g_value_set_string(value, sink->soc.devname);
+         break;
+      case PROP_FRAME_STEP_ON_PREROLL:
+         g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
@@ -436,8 +455,6 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
    wstStartEvents( sink );
 
-   wstSetupInput( sink );
-
    if ( !sink->soc.useCaptureOnly )
    {
       sink->soc.conn= wstCreateVideoClientConnection( sink, DEFAULT_VIDEO_SERVER );
@@ -541,6 +558,14 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
    sink->soc.quitVideoOutputThread= TRUE;
    sink->soc.quitEOSDetectionThread= TRUE;
    sink->soc.quitDispatchThread= TRUE;
+   if ( sink->display )
+   {
+      int fd= wl_display_get_fd( sink->display );
+      if ( fd >= 0 )
+      {
+         shutdown( fd, SHUT_RDWR );
+      }
+   }
 
    wstStopEvents( sink );
 
@@ -707,6 +732,11 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       int inSize, offset, avail, copylen;
       unsigned char *inData;
 
+      if ( !sink->soc.formatsSet )
+      {
+         wstSetupInput( sink );
+      }
+
       #ifdef USE_GST1
       GstMapInfo map;
       gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ);
@@ -721,10 +751,29 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       if ( GST_BUFFER_PTS_IS_VALID(buffer) )
       {
+         guint64 prevPTS;
+
          nanoTime= GST_BUFFER_PTS(buffer);
          LOCK(sink)
-         sink->position= nanoTime;
-         sink->currentPTS= ((sink->position * 90000LL)/GST_SECOND);
+         prevPTS= sink->currentPTS;
+         sink->currentPTS= ((nanoTime * 90000LL)/GST_SECOND);
+         if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
+         {
+            sink->firstPTS= sink->currentPTS;
+            sink->prevPositionSegmentStart = sink->positionSegmentStart;
+            GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
+         }
+         if ( sink->currentPTS != 0 || sink->soc.frameInCount == 0 )
+         {
+            if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
+            {
+               /* If we have hit a discontinuity that doesn't look like rollover, then
+                  treat this as the case of looping a short clip.  Adjust our firstPTS
+                  to keep our running time correct. */
+               sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
+            }
+            sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+         }
          UNLOCK(sink);
       }
 
@@ -810,6 +859,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 {
    GST_DEBUG("gst_westeros_sink_soc_flush");
    LOCK(sink);
+   sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
    UNLOCK(sink);
 }
@@ -2809,6 +2859,20 @@ static gpointer wstDispatchThread(gpointer data)
       GST_DEBUG("dispatchThread: exit");
    }
    return NULL;
+}
+
+static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
+{
+   GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
+
+   if ( (GST_BASE_SINK(sink)->have_preroll == FALSE) || sink->soc.frameStepOnPreroll )
+   {
+      gst_westeros_sink_soc_render( sink, buffer );
+   }
+
+   GST_INFO("preroll ok");
+
+   return GST_FLOW_OK;
 }
 
 static int ioctl_wrapper( int fd, int request, void* arg )

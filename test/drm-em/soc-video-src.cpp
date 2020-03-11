@@ -93,6 +93,7 @@ static void em_video_src_init(EMVideoSrc* src)
    src->paused= true;
    src->frameNumber= 0;
    src->needSegment= true;
+   src->needStep= false;
    src->segRate= 1.0;
    src->segAppliedRate= 1.0;
    src->segStartTime= 0;
@@ -359,12 +360,12 @@ static void emVideoSrcLoop( GstPad *pad )
    pthread_mutex_lock( &src->mutex );
    if ( src->paused  )
    {
-      int decoderFrameNumber= EMSimpleVideoDecoderGetFrameNumber( src->dec );
-      if ( src->frameNumber != decoderFrameNumber )
+      needStep= src->needStep;
+      if ( needStep )
       {
-         src->frameNumber= decoderFrameNumber;
-         needStep= true;
+         ++src->frameNumber;
       }
+      src->needStep= false;
    }
    if ( !src->paused || src->needSegment || needStep )
    {
@@ -407,7 +408,7 @@ static void emVideoSrcLoop( GstPad *pad )
             gst_segment_init( &segment, GST_FORMAT_TIME );
             segment.rate= src->segRate;
             segment.applied_rate= src->segAppliedRate;
-            segment.start= src->segStartTime;
+            segment.start= src->segStartTime+(EMSimpleVideoDecoderGetBasePTS(src->dec)/90000.0)*GST_SECOND;
             segment.stop= src->segStopTime;
             segment.position= src->segStartTime;
 
@@ -418,7 +419,7 @@ static void emVideoSrcLoop( GstPad *pad )
             src->needSegment= false;
          }
 
-         nanoTime= (src->frameNumber/frameRate)*GST_SECOND;
+         nanoTime= ((EMSimpleVideoDecoderGetBasePTS(src->dec)/90000.0)+(src->frameNumber/frameRate))*GST_SECOND;
 
          GST_BUFFER_PTS(buffer)= nanoTime;
 
@@ -517,4 +518,16 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
          GST_PAD_STREAM_UNLOCK(pad);
       }
    }
+}
+
+void videoSrcDoStep( GstElement *element )
+{
+   EMVideoSrc *src= EM_VIDEO_SRC(element);
+
+   pthread_mutex_lock( &src->mutex );
+
+   GST_DEBUG("need step");
+   src->needStep= true;
+
+   pthread_mutex_unlock( &src->mutex );
 }

@@ -856,7 +856,7 @@ static void *wstVideoServerConnectionThread( void *arg )
    }
 
 exit:
-   if ( conn->videoPlane )
+   if ( conn->videoPlane && gCtx )
    {
       pthread_mutex_lock( &gCtx->mutex );
 
@@ -1022,7 +1022,6 @@ static void *wstVideoServerThread( void *arg )
    VideoServerCtx *server= (VideoServerCtx*)arg;
 
    DEBUG("wstVideoServerThread: enter");
-   server->threadStarted= true;
 
    while( !server->threadStopRequested )
    {
@@ -1034,34 +1033,41 @@ static void *wstVideoServerThread( void *arg )
       fd= accept4( server->socketFd, (struct sockaddr *)&addr, &addrLen, SOCK_CLOEXEC );
       if ( fd >= 0 )
       {
-         VideoServerConnection *conn= 0;
-
-         DEBUG("video server received connection: fd %d", fd);
-
-         conn= wstCreateVideoServerConnection( server, fd );
-         if ( conn )
+         if ( !server->threadStopRequested )
          {
-            int i;
-            DEBUG("created video server connection %p for fd %d", conn, fd );
-            pthread_mutex_lock( &server->mutex );
-            for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
+            VideoServerConnection *conn= 0;
+
+            DEBUG("video server received connection: fd %d", fd);
+
+            conn= wstCreateVideoServerConnection( server, fd );
+            if ( conn )
             {
-               if ( conn->server->connections[i] == 0 )
+               int i;
+               DEBUG("created video server connection %p for fd %d", conn, fd );
+               pthread_mutex_lock( &server->mutex );
+               for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
                {
-                  conn->server->connections[i]= conn;
-                  break;
+                  if ( conn->server->connections[i] == 0 )
+                  {
+                     conn->server->connections[i]= conn;
+                     break;
+                  }
                }
+               if ( i >= MAX_VIDEO_CONNECTIONS )
+               {
+                  ERROR("too many video connections");
+                  wstDestroyVideoServerConnection( conn );
+               }
+               pthread_mutex_unlock( &server->mutex );
             }
-            if ( i >= MAX_VIDEO_CONNECTIONS )
+            else
             {
-               ERROR("too many video connections");
-               wstDestroyVideoServerConnection( conn );
+               ERROR("failed to create video server connection for fd %d", fd);
             }
-            pthread_mutex_unlock( &server->mutex );
          }
          else
          {
-            ERROR("failed to create video server connection for fd %d", fd);
+            close( fd );
          }
       }
       else
@@ -1160,6 +1166,7 @@ static bool wstInitVideoServer( VideoServerCtx *server )
       ERROR("wstInitVideoServer: Error: unable to start server thread: rc %d errno %d", rc, errno);
       goto exit;
    }
+   server->threadStarted= true;
 
    result= true;
 
@@ -1181,16 +1188,6 @@ static void wstTermVideoServer( VideoServerCtx *server )
          return;
       }
 
-      for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
-      {
-         VideoServerConnection *conn= server->connections[i];
-         if ( conn )
-         {
-            wstDestroyVideoServerConnection( conn );
-            server->connections[i]= 0;
-         }
-      }
-
       if ( server->socketFd >= 0 )
       {
          shutdown( server->socketFd, SHUT_RDWR );
@@ -1199,7 +1196,19 @@ static void wstTermVideoServer( VideoServerCtx *server )
       if ( server->threadStarted )
       {
          server->threadStopRequested= true;
+         pthread_mutex_unlock( &server->mutex );
          pthread_join( server->threadId, NULL );
+         pthread_mutex_lock( &server->mutex );
+      }
+
+      for( i= 0; i < MAX_VIDEO_CONNECTIONS; ++i )
+      {
+         VideoServerConnection *conn= server->connections[i];
+         if ( conn )
+         {
+            wstDestroyVideoServerConnection( conn );
+            server->connections[i]= 0;
+         }
       }
 
       if ( server->socketFd >= 0 )

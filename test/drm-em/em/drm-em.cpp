@@ -210,9 +210,10 @@ typedef enum _EM_DEVICE_TYPE
 #define EM_DRM_MODE_MAX (32)
 #define EM_DRM_HANDLE_MAX (32)
 #define EM_V4L2_FMT_MAX (32)
-#define EM_V4L2_INBUFF_MAX (2)
-#define EM_V4L2_OUTBUFF_MAX (6)
+#define EM_V4L2_INBUFF_MAX (4)
+#define EM_V4L2_OUTBUFF_MAX (12)
 #define EM_V4L2_MAP_MAX (EM_V4L2_INBUFF_MAX+(2*EM_V4L2_OUTBUFF_MAX))
+#define EM_V4L2_MIN_BUFFERS_FOR_CAPTURE (5)
 #define EM_V4L2_MIN_WIDTH (64)
 #define EM_V4L2_MAX_WIDTH (3840)
 #define EM_V4L2_STEP_WIDTH (8)
@@ -1152,6 +1153,11 @@ static void EMV4l2DeviceInit( EMDevice *d )
       d->dev.v4l2.outputBufferFds[i*2+1].fd= -1;
       d->dev.v4l2.outputBufferFds[i*2+1].fd_os= -1;
    }
+
+   for ( i= 0; i < EM_V4L2_MAP_MAX; ++i )
+   {
+      d->dev.v4l2.map[i]= 0;
+   }
 }
 
 static void EMV4l2DeviceTerm( EMDevice *d )
@@ -1429,6 +1435,7 @@ static int EMV4l2MapBuffer( EMDevice *dev, int length )
 {
    int offset= -1;
    int i;
+   pthread_mutex_lock( &gMutex );
    for ( i= 0; i < EM_V4L2_MAP_MAX; ++i )
    {
       if ( dev->dev.v4l2.map[i] == 0 )
@@ -1441,16 +1448,19 @@ static int EMV4l2MapBuffer( EMDevice *dev, int length )
          }
       }
    }
+   pthread_mutex_unlock( &gMutex );
    return offset;
 }
 
 static void *EMV4l2GetMap( EMDevice *dev, int offset )
 {
    void *map= MAP_FAILED;
+   pthread_mutex_lock( &gMutex );
    if ( (offset >= 0) && (offset < EM_V4L2_MAP_MAX) )
    {
       map= dev->dev.v4l2.map[offset];
    }
+   pthread_mutex_unlock( &gMutex );
    return map;
 }
 
@@ -1458,6 +1468,7 @@ static int EMV4l2ReleaseMap( EMDevice *dev, void *addr )
 {
    int rc= -1;
    int i;
+   pthread_mutex_lock( &gMutex );
    for ( i= 0; i < EM_V4L2_MAP_MAX; ++i )
    {
       if ( dev->dev.v4l2.map[i] == addr )
@@ -1468,6 +1479,7 @@ static int EMV4l2ReleaseMap( EMDevice *dev, void *addr )
          break;
       }
    }
+   pthread_mutex_unlock( &gMutex );
    return rc;
 }
 
@@ -1493,24 +1505,30 @@ static void EMV4l2FreeOutputBuffers( EMDevice *dev )
    {
       for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
       {
-         void *addr= EMV4l2GetMap(dev, dev->dev.v4l2.outputBuffers[i].m.planes[0].m.mem_offset );
-         if ( addr != MAP_FAILED )
+         for( int j= 0; j < 2; ++j )
          {
-            EMV4l2ReleaseMap( dev, addr );
+            void *addr= EMV4l2GetMap(dev, dev->dev.v4l2.outputBuffers[i].m.planes[j].m.mem_offset );
+            if ( addr != MAP_FAILED )
+            {
+               EMV4l2ReleaseMap( dev, addr );
+            }
          }
       }
       for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
       {
-         int fd= dev->dev.v4l2.outputBufferFds[i].fd;
-         if ( fd >= 0 )
+         for( int j= 0; j < 2; ++j )
          {
-            int fd_os= dev->dev.v4l2.outputBufferFds[i].fd_os;
-            if ( fd_os >= 0 )
+            int fd= dev->dev.v4l2.outputBufferFds[i*j+j].fd;
+            if ( fd >= 0 )
             {
-               EMDeviceCloseOS( fd_os );
+               int fd_os= dev->dev.v4l2.outputBufferFds[i*2+j].fd_os;
+               if ( fd_os >= 0 )
+               {
+                  EMDeviceCloseOS( fd_os );
+               }
+               dev->dev.v4l2.outputBufferFds[i*2+j].fd= -1;
+               dev->dev.v4l2.outputBufferFds[i*2+j].fd_os= -1;
             }
-            dev->dev.v4l2.outputBufferFds[i].fd= -1;
-            dev->dev.v4l2.outputBufferFds[i].fd_os= -1;
          }
       }
       dev->dev.v4l2.countOutputBuffers= 0;
@@ -1697,7 +1715,7 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
             switch( ctrl->id )
             {
                case V4L2_CID_MIN_BUFFERS_FOR_CAPTURE:
-                  ctrl->value= EM_V4L2_OUTBUFF_MAX-1;
+                  ctrl->value= EM_V4L2_MIN_BUFFERS_FOR_CAPTURE;
                   break;
                case V4L2_CID_MIN_BUFFERS_FOR_OUTPUT:
                default:
@@ -2186,12 +2204,10 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
             {
                case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
                   dev->dev.v4l2.inputStreaming= false;
-                  EMV4l2FreeInputBuffers( dev );
                   rc= 0;
                   break;
                case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
                   dev->dev.v4l2.outputStreaming= false;
-                  EMV4l2FreeOutputBuffers( dev );
                   rc= 0;
                   break;
                default:
@@ -4793,6 +4809,7 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR (EGLDisplay display, EGLContext
    {
       case EGL_WAYLAND_BUFFER_WL:
       case EGL_NATIVE_PIXMAP_KHR:
+      case EGL_LINUX_DMA_BUF_EXT:
          {
             EMEGLImage *img= 0;
             img= (EMEGLImage*)calloc( 1, sizeof(EMEGLImage));
@@ -4805,9 +4822,6 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR (EGLDisplay display, EGLContext
             image= (EGLImageKHR)img;
             gEGLError= EGL_SUCCESS;
          }
-         break;
-      case EGL_LINUX_DMA_BUF_EXT:
-         TRACE1("eglCreateImageKHR: target EGL_LINUX_DMA_BUF_EXT");
          break;
       default:
          WARNING("eglCreateImageKHR: unsupported target %X", target);
@@ -5443,6 +5457,10 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
                      {
                         bufferId= (((long long)deviceBuffer)&0xFFFFFFFF);
                      }
+                  }
+                  else if ( img->target == EGL_LINUX_DMA_BUF_EXT )
+                  {
+                     bufferId= 0;
                   }
                   else if ( img->target == EGL_NATIVE_PIXMAP_KHR )
                   {
