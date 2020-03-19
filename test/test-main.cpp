@@ -246,6 +246,10 @@ TESTCASE genericTests[]=
      "Test Essos create native window API paths",
      testCaseEssosCreateNativeWindow
    },
+   { "testEssosAPIDestroyNativeWindow",
+     "Test Essos destroy native window API paths",
+     testCaseEssosDestroyNativeWindow
+   },
    { "testEssosAPIGetWaylandDisplay",
      "Test Essos get wayland display API paths",
      testCaseEssosGetWaylandDisplay

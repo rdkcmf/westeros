@@ -248,6 +248,13 @@ bool EssContextGetEGLDisplayType( EssCtx *ctx, NativeDisplayType *displayType );
 bool EssContextCreateNativeWindow( EssCtx *ctx, int width, int h, NativeWindowType *nativeWindow );
 
 /**
+ * EssContextDestroyNativeWindow
+ *
+ * Destroys a NativeWindowType value obtained from EssContextCreateNativeWindow.
+ */
+bool EssContextDestroyNativeWindow( EssCtx *ctx, NativeWindowType nativeWindow );
+
+/**
  * EssContextGetWaylandDisplay
  *
  * If the context is initialized and configured to run as a Wayland app. this call
