@@ -96,6 +96,7 @@ typedef struct _EssCtx
    bool isWayland;
    bool isInitialized;
    bool isRunning;
+   bool isExternalEGL;
    char lastErrorDetail[ESS_MAX_ERROR_DETAIL];
 
    bool haveMode;
@@ -199,6 +200,7 @@ static void essEGLTerm( EssCtx *ctx );
 static void essInitInput( EssCtx *ctx );
 static void essSetDisplaySize( EssCtx *ctx, int width, int height, bool customSafe, int safeX, int safeY, int safeW, int safeH );
 static bool essCreateNativeWindow( EssCtx *ctx, int width, int height );
+static bool essDestroyNativeWindow( EssCtx *ctx, NativeWindowType nw );
 static bool essResize( EssCtx *ctx, int width, int height );
 static void essRunEventLoopOnce( EssCtx *ctx );
 static void essProcessKeyPressed( EssCtx *ctx, int linuxKeyCode );
@@ -768,7 +770,43 @@ bool EssContextCreateNativeWindow( EssCtx *ctx, int width, int height, NativeWin
       if ( result )
       {
          *nativeWindow= ctx->nativeWindow;
+
+         /*
+          * App is creating its EGL environment outside of Essos
+          */
+         if ( !ctx->isExternalEGL )
+         {
+            INFO("essos: app using external EGL");
+            ctx->isExternalEGL= true;
+         }
       }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+exit:
+   return result;
+}
+
+bool EssContextDestroyNativeWindow( EssCtx *ctx, NativeWindowType nativeWindow )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( !ctx->isInitialized )
+      {
+         sprintf( ctx->lastErrorDetail,
+                  "Bad state.  Must initialize context before calling" );
+         pthread_mutex_unlock( &ctx->mutex );
+         goto exit;
+      }
+
+      essDestroyNativeWindow( ctx, nativeWindow );
+
+      result= true;
 
       pthread_mutex_unlock( &ctx->mutex );
    }
@@ -951,11 +989,14 @@ bool EssContextStart( EssCtx *ctx )
          pthread_mutex_lock( &ctx->mutex );
       }
 
-      result= essEGLInit( ctx );
-      if ( !result )
+      if ( !ctx->isExternalEGL )
       {
-         pthread_mutex_unlock( &ctx->mutex );
-         goto exit;
+         result= essEGLInit( ctx );
+         if ( !result )
+         {
+            pthread_mutex_unlock( &ctx->mutex );
+            goto exit;
+         }
       }
 
       essInitInput( ctx );
@@ -1544,6 +1585,50 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
 #endif
          result= true;
          #endif
+      }
+   }
+
+exit:
+   return result;
+}
+
+static bool essDestroyNativeWindow( EssCtx *ctx, NativeWindowType nw )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      if ( nw == ctx->nativeWindow )
+      {
+         if ( ctx->isWayland )
+         {
+            #ifdef HAVE_WAYLAND
+            if ( ctx->wleglwindow )
+            {
+               wl_egl_window_destroy( ctx->wleglwindow );
+               ctx->wleglwindow= 0;
+            }
+
+            if ( ctx->wlsurface )
+            {
+               wl_surface_destroy( ctx->wlsurface );
+               ctx->wlsurface= 0;
+            }
+            #endif
+         }
+         else
+         {
+            #ifdef HAVE_WESTEROS
+            if ( ctx->nativeWindow )
+            {
+               WstGLDestroyNativeWindow( ctx->glCtx, (void*)ctx->nativeWindow );
+               ctx->nativeWindow= 0;
+            }
+            #endif
+         }
+
+         ctx->nativeWindow= 0;
+         result= true;
       }
    }
 

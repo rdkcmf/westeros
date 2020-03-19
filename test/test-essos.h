@@ -35,6 +35,7 @@ bool testCaseEssosSwapInterval( EMCTX *emctx );
 bool testCaseEssosInit( EMCTX *emctx );
 bool testCaseEssosGetEGLDisplayType( EMCTX *emctx );
 bool testCaseEssosCreateNativeWindow( EMCTX *emctx );
+bool testCaseEssosDestroyNativeWindow( EMCTX *emctx );
 bool testCaseEssosGetWaylandDisplay( EMCTX *emctx );
 bool testCaseEssosStart( EMCTX *emctx );
 bool testCaseEssosEventLoopThrottle( EMCTX *emctx );

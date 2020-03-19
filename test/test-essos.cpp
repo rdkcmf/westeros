@@ -1129,6 +1129,148 @@ exit:
    return testResult;
 }
 
+bool testCaseEssosDestroyNativeWindow( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   NativeWindowType windowType;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   int windowWidth, windowHeight;
+
+   windowWidth= WINDOW_WIDTH;
+   windowHeight= WINDOW_HEIGHT;
+
+   result= EssContextDestroyNativeWindow( (EssCtx*)0, &windowType );
+   if ( result )
+   {
+      EMERROR("EssContextDestroyNativeWindow did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, false );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextDestroyNativeWindow( ctx, windowType );
+   if ( result )
+   {
+      EMERROR("EssContextDestroyNativeWindow did not fail with uninitialized context");
+      goto exit;
+   }
+
+   result= EssContextInit( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextInit failed");
+      goto exit;
+   }
+
+   result= EssContextCreateNativeWindow( ctx, windowWidth, windowHeight, &windowType );
+   if ( result == false )
+   {
+      EMERROR("EssContextCreateNativeWindow failed");
+      goto exit;
+   }
+
+   result= EssContextDestroyNativeWindow( ctx, windowType );
+   if ( result == false )
+   {
+      EMERROR("EssContextDestroyNativeWindow failed");
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextInit( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextInit failed");
+      goto exit;
+   }
+
+   result= EssContextCreateNativeWindow( ctx, windowWidth, windowHeight, &windowType );
+   if ( result == false )
+   {
+      EMERROR("EssContextCreateNativeWindow failed");
+      goto exit;
+   }
+
+   result= EssContextDestroyNativeWindow( ctx, windowType );
+   if ( result == false )
+   {
+      EMERROR("EssContextDestroyNativeWindow failed");
+      goto exit;
+   }
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   testResult= true;
+
+exit:
+
+   EssContextDestroy( ctx );
+
+   WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
 bool testCaseEssosGetWaylandDisplay( EMCTX *emctx )
 {
    bool testResult= false;
