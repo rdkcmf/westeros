@@ -374,7 +374,7 @@ exit:
    return testResult;
 }
 
-bool testCaseEssosEGLSurfaceAttributes( EMCTX *emctx )
+bool testCaseEssosEGLConfigAttributes( EMCTX *emctx )
 {
    bool testResult= false;
    bool result;
@@ -386,6 +386,113 @@ bool testCaseEssosEGLSurfaceAttributes( EMCTX *emctx )
 
    attr[0]= EGL_DEPTH_SIZE;
    attr[1]= 24;
+   attr[2]= EGL_NONE;
+
+   attrSize= 3;
+
+   result= EssContextSetEGLConfigAttributes( (EssCtx*)0, attr, attrSize );
+   if ( result )
+   {
+      EMERROR("EssContextSetEGLConfigAttributes did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextGetEGLConfigAttributes( ctx, &defaultValue, &defaultSize );
+   if ( result == false )
+   {
+      EMERROR("EssContextGetEGLConfigAttributes failed");
+      goto exit;
+   }
+
+   result= EssContextSetEGLConfigAttributes( ctx, attr, attrSize );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetEGLConfigAttributes failed");
+      goto exit;
+   }
+
+   result= EssContextGetEGLConfigAttributes( ctx, 0, &valueSize );
+   if ( result )
+   {
+      EMERROR("EssContextSetEGLConfigAttributes did not fail with null attr pointer");
+      goto exit;
+   }
+
+   result= EssContextGetEGLConfigAttributes( ctx, &valueAttr, 0 );
+   if ( result )
+   {
+      EMERROR("EssContextSetEGLConfigAttributes did not fail with null size pointer");
+      goto exit;
+   }
+
+   result= EssContextGetEGLConfigAttributes( ctx, 0, 0 );
+   if ( result )
+   {
+      EMERROR("EssContextSetEGLConfigAttributes did not fail with null attr and size pointers");
+      goto exit;
+   }
+
+   result= EssContextGetEGLConfigAttributes( ctx, &valueAttr, &valueSize );
+   if ( result == false )
+   {
+      EMERROR("EssContextGetEGLConfigAttributes failed");
+      goto exit;
+   }
+
+   if ( (valueSize != attrSize) && (memcmp( valueAttr, attr, attrSize*sizeof(EGLint) ) != 0 ) )
+   {
+      EMERROR("EssContextGetEGLConfigAttributes return unexpected values");
+      goto exit;
+   }
+
+   result= EssContextSetEGLConfigAttributes( ctx, 0, 0 );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetEGLConfigAttributes failed");
+      goto exit;
+   }
+
+   result= EssContextGetEGLConfigAttributes( ctx, &valueAttr, &valueSize );
+   if ( result == false )
+   {
+      EMERROR("EssContextGetEGLConfigAttributes failed");
+      goto exit;
+   }
+
+   if ( (valueSize != defaultSize) && (memcmp( valueAttr, defaultValue, defaultSize*sizeof(EGLint) ) != 0 ) )
+   {
+      EMERROR("EssContextGetEGLConfigAttributes return unexpected values");
+      goto exit;
+   }
+
+   EssContextDestroy( ctx );
+
+   testResult= true;
+
+exit:
+
+   return testResult;
+}
+
+bool testCaseEssosEGLSurfaceAttributes( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   EGLint attr[3];
+   EGLint attrSize;
+   EGLint *valueAttr, *defaultValue;
+   EGLint valueSize, defaultSize;
+
+   attr[0]= EGL_SWAP_BEHAVIOR;
+   attr[1]= EGL_BUFFER_PRESERVED;
    attr[2]= EGL_NONE;
 
    attrSize= 3;

@@ -214,6 +214,10 @@ TESTCASE genericTests[]=
      "Test Essos key repeat period API paths",
      testCaseEssosSetKeyRepeatPeriod
    },
+   { "testEssosAPIEGLConfigAttributes",
+     "Test Essos EGL config attributes API paths",
+     testCaseEssosEGLConfigAttributes
+   },
    { "testEssosAPIEGLSurfaceAttributes",
      "Test Essos EGL surface attributes API paths",
      testCaseEssosEGLSurfaceAttributes
