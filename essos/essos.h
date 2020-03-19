@@ -143,6 +143,23 @@ bool EssContextGetUseDirect( EssCtx *ctx );
 bool EssContextSetName( EssCtx *ctx, const char *name );
 
 /**
+ * EssContextSetEGLConfigAttributes
+ *
+ * Specifies a set of EGL surface attributes to be used as constraints
+ * when choosing an EGL config.  This call can be made to replace the default
+ * attributes used by Essos.
+ */
+bool EssContextSetEGLConfigAttributes( EssCtx *ctx, EGLint *attrs, EGLint size );
+
+/**
+ * EssContextGetEGLConfigAttributes
+ *
+ * Returns the current set of attributes the context is configured to use
+ * when choosing EGL config.
+ */
+bool EssContextGetEGLConfigAttributes( EssCtx *ctx, EGLint **attrs, EGLint *size );
+
+/**
  * EssContextSetEGLSurfaceAttributes
  *
  * Specifies a set of EGL surface attributes to be used when creating

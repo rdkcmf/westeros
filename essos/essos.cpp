@@ -154,6 +154,8 @@ typedef struct _EssCtx
    EGLConfig eglConfig;
    EGLint *eglCtxAttr;
    EGLint eglCtxAttrSize;
+   EGLint *eglSurfAttr;
+   EGLint eglSurfAttrSize;
    EGLContext eglContext;
    EGLSurface eglSurfaceWindow;
    EGLint eglSwapInterval;
@@ -237,6 +239,12 @@ static EGLint gDefaultEGLCfgAttr[]=
   EGL_STENCIL_SIZE, 0,
   EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
   EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+  EGL_NONE
+};
+
+static EGLint gDefaultEGLSurfAttrSize= 1;
+static EGLint gDefaultEGLSurfAttr[]=
+{
   EGL_NONE
 };
 
@@ -460,7 +468,7 @@ exit:
    return result;
 }
 
-bool EssContextSetEGLSurfaceAttributes( EssCtx *ctx, EGLint *attrs, EGLint size )
+bool EssContextSetEGLConfigAttributes( EssCtx *ctx, EGLint *attrs, EGLint size )
 {
    bool result= false;
 
@@ -479,7 +487,7 @@ bool EssContextSetEGLSurfaceAttributes( EssCtx *ctx, EGLint *attrs, EGLint size 
    return result;
 }
 
-bool EssContextGetEGLSurfaceAttributes( EssCtx *ctx, EGLint **attrs, EGLint *size )
+bool EssContextGetEGLConfigAttributes( EssCtx *ctx, EGLint **attrs, EGLint *size )
 {
    bool result= false;
 
@@ -500,6 +508,45 @@ bool EssContextGetEGLSurfaceAttributes( EssCtx *ctx, EGLint **attrs, EGLint *siz
    return result;
 }
 
+bool EssContextSetEGLSurfaceAttributes( EssCtx *ctx, EGLint *attrs, EGLint size )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->eglSurfAttr= (attrs ? attrs : gDefaultEGLSurfAttr);
+      ctx->eglSurfAttrSize= (attrs ? size : gDefaultEGLSurfAttrSize);
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
+   }
+
+   return result;
+}
+
+bool EssContextGetEGLSurfaceAttributes( EssCtx *ctx, EGLint **attrs, EGLint *size )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      if ( attrs && size )
+      {
+         *attrs= ctx->eglSurfAttr;
+         *size= ctx->eglSurfAttrSize;
+         result= true;
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
 
 bool EssContextSetEGLContextAttributes( EssCtx *ctx, EGLint *attrs, EGLint size )
 {
@@ -1350,7 +1397,7 @@ static bool essEGLInit( EssCtx *ctx )
    ctx->eglSurfaceWindow= eglCreateWindowSurface( ctx->eglDisplay,
                                                   ctx->eglConfig,
                                                   ctx->nativeWindow,
-                                                  NULL );
+                                                  ctx->eglSurfAttr );
    if ( ctx->eglSurfaceWindow == EGL_NO_SURFACE )
    {
       sprintf( ctx->lastErrorDetail,
