@@ -117,12 +117,6 @@ static void destroy_shared_pool (SharedPool *sharedPool)
 
 void gst_westeros_sink_soc_term (GstBaseSink *base_sink)
 {
-   GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
-
-   if(sink->soc.wos_shm)
-      wl_shm_destroy(sink->soc.wos_shm);
-   if(sink->soc.shared_pool) 
-      destroy_shared_pool (sink->soc.shared_pool);
 }
 void gst_westeros_sink_soc_update_video_position(GstWesterosSink *sink)
 {
@@ -157,6 +151,16 @@ bool gst_westeros_sink_soc_playing_to_paused(GstWesterosSink *sink, gboolean *pa
 
 bool gst_westeros_sink_soc_paused_to_ready (GstWesterosSink *sink, gboolean *passToDefault)
 {
+   if(sink->soc.wos_shm)
+   {
+      wl_shm_destroy(sink->soc.wos_shm);
+      sink->soc.wos_shm= 0;
+   }
+   if(sink->soc.shared_pool)
+   {
+      destroy_shared_pool (sink->soc.shared_pool);
+      sink->soc.shared_pool= 0;
+   }
    return true;
 }
 

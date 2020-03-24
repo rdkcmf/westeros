@@ -323,19 +323,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       goto exit;
    }
    sink->soc.omxIsInit= true;
-
-   /*
-    * The userland EGL implementation has an implicit restriction of each process only being able to
-    * interact as a wayland-egl client of one wayland display.  This breaks applications that use
-    * wayland-egl for graphics and also use westeros-sink for video.  To workaround this, the rpi
-    * wesrteros-sink soc code tries to detect and share any existing wl_display connection.
-    */
-   sink->display= khrn_platform_get_wl_display();
-   GST_DEBUG("gst_westeros_sink_soc_init: khrn_platform_get_wl_display returns %p\n", sink->display);
-   if ( sink->display )
-   {
-      sink->soc.sharedWLDisplay= true;
-   }
    
    result= TRUE;
 
@@ -353,20 +340,6 @@ exit:
 
 void gst_westeros_sink_soc_term( GstWesterosSink *sink )
 {
-   if ( sink->soc.sb )
-   {
-      wl_sb_destroy( sink->soc.sb );
-      sink->soc.sb= 0;
-   }
-
-   if ( sink->soc.sharedWLDisplay )
-   {
-      /* We are sharing a wl_display connection.  Clear the reference so the
-       * generic sink term code doesn't destroy the display out from under
-       * the application which is also using the display for graphics */
-      sink->display= 0;
-   }
-
    if ( sink->soc.OMX_Deinit )
    {
       sink->soc.OMX_Deinit();
@@ -1344,6 +1317,19 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
       GST_ERROR("gst_westeros_sink_soc_ready_to_paused: OMX_SendCommand for vidDec setState OMX_StateExecuting: omxerr %x", omxerr );
    }
 
+   /*
+    * The userland EGL implementation has an implicit restriction of each process only being able to
+    * interact as a wayland-egl client of one wayland display.  This breaks applications that use
+    * wayland-egl for graphics and also use westeros-sink for video.  To workaround this, the rpi
+    * wesrteros-sink soc code tries to detect and share any existing wl_display connection.
+    */
+   sink->display= khrn_platform_get_wl_display();
+   GST_DEBUG("gst_westeros_sink_soc_init: khrn_platform_get_wl_display returns %p\n", sink->display);
+   if ( sink->display )
+   {
+      sink->soc.sharedWLDisplay= true;
+   }
+
    sink->soc.playingVideo= true;
       
    result= TRUE;
@@ -1649,6 +1635,20 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
       {
          GST_ERROR("gst_westeros_sink_soc_paused_to_ready: OMX_SendCommand for clock setState OMX_StateIdle: omxerr %x", omxerr );
       }
+   }
+
+   if ( sink->soc.sb )
+   {
+      wl_sb_destroy( sink->soc.sb );
+      sink->soc.sb= 0;
+   }
+
+   if ( sink->soc.sharedWLDisplay )
+   {
+      /* We are sharing a wl_display connection.  Clear the reference so the
+       * generic sink term code doesn't destroy the display out from under
+       * the application which is also using the display for graphics */
+      sink->display= 0;
    }
 
    *passToDefault= false;

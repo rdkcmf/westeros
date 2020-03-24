@@ -62,12 +62,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_term( GstWesterosSink *sink )
 {
-   if ( sink->soc.sb )
-   {
-      wl_sb_destroy( sink->soc.sb );
-      sink->soc.sb= 0;
-   }
-
    //TBD
 }
 
@@ -158,6 +152,12 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
 gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
    LOCK( sink );
+   if ( sink->soc.sb )
+   {
+      wl_sb_destroy( sink->soc.sb );
+      sink->soc.sb= 0;
+   }
+
    sink->videoStarted= FALSE;
    UNLOCK( sink );
    
