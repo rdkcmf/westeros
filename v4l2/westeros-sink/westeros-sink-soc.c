@@ -73,6 +73,7 @@ static guint g_signals[MAX_SIGNAL]= {0};
 
 static gboolean (*queryOrg)(GstElement *element, GstQuery *query)= 0;
 
+static void wstSinkSocStopVideo( GstWesterosSink *sink );
 static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dummySink );
 static void wstDiscoverVideoDecoder( GstWesterosSinkClass *klass );
 static void wstStartEvents( GstWesterosSink *sink );
@@ -278,12 +279,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_term( GstWesterosSink *sink )
 {
-   if ( sink->soc.sb )
-   {
-      wl_sb_destroy( sink->soc.sb );
-      sink->soc.sb= 0;
-   }
-
    if ( sink->soc.devname )
    {
       free( sink->soc.devname );
@@ -396,6 +391,15 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
    WESTEROS_UNUSED(passToDefault);
 
+   result= TRUE;
+
+   return result;
+}
+
+gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   WESTEROS_UNUSED(passToDefault);
+
    int rc;
    struct v4l2_exportbuffer eb;
 
@@ -472,21 +476,12 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
       }
    }
 
-   result= TRUE;
-
-exit:
-   return result;
-}
-
-gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
-{
-   WESTEROS_UNUSED(passToDefault);
-
    LOCK(sink);
    sink->startAfterCaps= TRUE;
    sink->soc.videoPlaying= TRUE;
    UNLOCK(sink);
 
+exit:
    return TRUE;
 }
 
@@ -529,6 +524,7 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
 
 gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
+   wstSinkSocStopVideo( sink );
    LOCK( sink );
    sink->videoStarted= FALSE;
    UNLOCK( sink );
@@ -549,60 +545,7 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
 {
    WESTEROS_UNUSED(sink);
 
-   LOCK(sink);
-   if ( sink->soc.conn )
-   {
-      wstDestroyVideoClientConnection( sink->soc.conn );
-   }
-
-   sink->soc.quitVideoOutputThread= TRUE;
-   sink->soc.quitEOSDetectionThread= TRUE;
-   sink->soc.quitDispatchThread= TRUE;
-   if ( sink->display )
-   {
-      int fd= wl_display_get_fd( sink->display );
-      if ( fd >= 0 )
-      {
-         shutdown( fd, SHUT_RDWR );
-      }
-   }
-
-   wstStopEvents( sink );
-
-   wstTearDownInputBuffers( sink );
-
-   wstTearDownOutputBuffers( sink );
-   UNLOCK(sink);
-
-   sink->soc.prevFrameFd= -1;
-   sink->soc.nextFrameFd= -1;
-   sink->soc.formatsSet= FALSE;
-
-   if ( sink->soc.inputFormats )
-   {
-      free( sink->soc.inputFormats );
-   }
-   if ( sink->soc.outputFormats )
-   {
-      free( sink->soc.outputFormats );
-   }
-   if ( sink->soc.v4l2Fd >= 0 )
-   {
-      close( sink->soc.v4l2Fd );
-      sink->soc.v4l2Fd= -1;
-   }
-
-   if ( sink->soc.videoOutputThread )
-   {
-      g_thread_join( sink->soc.videoOutputThread );
-      sink->soc.videoOutputThread= NULL;
-   }
-
-   if ( sink->soc.eosDetectionThread )
-   {
-      g_thread_join( sink->soc.eosDetectionThread );
-      sink->soc.eosDetectionThread= NULL;
-   }
+   wstSinkSocStopVideo( sink );
 
    *passToDefault= false;
 
@@ -869,6 +812,8 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    gboolean result= FALSE;
    int rc;
 
+   sink->soc.frameOutCount= 0;
+
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
    if ( rc < 0 )
    {
@@ -978,6 +923,76 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
    WESTEROS_UNUSED(query);
 
    return FALSE;
+}
+
+static void wstSinkSocStopVideo( GstWesterosSink *sink )
+{
+   LOCK(sink);
+   if ( sink->soc.conn )
+   {
+      wstDestroyVideoClientConnection( sink->soc.conn );
+      sink->soc.conn= 0;
+   }
+   if ( sink->videoStarted )
+   {
+      sink->videoStarted= FALSE;
+      sink->soc.quitVideoOutputThread= TRUE;
+      sink->soc.quitEOSDetectionThread= TRUE;
+      sink->soc.quitDispatchThread= TRUE;
+      if ( sink->display )
+      {
+         int fd= wl_display_get_fd( sink->display );
+         if ( fd >= 0 )
+         {
+            shutdown( fd, SHUT_RDWR );
+         }
+      }
+
+      wstStopEvents( sink );
+
+      wstTearDownInputBuffers( sink );
+
+      wstTearDownOutputBuffers( sink );
+   }
+   UNLOCK(sink);
+
+   sink->soc.prevFrameFd= -1;
+   sink->soc.nextFrameFd= -1;
+   sink->soc.formatsSet= FALSE;
+
+   if ( sink->soc.inputFormats )
+   {
+      free( sink->soc.inputFormats );
+      sink->soc.inputFormats= 0;
+   }
+   if ( sink->soc.outputFormats )
+   {
+      free( sink->soc.outputFormats );
+      sink->soc.outputFormats= 0;
+   }
+   if ( sink->soc.v4l2Fd >= 0 )
+   {
+      close( sink->soc.v4l2Fd );
+      sink->soc.v4l2Fd= -1;
+   }
+
+   if ( sink->soc.videoOutputThread )
+   {
+      g_thread_join( sink->soc.videoOutputThread );
+      sink->soc.videoOutputThread= NULL;
+   }
+
+   if ( sink->soc.eosDetectionThread )
+   {
+      g_thread_join( sink->soc.eosDetectionThread );
+      sink->soc.eosDetectionThread= NULL;
+   }
+
+   if ( sink->soc.sb )
+   {
+      wl_sb_destroy( sink->soc.sb );
+      sink->soc.sb= 0;
+   }
 }
 
 static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dummySink )
@@ -2177,7 +2192,6 @@ static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn )
       }
 
       free( conn );
-      conn= 0;
    }
 }
 

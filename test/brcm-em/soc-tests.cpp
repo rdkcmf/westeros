@@ -59,6 +59,7 @@ static bool testCaseSocSinkBasicPipeline( EMCTX *ctx );
 static bool testCaseSocSinkFirstFrameSignal( EMCTX *ctx );
 static bool testCaseSocSinkUnderflowSignal( EMCTX *ctx );
 static bool testCaseSocSinkPtsErrorSignal( EMCTX *ctx );
+static bool testCaseSocSinkElementRecycle( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReporting( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *ctx );
 static bool testCaseSocSinkBasicPauseResume( EMCTX *ctx );
@@ -71,6 +72,7 @@ static bool testCaseSocSinkBasicPipelineWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkFirstFrameSignalWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkUnderflowSignalWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkPtsErrorSignalWithCompositor( EMCTX *ctx );
+static bool testCaseSocSinkElementRecycleWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReportingWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPauseResumeWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicSeekWithCompositor( EMCTX *ctx );
@@ -120,6 +122,10 @@ TESTCASE socTests[]=
      "Test pts error signal",
      testCaseSocSinkPtsErrorSignal
    },
+   { "testSocSinkElementRecycle",
+     "Test recycling a westerossink element",
+     testCaseSocSinkElementRecycle
+   },
    { "testSocSinkBasicPositionReporting",
      "Test basic position reporting from a pipeline",
      testCaseSocSinkBasicPositionReporting
@@ -167,6 +173,10 @@ TESTCASE socTests[]=
    { "testSocSinkPtsErrorSignalWithCompositor",
      "Test pts error signal with a compositor",
      testCaseSocSinkPtsErrorSignalWithCompositor
+   },
+   { "testSocSinkElementRecycleWithCompositor",
+     "Test recycling a westerossink element with a compositor",
+     testCaseSocSinkElementRecycleWithCompositor
    },
    { "testSocSinkBasicPositionReportingWithCompositor",
      "Test basic position reporting from a pipeline with a compositor",
@@ -663,6 +673,141 @@ static bool testCaseSocSinkPtsErrorSignal( EMCTX *emctx )
       EMERROR("Failed to receive pts error signal");
       goto exit;
    }
+
+   testResult= true;
+
+exit:
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+
+   return testResult;
+}
+
+namespace ElementRecycle
+{
+void textureCreated( EMCTX *ctx, void *userData, int bufferId )
+{
+   int *textureCount= (int*)userData;
+   *textureCount= *textureCount + 1;
+}
+}; // namespace ElementRecycle
+
+static bool testCaseSocSinkElementRecycle( EMCTX *emctx )
+{
+   using namespace ElementRecycle;
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   bool receivedSignal;
+   bool checkTextures= false;
+   int textureCount;
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   if ( getenv("WAYLAND_DISPLAY") )
+   {
+      checkTextures= true;
+      EMSetTextureCreatedCallback( emctx, textureCreated, &textureCount );
+   }
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   g_signal_connect( sink, "first-video-frame-callback", G_CALLBACK(firstFrameCallback), &receivedSignal);
+
+   receivedSignal= false;
+   textureCount= 0;
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   // Allow pipeline to run briefly
+   usleep( 2000000 );
+
+   if ( !receivedSignal )
+   {
+      EMERROR("Failed to receive first video frame signal");
+      goto exit;
+   }
+
+   if ( checkTextures )
+   {
+      if ( textureCount < 1 )
+      {
+         EMERROR("Failed to receive video texture");
+         goto exit;
+      }
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_READY );
+
+   receivedSignal= false;
+   textureCount= 0;
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   // Allow pipeline to run briefly
+   usleep( 2000000 );
+
+   if ( !receivedSignal )
+   {
+      EMERROR("Failed to receive first video frame signal");
+      goto exit;
+   }
+
+   if ( checkTextures )
+   {
+      if ( textureCount < 1 )
+      {
+         EMERROR("Failed to receive video texture");
+         goto exit;
+      }
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
 
    testResult= true;
 
@@ -1573,6 +1718,56 @@ static bool testCaseSocSinkPtsErrorSignalWithCompositor( EMCTX *emctx )
 exit:
 
    unsetenv( "WAYLAND_DISPLAY" );
+
+   return testResult;
+}
+
+static bool testCaseSocSinkElementRecycleWithCompositor( EMCTX *emctx )
+{
+   bool testResult= false;
+   WstCompositor *wctx= 0;
+   bool result;
+   const char *value;
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRenderedModule failed" );
+      goto exit;
+   }
+
+   value= WstCompositorGetDisplayName( wctx );
+   if ( value == 0 )
+   {
+      EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", value, true );
+   setenv( "WESTEROS_SINK_USE_GFX", "1", true );
+
+   testResult= testCaseSocSinkElementRecycle( emctx );
+
+   WstCompositorDestroy( wctx );
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+   unsetenv( "WESTEROS_SINK_USE_GFX" );
 
    return testResult;
 }
@@ -3124,6 +3319,11 @@ static bool testCaseSocSinkBasicPipelineGfx( EMCTX *emctx )
 exit:
 
    unsetenv( "WAYLAND_DISPLAY" );
+
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
 
    return testResult;
 }

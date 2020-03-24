@@ -344,6 +344,7 @@ typedef struct _EMEGLImage
    uint32_t magic;
    EGLClientBuffer clientBuffer;
    EGLenum target;
+   int fd;
 } EMEGLImage;
 
 #define EM_EGL_CONTEXT_MAGIC (0x55112531)
@@ -4818,6 +4819,20 @@ EGLAPI EGLImageKHR EGLAPIENTRY eglCreateImageKHR (EGLDisplay display, EGLContext
                img->magic= EM_EGL_IMAGE_MAGIC;
                img->clientBuffer= buffer;
                img->target= target;
+               if ( attrib_list && (target == EGL_LINUX_DMA_BUF_EXT) )
+               {
+                  int i= 0;
+                  while ( attrib_list[i] != 0 )
+                  {
+                     if ( attrib_list[i] == EGL_DMA_BUF_PLANE0_FD_EXT )
+                     {
+                        img->fd= EMDeviceGetFdFromFdOS( attrib_list[i+1] );
+                        TRACE1("eglCreateImageKHR: fd %d (%d)", img->fd, attrib_list[i+1]);
+                        break;
+                     }
+                     i += 2;
+                  }
+               }
             }
             image= (EGLImageKHR)img;
             gEGLError= EGL_SUCCESS;
@@ -5437,10 +5452,15 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
    switch( target )
    {
       case GL_TEXTURE_2D:
+      case GL_TEXTURE_EXTERNAL_OES:
          {
             EMEGLImage* img= (EMEGLImage*)image;
             if ( img )
             {
+               if ( target == GL_TEXTURE_EXTERNAL_OES )
+               {
+                  TRACE1("glEGLImageTargetTexture2DOES: target GL_TEXTURE_EXTERNAL_OES");
+               }
                if ( img->magic == EM_EGL_IMAGE_MAGIC )
                {
                   int bufferId=-1;
@@ -5460,7 +5480,7 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
                   }
                   else if ( img->target == EGL_LINUX_DMA_BUF_EXT )
                   {
-                     bufferId= 0;
+                     bufferId= img->fd;
                   }
                   else if ( img->target == EGL_NATIVE_PIXMAP_KHR )
                   {
@@ -5490,9 +5510,6 @@ GL_APICALL void GL_APIENTRY glEGLImageTargetTexture2DOES (GLenum target, GLeglIm
                }
             }
          }
-         break;
-      case GL_TEXTURE_EXTERNAL_OES:
-         TRACE1("glEGLImageTargetTexture2DOES: target GL_TEXTURE_EXTERNAL_OES");
          break;
       default:
          WARNING("glEGLImageTargetTexture2DOES: unsupported target %X", target);

@@ -428,6 +428,64 @@ static void captureTerm( GstWesterosSink *sink )
    }
 }
 
+static void releaseWaylandResources( GstWesterosSink *sink )
+{
+   if ( sink->display )
+   {
+      if ( sink->vpcSurface )
+      {
+         wl_vpc_surface_destroy( sink->vpcSurface );
+         sink->vpcSurface= 0;
+      }
+      if ( sink->output )
+      {
+         wl_output_destroy( sink->output );
+         sink->output= 0;
+      }
+      if ( sink->vpc )
+      {
+         wl_vpc_destroy( sink->vpc );
+         sink->vpc= 0;
+      }
+      if ( sink->surface )
+      {
+         wl_surface_destroy( sink->surface );
+         sink->surface= 0;
+      }
+      if ( sink->display && sink->queue )
+      {
+         wl_display_flush(sink->display);
+         wl_display_roundtrip_queue(sink->display, sink->queue);
+      }
+      if ( sink->compositor )
+      {
+         wl_compositor_destroy( sink->compositor );
+         sink->compositor= 0;
+      }
+      if ( sink->shell )
+      {
+         wl_simple_shell_destroy( sink->shell );
+         sink->shell= 0;
+      }
+      if ( sink->registry )
+      {
+         wl_registry_destroy(sink->registry);
+         sink->registry= 0;
+      }
+      if ( sink->queue )
+      {
+         wl_event_queue_destroy( sink->queue );
+         sink->queue= 0;
+      }
+      if ( sink->display )
+      {
+         printf("westeros-sink: paused-to-ready: display=%p\n", (void*)sink->display);
+         wl_display_disconnect(sink->display);
+         sink->display= 0;
+      }
+   }
+}
+
 #ifndef USE_GST1
 static void gst_westeros_sink_base_init(gpointer g_class)
 {
@@ -611,42 +669,6 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
       sink->vpc= 0;
       sink->vpcSurface= 0;
       sink->output= 0;
-
-      if ( !sink->display ) 
-      {
-         sink->display= wl_display_connect(NULL);
-      }
-      if ( sink->display )
-      {
-         sink->queue= wl_display_create_queue(sink->display);
-         if ( sink->queue )
-         {
-            sink->registry= wl_display_get_registry( sink->display );
-            if ( sink->registry )
-            {
-               wl_proxy_set_queue((struct wl_proxy*)sink->registry, sink->queue);
-               wl_registry_add_listener(sink->registry, &registryListener, sink);   
-               wl_display_roundtrip_queue(sink->display,sink->queue);
-
-               sink->surface= wl_compositor_create_surface(sink->compositor);
-               printf("gst_westeros_sink_init: surface=%p\n", (void*)sink->surface);
-               wl_proxy_set_queue((struct wl_proxy*)sink->surface, sink->queue);
-               wl_display_flush( sink->display );
-            }
-            else
-            {
-               GST_ERROR("gst_westeros_sink_init: unable to get display registry\n");
-            }
-         }
-         else
-         {
-            GST_ERROR("gst_westeros_sink_init: unable to create queue\n");
-         }
-      }
-      else
-      {
-         GST_ERROR("gst_westeros_sink_init: unable to create display\n");
-      }
    }
    else
    {
@@ -658,56 +680,8 @@ static void gst_westeros_sink_term(GstWesterosSink *sink)
 {
    sink->initialized= FALSE;
 
-   if ( sink->output )
-   {
-      wl_output_destroy( sink->output );
-      sink->output= 0;
-   }
-   if ( sink->vpc )
-   {
-      wl_vpc_destroy( sink->vpc );
-      sink->vpc= 0;
-   }   
-   if ( sink->surface )
-   {
-      wl_surface_destroy( sink->surface );
-      sink->surface= 0;
-   }
-   if ( sink->display && sink->queue )
-   {
-      wl_display_flush(sink->display);
-      wl_display_roundtrip_queue(sink->display, sink->queue);
-   }
-
    gst_westeros_sink_soc_term( sink );
 
-   if ( sink->compositor )
-   {
-      wl_compositor_destroy( sink->compositor );
-      sink->compositor= 0;
-   }
-   if ( sink->shell )
-   {
-      wl_simple_shell_destroy( sink->shell );
-      sink->shell= 0;
-   }
-   if ( sink->registry )
-   {
-      wl_registry_destroy(sink->registry);
-      sink->registry= 0;
-   }
-   if ( sink->queue )
-   {
-      wl_event_queue_destroy( sink->queue );
-      sink->queue= 0;
-   }
-   if ( sink->display )
-   {
-      printf("gst_westeros_sink_term: wl_display_disconnect: display=%p\n", (void*)sink->display);
-      wl_display_disconnect(sink->display);
-      sink->display= 0;
-   }
-   
    #ifdef GLIB_VERSION_2_32 
    g_mutex_clear( &sink->mutex );
    #else
@@ -898,30 +872,6 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
             result= GST_STATE_CHANGE_FAILURE;
             break;
          }
-         if ( sink->vpc && sink->surface )
-         {
-            sink->vpcSurface= wl_vpc_get_vpc_surface( sink->vpc, sink->surface );
-            if ( sink->vpcSurface )
-            {
-               wl_vpc_surface_add_listener( sink->vpcSurface, &vpcListener, sink );
-               wl_proxy_set_queue((struct wl_proxy*)sink->vpcSurface, sink->queue);
-               if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) || (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
-               {
-                  wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
-               }
-               wl_display_flush( sink->display );
-               printf("westeros-sink: null_to_ready: done add vpcSurface listener\n");
-            }
-            else
-            {
-               GST_ERROR("gst_westeros_sink: null_to_ready: failed to create vpcSurface\n");
-            }
-         }
-         else
-         {
-            GST_ERROR("gst_westeros_sink: null_to_ready: can't create vpc surface: vpc %p surface %p\n",
-                      sink->vpc, sink->surface);
-         }
          break;
       }
 
@@ -933,6 +883,67 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          if ( gst_westeros_sink_soc_ready_to_paused(sink, &passToDefault) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
+
+            if ( !sink->display )
+            {
+               sink->display= wl_display_connect(NULL);
+            }
+            if ( sink->display )
+            {
+               sink->queue= wl_display_create_queue(sink->display);
+               if ( sink->queue )
+               {
+                  sink->registry= wl_display_get_registry( sink->display );
+                  if ( sink->registry )
+                  {
+                     wl_proxy_set_queue((struct wl_proxy*)sink->registry, sink->queue);
+                     wl_registry_add_listener(sink->registry, &registryListener, sink);
+                     wl_display_roundtrip_queue(sink->display,sink->queue);
+
+                     sink->surface= wl_compositor_create_surface(sink->compositor);
+                     printf("westeros-sink: ready-to-paused: surface=%p\n", (void*)sink->surface);
+                     wl_proxy_set_queue((struct wl_proxy*)sink->surface, sink->queue);
+                     wl_display_flush( sink->display );
+                  }
+                  else
+                  {
+                     GST_ERROR("westeros-sink: ready-to-paused: unable to get display registry\n");
+                  }
+               }
+               else
+               {
+                  GST_ERROR("westeros-sink: ready-to-paused: unable to create queue\n");
+               }
+            }
+            else
+            {
+               GST_ERROR("westeros-sink: ready-to-paused: unable to create display\n");
+            }
+
+            if ( sink->vpc && sink->surface )
+            {
+               sink->vpcSurface= wl_vpc_get_vpc_surface( sink->vpc, sink->surface );
+               if ( sink->vpcSurface )
+               {
+                  wl_vpc_surface_add_listener( sink->vpcSurface, &vpcListener, sink );
+                  wl_proxy_set_queue((struct wl_proxy*)sink->vpcSurface, sink->queue);
+                  if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) || (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
+                  {
+                     wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+                  }
+                  wl_display_flush( sink->display );
+                  printf("westeros-sink: ready-to-paused: done add vpcSurface listener\n");
+               }
+               else
+               {
+                  GST_ERROR("westeros-sink: ready-to-paused: failed to create vpcSurface\n");
+               }
+            }
+            else
+            {
+               GST_ERROR("westeros-sink: ready-to-paused: can't create vpc surface: vpc %p surface %p\n",
+                         sink->vpc, sink->surface);
+            }
          }
          else
          {
@@ -991,6 +1002,9 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
          }
+
+         releaseWaylandResources( sink );
+
          captureTerm(sink);
          break;
       }
@@ -999,17 +1013,12 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          if ( sink->initialized )
          {
-            if ( sink->vpcSurface )
-            {
-               wl_vpc_surface_destroy( sink->vpcSurface );
-               sink->vpcSurface= 0;
-            }
-
             if ( !gst_westeros_sink_soc_ready_to_null( sink, &passToDefault ) )
             {
                result= GST_STATE_CHANGE_FAILURE;
             }
          }
+         releaseWaylandResources( sink );
          break;
       }
 

@@ -132,6 +132,11 @@ static GstStateChangeReturn emVideoSrcChangeState(GstElement *element, GstStateC
 
    switch (transition)
    {
+      case GST_STATE_CHANGE_READY_TO_PAUSED:
+         pthread_mutex_lock( &src->mutex );
+         src->needSegment= true;
+         pthread_mutex_unlock( &src->mutex );
+         break;
       case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
          pthread_mutex_lock( &src->mutex );
          src->paused= false;
