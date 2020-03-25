@@ -309,7 +309,10 @@ void EssContextDestroy( EssCtx *ctx )
          EssContextStop( ctx );
       }
 
-      essPlatformTerm( ctx );
+      if ( ctx->isInitialized )
+      {
+         essPlatformTerm( ctx );
+      }
 
       if ( ctx->appName )
       {
@@ -424,9 +427,9 @@ exit:
    return result;      
 }
 
-bool EssContextSetUseDirect( EssCtx *ctx, bool useWayland )
+bool EssContextSetUseDirect( EssCtx *ctx, bool useDirect )
 {
-   return EssContextSetUseWayland( ctx, !useWayland );
+   return EssContextSetUseWayland( ctx, !useDirect );
 }
 
 bool EssContextGetUseDirect( EssCtx *ctx )
@@ -1034,11 +1037,6 @@ void EssContextStop( EssCtx *ctx )
          ctx->isRunning= false;
       }
 
-      if ( ctx->isInitialized )
-      {
-         essPlatformTerm( ctx );
-      }
-
       pthread_mutex_unlock( &ctx->mutex );
    }
 }
@@ -1223,15 +1221,19 @@ void EssContextRunEventLoopOnce( EssCtx *ctx )
 {
    if ( ctx )
    {
+      bool running;
+      pthread_mutex_lock( &ctx->mutex );
+      running= ctx->isRunning;
+      pthread_mutex_unlock( &ctx->mutex );
       long long start, end, diff, delay;
-      
       if ( ctx->eventLoopPeriodMS )
       {
          start= essGetCurrentTimeMillis();
       }
-
-      essRunEventLoopOnce( ctx );
-
+      if ( running )
+      {
+         essRunEventLoopOnce( ctx );
+      }
       if ( ctx->eventLoopPeriodMS )
       {
          if ( ctx->eventLoopLastTimeStamp )
@@ -2632,6 +2634,11 @@ void displaySizeCallback( void *userData, int width, int height )
       }
    }
    essSetDisplaySize( ctx, width, height, customSafe, safex, safey, safew, safeh);
+   if ( !ctx->haveMode )
+   {
+      ctx->windowWidth= width;
+      ctx->windowHeight= height;
+   }
    ctx->resizePending= true;
    ctx->resizeWidth= width;
    ctx->resizeHeight= height;
