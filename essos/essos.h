@@ -52,7 +52,7 @@ typedef struct _EssSettingsListener
    void (*displaySafeArea)( void *userData, int x, int y, int width, int height );
 } EssSettingsListener;
 
-typedef struct _EssTerminateLisenter
+typedef struct _EssTerminateListener
 {
    void (*terminated)( void *userData );
 } EssTerminateListener;
@@ -124,7 +124,7 @@ bool EssContextGetUseWayland( EssCtx *ctx );
  * EGL application.  This must be called before initializing or 
  * starting the application.
  */
-bool EssContextSetUseDirect( EssCtx *ctx, bool useWayland );
+bool EssContextSetUseDirect( EssCtx *ctx, bool useDirect );
 
 /**
  * EssContextGetUseDirect
