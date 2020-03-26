@@ -86,6 +86,7 @@ struct _GstWesterosSink
    int windowHeight;
    bool show;
    bool windowChange;
+   bool windowSet;
    bool windowSizeOverride;
    
    bool visible;
