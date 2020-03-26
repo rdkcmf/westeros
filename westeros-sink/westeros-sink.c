@@ -622,6 +622,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->windowWidth= DEFAULT_WINDOW_WIDTH;
    sink->windowHeight= DEFAULT_WINDOW_HEIGHT;
    sink->show= true;
+   sink->windowSet= false;
    sink->windowChange= false;
    sink->windowSizeOverride= false;
    
@@ -728,13 +729,15 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
             nw= atoi( parts[2] );
             nh= atoi( parts[3] );
 
-            if ( (nx != sink->windowX) ||
+            if ( (sink->windowSet == false) ||
+                 (nx != sink->windowX) ||
                  (ny != sink->windowY) ||
                  (nw != sink->windowWidth) ||
                  (nh != sink->windowHeight) )
             {
                LOCK( sink );
                sink->windowChange= true;
+               sink->windowSet= true;
                sink->windowX= nx;
                sink->windowY= ny;
                sink->windowWidth= nw;
