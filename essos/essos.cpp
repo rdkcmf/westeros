@@ -1221,19 +1221,14 @@ void EssContextRunEventLoopOnce( EssCtx *ctx )
 {
    if ( ctx )
    {
-      bool running;
-      pthread_mutex_lock( &ctx->mutex );
-      running= ctx->isRunning;
-      pthread_mutex_unlock( &ctx->mutex );
       long long start, end, diff, delay;
       if ( ctx->eventLoopPeriodMS )
       {
          start= essGetCurrentTimeMillis();
       }
-      if ( running )
-      {
-         essRunEventLoopOnce( ctx );
-      }
+
+      essRunEventLoopOnce( ctx );
+
       if ( ctx->eventLoopPeriodMS )
       {
          if ( ctx->eventLoopLastTimeStamp )
