@@ -205,6 +205,7 @@ static bool essResize( EssCtx *ctx, int width, int height );
 static void essRunEventLoopOnce( EssCtx *ctx );
 static void essProcessKeyPressed( EssCtx *ctx, int linuxKeyCode );
 static void essProcessKeyReleased( EssCtx *ctx, int linuxKeyCode );
+static void essProcessKeyRepeat( EssCtx *ctx, int linuxKeyCode );
 static void essProcessPointerMotion( EssCtx *ctx, int x, int y );
 static void essProcessPointerButtonPressed( EssCtx *ctx, int button );
 static void essProcessPointerButtonReleased( EssCtx *ctx, int button );
@@ -1735,7 +1736,7 @@ static void essRunEventLoopOnce( EssCtx *ctx )
          {
             ctx->lastKeyTime= now;
             ctx->keyRepeating= true;
-            essProcessKeyPressed( ctx, ctx->lastKeyCode );
+            essProcessKeyRepeat( ctx, ctx->lastKeyCode );
          }
       }
 
@@ -1779,6 +1780,25 @@ static void essProcessKeyReleased( EssCtx *ctx, int linuxKeyCode )
       if ( ctx->keyListener && ctx->keyListener->keyReleased )
       {
          ctx->keyListener->keyReleased( ctx->keyListenerUserData, linuxKeyCode );
+      }
+   }
+}
+
+static void essProcessKeyRepeat( EssCtx *ctx, int linuxKeyCode )
+{
+   if ( ctx )
+   {
+      DEBUG("essProcessKeyRepeat: key %d", linuxKeyCode);
+      if ( ctx->keyListener )
+      {
+         if ( ctx->keyListener->keyRepeat )
+         {
+            ctx->keyListener->keyRepeat( ctx->keyListenerUserData, linuxKeyCode );
+         }
+         else if ( ctx->keyListener->keyPressed )
+         {
+            ctx->keyListener->keyPressed( ctx->keyListenerUserData, linuxKeyCode );
+         }
       }
    }
 }

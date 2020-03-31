@@ -2695,6 +2695,198 @@ exit:
    return testResult;
 }
 
+namespace RepeatKeyInput
+{
+
+typedef struct _TestCtx
+{
+   bool wasCalled;
+   bool keyAlt;
+   bool keyCtrl;
+   bool keyShift;
+   bool keyCaps;
+   int keyPressed;
+   int repeatCount;
+} TestCtx;
+
+static void keyPressed( void *userData, unsigned int key )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->keyPressed= key;
+   switch( key )
+   {
+      case KEY_RIGHTSHIFT:
+      case KEY_LEFTSHIFT:
+         testCtx->keyShift= true;
+         break;
+      case KEY_RIGHTALT:
+      case KEY_LEFTALT:
+         testCtx->keyAlt= true;
+         break;
+      case KEY_RIGHTCTRL:
+      case KEY_LEFTCTRL:
+         testCtx->keyCtrl= true;
+         break;
+      case KEY_CAPSLOCK:
+         testCtx->keyCaps= !testCtx->keyCaps;
+         break;
+      default:
+         break;
+   }
+}
+
+static void keyReleased( void *userData, unsigned int key )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   testCtx->keyPressed= 0;
+   switch( key )
+   {
+      case KEY_RIGHTSHIFT:
+      case KEY_LEFTSHIFT:
+         testCtx->keyShift= false;
+         break;
+      case KEY_RIGHTALT:
+      case KEY_LEFTALT:
+         testCtx->keyAlt= false;
+         break;
+      case KEY_RIGHTCTRL:
+      case KEY_LEFTCTRL:
+         testCtx->keyCtrl= false;
+         break;
+      case KEY_CAPSLOCK:
+         // Nothing to do
+         break;
+      default:
+         break;
+   }
+}
+
+static void keyRepeat( void *userData, unsigned int key )
+{
+   TestCtx *testCtx= (TestCtx*)userData;
+   testCtx->wasCalled= true;
+   ++testCtx->repeatCount;
+}
+
+static EssKeyListener keyListener=
+{
+   keyPressed,
+   keyReleased,
+   keyRepeat
+};
+
+};
+
+bool testCaseEssosKeyboardRepeatKeyInputWayland( EMCTX *emctx )
+{
+   using namespace RepeatKeyInput;
+
+   bool testResult= false;
+   bool result;
+   WstCompositor *wctx= 0;
+   const char *displayName= "test0";
+   EssCtx *ctx= 0;
+   TestCtx tCtx;
+   TestCtx *testCtx= &tCtx;
+
+   EMStart( emctx );
+
+   memset( testCtx, 0, sizeof(TestCtx) );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetUseWayland( ctx, true );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetUseWayland failed");
+      goto exit;
+   }
+
+   result= EssContextSetKeyListener( ctx, testCtx, &keyListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetKeyListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   WstCompositorKeyEvent( wctx,  KEY_A, WstKeyboard_keyState_depressed, 0 );
+
+   for( int i= 0; i < 100; ++i )
+   {
+      EssContextRunEventLoopOnce( ctx );
+      usleep(2000);
+   }
+
+   if ( !testCtx->wasCalled )
+   {
+      EMERROR("EssKeyListener not called");
+      goto exit;
+   }
+   if ( testCtx->repeatCount < 4 )
+   {
+      EMERROR("EssKeyListener keyRepeat not called: expected 4, actual %d", testCtx->repeatCount);
+      goto exit;
+   }
+   testCtx->wasCalled= false;
+   testCtx->repeatCount= 0;
+
+   testResult= true;
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   EssContextDestroy( ctx );
+
+   WstCompositorDestroy( wctx );
+
+   return testResult;
+}
+
 namespace BasicPointerInput
 {
 

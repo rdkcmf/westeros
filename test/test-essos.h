@@ -45,6 +45,7 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx );
 bool testCaseEssosDisplaySizeChangeWayland( EMCTX *emctx );
 bool testCaseEssosDisplaySafeAreaChangeWayland( EMCTX *emctx );
 bool testCaseEssosKeyboardBasicKeyInputWayland( EMCTX *emctx );
+bool testCaseEssosKeyboardRepeatKeyInputWayland( EMCTX *emctx );
 bool testCaseEssosPointerBasicPointerInputWayland( EMCTX *emctx );
 bool testCaseEssosTerminateListener( EMCTX *emctx );
 
