@@ -144,14 +144,6 @@ bool EssContextSetWindowPosition( EssCtx *ctx, int x, int y );
  bool EssContextSetKeyRepeatPeriod( EssCtx *ctx, int period );
 
 /**
- * EssContextSetName
- *
- * Establish name of the application context.  This must be called
- * before initializing or starting the application
- */
-bool EssContextSetName( EssCtx *ctx, const char *name );
-
-/**
  * EssContextSetSwapInterval
  *
  * Sets the EGL swap interval used by the context.  The default interval is 1.
