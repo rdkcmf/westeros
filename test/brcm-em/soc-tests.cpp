@@ -33,6 +33,8 @@
 #include "soc-tests.h"
 #include "soc-video-src.h"
 
+#include "essos.h"
+
 #include "wayland-client.h"
 #include "wayland-egl.h"
 
@@ -87,6 +89,7 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx );
 static bool testCaseSocSinkEOSTest1( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx );
+static bool testCaseSocEssosDualMediaPlayback( EMCTX *emctx );
 
 TESTCASE socTests[]=
 {
@@ -233,6 +236,10 @@ TESTCASE socTests[]=
    { "testSocRenderBasicCompositionEmbeddedFastRepeater",
      "Test embedded compositor basic composition with fast render delegation and repeater client",
      testCaseSocRenderBasicCompositionEmbeddedFastRepeater
+   },
+   { "testSocEssosDualMediaPlayback",
+     "Test dual media playback with Essos",
+     testCaseSocEssosDualMediaPlayback
    },
    {
      "", "", (TESTCASEFUNC)0
@@ -807,13 +814,13 @@ static bool testCaseSocSinkElementRecycle( EMCTX *emctx )
       }
    }
 
-   gst_element_set_state( pipeline, GST_STATE_NULL );
-
    testResult= true;
 
 exit:
    if ( pipeline )
    {
+      gst_element_set_state( pipeline, GST_STATE_NULL );
+
       gst_object_unref( pipeline );
    }
 
@@ -6047,6 +6054,364 @@ exit:
    }
 
    testTermEGL( &ctx->eglCtx );
+
+   return testResult;
+}
+
+namespace DualMedia
+{
+typedef struct _TestCtx TestCtx;
+
+typedef struct _Pipeline
+{
+   TestCtx *ctx;
+   EMSimpleVideoDecoder *videoDecoder;
+   GstElement *pipeline;
+   GstBus *bus;
+   GstElement *src;
+   GstElement *videoSink;
+   int x;
+   int y;
+   int width;
+   int height;
+   bool eos;
+} Pipeline;
+
+typedef struct _TestCtx
+{
+   EMCTX *emctx;
+   EssCtx *essCtx;
+   GMainLoop *loop;
+   Pipeline *pipeLine1;
+   Pipeline *pipeLine2;
+   bool terminated;
+} TestCtx;
+
+static void destroyPipeline( Pipeline *pipeLine );
+
+static Pipeline* createPipeline( TestCtx *ctx, int x, int y, int width, int height )
+{
+   bool result= false;
+   EMCTX *emctx= ctx->emctx;
+   Pipeline *pipeLine= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+
+   pipeLine= (Pipeline*)calloc( 1, sizeof(Pipeline) );
+   if ( !pipeLine )
+   {
+      EMERROR("Error: no memory for pipeLine");
+      goto exit;
+   }
+   pipeLine->ctx= ctx;
+   pipeLine->x= x;
+   pipeLine->y= y;
+   pipeLine->width= width;
+   pipeLine->height= height;
+
+   pipeLine->pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeLine->pipeline )
+   {
+      EMERROR("Error: unable to create pipeline instance" );
+      goto exit;
+   }
+
+   pipeLine->bus= gst_pipeline_get_bus( GST_PIPELINE(pipeLine->pipeline) );
+   if ( !pipeLine->bus )
+   {
+      EMERROR("Error: unable to get pipeline bus");
+      goto exit;
+   }
+
+   pipeLine->videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !pipeLine->videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( pipeLine->videoDecoder, 1920, 1080 );
+
+   pipeLine->src= createVideoSrc( emctx, pipeLine->videoDecoder );
+   if ( !pipeLine->src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+   gst_object_ref( pipeLine->src );
+
+   pipeLine->videoSink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !pipeLine->videoSink )
+   {
+      EMERROR("Failed to create video sink instance");
+      goto exit;
+   }
+   gst_object_ref( pipeLine->videoSink );
+
+   gst_bin_add_many( GST_BIN(pipeLine->pipeline),
+                     pipeLine->src,
+                     pipeLine->videoSink,
+                     NULL
+                   );
+   if ( !gst_element_link_many( pipeLine->src, pipeLine->videoSink, NULL ) )
+   {
+      EMERROR("Failed to link source and video sink");
+      goto exit;
+   }
+
+   if ( GST_STATE_CHANGE_FAILURE == gst_element_set_state(pipeLine->pipeline, GST_STATE_PAUSED) )
+   {
+      EMERROR("Error: unable to start pipeline");
+      goto exit;
+   }
+
+   gst_element_get_state( pipeLine->pipeline, NULL, NULL, GST_CLOCK_TIME_NONE );
+
+   result= true;
+
+exit:
+
+   if ( !result )
+   {
+      destroyPipeline( pipeLine );
+      pipeLine= 0;
+   }
+
+   return pipeLine;
+}
+
+static void startPipeline( Pipeline *pipeLine )
+{
+   EMCTX *emctx= pipeLine->ctx->emctx;
+   if ( GST_STATE_CHANGE_FAILURE == gst_element_set_state(pipeLine->pipeline, GST_STATE_PLAYING) )
+   {
+      EMERROR("Error: unable to start pipeline");
+   }
+}
+
+static void destroyPipeline( Pipeline *pipeLine )
+{
+   if ( pipeLine->pipeline )
+   {
+      gst_element_set_state(pipeLine->pipeline, GST_STATE_NULL);
+   }
+   if ( pipeLine->videoSink )
+   {
+      gst_object_unref( pipeLine->videoSink );
+      pipeLine->videoSink= 0;
+   }
+   if ( pipeLine->src )
+   {
+      gst_object_unref( pipeLine->src );
+      pipeLine->src= 0;
+   }
+   if ( pipeLine->bus )
+   {
+      gst_object_unref( pipeLine->bus );
+      pipeLine->bus= 0;
+   }
+   if ( pipeLine->pipeline )
+   {
+      gst_object_unref( GST_OBJECT(pipeLine->pipeline) );
+      pipeLine->pipeline= 0;
+   }
+}
+
+static bool initGst( TestCtx *ctx )
+{
+   bool result= false;
+   int argc= 0;
+   char **argv= 0;
+   EMCTX *emctx= ctx->emctx;
+
+   gst_init( &argc, &argv );
+
+   ctx->loop= g_main_loop_new(NULL,FALSE);
+   if ( !ctx->loop )
+   {
+      EMERROR("Error: unable to create glib main loop");
+      goto exit;
+   }
+
+   unsetenv("WESTEROS_SINK_USE_GFX");
+   ctx->pipeLine1= createPipeline( ctx, 0, 270, 960, 540 );
+   if ( !ctx->pipeLine1 )
+   {
+      EMERROR("Error: unable to create pipeline");
+      goto exit;
+   }
+   g_print("pipeline 1 created\n");
+
+   setenv("WESTEROS_SINK_USE_GFX", "1", true);
+   ctx->pipeLine2= createPipeline( ctx, 960, 270, 960, 540 );
+   if ( !ctx->pipeLine2 )
+   {
+      EMERROR("Error: unable to create pipeline");
+      goto exit;
+   }
+   g_print("pipeline 2 created\n");
+
+   startPipeline( ctx->pipeLine1 );
+   g_print("pipeline 1 started\n");
+
+   startPipeline( ctx->pipeLine2 );
+   g_print("pipeline 2 started\n");
+
+   result= true;
+
+exit:
+
+   return result;
+}
+
+static void termGst( TestCtx *ctx )
+{
+   if ( ctx->pipeLine1 )
+   {
+      destroyPipeline( ctx->pipeLine1 );
+      ctx->pipeLine1= 0;
+   }
+
+   if ( ctx->pipeLine2 )
+   {
+      destroyPipeline( ctx->pipeLine2 );
+      ctx->pipeLine2= 0;
+   }
+
+   if ( ctx->loop )
+   {
+      g_main_loop_unref(ctx->loop);
+      ctx->loop= 0;
+   }
+}
+
+static void terminated( void *userData )
+{
+   TestCtx *ctx= (TestCtx*)userData;
+   printf("terminated event\n");
+   ctx->terminated= true;
+}
+
+static EssTerminateListener terminateListener=
+{
+   terminated
+};
+
+};
+
+bool testCaseSocEssosDualMediaPlayback( EMCTX *emctx )
+{
+   using namespace DualMedia;
+
+   bool testResult= false;
+   bool result;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   TestCtx tCtx;
+   TestCtx *testCtx= &tCtx;
+
+   EMStart( emctx );
+
+   memset( testCtx, 0, sizeof(TestCtx) );
+   testCtx->emctx= emctx;
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   for( int i= 0; i < 2; ++i )
+   {
+      testCtx->essCtx= EssContextCreate();
+      if ( !testCtx->essCtx )
+      {
+         EMERROR("EssContextCreate failed");
+         goto exit;
+      }
+
+      result= EssContextSetTerminateListener( testCtx->essCtx, testCtx, &terminateListener );
+      if ( result == false )
+      {
+         EMERROR("EssContextSetTerminateListener failed");
+         goto exit;
+      }
+
+      result= EssContextStart( testCtx->essCtx );
+      if ( result == false )
+      {
+         EMERROR("EssContextStart failed");
+         goto exit;
+      }
+
+      if ( !initGst( testCtx ) )
+      {
+         EMERROR("intGst failed");
+         goto exit;
+      }
+
+      for( int j= 0; j < 100; ++j )
+      {
+         EssContextRunEventLoopOnce( testCtx->essCtx );
+         if ( testCtx->terminated )
+         {
+            EMERROR("Unexpected terminate callback");
+            goto exit;
+         }
+         usleep(2000);
+      }
+
+      termGst(testCtx);
+
+      if ( testCtx->essCtx )
+      {
+         EssContextDestroy( testCtx->essCtx );
+         testCtx->essCtx= 0;
+      }
+   }
+
+   testResult= true;
+
+exit:
+
+   termGst(testCtx);
+
+   if ( testCtx->essCtx )
+   {
+      EssContextDestroy( testCtx->essCtx );
+   }
+
+   if ( wctx )
+   {
+      WstCompositorDestroy( wctx );
+   }
 
    return testResult;
 }

@@ -476,6 +476,7 @@ void EMSetError( EMCTX *ctx, const char *fmt, ... )
    va_start( argptr, fmt );
    vsprintf( ctx->errorDetail, fmt, argptr );
    va_end( argptr );
+   fprintf(stderr,"%s\n",ctx->errorDetail);
 }
 
 const char* EMGetError( EMCTX *ctx )
