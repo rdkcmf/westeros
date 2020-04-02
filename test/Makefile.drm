@@ -1,0 +1,272 @@
+#
+# If not stated otherwise in this file or this component's Licenses.txt file the
+# following copyright and licenses apply:
+#
+# Copyright 2016 RDK Management
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+BASE=$(shell pwd)/../
+CID=$(BASE)/common/external/install
+WID=$(BASE)/drm/external/install
+
+XDGOPT ?= xdgv4
+
+all:  externals \
+      site \
+      westeros-protocols \
+      westeros-simpleshell \
+      westeros-simplebuffer \
+      westeros-soc \
+      westeros-core \
+      westeros-essos \
+      westeros-soc-sink \
+      unit-test
+
+clean: init
+
+cleanall: initall
+
+setenv= \
+	export PATH=$(CID)/bin:$(WID)/bin:$(PATH) && \
+	export LD_LIBRARY_PATH=$(CID)/lib:$(WID)/lib && \
+	export PKG_CONFIG_PATH=$(CID)/lib/pkgconfig:$(CID)/share/pkgconfig && \
+	export PKG_CONFIG=$(CID)/bin/pkg-config &&  \
+	export ACLOCAL_PATH=$(WID)/share/aclocal && \
+	export ACLOCAL="aclocal -I $ACLOCAL_PATH"
+
+initall: init
+	rm -rf external
+   
+init:
+	cd protocol && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo && rm -f *.gcno
+	cd protocol/version4 && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo && rm -f *.gcno
+	cd protocol/version5 && rm -f *.h && rm -f *.c && rm -f *.o && rm -f *.lo && rm -f *.gcno
+	cd simplebuffer/protocol && rm -f *.h && rm -f *.c && rm -f *.gcno
+	cd simplebuffer && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
+	cd simpleshell/protocol && rm -f *.h && rm -f *.c && rm -f *.gcno
+	cd simpleshell && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
+	cd essos && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd drm && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd drm/westeros-sink && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
+	cd ../drm-em && rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda
+	rm -f *.o && rm -f *.gcov && rm -f *.gcno && rm -f *.gcda
+	rm -f *.o && rm -f *.lo && rm -f .libs/*
+	rm -f .simplebuffer
+	rm -f .simpleshell
+	rm -f .drm-em
+	rm -f external/install/include/vpc*.h	
+
+externals: external
+	rm -f $(WID)/share/config.site
+
+external:
+	mkdir -p external
+	mkdir -p external/install
+	
+site:
+	mkdir -p $(WID)/share && \
+	cp ../drm-em/config.site $(WID)/share
+
+westeros-protocols: xdg-shell-v4 xdg-shell-v5 simpleshell simplebuffer
+
+xdg-shell-v4: protocol/version4/xdg-shell-server-protocol.h \
+              protocol/version4/xdg-shell-protocol.c
+
+protocol/version4/xdg-shell-server-protocol.h: protocol/version4/xdg-shell.xml
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C protocol
+
+protocol/version4/xdg-shell-protocol.c: protocol/version4/xdg-shell.xml
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C protocol
+
+xdg-shell-v5: protocol/version5/xdg-shell-server-protocol.h \
+              protocol/version5/xdg-shell-protocol.c
+
+protocol/version5/xdg-shell-server-protocol.h: protocol/version5/xdg-shell.xml
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C protocol
+
+protocol/version5/xdg-shell-protocol.c: protocol/version5/xdg-shell.xml
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C protocol
+	
+simpleshell: simpleshell/protocol/simpleshell-client-protocol.h \
+             simpleshell/protocol/simpleshell-server-protocol.h \
+             simpleshell/protocol/simpleshell-protocol.c
+
+simpleshell/protocol/simpleshell-client-protocol.h:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+simpleshell/protocol/simpleshell-server-protocol.h:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+simpleshell/protocol/simpleshell-protocol.c:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C simpleshell/protocol
+
+westeros-simpleshell: .simpleshell
+
+.simpleshell:
+	$(call setenv) && \
+	cd simpleshell && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .simpleshell
+
+simplebuffer: simplebuffer/protocol/simplebuffer-client-protocol.h \
+             simplebuffer/protocol/simplebuffer-server-protocol.h \
+             simplebuffer/protocol/simplebuffer-protocol.c
+
+simplebuffer/protocol/simplebuffer-client-protocol.h:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C simplebuffer/protocol
+
+simplebuffer/protocol/simplebuffer-server-protocol.h:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C simplebuffer/protocol
+
+simplebuffer/protocol/simplebuffer-protocol.c:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C simplebuffer/protocol
+
+westeros-simplebuffer: .simplebuffer
+
+.simplebuffer:
+	$(call setenv) && \
+	cd simplebuffer && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd .. && \
+	touch .simplebuffer
+
+.drm-em:
+	mkdir -p $(WID)/usr/include && \
+	cp ../drm-em/wayland-egl.pc $(CID)/share/pkgconfig && \
+	cp ../drm-em/include/* $(WID)/include -r && \
+	cd ../drm-em/em && \
+	cp $(CID)/../mesa/mesa-mesa-19.2.4/src/gbm/main/gbm.h $(WID)/include && \
+	cp $(CID)/../mesa/mesa-mesa-19.2.4/src/egl/wayland/wayland-drm/wayland-drm.xml protocol/wayland-drm.xml && \
+	cp $(CID)/../mesa/drm-libdrm-2.4.100/xf86drm*.h $(WID)/include && \
+	cp $(CID)/../mesa/drm-libdrm-2.4.100/include/drm $(WID)/include -r && \
+	cp $(CID)/../mesa/drm-libdrm-2.4.100/include/drm/drm*.h $(WID)/include && \
+	mkdir -p $(WID)/include/linux && \
+	wget https://git.linuxtv.org/linux.git/plain/include/uapi/linux/videodev2.h -O $(WID)/include/linux/.videodev2.h && \
+	wget https://git.linuxtv.org/linux.git/plain/include/linux/compiler.h -O $(WID)/include/linux/compiler.h && \
+	wget https://git.linuxtv.org/linux.git/plain/include/linux/compiler_types.h -O $(WID)/include/linux/compiler_types.h && \
+	sed '/v4l2-controls/ a\#include "westeros-ut-open.h"' $(WID)/include/linux/.videodev2.h > $(WID)/include/linux/videodev2.h && \
+	$(call setenv) && \
+	export SCANNER_TOOL=$(CID)/bin/wayland-scanner && \
+	make -C protocol && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	make && make install && \
+	cd $(WID)/lib && \
+	rm -f libwayland-egl.so.0 && ln -s libwesteros-ut-em.so.0.0.0 libwayland-egl.so.0 && \
+	rm -f libwayland-egl.so && ln -s libwesteros-ut-em.so.0.0.0 libwayland-egl.so && \
+	rm -f libEGL.so && ln -s libwesteros-ut-em.so.0.0.0 libEGL.so && \
+	rm -f libGLESv2.so && ln -s libwesteros-ut-em.so.0.0.0 libGLESv2.so && \
+	cd ../../.. && \
+	touch .drm-em
+
+westeros-soc: .drm-em
+	$(call setenv) && \
+	cd drm && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	export PKG_CONFIG_SYSROOT_DIR=$(WID) && \
+	make && make install
+
+westeros-core:
+	$(call setenv) && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test --enable-embedded=yes --enable-sbprotocol=yes --enable-essos=no && \
+	make && make install
+
+westeros-essos:
+	$(call setenv) && \
+	cd essos && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf && \
+	./configure --prefix $(WID) && \
+	make && make install
+
+westeros-soc-sink:
+	$(call setenv) && \
+	cp westeros-sink/westeros-sink.c v4l2/westeros-sink/westeros-sink.c && \
+	cp westeros-sink/westeros-sink.h v4l2/westeros-sink/westeros-sink.h && \
+	cd v4l2/westeros-sink && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) --enable-gstreamer1 CFLAGS='-DWESTEROS_PLATFORM_DRM -x c++'  && \
+	export PKG_CONFIG_SYSROOT_DIR=$(WID) && \
+	make && make install
+
+unit-test:
+	cd ../drm-em && \
+	$(call setenv) && \
+	mkdir -p m4 && \
+	aclocal -I cfg && \
+	libtoolize --automake && \
+	autoheader && \
+	automake --foreign --add-missing && \
+	rm -f configure && \
+	autoconf --include=$(WID)/include && \
+	./configure --prefix $(WID) && \
+	make && make install
+

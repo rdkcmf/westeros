@@ -963,7 +963,7 @@ static VideoServerConnection *wstCreateVideoServerConnection( VideoServerCtx *se
       conn->server= server;
       conn->prevFrameFd0= -1;
       conn->prevFrameFd1= -1;
-      conn->prevFrameFd1= -1;
+      conn->prevFrameFd2= -1;
 
       rc= pthread_create( &conn->threadId, NULL, wstVideoServerConnectionThread, conn );
       if ( rc )

@@ -80,6 +80,13 @@
 #include <vector>
 #include <map>
 
+#undef open
+#undef close
+#undef ioctl
+#undef mmap
+#undef munmap
+#undef poll
+
 // When running:
 //export LD_PRELOAD=../lib/libwesteros-ut-em.so
 //export LD_LIBRARY_PATH=../lib
@@ -593,6 +600,7 @@ void EMSetError( EMCTX *ctx, const char *fmt, ... )
    va_start( argptr, fmt );
    vsprintf( ctx->errorDetail, fmt, argptr );
    va_end( argptr );
+   fprintf(stderr,"%s\n",ctx->errorDetail);
 }
 
 const char* EMGetError( EMCTX *ctx )
@@ -2388,12 +2396,6 @@ exit:
 
 extern "C"
 {
-#undef open
-#undef close
-#undef ioctl
-#undef mmap
-#undef munmap
-#undef poll
 
 int EMIOctl( int fd, int request, void *arg )
 {
