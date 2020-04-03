@@ -58,12 +58,14 @@ enum
   PROP_DISPLAY_RESOLUTION,
   PROP_WINDOW_SHOW,
   PROP_ZOOM_MODE,
+  PROP_FORCE_ASPECT_RATIO,
   PROP_SERVER_PLAY_SPEED,
   PROP_LOW_DELAY,
   PROP_LATENCY_TARGET,
   PROP_CAPTURE_SIZE,
   PROP_HIDE_VIDEO_DURING_CAPTURE,
   PROP_CAMERA_LATENCY,
+  PROP_IMMEDIATE_OUTPUT,
   PROP_FRAME_STEP_ON_PREROLL,
   PROP_ENABLE_TEXTURE,
   PROP_QUEUED_FRAMES
@@ -168,6 +170,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                        "Set zoom mode",
                        0, NEXUS_VideoWindowContentMode_eMax-1, NEXUS_VideoWindowContentMode_eFull, G_PARAM_READWRITE ));
 
+   g_object_class_install_property (gobject_class, PROP_FORCE_ASPECT_RATIO,
+     g_param_spec_boolean ("force-aspect-ratio",
+                           "force aspect ratio",
+                           "When enabled scaling respects source aspect ratio", FALSE, G_PARAM_READWRITE));
+
    g_object_class_install_property(gobject_class, PROP_SERVER_PLAY_SPEED,
       g_param_spec_float("server-play-speed", "server play speed",
           "Server side applied play speed",
@@ -198,6 +205,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
      g_param_spec_boolean ("camera-latency",
                            "low latency camera mode",
                            "configure for low latency mode suitable for cameras", FALSE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_IMMEDIATE_OUTPUT,
+     g_param_spec_boolean ("immediate-output",
+                           "immediate output mode",
+                           "Decoded frames are output with minimum delay. B frames are dropped.", FALSE, G_PARAM_READWRITE));
 
    g_object_class_install_property (gobject_class, PROP_FRAME_STEP_ON_PREROLL,
      g_param_spec_boolean ("frame-step-on-preroll",
@@ -378,10 +390,10 @@ static void streamChangedCallback(void * context, int param)
    switch (streamInfo.dynamicMetadataType)
    {
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eDolbyVision:
-         GST_WARNING("Dolby Vision content decoding begins.\n");
+         GST_WARNING("Dolby Vision content decoding begins.");
          break;
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eTechnicolorPrime:
-         GST_WARNING(" Technicolor Prime content decoding begins.\n");
+         GST_WARNING(" Technicolor Prime content decoding begins.");
          break;
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eNone:
       default:
@@ -392,10 +404,10 @@ static void streamChangedCallback(void * context, int param)
              * The enum value is deprecated and assigned to eInvalid now
              */
             case NEXUS_VideoEotf_eHdr10:
-               GST_WARNING(" HDR content decoding begins.\n");
+               GST_WARNING(" HDR content decoding begins.");
                break;
             case NEXUS_VideoEotf_eHlg:
-               GST_WARNING(" HLG content decoding begins.\n");
+               GST_WARNING(" HLG content decoding begins.");
                break;
             default:
                break;
@@ -467,7 +479,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    }
    sink->soc.hideVideoDuringCapture= TRUE;
    sink->soc.usePip= FALSE;
-   sink->soc.useCameraLatency= FALSE;
+   sink->soc.useImmediateOutput= FALSE;
    sink->soc.useLowDelay= FALSE;
    sink->soc.frameStepOnPreroll= FALSE;
    sink->soc.enableTextureSignal= FALSE;
@@ -499,7 +511,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoDecoderId= 0;
    sink->soc.videoDecoder= 0;
    sink->soc.ptsOffset= 0;
+   sink->soc.zoomSet= FALSE;
    sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
+   sink->soc.forceAspectRatio= FALSE;
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.clientPlaySpeed= 1.0;
@@ -547,7 +561,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    }
    else
    {
-      GST_ERROR("gst_westeros_sink_soc_init: NxClient_Join failed %d\n", rc);
+      GST_ERROR("gst_westeros_sink_soc_init: NxClient_Join failed %d", rc);
    }
    
    return result;
@@ -658,6 +672,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
          {
             int intValue= g_value_get_int(value);
 
+            sink->soc.zoomSet= TRUE;
             switch( intValue )
             {
                case 0:
@@ -680,6 +695,28 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
                   clientSettings.composition.contentMode= sink->soc.zoomMode;
                   NEXUS_SurfaceClient_SetSettings(sink->soc.videoWindow, &clientSettings);
                }
+            }
+         }
+         break;
+      case PROP_FORCE_ASPECT_RATIO:
+         if ( !sink->soc.zoomSet )
+         {
+            sink->soc.forceAspectRatio= g_value_get_boolean(value);
+            if ( sink->soc.forceAspectRatio )
+            {
+               sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eBox;
+            }
+            else
+            {
+               sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
+            }
+            if ( sink->soc.videoWindow )
+            {
+               NEXUS_SurfaceClientSettings clientSettings;
+
+               NEXUS_SurfaceClient_GetSettings(sink->soc.videoWindow, &clientSettings);
+               clientSettings.composition.contentMode= sink->soc.zoomMode;;
+               NEXUS_SurfaceClient_SetSettings(sink->soc.videoWindow, &clientSettings);
             }
          }
          break;
@@ -760,9 +797,10 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.hideVideoDuringCapture= g_value_get_boolean(value);
             break;
          }
+      case PROP_IMMEDIATE_OUTPUT:
       case PROP_CAMERA_LATENCY:
          {
-            sink->soc.useCameraLatency= g_value_get_boolean(value);
+            sink->soc.useImmediateOutput= g_value_get_boolean(value);
             break;
          }
       case PROP_FRAME_STEP_ON_PREROLL:
@@ -853,6 +891,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
             g_value_set_int( value, intValue );
          }
          break;
+      case PROP_FORCE_ASPECT_RATIO:
+         g_value_set_boolean(value, sink->soc.forceAspectRatio);
+         break;
       case PROP_SERVER_PLAY_SPEED:
          g_value_set_float(value, sink->soc.serverPlaySpeed);
          break;
@@ -865,8 +906,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
       case PROP_HIDE_VIDEO_DURING_CAPTURE:
          g_value_set_boolean(value, sink->soc.hideVideoDuringCapture);
          break;
+      case PROP_IMMEDIATE_OUTPUT:
       case PROP_CAMERA_LATENCY:
-         g_value_set_boolean(value, sink->soc.useCameraLatency);
+         g_value_set_boolean(value, sink->soc.useImmediateOutput);
          break;
       case PROP_FRAME_STEP_ON_PREROLL:
          g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
@@ -1468,7 +1510,7 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
       for( i= 0; i < NUM_CAPTURE_SURFACES; ++i )
       {
          sink->soc.captureSurface[i]= NEXUS_Surface_Create(&videoSurfaceCreateSettings);
-         GST_LOG("video capture surface %d: %p (%dx%d)\n", i, 
+         GST_LOG("video capture surface %d: %p (%dx%d)", i,
                   (void*)sink->soc.captureSurface[i], sink->soc.captureWidth, sink->soc.captureHeight);
          if ( sink->soc.captureSurface[i] == NULL )
          {
@@ -1524,7 +1566,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       result= gst_pad_query(sink->peerPad, query);
       if (!result) 
       {
-         GST_DEBUG("queryPeerHandles: pad query for stc_channel failed\n");
+         GST_DEBUG("queryPeerHandles: pad query for stc_channel failed");
          gst_query_unref(query);
          return FALSE;
       }    
@@ -1532,7 +1574,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       val= gst_structure_get_value(structure2, "stc_channel");
       if (val == NULL) 
       {
-         GST_ERROR("queryPeerHandles: struc value for stc_channel failed\n");
+         GST_ERROR("queryPeerHandles: struc value for stc_channel failed");
          gst_query_unref(query);
          return FALSE;
       }    
@@ -1551,7 +1593,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    result= gst_pad_query(sink->peerPad, query);
    if (!result) 
    {
-      GST_ERROR("queryPeerHandles: pad query for codec failed\n");
+      GST_ERROR("queryPeerHandles: pad query for codec failed");
       gst_query_unref(query);
       return FALSE;
    }
@@ -1559,7 +1601,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    val= gst_structure_get_value(structure2, "video_codec");
    if (val == NULL) 
    {
-      GST_ERROR("queryPeerHandles: struc value for codec failed\n");
+      GST_ERROR("queryPeerHandles: struc value for codec failed");
       gst_query_unref(query);
       return FALSE;
    }    
@@ -1576,7 +1618,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    result= gst_pad_query(sink->peerPad, query);
    if (!result) 
    {
-      GST_ERROR("queryPeerHandles: pad query for video_pid_channel failed\n");
+      GST_ERROR("queryPeerHandles: pad query for video_pid_channel failed");
       gst_query_unref(query);
       return FALSE;
    }
@@ -1584,7 +1626,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    val= gst_structure_get_value(structure2, "video_pid_channel");
    if (val == NULL) 
    {
-      GST_ERROR("queryPeerHandles: struc value for video_pid_channel failed\n");
+      GST_ERROR("queryPeerHandles: struc value for video_pid_channel failed");
       gst_query_unref(query);
       return FALSE;
    }
@@ -1670,7 +1712,7 @@ static gpointer captureThread(gpointer data)
 
    if ( getenv("WESTEROS_SINK_USE_GFX") )
    {
-      GST_INFO_OBJECT(sink, "WESTEROS_SINK_USE_GFX defined - enabling capture\n");
+      GST_INFO_OBJECT(sink, "WESTEROS_SINK_USE_GFX defined - enabling capture");
       gst_westeros_sink_soc_set_video_path( sink, true );
    }
 
@@ -1932,7 +1974,7 @@ static void processFrame( GstWesterosSink *sink )
       {
          long long now= getCurrentTimeMillis();
          long long elapsed= now-sink->soc.startTime;
-         GST_LOG("%lld.%03lld: cap surf %p: frame %d pts %u (%d) serial %u iter %d\n",
+         GST_LOG("%lld.%03lld: cap surf %p: frame %d pts %u (%d) serial %u iter %d",
                  elapsed/1000LL, elapsed%1000LL, (void*)captureSurface, sink->soc.frameCount,
                  captureStatus.pts, captureStatus.ptsValid, captureStatus.serialNumber, sink->soc.captureCount );
 
@@ -2129,7 +2171,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
       int limit= EOS_DETECT_DELAY;
       if ( sink->soc.noFrameCount*FRAME_POLL_TIME > limit )
       {
-         GST_INFO_OBJECT(sink, "updateVideoStatus: eos detected: firstPTS %lld currentPTS %lld\n", sink->firstPTS, sink->currentPTS);
+         GST_INFO_OBJECT(sink, "updateVideoStatus: eos detected: firstPTS %lld currentPTS %lld", sink->firstPTS, sink->currentPTS);
          sink->eosEventSeen= TRUE;
          gst_westeros_sink_eos_detected( sink );
          sink->soc.noFrameCount= 0;
@@ -2863,7 +2905,7 @@ static int sinkAcquireResources( GstWesterosSink *sink )
             ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
             printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
          }
-         if ( sink->soc.useCameraLatency )
+         if ( sink->soc.useImmediateOutput )
          {
             NEXUS_VideoDecoderTrickState trickState;
             NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
@@ -2871,7 +2913,7 @@ static int sinkAcquireResources( GstWesterosSink *sink )
             NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
             ext_settings.zeroDelayOutputMode= true;
             ext_settings.ignoreDpbOutputDelaySyntax= true;
-            printf("westerossink: using camera mode\n");
+            printf("westerossink: using immediate output mode\n");
          }
          ext_settings.treatIFrameAsRap= true;
          ext_settings.ignoreNumReorderFramesEqZero= true;
@@ -2917,7 +2959,7 @@ static int sinkAcquireResources( GstWesterosSink *sink )
    }
    else
    {
-      GST_ERROR("sinkAcquireResources: NxClient_Alloc failed %d\n", rc);
+      GST_ERROR("sinkAcquireResources: NxClient_Alloc failed %d", rc);
    }
 
    return result;

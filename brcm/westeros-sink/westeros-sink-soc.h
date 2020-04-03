@@ -50,8 +50,9 @@ struct _GstWesterosSinkSoc
    NEXUS_SurfaceClientHandle surfaceClient;
    NEXUS_SurfaceClientHandle videoWindow;
 
+   gboolean forceAspectRatio;
    gboolean hideVideoDuringCapture;
-   gboolean useCameraLatency;
+   gboolean useImmediateOutput;
    gboolean usePip;
    gboolean useLowDelay;
    gboolean frameStepOnPreroll;
@@ -93,6 +94,7 @@ struct _GstWesterosSinkSoc
 
    gboolean presentationStarted;
    unsigned int ptsOffset;
+   gboolean zoomSet;
    NEXUS_VideoWindowContentMode zoomMode;
    gboolean enableCCPassthru;
    NEXUS_VideoFormat outputFormat;

@@ -673,7 +673,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    }
    else
    {
-      GST_ERROR("gst_westeros_sink_init: soc_init failed\n");
+      GST_ERROR("gst_westeros_sink_init: soc_init failed");
    }
 }
 
@@ -1163,7 +1163,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                   gst_structure_get_int(structure, "height", &height);
                   if (width > sink->maxWidth || height > sink->maxHeight)
                   {
-                     GST_ERROR("width=%d height=%d > maxWidth=%d maxHeight=%d\n", width, height, sink->maxWidth, sink->maxHeight);
+                     GST_ERROR("width=%d height=%d > maxWidth=%d maxHeight=%d", width, height, sink->maxWidth, sink->maxHeight);
                      const char *err_string = "Maximum video dimensions exceeded";
                      GError *error = g_error_new(GST_STREAM_ERROR, GST_STREAM_ERROR_WRONG_TYPE, "%s", err_string);
                      GstMessage *message = gst_message_new_error(GST_OBJECT_CAST(sink), error, err_string);
@@ -1369,7 +1369,7 @@ static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstPad *peer)
    
    if (gst_westeros_sink_check_caps(sink, peer) != TRUE)
    {
-      GST_ERROR("Peer Caps is not supported\n");
+      GST_ERROR("Peer Caps is not supported");
    }
 
    sink->peerPad= peer;
