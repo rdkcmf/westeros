@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <memory.h>
+#include <poll.h>
 #include <pthread.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -68,6 +69,11 @@
 #define DISPLAY_SAFE_BORDER_PERCENT (5)
 
 #define DRM_NO_SRC_CROP
+
+#ifndef DRM_NO_OUT_FENCE
+#define DRM_USE_OUT_FENCE
+#define DRM_NO_NATIVE_FENCE
+#endif
 
 #ifndef DRM_NO_NATIVE_FENCE
 #ifdef EGL_ANDROID_native_fence_sync
@@ -218,6 +224,8 @@ typedef struct _WstGLCtx
    int flipPending;
    #ifdef DRM_USE_NATIVE_FENCE
    EGLSyncKHR fenceSync;
+   #endif
+   #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
    int nativeOutputFenceFd;
    #endif
 } WstGLCtx;
@@ -234,6 +242,8 @@ typedef struct _WstGLSizeCBInfo
 
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstTermCtx( WstGLCtx *ctx );
+static void wstUpdateCtx( WstGLCtx *ctx );
+static void wstSelectMode( WstGLCtx *ctx, int width, int height );
 static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw );
 static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw );
 
@@ -1316,40 +1326,43 @@ static bool wstAcquireConnectorProperties( WstGLCtx *ctx )
    bool error= false;
    int i;
 
-   ctx->connectorProps= drmModeObjectGetProperties( ctx->drmFd, ctx->conn->connector_id, DRM_MODE_OBJECT_CONNECTOR );
-   if ( ctx->connectorProps )
+   if ( ctx->conn )
    {
-      ctx->connectorPropRes= (drmModePropertyRes**)calloc( ctx->connectorProps->count_props, sizeof(drmModePropertyRes*) );
-      if ( ctx->connectorPropRes )
+      ctx->connectorProps= drmModeObjectGetProperties( ctx->drmFd, ctx->conn->connector_id, DRM_MODE_OBJECT_CONNECTOR );
+      if ( ctx->connectorProps )
       {
-         for( i= 0; i < ctx->connectorProps->count_props; ++i )
+         ctx->connectorPropRes= (drmModePropertyRes**)calloc( ctx->connectorProps->count_props, sizeof(drmModePropertyRes*) );
+         if ( ctx->connectorPropRes )
          {
-            ctx->connectorPropRes[i]= drmModeGetProperty( ctx->drmFd, ctx->connectorProps->props[i] );
-            if ( ctx->connectorPropRes[i] )
+            for( i= 0; i < ctx->connectorProps->count_props; ++i )
             {
-               DEBUG("connector property %d name (%s) value (%lld)",
-                     ctx->connectorProps->props[i], ctx->connectorPropRes[i]->name, ctx->connectorProps->prop_values[i] );
+               ctx->connectorPropRes[i]= drmModeGetProperty( ctx->drmFd, ctx->connectorProps->props[i] );
+               if ( ctx->connectorPropRes[i] )
+               {
+                  DEBUG("connector property %d name (%s) value (%lld)",
+                        ctx->connectorProps->props[i], ctx->connectorPropRes[i]->name, ctx->connectorProps->prop_values[i] );
+               }
+               else
+               {
+                  error= true;
+                  break;
+               }
             }
-            else
-            {
-               error= true;
-               break;
-            }
+         }
+         else
+         {
+            error= true;
          }
       }
       else
       {
          error= true;
       }
-   }
-   else
-   {
-      error= true;
-   }
-   if ( error )
-   {
-      wstReleaseConnectorProperties( ctx );
-      ctx->haveAtomic= false;
+      if ( error )
+      {
+         wstReleaseConnectorProperties( ctx );
+         ctx->haveAtomic= false;
+      }
    }
 
    return !error;
@@ -1566,7 +1579,7 @@ static WstGLCtx *wstInitCtx( void )
          INFO("westeros-gl: no video server");
          ctx->useVideoServer= false;
       }
-      #ifdef DRM_USE_NATIVE_FENCE
+      #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
       ctx->nativeOutputFenceFd= -1;
       #endif
 
@@ -1621,16 +1634,18 @@ static WstGLCtx *wstInitCtx( void )
       if ( !conn )
       {
          ERROR("wstInitCtx: unable to get connector for card (%s)", card);
-         goto exit;
       }
       ctx->res= res;
       ctx->conn= conn;
 
-      for( i= 0; i < conn->count_modes; ++i )
+      if ( conn )
       {
-         DEBUG("mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x",
-                i, conn->modes[i].hdisplay, conn->modes[i].vdisplay, conn->modes[i].vrefresh,
-                conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
+         for( i= 0; i < conn->count_modes; ++i )
+         {
+            DEBUG("mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x",
+                   i, conn->modes[i].hdisplay, conn->modes[i].vdisplay, conn->modes[i].vrefresh,
+                   conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
+         }
       }
 
       ctx->gbm= gbm_create_device( ctx->drmFd );
@@ -1644,7 +1659,7 @@ static WstGLCtx *wstInitCtx( void )
          uint32_t crtcId= 0;
          bool found= false;
          ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[i]);
-         if ( ctx->enc && (ctx->enc->encoder_id == conn->encoder_id) )
+         if ( ctx->enc && conn && (ctx->enc->encoder_id == conn->encoder_id) )
          {
             found= true;
             break;
@@ -1661,6 +1676,7 @@ static WstGLCtx *wstInitCtx( void )
                      drmModeFreeEncoder( ctx->enc );
                      ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[k]);
                      ctx->enc->crtc_id= crtcId;
+                     DEBUG("got enc %p crtc id %d", ctx->enc, crtcId);
                      found= true;
                      break;
                   }
@@ -1997,6 +2013,188 @@ static void wstTermCtx( WstGLCtx *ctx )
    }
 }
 
+static void wstUpdateCtx( WstGLCtx *ctx )
+{
+   int i, j, k;
+   drmModeRes *res= 0;
+   drmModeConnector *conn= 0;
+   if ( ctx )
+   {
+      res= ctx->res;
+      if ( res )
+      {
+         wstReleaseConnectorProperties( ctx );
+
+         for( i= 0; i < res->count_connectors; ++i )
+         {
+            conn= drmModeGetConnector( ctx->drmFd, res->connectors[i] );
+            if ( conn )
+            {
+               if ( conn->count_modes && (conn->connection == DRM_MODE_CONNECTED) )
+               {
+                  break;
+               }
+               drmModeFreeConnector(conn);
+               conn= 0;
+            }
+         }
+         if ( conn )
+         {
+            ctx->conn= conn;
+            for( i= 0; i < conn->count_modes; ++i )
+            {
+               DEBUG("mode %d: %dx%dx%d (%s) type 0x%x flags 0x%x",
+                      i, conn->modes[i].hdisplay, conn->modes[i].vdisplay, conn->modes[i].vrefresh,
+                      conn->modes[i].name, conn->modes[i].type, conn->modes[i].flags );
+            }
+
+            for( i= 0; i < res->count_encoders; ++i )
+            {
+               uint32_t crtcId= 0;
+               bool found= false;
+               ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[i]);
+               if ( ctx->enc && conn && (ctx->enc->encoder_id == conn->encoder_id) )
+               {
+                  found= true;
+                  break;
+               }
+               for( j= 0; j < res->count_crtcs; j++ )
+               {
+                  if ( ctx->enc->possible_crtcs & (1 << j))
+                  {
+                     crtcId= res->crtcs[j];
+                     for( k= 0; k < res->count_crtcs; k++ )
+                     {
+                        if ( res->crtcs[k] == crtcId )
+                        {
+                           drmModeFreeEncoder( ctx->enc );
+                           ctx->enc= drmModeGetEncoder(ctx->drmFd, res->encoders[k]);
+                           ctx->enc->crtc_id= crtcId;
+                           DEBUG("got enc %p crtc id %d", ctx->enc, crtcId);
+                           found= true;
+                           break;
+                        }
+                     }
+                     if ( found )
+                     {
+                        break;
+                     }
+                  }
+               }
+               if ( !found )
+               {
+                  drmModeFreeEncoder( ctx->enc );
+                  ctx->enc= 0;
+               }
+            }
+
+            if ( ctx->haveAtomic )
+            {
+               wstAcquireConnectorProperties( ctx );
+            }
+
+            if ( !ctx->modeSet )
+            {
+               if ( ctx->nwFirst )
+               {
+                  int width, height;
+                  width= ctx->nwFirst->width;
+                  height= ctx->nwFirst->height;
+
+                  DEBUG("Select mode: window %dx%d", width, height);
+                  wstSelectMode( ctx, width, height );
+               }
+            }
+         }
+      }
+   }
+}
+
+static void wstSelectMode( WstGLCtx *ctx, int width, int height )
+{
+   if ( ctx && ctx->conn )
+   {
+      bool found= false;
+      int i, area, largestArea= 0;
+      int miPreferred= -1, miBest= -1;
+      int refresh;
+      const char *usePreferred= 0;
+      const char *useBest= 0;
+      int maxArea= 0;
+      const char *env= getenv("WESTEROS_GL_MAX_MODE");
+      if ( env )
+      {
+         int w= 0, h= 0;
+         if ( sscanf( env, "%dx%d", &w, &h ) == 2 )
+         {
+            DEBUG("max mode: %dx%d", w, h);
+            maxArea= w*h;
+         }
+      }
+      if ( ctx->haveAtomic )
+      {
+         usePreferred= getenv("WESTEROS_GL_USE_PREFERRED_MODE");
+         useBest= getenv("WESTEROS_GL_USE_BEST_MODE");
+      }
+      for( i= 0; i < ctx->conn->count_modes; ++i )
+      {
+         if ( usePreferred )
+         {
+            if ( ctx->conn->modes[i].type & DRM_MODE_TYPE_PREFERRED )
+            {
+               miPreferred= i;
+            }
+         }
+         else if ( useBest )
+         {
+            area= ctx->conn->modes[i].hdisplay * ctx->conn->modes[i].vdisplay;
+            if ( (area > largestArea) && ((maxArea == 0) || (area <= maxArea)) )
+            {
+               largestArea= area;
+               miBest= i;
+               refresh= ctx->conn->modes[i].vrefresh;
+            }
+            else if ( area == largestArea )
+            {
+               if ( ctx->conn->modes[i].vrefresh > refresh )
+               {
+                  miBest= i;
+                  refresh= ctx->conn->modes[i].vrefresh;
+               }
+            }
+         }
+         else if ( (ctx->conn->modes[i].hdisplay == width) &&
+              (ctx->conn->modes[i].vdisplay == height) &&
+              (ctx->conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
+         {
+            found= true;
+            ctx->modeCurrent= ctx->conn->modes[i];
+            ctx->modeInfo= &ctx->modeCurrent;
+            break;
+         }
+      }
+      if ( !found )
+      {
+         if ( usePreferred && (miPreferred >= 0) )
+         {
+            ctx->modeCurrent= ctx->conn->modes[miPreferred];
+            ctx->modeInfo= &ctx->modeCurrent;
+         }
+         else if ( useBest && (miBest >= 0) )
+         {
+            ctx->modeCurrent= ctx->conn->modes[miBest];
+            ctx->modeInfo= &ctx->modeCurrent;
+         }
+         else
+         {
+            ctx->modeCurrent= ctx->conn->modes[0];
+            ctx->modeInfo= &ctx->modeCurrent;
+         }
+      }
+      INFO("choosing output mode: %dx%dx%d", ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh);
+   }
+}
+
 static void wstAtomicAddProperty( WstGLCtx *ctx, drmModeAtomicReq *req, uint32_t objectId,
                                   int countProps, drmModePropertyRes **propRes, const char *name, uint64_t value )
 {
@@ -2056,11 +2254,15 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       goto exit;
    }
 
+   #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
    #ifdef DRM_USE_NATIVE_FENCE
    if ( ctx->haveNativeFence )
    {
+   #endif
       flags |= DRM_MODE_ATOMIC_NONBLOCK;
+   #ifdef DRM_USE_NATIVE_FENCE
    }
+   #endif
    #endif
 
    if ( !ctx->modeSet )
@@ -2088,13 +2290,17 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       }
    }
 
+   #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
    #ifdef DRM_USE_NATIVE_FENCE
    if ( ctx->haveNativeFence )
    {
+   #endif
       wstAtomicAddProperty( ctx, req, ctx->crtc->crtc_id,
                             ctx->crtcProps->count_props, ctx->crtcPropRes,
                             "OUT_FENCE_PTR", (uint64_t)(unsigned long)(&ctx->nativeOutputFenceFd) );
+   #ifdef DRM_USE_NATIVE_FENCE
    }
+   #endif
    #endif
 
    if ( nw )
@@ -2366,6 +2572,36 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       ctx->modeSet= true;
    }
 
+   #ifdef DRM_USE_OUT_FENCE
+   if ( ctx->nativeOutputFenceFd >= 0 )
+   {
+      int rc;
+      struct pollfd pfd;
+
+      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
+      pfd.fd= ctx->nativeOutputFenceFd;
+      pfd.events= POLLIN;
+      pfd.revents= 0;
+
+      for( ; ; )
+      {
+         rc= poll( &pfd, 1, 3000);
+         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
+         {
+            continue;
+         }
+         else if ( rc <= 0 )
+         {
+            if ( rc == 0 ) errno= ETIME;
+            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
+         }
+         break;
+      }
+      close( ctx->nativeOutputFenceFd );
+      ctx->nativeOutputFenceFd= -1;
+   }
+   #endif
+
 exit:
 
    TRACE3("wstSwapDRMBuffersAtomic: atomic stop");
@@ -2387,6 +2623,16 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
    drmModePlane *plane= 0;
    int rc;
    bool eventPending= false;
+
+   if ( !ctx->conn )
+   {
+      wstUpdateCtx( ctx );
+      if ( !ctx->conn )
+      {
+         TRACE3("wstSwapDRMBuffersAtomic: no connector");
+         goto exit;
+      }
+   }
 
    if ( ctx->modeSetPending )
    {
@@ -3402,86 +3648,9 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
 
       WSTGL_CHECK_GRAPHICS_SIZE( width, height );
 
-      if ( !ctx->modeSet && !ctx->modeSetPending )
+      if ( !ctx->modeSet && !ctx->modeSetPending && ctx->conn )
       {
-         bool found= false;
-         int i, area, largestArea= 0;
-         int miPreferred= -1, miBest= -1;
-         int refresh;
-         const char *usePreferred= 0;
-         const char *useBest= 0;
-         int maxArea= 0;
-         const char *env= getenv("WESTEROS_GL_MAX_MODE");
-         if ( env )
-         {
-            int w= 0, h= 0;
-            if ( sscanf( env, "%dx%d", &w, &h ) == 2 )
-            {
-               DEBUG("max mode: %dx%d", w, h);
-               maxArea= w*h;
-            }
-         }
-         if ( ctx->haveAtomic )
-         {
-            usePreferred= getenv("WESTEROS_GL_USE_PREFERRED_MODE");
-            useBest= getenv("WESTEROS_GL_USE_BEST_MODE");
-         }
-         for( i= 0; i < ctx->conn->count_modes; ++i )
-         {
-            if ( usePreferred )
-            {
-               if ( ctx->conn->modes[i].type & DRM_MODE_TYPE_PREFERRED )
-               {
-                  miPreferred= i;
-               }
-            }
-            else if ( useBest )
-            {
-               area= ctx->conn->modes[i].hdisplay * ctx->conn->modes[i].vdisplay;
-               if ( (area > largestArea) && ((maxArea == 0) || (area <= maxArea)) )
-               {
-                  largestArea= area;
-                  miBest= i;
-                  refresh= ctx->conn->modes[i].vrefresh;
-               }
-               else if ( area == largestArea )
-               {
-                  if ( ctx->conn->modes[i].vrefresh > refresh )
-                  {
-                     miBest= i;
-                     refresh= ctx->conn->modes[i].vrefresh;
-                  }
-               }
-            }
-            else if ( (ctx->conn->modes[i].hdisplay == width) &&
-                 (ctx->conn->modes[i].vdisplay == height) &&
-                 (ctx->conn->modes[i].type & DRM_MODE_TYPE_DRIVER) )
-            {
-               found= true;
-               ctx->modeCurrent= ctx->conn->modes[i];
-               ctx->modeInfo= &ctx->modeCurrent;
-               break;
-            }
-         }
-         if ( !found )
-         {
-            if ( usePreferred && (miPreferred >= 0) )
-            {
-               ctx->modeCurrent= ctx->conn->modes[miPreferred];
-               ctx->modeInfo= &ctx->modeCurrent;
-            }
-            else if ( useBest && (miBest >= 0) )
-            {
-               ctx->modeCurrent= ctx->conn->modes[miBest];
-               ctx->modeInfo= &ctx->modeCurrent;
-            }
-            else
-            {
-               ctx->modeCurrent= ctx->conn->modes[0];
-               ctx->modeInfo= &ctx->modeCurrent;
-            }
-         }
-         INFO("choosing output mode: %dx%dx%d", ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh);
+         wstSelectMode( ctx, width, height );
       }
 
       nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
