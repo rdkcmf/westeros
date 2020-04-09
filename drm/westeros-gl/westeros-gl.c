@@ -2247,6 +2247,37 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
    uint32_t handle, stride;
 
    TRACE3("wstSwapDRMBuffersAtomic: atomic start");
+
+   #ifdef DRM_USE_OUT_FENCE
+   if ( ctx->nativeOutputFenceFd >= 0 )
+   {
+      int rc;
+      struct pollfd pfd;
+
+      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
+      pfd.fd= ctx->nativeOutputFenceFd;
+      pfd.events= POLLIN;
+      pfd.revents= 0;
+
+      for( ; ; )
+      {
+         rc= poll( &pfd, 1, 3000);
+         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
+         {
+            continue;
+         }
+         else if ( rc <= 0 )
+         {
+            if ( rc == 0 ) errno= ETIME;
+            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
+         }
+         break;
+      }
+      close( ctx->nativeOutputFenceFd );
+      ctx->nativeOutputFenceFd= -1;
+   }
+   #endif
+
    req= drmModeAtomicAlloc();
    if ( !req )
    {
@@ -2571,36 +2602,6 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
    {
       ctx->modeSet= true;
    }
-
-   #ifdef DRM_USE_OUT_FENCE
-   if ( ctx->nativeOutputFenceFd >= 0 )
-   {
-      int rc;
-      struct pollfd pfd;
-
-      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
-      pfd.fd= ctx->nativeOutputFenceFd;
-      pfd.events= POLLIN;
-      pfd.revents= 0;
-
-      for( ; ; )
-      {
-         rc= poll( &pfd, 1, 3000);
-         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
-         {
-            continue;
-         }
-         else if ( rc <= 0 )
-         {
-            if ( rc == 0 ) errno= ETIME;
-            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
-         }
-         break;
-      }
-      close( ctx->nativeOutputFenceFd );
-      ctx->nativeOutputFenceFd= -1;
-   }
-   #endif
 
 exit:
 
