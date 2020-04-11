@@ -21,12 +21,14 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <memory.h>
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
 #include <linux/input.h>
+#include <linux/joystick.h>
 #include <dlfcn.h>
 #include <poll.h>
 #include <pthread.h>
@@ -89,6 +91,22 @@ typedef struct _EssTouchInfo
    bool moved;
 } EssTouchInfo;
 
+typedef struct _EssGamepad
+{
+   EssCtx *ctx;
+   const char *devicePath;
+   const char *name;
+   int fd;
+   int buttonCount;
+   uint16_t buttonMap[KEY_MAX - BTN_MISC + 1];
+   int buttonState[KEY_MAX - BTN_MISC + 1];
+   int axisCount;
+   uint8_t axisMap[ABS_CNT];
+   int axisState[ABS_CNT];
+   void *eventListenerUserData;
+   EssGamepadEventListener *eventListener;
+} EssGamepad;
+
 typedef struct _EssCtx
 {
    pthread_mutex_t mutex;
@@ -119,6 +137,7 @@ typedef struct _EssCtx
    int notifyFd;
    int watchFd;
    std::vector<pollfd> inputDeviceFds;
+   std::vector<EssGamepad*> gamepads;
    int eventLoopPeriodMS;
    long long eventLoopLastTimeStamp;
 
@@ -140,6 +159,8 @@ typedef struct _EssCtx
    EssPointerListener *pointerListener;
    void *touchListenerUserData;
    EssTouchListener *touchListener;
+   void *gamepadConnectionListenerUserData;
+   EssGamepadConnectionListener *gamepadConnectionListener;
    void *settingsListenerUserData;
    EssSettingsListener *settingsListener;
    void *terminateListenerUserData;
@@ -213,6 +234,9 @@ static void essProcessTouchDown( EssCtx *ctx, int id, int x, int y );
 static void essProcessTouchUp( EssCtx *ctx, int id );
 static void essProcessTouchMotion( EssCtx *ctx, int id, int x, int y );
 static void essProcessTouchFrame( EssCtx *ctx );
+static void essProcessGamepadButtonPressed( EssGamepad *gp, int button );
+static void essProcessGamepadButtonReleased( EssGamepad *gp, int button );
+static void essProcessGamepadAxisChanged( EssGamepad *gp, int axis, int value );
 #ifdef HAVE_WAYLAND
 static bool essPlatformInitWayland( EssCtx *ctx );
 static void essPlatformTermWayland( EssCtx *ctx );
@@ -222,6 +246,7 @@ static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx );
 static bool essPlatformInitDirect( EssCtx *ctx );
 static void essPlatformTermDirect( EssCtx *ctx );
 static bool essPlatformSetDisplayModeDirect( EssCtx *ctx, const char *mode );
+static int essOpenGamepadDevice( EssCtx *ctx, const char *devPathName );
 static int essOpenInputDevice( EssCtx *ctx, const char *devPathName );
 static char *essGetInputDevice( EssCtx *ctx, const char *path, char *devName );
 static void essGetInputDevices( EssCtx *ctx );
@@ -229,6 +254,12 @@ static void essMonitorInputDevicesLifecycleBegin( EssCtx *ctx );
 static void essMonitorInputDevicesLifecycleEnd( EssCtx *ctx );
 static void essReleaseInputDevices( EssCtx *ctx );
 static void essProcessInputDevices( EssCtx *ctx );
+static void essProcessGamepad( EssCtx *ctx, EssGamepad *gp );
+static void essValidatGamepads( EssCtx *ctx );
+static EssGamepad *essGetGamepadFromPath( EssCtx *ctx, const char *path );
+static EssGamepad *essGetGamepadFromFd( EssCtx *ctx, int fd );
+static void essGamepadNotifyConnected( EssCtx *ctx, EssGamepad *gp );
+static void essGamepadNotifyDisconnected( EssCtx *ctx, EssGamepad *gp );
 #endif
 
 static EGLint gDefaultEGLCfgAttrSize= 17;
@@ -296,6 +327,7 @@ EssCtx* EssContextCreate()
       ctx->eglSwapInterval= 1;
 
       ctx->inputDeviceFds= std::vector<pollfd>();
+      ctx->gamepads= std::vector<EssGamepad*>();
    }
 
    return ctx;
@@ -932,6 +964,243 @@ bool EssContextSetTerminateListener( EssCtx *ctx, void *userData, EssTerminateLi
    return result;
 }
 
+bool EssContextSetGamepadConnectionListener( EssCtx *ctx, void *userData, EssGamepadConnectionListener *listener )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      std::vector<EssGamepad*> pads= std::vector<EssGamepad*>();
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->gamepadConnectionListenerUserData= userData;
+      ctx->gamepadConnectionListener= listener;
+
+      if ( listener && listener->connected )
+      {
+         // Create a snapshot of any existing gamepads
+         for( int i= 0; i < ctx->gamepads.size(); ++i )
+         {
+            EssGamepad *gp= ctx->gamepads[i];
+            pads.push_back( gp );
+         }
+      }
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      // Notify listener of any existing gamepads
+      for( int i= 0; i < pads.size(); ++i )
+      {
+         EssGamepad *gp= pads[i];
+         essGamepadNotifyConnected( ctx, gp );
+      }
+   }
+
+   return result;
+}
+
+bool EssGamepadSetEventListener( EssGamepad *gp, void *userData, EssGamepadEventListener *listener )
+{
+   bool result= false;
+
+   if ( gp )
+   {
+      EssCtx *ctx= gp->ctx;
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      gp->eventListenerUserData= userData;
+      gp->eventListener= listener;
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
+
+const char *EssGamepadGetDeviceName( EssGamepad *gp )
+{
+   const char *name= 0;
+
+   if ( gp )
+   {
+      EssCtx *ctx= gp->ctx;
+      int rc, len;
+      char work[256];
+
+      if ( ctx )
+      {
+         pthread_mutex_lock( &ctx->mutex );
+
+         if ( !gp->name )
+         {
+            work[0]= '\0';
+            rc= ioctl( gp->fd, JSIOCGNAME(sizeof(work)), work);
+            if ( rc > 0 )
+            {
+               len= strlen(work);
+               if ( (len > 0) && (len < sizeof(work)) )
+               {
+                  gp->name= strdup(work);
+               }
+               else
+               {
+                  sprintf( ctx->lastErrorDetail,
+                           "Error.  Bad gamepad name length: %d", len );
+               }
+            }
+            else
+            {
+               sprintf( ctx->lastErrorDetail,
+                        "Error.  Failed to get gamepad name: rc %d", rc );
+            }
+         }
+
+         name= gp->name;
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return name;
+}
+
+unsigned int EssGamepadGetDriverVersion( EssGamepad *gp )
+{
+   unsigned int version= 0;
+
+   if ( gp )
+   {
+      EssCtx *ctx= gp->ctx;
+      int rc;
+
+      if ( ctx )
+      {
+         pthread_mutex_lock( &ctx->mutex );
+
+         rc= ioctl( gp->fd, JSIOCGVERSION, &version );
+         if ( rc != 0 )
+         {
+            sprintf( ctx->lastErrorDetail,
+                     "Error.  Failed to get gamepad driver version: rc %d", rc );
+         }
+
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+
+   return version;
+}
+
+bool EssGamepadGetButtonMap( EssGamepad *gp, int *count, int *map )
+{
+   bool result= false;
+
+   if ( gp )
+   {
+      EssCtx *ctx= gp->ctx;
+      int buttonCount= 0;
+
+      if ( ctx )
+      {
+         pthread_mutex_lock( &ctx->mutex );
+
+         if ( count )
+         {
+            *count= gp->buttonCount;
+         }
+
+         if ( map )
+         {
+            for( int i= 0; i < gp->buttonCount; ++i )
+            {
+               int id;
+               id= gp->buttonMap[i];
+               map[i]= id;
+            }
+         }
+
+         result= true;
+
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+
+   return result;
+}
+
+bool EssGamepadGetAxisMap( EssGamepad *gp, int *count, int *map )
+{
+   bool result= false;
+
+   if ( gp )
+   {
+      EssCtx *ctx= gp->ctx;
+      int axisCount= 0;
+
+      if ( ctx )
+      {
+         pthread_mutex_lock( &ctx->mutex );
+
+         if ( count )
+         {
+            *count= gp->axisCount;
+         }
+
+         if ( map )
+         {
+            for( int i= 0; i < gp->axisCount; ++i )
+            {
+               int id;
+               id= gp->axisMap[i];
+               map[i]= id;
+            }
+         }
+
+         result= true;
+
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+
+   return result;
+}
+
+bool EssGamepadGetState( EssGamepad *gp, int *buttonState, int *axisState )
+{
+   bool result= false;
+
+   if ( gp )
+   {
+      EssCtx *ctx= gp->ctx;
+
+      if ( ctx )
+      {
+         pthread_mutex_lock( &ctx->mutex );
+
+         if ( buttonState )
+         {
+            memcpy( buttonState, gp->buttonState, gp->buttonCount*sizeof(int) );
+         }
+
+         if ( axisState )
+         {
+            memcpy( axisState, gp->axisState, gp->axisCount*sizeof(int) );
+         }
+
+         result= true;
+
+         pthread_mutex_unlock( &ctx->mutex );
+      }
+   }
+
+   return result;
+}
 
 bool EssContextSetKeyRepeatInitialDelay( EssCtx *ctx, int delay )
 {
@@ -939,6 +1208,8 @@ bool EssContextSetKeyRepeatInitialDelay( EssCtx *ctx, int delay )
                   
    if ( ctx )
    {
+      int rc;
+
       pthread_mutex_lock( &ctx->mutex );
 
       ctx->keyRepeatInitialDelay= delay;
@@ -1889,6 +2160,42 @@ static void essProcessTouchFrame( EssCtx *ctx )
    }
 }
 
+static void essProcessGamepadButtonPressed( EssGamepad *gp, int buttonId )
+{
+   if ( gp )
+   {
+      DEBUG("essos: essProcessGamepadButtonPressed: buttonId %d", buttonId);
+      if ( gp->eventListener && gp->eventListener->buttonPressed )
+      {
+         gp->eventListener->buttonPressed( gp->eventListenerUserData, buttonId );
+      }
+   }
+}
+
+static void essProcessGamepadButtonReleased( EssGamepad *gp, int buttonId )
+{
+   if ( gp )
+   {
+      DEBUG("essos: essProcessGamepadButtonReleased: buttonId %d", buttonId);
+      if ( gp->eventListener && gp->eventListener->buttonReleased )
+      {
+         gp->eventListener->buttonReleased( gp->eventListenerUserData, buttonId );
+      }
+   }
+}
+
+static void essProcessGamepadAxisChanged( EssGamepad *gp, int axisId, int value )
+{
+   if ( gp )
+   {
+      DEBUG("essos: essProcessGamepadAxisChanged: axisId %d value %d", axisId, value);
+      if ( gp->eventListener && gp->eventListener->axisChanged )
+      {
+         gp->eventListener->axisChanged( gp->eventListenerUserData, axisId, value );
+      }
+   }
+}
+
 #ifdef HAVE_WAYLAND
 static void essKeyboardKeymap( void *data, struct wl_keyboard *keyboard, uint32_t format, int32_t fd, uint32_t size )
 {
@@ -2758,6 +3065,84 @@ exit:
 
 static const char *inputPath= "/dev/input/";
 
+static int essOpenGamepadDevice( EssCtx *ctx, const char *devPathName )
+{
+   int fd= -1;
+   struct stat buf;
+
+   if ( stat( devPathName, &buf ) == 0 )
+   {
+      if ( S_ISCHR(buf.st_mode) )
+      {
+         EssGamepad *gp= essGetGamepadFromPath( ctx, devPathName );
+         if ( gp )
+         {
+            fd= gp->fd;
+         }
+         else
+         {
+            fd= open( devPathName, O_RDONLY | O_CLOEXEC );
+            DEBUG( "essOpenGamepadDevice: opened device %s : fd %d", devPathName, fd );
+         }
+
+         if ( fd < 0 )
+         {
+            snprintf( ctx->lastErrorDetail, ESS_MAX_ERROR_DETAIL,
+            "Error: error opening gamepad device: %s\n", devPathName );
+         }
+         else
+         {
+            pollfd pfd;
+            pfd.fd= fd;
+            ctx->inputDeviceFds.push_back( pfd );
+
+            if ( !gp )
+            {
+               gp= (EssGamepad*)calloc( 1, sizeof(EssGamepad));
+               if ( gp )
+               {
+                  gp->ctx= ctx;
+                  gp->devicePath= strdup(devPathName);
+                  gp->fd= fd;
+                  ctx->gamepads.push_back( gp );
+
+                  ioctl( gp->fd, JSIOCGBUTTONS, &gp->buttonCount );
+                  ioctl( gp->fd, JSIOCGBTNMAP, gp->buttonMap );
+                  ioctl( gp->fd, JSIOCGAXES, &gp->axisCount );
+                  ioctl( gp->fd, JSIOCGAXMAP, gp->axisMap );
+                  DEBUG("essOpenGamepadDevice: gp %p has %d buttons %d axes", gp, gp->buttonCount, gp->axisCount);
+
+                  pfd.events= POLLIN;
+                  pfd.revents= 0;
+                  while ( poll(&pfd, 1, 0 ) > 0 )
+                  {
+                     essProcessGamepad( ctx, gp );
+                  }
+
+                  pthread_mutex_unlock( &ctx->mutex );
+                  essGamepadNotifyConnected( ctx, gp );
+                  pthread_mutex_lock( &ctx->mutex );
+               }
+               else
+               {
+                  ERROR("Error: unable to allocate gamepad");
+               }
+            }
+         }
+      }
+      else
+      {
+         DEBUG("essOpenGamepadDevice: ignoring non character device %s", devPathName );
+      }
+   }
+   else
+   {
+      DEBUG( "essOpenGamepadDevice: error performing stat on device: %s", devPathName );
+   }
+
+   return fd;
+}
+
 static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
 {
    int fd= -1;   
@@ -2834,15 +3219,24 @@ static void essGetInputDevices( EssCtx *ctx )
    {
       while( NULL != (result = readdir( dir )) )
       {
-         if ( (result->d_type != DT_DIR) &&
-             !strncmp(result->d_name, "event", 5) )
+         if ( result->d_type != DT_DIR )
          {
             devPathName= essGetInputDevice( ctx, inputPath, result->d_name );
             if ( devPathName )
             {
-               if (essOpenInputDevice( ctx, devPathName ) < 0 )
+               if ( !strncmp(result->d_name, "event", 5) )
                {
-                  ERROR("essos: could not open device %s", devPathName);
+                  if (essOpenInputDevice( ctx, devPathName ) < 0 )
+                  {
+                     ERROR("essos: could not open device %s", devPathName);
+                  }
+               }
+               else if ( !strncmp(result->d_name, "js", 2) )
+               {
+                  if ( essOpenGamepadDevice( ctx, devPathName ) < 0 )
+                  {
+                     ERROR("essos: could not open gamepad device %s", devPathName);
+                  }
                }
                free( devPathName );
             }
@@ -2930,8 +3324,11 @@ static void essProcessInputDevices( EssCtx *ctx )
                {
                   struct inotify_event *iev= (struct inotify_event*)intfyEvent;
                   {
+                     essValidatGamepads( ctx );
+
                      // Re-discover devices
                      DEBUG("essProcessInputDevices: inotify: mask %x (%s) wd %d (%d)", iev->mask, iev->name, iev->wd, ctx->watchFd );
+                     pthread_mutex_lock( &ctx->mutex );
                      pollfd pfd= ctx->inputDeviceFds.back();
                      ctx->inputDeviceFds.pop_back();
                      essReleaseInputDevices( ctx );
@@ -2939,12 +3336,20 @@ static void essProcessInputDevices( EssCtx *ctx )
                      essGetInputDevices( ctx );
                      ctx->inputDeviceFds.push_back( pfd );
                      deviceCount= ctx->inputDeviceFds.size();
+                     pthread_mutex_unlock( &ctx->mutex );
                      break;
                   }
                }
             }
             else
             {
+               EssGamepad *gp= essGetGamepadFromFd( ctx, ctx->inputDeviceFds[i].fd );
+               if ( gp )
+               {
+                  essProcessGamepad( ctx, gp );
+                  break;
+               }
+
                n= read( ctx->inputDeviceFds[i].fd, &e, sizeof(input_event) );
                if ( n > 0 )
                {
@@ -3133,6 +3538,194 @@ static void essProcessInputDevices( EssCtx *ctx )
          break;
       }
       n= poll(&ctx->inputDeviceFds[0], deviceCount, 0);
+   }
+}
+
+static void essProcessGamepad( EssCtx *ctx, EssGamepad *gp )
+{
+   int rc;
+   struct js_event js;
+
+   rc= read( gp->fd, &js, sizeof(struct js_event) );
+   if ( rc == sizeof(struct js_event) )
+   {
+      switch( js.type & ~JS_EVENT_INIT )
+      {
+         case JS_EVENT_BUTTON:
+            gp->buttonState[js.number]= js.value;
+            if ( js.value )
+            {
+               essProcessGamepadButtonPressed( gp, gp->buttonMap[js.number] );
+            }
+            else
+            {
+               essProcessGamepadButtonReleased( gp, gp->buttonMap[js.number] );
+            }
+            break;
+         case JS_EVENT_AXIS:
+            gp->axisState[js.number]= js.value;
+            essProcessGamepadAxisChanged( gp, gp->axisMap[js.number], js.value );
+            break;
+         default:
+            break;
+      }
+   }
+}
+
+static void essValidatGamepads( EssCtx *ctx )
+{
+   if ( ctx )
+   {
+      std::vector<EssGamepad*> toRelease= std::vector<EssGamepad*>();
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      // Remove all gamepad fd's from inputDeviceFds
+      for( std::vector<EssGamepad*>::iterator it= ctx->gamepads.begin();
+           it != ctx->gamepads.end();
+           ++it )
+      {
+         EssGamepad *gp= (*it);
+         if ( gp )
+         {
+            for( std::vector<pollfd>::iterator it= ctx->inputDeviceFds.begin();
+                 it != ctx->inputDeviceFds.end();
+                 ++it )
+            {
+               if ( (*it).fd == gp->fd )
+               {
+                  ctx->inputDeviceFds.erase( it );
+                  break;
+               }
+            }
+         }
+      }
+
+      // Check each gamepad to see if it is still valid
+      std::vector<EssGamepad*>::iterator it= ctx->gamepads.begin();
+      while ( it != ctx->gamepads.end() )
+      {
+         EssGamepad *gp= (*it);
+         if ( gp )
+         {
+            bool keep= false;
+            struct stat buf;
+
+            if ( stat( gp->devicePath, &buf ) == 0 )
+            {
+               if ( S_ISCHR(buf.st_mode) )
+               {
+                  keep= true;
+               }
+            }
+
+            if ( !keep )
+            {
+               it= ctx->gamepads.erase( it );
+               toRelease.push_back( gp );
+               continue;
+            }
+         }
+         ++it;
+      }
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      // Discard all gamepads that are no longer valid
+      if ( toRelease.size() )
+      {
+         for( std::vector<EssGamepad*>::iterator it= toRelease.begin();
+              it != toRelease.end();
+              ++it )
+         {
+            EssGamepad *gp= (*it);
+            if ( gp )
+            {
+               essGamepadNotifyDisconnected( ctx, gp );
+
+               if ( gp->devicePath )
+               {
+                  free( (char*)gp->devicePath );
+               }
+               if ( gp->name )
+               {
+                  free( (char*)gp->name );
+               }
+               if ( gp->fd >= 0 )
+               {
+                  close( gp->fd );
+               }
+               free( gp );
+            }
+         }
+      }
+   }
+}
+
+// Must be called holding context mutex
+static EssGamepad *essGetGamepadFromPath( EssCtx *ctx, const char *path )
+{
+   EssGamepad *gp= 0;
+   if ( ctx && path )
+   {
+      int i, imax;
+
+      imax= ctx->gamepads.size();
+      for( i= 0; i < imax; ++i )
+      {
+         if ( strcmp( path, ctx->gamepads[i]->devicePath ) == 0 )
+         {
+            gp= ctx->gamepads[i];
+            break;
+         }
+      }
+   }
+   return gp;
+}
+
+static EssGamepad *essGetGamepadFromFd( EssCtx *ctx, int fd )
+{
+   EssGamepad *gp= 0;
+   if ( ctx )
+   {
+      int i, imax;
+
+      pthread_mutex_lock( &ctx->mutex );
+      imax= ctx->gamepads.size();
+      for( i= 0; i < imax; ++i )
+      {
+         if ( ctx->gamepads[i]->fd == fd )
+         {
+            gp= ctx->gamepads[i];
+            break;
+         }
+      }
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+   return gp;
+}
+
+static void essGamepadNotifyConnected( EssCtx *ctx, EssGamepad *gp )
+{
+   if ( ctx )
+   {
+      DEBUG("essos: essGamepadNotifyConnected gp %p", gp );
+      if ( ctx->gamepadConnectionListener && ctx->gamepadConnectionListener->connected )
+      {
+         ctx->gamepadConnectionListener->connected( ctx->gamepadConnectionListenerUserData, gp );
+      }
+   }
+}
+
+static void essGamepadNotifyDisconnected( EssCtx *ctx, EssGamepad *gp )
+{
+   if ( ctx )
+   {
+      DEBUG("essos: essGamepadNotifyDisconnected gp %p", gp );
+      if ( ctx->gamepadConnectionListener && ctx->gamepadConnectionListener->disconnected )
+      {
+         ctx->gamepadConnectionListener->disconnected( ctx->gamepadConnectionListenerUserData, gp );
+      }
    }
 }
 #endif

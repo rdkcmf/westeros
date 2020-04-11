@@ -21,6 +21,7 @@
 #define __ESSOS__
 
 #include "essos-app.h"
+#include "essos-game.h"
 #include "essos-system.h"
 
 #endif
