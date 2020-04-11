@@ -258,6 +258,148 @@ static EssSettingsListener settingsListener=
    displaySize
 };
 
+void gpButtonPressed( void *userData, int buttonId )
+{
+   switch( buttonId )
+   {
+     case BTN_X:
+     case BTN_TL:
+     case BTN_TL2:
+     case BTN_THUMBL:
+        gCol= gCol-1;
+        if ( gCol < 0 ) gCol= 2;
+        break;
+     case BTN_B:
+     case BTN_TR:
+     case BTN_TR2:
+     case BTN_THUMBR:
+        gCol= gCol+1;
+        if ( gCol > 2 ) gCol= 0;
+        break;
+     case BTN_Y:
+     case BTN_SELECT:
+        gRow= gRow-1;
+        if ( gRow < 0 ) gRow= 2;
+        break;
+     case BTN_A:
+     case BTN_START:
+        gRow= gRow+1;
+        if ( gRow > 2 ) gRow= 0;
+        break;
+     default:
+        break;
+   }
+}
+
+void gpButtonReleased( void *userData, int buttonId )
+{
+}
+
+void gpAxisChanged( void *userData, int axisId, int value )
+{
+   switch( axisId )
+   {
+      case ABS_X:
+      case ABS_Z:
+      case ABS_HAT0X:
+         if ( value > 0 )
+         {
+            gCol= gCol+1;
+            if ( gCol > 2 ) gCol= 2;
+         }
+         else
+         {
+            gCol= gCol-1;
+            if ( gCol < 0 ) gCol= 0;
+         }
+         break;
+      case ABS_Y:
+      case ABS_RZ:
+      case ABS_HAT0Y:
+         if ( value > 0 )
+         {
+            gRow= gRow+1;
+            if ( gRow > 2 ) gRow= 2;
+         }
+         else
+         {
+            gRow= gRow-1;
+            if ( gRow < 0 ) gRow= 0;
+         }
+         break;
+   }
+}
+
+static EssGamepadEventListener gpEvent=
+{
+   gpButtonPressed,
+   gpButtonReleased,
+   gpAxisChanged
+};
+
+void gpConnected( void *userData, EssGamepad *gp )
+{
+   printf("gamepad %p connected\n", gp );
+   if ( gp )
+   {
+      const char *name= 0;
+      unsigned int version= 0;
+      int buttonCount= 0;
+      int axisCount= 0;
+      int *buttonMap= 0;
+      int *axisMap= 0;
+
+      name= EssGamepadGetDeviceName( gp );
+      version= EssGamepadGetDriverVersion( gp );
+      printf("gamepad %p name (%s) version (%X)\n", gp, name, version);
+
+      EssGamepadGetButtonMap( gp, &buttonCount, NULL );
+      EssGamepadGetAxisMap( gp, &axisCount, NULL );
+      printf("gampad %p has %d buttons %d axes\n", gp, buttonCount, axisCount);
+
+      if ( buttonCount > 0 )
+      {
+         buttonMap= (int*)calloc( buttonCount, sizeof(int) );
+         if ( buttonMap )
+         {
+            EssGamepadGetButtonMap( gp, &buttonCount, buttonMap );
+            for( int i= 0; i < buttonCount; ++i )
+            {
+               printf("  button %d id 0x%x\n", i, buttonMap[i] );
+            }
+            free( buttonMap );
+         }
+      }
+
+      if ( axisCount > 0 )
+      {
+         axisMap= (int*)calloc( axisCount, sizeof(int) );
+         if ( axisMap )
+         {
+            EssGamepadGetAxisMap( gp, &axisCount, axisMap );
+            for( int i= 0; i < axisCount; ++i )
+            {
+               printf("  axis %d id %d\n", i, axisMap[i] );
+            }
+            free( axisMap );
+         }
+      }
+
+      EssGamepadSetEventListener( gp, userData, &gpEvent );
+   }
+}
+
+void gpDisconnected( void *userData, EssGamepad *gp )
+{
+   printf("gamepad %p disconnected\n", gp );
+}
+
+static EssGamepadConnectionListener gpConnectionListener=
+{
+   gpConnected,
+   gpDisconnected
+};
+
 int main( int argc, char **argv )
 {
    int nRC= 0;
@@ -303,6 +445,11 @@ int main( int argc, char **argv )
       }
 
       if ( !EssContextSetSettingsListener( ctx, ctx, &settingsListener ) )
+      {
+         error= true;
+      }
+
+      if ( !EssContextSetGamepadConnectionListener( ctx, ctx, &gpConnectionListener ) )
       {
          error= true;
       }

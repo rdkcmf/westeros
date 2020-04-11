@@ -26,9 +26,10 @@ extern "C" {
 #endif
 
 #define _SYS_IOCTL_H 1
+#include <asm-generic/ioctl.h>
 
 /* Hooks to allow drm-em.cpp to intercept ioctl calls */
-#define ioctl( d, r, p ) EMIOctl( d, r, p )
+#define ioctl( d, r, p ) EMIOctl( (d), (r), (p) )
 
 /* Hooks to allow drm-em.cpp to intercept mmap calls */
 #define mmap( addr, length, prot, flags, fd, offset ) EMMmap( addr, length, prot, flags, fd, offset)
