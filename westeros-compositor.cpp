@@ -3206,7 +3206,7 @@ void WstCompositorFocusClientByName( WstCompositor *wctx, const char *name)
          {
             WstSurface *surface= (*it);
 
-            if (::strcmp(name, surface->name) == 0)
+            if (surface && surface->name && (::strcmp(name, surface->name) == 0))
             {
                wstKeyboardSetFocus(keyboard, surface);
                break;
