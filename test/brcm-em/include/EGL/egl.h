@@ -44,6 +44,8 @@
 #include <stdint.h>
 
 #include "begl_displayplatform.h"
+#include <fcntl.h>
+#include "westeros-ut-open.h"
 
 #ifdef __cplusplus
 extern "C" {

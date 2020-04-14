@@ -31,6 +31,7 @@ bool testCaseEssosEGLConfigAttributes( EMCTX *emctx );
 bool testCaseEssosEGLSurfaceAttributes( EMCTX *emctx );
 bool testCaseEssosEGLContextAttributes( EMCTX *emctx );
 bool testCaseEssosInitialWindowSize( EMCTX *emctx );
+bool testCaseEssosSetWindowPosition( EMCTX *emctx );
 bool testCaseEssosSwapInterval( EMCTX *emctx );
 bool testCaseEssosInit( EMCTX *emctx );
 bool testCaseEssosGetEGLDisplayType( EMCTX *emctx );
@@ -48,6 +49,7 @@ bool testCaseEssosKeyboardBasicKeyInputWayland( EMCTX *emctx );
 bool testCaseEssosKeyboardRepeatKeyInputWayland( EMCTX *emctx );
 bool testCaseEssosPointerBasicPointerInputWayland( EMCTX *emctx );
 bool testCaseEssosTerminateListener( EMCTX *emctx );
+bool testCaseEssosGamepadBasic( EMCTX *emctx );
 
 #endif
 

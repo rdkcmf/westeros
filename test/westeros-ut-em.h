@@ -100,5 +100,6 @@ void EMSetTextureCreatedCallback( EMCTX *ctx, EMTextureCreated cb, void *userDat
 void EMSetBufferPushedCallback( EMCTX *ctx, EMBufferPushed cb, void *userData );
 void EMSetHolePunchedCallback( EMCTX *ctx, EMHolePunched cb, void *userData );
 
+void EMPushGamepadEvent( EMCTX *ctx, int type, int id, int value );
 #endif
 

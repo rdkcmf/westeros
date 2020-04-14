@@ -31,25 +31,25 @@ extern "C" {
 #define _SYS_IOCTL_H 1
 #include <asm-generic/ioctl.h>
 
-/* Hooks to allow drm-em.cpp to intercept ioctl calls */
+/* Hooks to allow brcm-em.cpp to intercept ioctl calls */
 #define ioctl( d, r, p ) EMIOctl( (d), (r), (p) )
 
-/* Hooks to allow drm-em.cpp to intercept mmap calls */
+/* Hooks to allow brcm-em.cpp to intercept mmap calls */
 #define mmap( addr, length, prot, flags, fd, offset ) EMMmap( addr, length, prot, flags, fd, offset)
 #define munmap( addr, length ) EMMunmap( addr, length )
 
-/* Hooks to allow drm-em.cpp to intercept poll calls */
+/* Hooks to allow brcm-em.cpp to intercept poll calls */
 #define poll( pollfd, nfds, timeout ) EMPoll( pollfd, nfds, timeout )
 
-/* Hooks to allow drm-em.cpp to intercept stat calls */
+/* Hooks to allow brcm-em.cpp to intercept stat calls */
 #define stat( path, buf ) EMStat( (path), (buf) )
 
-/* Hooks to allow drm-em.cpp to intercept opendir,readdir,closdir calls */
+/* Hooks to allow brcm-em.cpp to intercept opendir,readdir,closdir calls */
 #define opendir( name ) EMOpenDir( name )
 #define readdir( dir ) EMReadDir( dir )
 #define closedir( dir ) EMCloseDir( dir )
 
-/* Hooks to allow drm-em.cpp to intercept open calls */
+/* Hooks to allow brcm-em.cpp to intercept open calls */
 #define GET_OPEN_MACRO(_1,_2,_3,NAME,...) NAME
 #define open(...) GET_OPEN_MACRO(__VA_ARGS__, EMOpen3, EMOpen2)(__VA_ARGS__)
 #define close(fd) EMClose(fd)

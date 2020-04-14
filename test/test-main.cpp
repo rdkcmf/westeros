@@ -230,6 +230,10 @@ TESTCASE genericTests[]=
      "Test Essos initial window size API paths",
      testCaseEssosInitialWindowSize
    },
+   { "testEssosAPIWindowPosition",
+     "Test Essos window position API paths",
+     testCaseEssosSetWindowPosition
+   },
    { "testEssosAPISwapInterval",
      "Test Essos swap interal API paths",
      testCaseEssosSwapInterval
@@ -297,6 +301,10 @@ TESTCASE genericTests[]=
    { "testEssosTerminateListener",
      "Test Essos terminate listener",
      testCaseEssosTerminateListener
+   },
+   { "testEssosGamepadBasic",
+     "Test Essos Gamepad basic flow",
+     testCaseEssosGamepadBasic
    },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
