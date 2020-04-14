@@ -49,7 +49,15 @@
 #include <unistd.h>
 #include <syscall.h>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include <stdint.h>
+#include <signal.h>
+#include <linux/input.h>
+#include <linux/joystick.h>
 #include "berr.h"
 #include "nexus_config.h"
 #include "default_nexus.h"
@@ -77,6 +85,18 @@
 
 #include <vector>
 #include <map>
+
+#undef open
+#undef close
+#undef read
+#undef ioctl
+#undef mmap
+#undef munmap
+#undef poll
+#undef stat
+#undef opendir
+#undef closedir
+#undef readdir
 
 // When running:
 //export LD_PRELOAD=../lib/libwesteros-ut-em.so
@@ -230,6 +250,54 @@ typedef struct _EMSimpleVideoDecoder
    NEXUS_SimpleVideoDecoderStartCaptureSettings captureSettings;
 } EMSimpleVideoDecoder;
 
+#define EM_DEVICE_FD_BASE (1000000)
+#define EM_DEVICE_MAGIC (0x55112631)
+
+typedef enum _EM_DEVICE_TYPE
+{
+   EM_DEVICE_TYPE_NONE= 0,
+   EM_DEVICE_TYPE_GAMEPAD
+} EM_DEVICE_TYPE;
+
+typedef struct _EMFd
+{
+   int fd;
+   int fd_os;
+} EMFd;
+
+typedef struct _EMDrmHandle
+{
+   uint32_t handle;
+   int fd;
+   uint32_t fbId;
+} EMDrmHandle;
+
+typedef struct _EMDevice
+{
+   uint32_t magic;
+   int fd;
+   int fd_os;
+   int type;
+   const char *path;
+   EMCTX *ctx;
+   union _dev
+   {
+      struct _gamepad
+      {
+         unsigned int version;
+         const char *deviceName;
+         int buttonCount;
+         uint16_t buttonMap[4];
+         int axisCount;
+         uint8_t axisMap[4];
+         bool eventPending;
+         int eventType;
+         int eventNumber;
+         int eventValue;
+      } gamepad;
+   } dev;
+} EMDevice;
+
 typedef struct _EMNXClient
 {
    NEXUS_SurfaceComposition composition;
@@ -290,6 +358,7 @@ typedef struct _EMEGLDisplay
 #define DEFAULT_DISPLAY_HEIGHT (720)
 
 #define EM_MAX_ERROR (4096)
+#define EM_DEVICE_MAX (20)
 #define EM_MAX_NXCLIENT (100)
 
 typedef struct _EMWLBinding
@@ -355,12 +424,19 @@ typedef struct _EMCTX
    EMHolePunched holePunchedCB;
    void *holePunchedUserData;
 
+   int deviceCount;
+   int deviceNextFd;
+   EMDevice devices[EM_DEVICE_MAX];
+
    char errorDetail[EM_MAX_ERROR];
 } EMCTX;
 
 static EMCTX* emGetContext( void );
 static EMCTX* emCreate( void );
 static void emDestroy( EMCTX* ctx );
+static int EMDeviceOpenOS( int fd );
+static void EMDeviceCloseOS( int fd_os );
+static void EMDevicePruneOS();
 static EGLNativeWindowType wlGetNativeWindow( struct wl_egl_window *egl_window );
 static void wlSwapBuffers( struct wl_egl_window *egl_window );
 
@@ -401,6 +477,7 @@ void EMDestroyContext( EMCTX* ctx )
 {
    if ( ctx )
    {
+      EMDevicePruneOS();
       emDestroy( ctx );
       gCtx= 0;
    }
@@ -725,6 +802,49 @@ void EMSetHolePunchedCallback( EMCTX *ctx, EMHolePunched cb, void *userData )
    ctx->holePunchedUserData= userData;
 }
 
+void EMPushGamepadEvent( EMCTX *ctx, int type, int id, int value )
+{
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].type == EM_DEVICE_TYPE_GAMEPAD )
+      {
+         int number= -1;
+         switch( type )
+         {
+            case JS_EVENT_BUTTON:
+               for( int j= 0; j < ctx->devices[i].dev.gamepad.buttonCount; ++ j )
+               {
+                  if ( ctx->devices[i].dev.gamepad.buttonMap[j] == id )
+                  {
+                     number= j;
+                     break;
+                  }
+               }
+               break;
+            case JS_EVENT_AXIS:
+               for( int j= 0; j < ctx->devices[i].dev.gamepad.axisCount; ++ j )
+               {
+                  if ( ctx->devices[i].dev.gamepad.axisMap[j] == id )
+                  {
+                     number= j;
+                     break;
+                  }
+               }
+               break;
+         }
+         if ( number >= 0 )
+         {
+            TRACE1("EMPushGamepadEvent: event type %d number %d value %d pending", type, number, value);
+            ctx->devices[i].dev.gamepad.eventType= type;
+            ctx->devices[i].dev.gamepad.eventNumber= number;
+            ctx->devices[i].dev.gamepad.eventValue= value;
+            ctx->devices[i].dev.gamepad.eventPending= true;
+         }
+         break;
+      }
+   }
+}
+
 
 
 
@@ -795,6 +915,14 @@ static EMCTX* emCreate( void )
       ctx->wlRemotes= std::map<struct wl_display*,EMWLRemote>();
       ctx->surfaceClients= std::map<unsigned,EMSurfaceClient*>();
 
+      ctx->deviceCount= 0;
+      ctx->deviceNextFd= EM_DEVICE_FD_BASE;
+      for( int i= 0; i < EM_DEVICE_MAX; ++i )
+      {
+         ctx->devices[i].type= EM_DEVICE_TYPE_NONE;
+         ctx->devices[i].fd= -1;
+      }
+
       ctx->simpleVideoDecoderMain.magic= EM_SIMPLE_VIDEO_DECODER_MAGIC;
       ctx->simpleVideoDecoderMain.inUse= false;
       ctx->simpleVideoDecoderMain.type= NEXUS_DISPLAY_WINDOW_MAIN;
@@ -829,6 +957,718 @@ static void emDestroy( EMCTX* ctx )
       free( ctx );
    }
 }
+
+// Section: Base ------------------------------------------------------
+
+static void EMGamepadDeviceInit( EMDevice *d )
+{
+   TRACE1("EMGamepadDeviceInit");
+
+   d->dev.gamepad.version= 0x010203;
+   d->dev.gamepad.deviceName= "EMGamepad";
+   d->dev.gamepad.buttonCount= 4;
+   d->dev.gamepad.buttonMap[0]= (uint16_t)BTN_A;
+   d->dev.gamepad.buttonMap[1]= (uint16_t)BTN_B;
+   d->dev.gamepad.buttonMap[2]= (uint16_t)BTN_X;
+   d->dev.gamepad.buttonMap[3]= (uint16_t)BTN_Y;
+   d->dev.gamepad.axisCount= 4;
+   d->dev.gamepad.axisMap[0]= (uint8_t)ABS_X;
+   d->dev.gamepad.axisMap[1]= (uint8_t)ABS_Y;
+   d->dev.gamepad.axisMap[2]= (uint8_t)ABS_Z;
+   d->dev.gamepad.axisMap[3]= (uint8_t)ABS_RZ;
+}
+
+static void EMGamepadDeviceTerm( EMDevice *d )
+{
+   TRACE1("EMGamepadDeviceTerm");
+}
+
+static int EMGamepadIOctl( EMDevice *dev, int fd, int request, void *arg )
+{
+   int rc= -1;
+   switch( request )
+   {
+      case JSIOCGVERSION:
+         *((unsigned int*)arg)= dev->dev.gamepad.version;
+         rc= 0;
+         break;
+      case JSIOCGBUTTONS:
+         *((int*)arg)= dev->dev.gamepad.buttonCount;
+         rc= 0;
+         break;
+      case JSIOCGAXES:
+         *((int*)arg)= dev->dev.gamepad.axisCount;
+         rc= 0;
+         break;
+      case JSIOCGBTNMAP:
+         {
+            uint16_t *map= (uint16_t*)arg;
+            memcpy( map, dev->dev.gamepad.buttonMap, dev->dev.gamepad.buttonCount*sizeof(uint16_t) );
+            rc= 0;
+         }
+         break;
+      case JSIOCGAXMAP:
+         {
+            uint8_t *map= (uint8_t*)arg;
+            memcpy( map, dev->dev.gamepad.axisMap, dev->dev.gamepad.axisCount*sizeof(uint8_t) );
+            rc= 0;
+         }
+         break;
+       default:
+         if ( (request & ~IOCSIZE_MASK) == JSIOCGNAME(0) )
+         {
+            int len= _IOC_SIZE(request);
+            strncpy( (char*)arg, dev->dev.gamepad.deviceName, len );
+            rc= strlen(dev->dev.gamepad.deviceName);
+         }
+         break;
+   }
+   return rc;
+}
+
+static int EMGamepadPoll( EMDevice *dev, struct pollfd *fds, int nfds, int timeout )
+{
+   int rc= 0;
+   if ( dev->dev.gamepad.eventPending )
+   {
+      for( int i= 0; i < nfds; ++i )
+      {
+         if ( fds[i].fd == dev->fd )
+         {
+            TRACE1("EMGamepadPoll: POLLIN");
+            fds[i].revents |= POLLIN;
+            rc= 1;
+            break;
+         }
+      }
+   }
+   return rc;
+}
+
+static int EMGamepadRead( EMDevice *dev, void *buf, size_t count )
+{
+   int rc= -1;
+
+   TRACE1("EMGamepadRead: eventPending %d", dev->dev.gamepad.eventPending);
+   if ( dev->dev.gamepad.eventPending )
+   {
+      struct js_event js;
+      memset( &js, 0, sizeof(js) );
+      js.type= dev->dev.gamepad.eventType;
+      js.number= dev->dev.gamepad.eventNumber;
+      js.value= dev->dev.gamepad.eventValue;
+      dev->dev.gamepad.eventPending= false;
+      memcpy( buf, &js, sizeof(js) );
+      rc= sizeof(js);
+   }
+
+   return rc;
+}
+
+#define EMFDOSFILE_PREFIX "em-brcm-"
+#define EMFDOSFILE_TEMPLATE "/tmp/" EMFDOSFILE_PREFIX "%d-XXXXXX"
+
+static int EMDeviceOpenOS( int fd )
+{
+   int fd_os= -1;
+   char work[34];
+
+   snprintf( work, sizeof(work), EMFDOSFILE_TEMPLATE, getpid() );
+   fd_os= mkostemp( work, O_CLOEXEC );
+   if ( fd_os >= 0 )
+   {
+     int len, lenwritten;
+     len= snprintf( work, sizeof(work), "%d", fd );
+     lenwritten= write( fd_os, work, len );
+     if ( lenwritten != len )
+     {
+        ERROR("Unable to write to fd_os file");
+        close( fd_os );
+        fd_os= -1;
+     }
+   }
+   else
+   {
+      ERROR("Unable to create fd_os temp file");
+   }
+
+   return fd_os;
+}
+
+static void EMDeviceCloseOS( int fd_os )
+{
+   int pid= getpid();
+   int len, prefixlen;
+   char path[32];
+   char link[256];
+   bool haveTempFilename= false;
+
+   prefixlen= strlen(EMFDOSFILE_PREFIX);
+   sprintf(path, "/proc/%d/fd/%d", pid, fd_os );
+   len= readlink( path, link, sizeof(link)-1 );
+   if ( len > prefixlen )
+   {
+      link[len]= '\0';
+      if ( strstr( link, EMFDOSFILE_PREFIX ) )
+      {
+         haveTempFilename= true;
+      }
+   }
+
+   close( fd_os );
+
+   if ( haveTempFilename )
+   {
+      remove( link );
+   }
+}
+
+int EMDeviceGetFdFromFdOS( int fd_os )
+{
+   int fd= -1;
+   int rc;
+   char work[34];
+   rc= lseek( fd_os, 0, SEEK_SET );
+   if ( rc >= 0 )
+   {
+      memset( work, 0, sizeof(work) );
+      rc= read( fd_os, work, sizeof(work)-1 );
+      if ( rc > 0 )
+      {
+         fd= atoi(work);
+      }
+   }
+   else
+   {
+      ERROR("Unable to seek to start of fd_os %d", fd_os);
+   }
+
+   return fd;
+}
+
+static void EMDevicePruneOS()
+{
+   DIR *dir;
+   struct dirent *result;
+   struct stat fileinfo;
+   int prefixLen;
+   int pid, rc;
+   char work[34];
+   if ( NULL != (dir = opendir( "/tmp" )) )
+   {
+      prefixLen= strlen(EMFDOSFILE_PREFIX);
+      while( NULL != (result = readdir( dir )) )
+      {
+         if ( (result->d_type != DT_DIR) &&
+             !strncmp(result->d_name, EMFDOSFILE_PREFIX, prefixLen) )
+         {
+            snprintf( work, sizeof(work), "%s/%s", "/tmp", result->d_name);
+            if ( sscanf( work, EMFDOSFILE_TEMPLATE, &pid ) == 1 )
+            {
+               rc= kill( pid, 0 );
+               if ( (pid == getpid()) || (rc != 0) )
+               {
+                  // Remove file since owned by us or owning process nolonger exists
+                  snprintf( work, sizeof(work), "%s/%s", "/tmp", result->d_name);
+                  remove( work );
+               }
+            }
+         }
+      }
+
+      closedir( dir );
+   }
+}
+
+static int EMDeviceOpen( int type, const char *pathname, int flags )
+{
+   int fd= -1;
+   EMCTX *ctx= 0;
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceOpen: emGetContext failed");
+      goto exit;
+   }
+
+   if ( ctx->deviceCount < EM_DEVICE_MAX-1 )
+   {
+      for( int i= 0; i < EM_DEVICE_MAX; ++i )
+      {
+         if ( ctx->devices[i].fd == -1 )
+         {
+            ++ctx->deviceCount;
+            fd= ctx->deviceNextFd++;
+            TRACE1("EMDeviceOpen: open %s as fd %d type %d slot %d", pathname, fd, type, i);
+            ctx->devices[i].magic= EM_DEVICE_MAGIC;
+            ctx->devices[i].fd= fd;
+            ctx->devices[i].fd_os= EMDeviceOpenOS(fd);
+            ctx->devices[i].type= type;
+            ctx->devices[i].path= strdup(pathname);
+            ctx->devices[i].ctx= ctx;
+            switch( type )
+            {
+               case EM_DEVICE_TYPE_GAMEPAD:
+                  EMGamepadDeviceInit( &ctx->devices[i] );
+                  break;
+               default:
+                  assert(false);
+                  break;
+            }
+            break;
+         }
+      }
+   }
+
+exit:
+   return fd;
+}
+
+static int EMDeviceClose( int fd )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceClose: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         TRACE1("EMDeviceClose: closing device fd %d, %s", fd, ctx->devices[i].path );
+         if ( ctx->devices[i].path )
+         {
+            free( (void*)ctx->devices[i].path );
+            ctx->devices[i].path= 0;
+         }
+         if ( ctx->devices[i].fd_os >= 0 )
+         {
+            EMDeviceCloseOS( ctx->devices[i].fd_os );
+            ctx->devices[i].fd_os= -1;
+         }
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_GAMEPAD:
+               EMGamepadDeviceTerm( &ctx->devices[i] );
+               break;
+            default:
+               assert(false);
+               break;
+         }
+         ctx->devices[i].fd= -1;
+         ctx->devices[i].type= EM_DEVICE_TYPE_NONE;
+         ctx->devices[i].magic= 0;
+         rc= 0;
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+int EMDeviceRead( int fd, void *buf, size_t count )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceRead: fd %d",fd);
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceClose: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_GAMEPAD:
+               rc= EMGamepadRead( &ctx->devices[i], buf, count );
+               break;
+            default:
+               assert(false);
+               break;
+         }
+         break;
+      }
+   }
+exit:
+   return rc;
+}
+
+static int EMDeviceIOctl( int fd, int request, void *arg )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceIOctl: fd %d request %d arg %p", fd, request, arg );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceIOctl: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_GAMEPAD:
+               rc= EMGamepadIOctl( &ctx->devices[i], fd, request, arg );
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+static void *EMDeviceMmap( void *addr, size_t length, int prot, int flags, int fd, off_t offset )
+{
+   void *map= MAP_FAILED;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceMmap: fd %d length %d offset %d", fd, length, offset );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceMmap: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_GAMEPAD:
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return map;
+}
+
+static int EMDeviceMunmap( void *addr, size_t length )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDeviceMunmap: addr %p length %d", addr, length );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDeviceMunmap: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd >= 0 )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_GAMEPAD:
+               break;
+         }
+      }
+      if ( rc == 0 )
+      {
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+static int EMDevicePoll( struct pollfd *fds, int nfds, int timeout )
+{
+   int rc= -1;
+   EMCTX *ctx= 0;
+
+   TRACE1("EMDevicePoll: fd %d nfds %d timeout %d", fds->fd, nfds, timeout );
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("EMDevicePoll: emGetContext failed");
+      goto exit;
+   }
+
+   for( int i= 0; i < EM_DEVICE_MAX; ++i )
+   {
+      if ( ctx->devices[i].fd == fds->fd )
+      {
+         switch( ctx->devices[i].type )
+         {
+            case EM_DEVICE_TYPE_GAMEPAD:
+               rc= EMGamepadPoll( &ctx->devices[i], fds, nfds, timeout );
+               break;
+         }
+         break;
+      }
+   }
+
+exit:
+   return rc;
+}
+
+extern "C"
+{
+
+int EMIOctl( int fd, int request, void *arg )
+{
+   int rc= -1;
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDeviceIOctl( fd, request, arg );
+   }
+   else
+   {
+      rc= ioctl( fd, request, arg );
+   }
+   return rc;
+}
+
+void *EMMmap( void *addr, size_t length, int prot, int flags, int fd, off_t offset ) __THROW
+{
+   void *map= 0;
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      map= EMDeviceMmap( addr, length, prot, flags, fd, offset );
+   }
+   else
+   {
+      map= mmap( addr, length, prot, flags, fd, offset );
+   }
+   return map;
+}
+
+int EMMunmap( void *addr, size_t length ) __THROW
+{
+   int rc= -1;
+   rc= EMDeviceMunmap( addr, length );
+   if ( rc < 0 )
+   {
+      rc= munmap( addr, length );
+   }
+   return rc;
+}
+
+int EMPoll( struct pollfd *fds, nfds_t nfds, int timeout )
+{
+   int rc= -1;
+   if ( fds->fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDevicePoll( fds, nfds, timeout );
+   }
+   else
+   {
+      rc= poll( fds, nfds, timeout );
+   }
+   return rc;
+}
+
+int EMStat(const char *path, struct stat *buf) __THROW
+{
+   int rc= -1;
+
+   TRACE1("EMStat (%s)", path);
+   if ( strstr( path, "/dev/input/js" ) )
+   {
+      TRACE1("intercept stat of %s", path );
+   }
+   else
+   {
+      goto passthru;
+   }
+
+   rc= 0;
+   buf->st_mode= S_IFCHR;
+   goto exit;
+
+passthru:
+   rc= stat( path, buf );
+
+exit:
+   return rc;
+}
+
+int EMOpen2( const char *pathname, int flags )
+{
+   int fd= -1;
+   int type= EM_DEVICE_TYPE_NONE;
+
+   TRACE1("open name %s flags %x", pathname, flags);
+
+   if ( strstr( pathname, "/dev/input/js" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_GAMEPAD;
+   }
+   else
+   {
+      goto passthru;
+   }
+
+   fd= EMDeviceOpen( type, pathname, flags );
+   goto exit;
+
+passthru:
+  fd= open( pathname, flags );
+
+exit:
+   return fd;
+}
+
+int EMOpen3( const char *pathname, int flags, mode_t mode )
+{
+   int fd= -1;
+   int type= EM_DEVICE_TYPE_NONE;
+
+   TRACE1("open name %s flags %x mode %x\n", pathname, flags, mode);
+
+   if ( strstr( pathname, "/dev/input/js" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_GAMEPAD;
+   }
+   else
+   {
+      goto passthru;
+   }
+
+   fd= EMDeviceOpen( type, pathname, flags );
+   goto exit;
+
+passthru:
+   fd= open( pathname, flags, mode );
+
+exit:
+   return fd;
+}
+
+int EMClose( int fd )
+{
+   int rc;
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDeviceClose( fd );
+   }
+   else
+   {
+      rc= close( fd );
+   }
+   return rc;
+}
+
+ssize_t EMRead( int fd, void *buf, size_t count )
+{
+   int rc;
+   TRACE1("EMRead: fd %d",fd);
+   if ( fd >= EM_DEVICE_FD_BASE )
+   {
+      rc= EMDeviceRead( fd, buf, count );
+   }
+   else
+   {
+      rc= read( fd, buf, count );
+   }
+   return rc;
+}
+
+
+typedef struct EMDIR_
+{
+   int next;
+   int count;
+   const char *names[10];
+   struct dirent entry;
+} EMDIR;
+
+DIR *EMOpenDir(const char *name)
+{
+   EMDIR *dir= 0;
+
+   TRACE1("EMOpenDir (%s)", name);
+   dir= (EMDIR*)calloc( 1, sizeof(EMDIR) );
+   if ( dir )
+   {
+      int len= strlen(name);
+      if ( (len == 4) && !strncmp( name, "/dev", len) )
+      {
+         dir->count= 1;
+         dir->names[0]= "video10";
+      }
+      else
+      if ( (len == 11) && !strncmp( name, "/dev/input/", len) )
+      {
+         dir->count= 1;
+         dir->names[0]= "js0";
+      }
+      else
+      {
+         // return empty
+      }
+   }
+   return (DIR*)dir;
+}
+
+int EMCloseDir(DIR *dirp)
+{
+   TRACE1("EMCloseDir");
+   if ( dirp )
+   {
+      free( dirp );
+   }
+}
+
+struct dirent *EMReadDir(DIR *dirp)
+{
+   struct dirent *result= 0;
+   EMDIR *dir= (EMDIR*)dirp;
+
+   TRACE1("EMReadDir");
+
+   if ( dir )
+   {
+      if ( dir->next < dir->count )
+      {
+         result= &dir->entry;
+         result->d_type= DT_CHR;
+         strcpy( result->d_name, dir->names[dir->next] );
+         TRACE1("EMReadDir: (%s)", result->d_name);
+         ++dir->next;
+      }
+   }
+
+   return result;
+}
+
+
+} //extern "C"
 
 // Section: bdbg ------------------------------------------------------
 

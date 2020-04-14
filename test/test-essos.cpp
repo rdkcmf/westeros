@@ -22,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/input.h>
+#include <linux/joystick.h>
 
 #include "test-essos.h"
 
@@ -752,6 +753,112 @@ bool testCaseEssosInitialWindowSize( EMCTX *emctx )
    testResult= true;
 
 exit:
+
+   return testResult;
+}
+
+bool testCaseEssosSetWindowPosition( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   const char *displayName= "test0";
+   WstCompositor *wctx= 0;
+   int windowX, windowY;
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetDisplayName( wctx, displayName );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetDisplayName failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRendererModule failed" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", displayName, 0 );
+
+   windowX= 100;
+   windowY= 110;
+   result= EssContextSetWindowPosition( (EssCtx*)0, windowX, windowY );
+   if ( result )
+   {
+      EMERROR("EssContextSetWindowPosition did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextInit( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextInit failed");
+      goto exit;
+   }
+
+   result= EssContextSetWindowPosition( ctx, windowX, windowY );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetInitialWindowSize failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   usleep( 34000 );
+
+   windowX= 200;
+   windowY= 210;
+   result= EssContextSetWindowPosition( ctx, windowX, windowY );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetInitialWindowSize failed");
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( ctx )
+   {
+      EssContextDestroy( ctx );
+   }
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   if ( wctx )
+   {
+      WstCompositorDestroy( wctx );
+   }
 
    return testResult;
 }
@@ -1971,6 +2078,20 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
 
    memset( &settingsInfo, 0, sizeof(settingsInfo) );
 
+   result= EssContextGetDisplaySafeArea( (EssCtx*)0, 0, 0, 0, 0 );
+   if ( result )
+   {
+      EMERROR("EssContextGetDisplaySafeArea did not fail with null handle");
+      goto exit;
+   }
+
+   result= EssContextGetDisplaySafeArea( ctx, 0, 0, 0, 0 );
+   if ( result )
+   {
+      EMERROR("EssContextGetDisplaySafeArea did not fail when called prior to initialization");
+      goto exit;
+   }
+
    result= EssContextSetSettingsListener( ctx, &settingsInfo, &settingsListener );
    if ( result == false )
    {
@@ -2003,6 +2124,31 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
    safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
    safeW= displayWidth-2*safeX;
    safeH= displayHeight-2*safeY;
+
+   if ( (settingsInfo.safeX != safeX) ||
+        (settingsInfo.safeY != safeY) ||
+        (settingsInfo.safeW != safeW) ||
+        (settingsInfo.safeH != safeH) )
+   {
+      EMERROR("Unexpected display safe area on startup: expected (%d,%d,%d.%d) actual (%d,%d,%d,%d)",
+              safeX, safeY, safeW, safeH, settingsInfo.safeX, settingsInfo.safeY, settingsInfo.safeW, settingsInfo.safeH );
+      goto exit;
+   }
+
+   result= EssContextGetDisplaySafeArea( ctx, 0, 0, 0, 0 );
+   if ( !result )
+   {
+      EMERROR("EssContextGetDisplaySafeArea failed");
+      goto exit;
+   }
+
+   memset( &settingsInfo, 0, sizeof(settingsInfo) );
+   result= EssContextGetDisplaySafeArea( ctx, &settingsInfo.safeX, &settingsInfo.safeY, &settingsInfo.safeW, &settingsInfo.safeH );
+   if ( !result )
+   {
+      EMERROR("EssContextGetDisplaySafeArea failed");
+      goto exit;
+   }
 
    if ( (settingsInfo.safeX != safeX) ||
         (settingsInfo.safeY != safeY) ||
@@ -2051,6 +2197,24 @@ bool testCaseEssosDisplaySafeAreaChange( EMCTX *emctx )
       safeY= displayHeight*DEFAULT_PLANE_SAFE_BORDER_PERCENT/100;
       safeW= displayWidth-2*safeX;
       safeH= displayHeight-2*safeY;
+
+      if ( (settingsInfo.safeX != safeX) ||
+           (settingsInfo.safeY != safeY) ||
+           (settingsInfo.safeW != safeW) ||
+           (settingsInfo.safeH != safeH) )
+      {
+         EMERROR("Unexpected display safe area: expected (%d,%d,%d.%d) actual (%d,%d,%d,%d)",
+                 safeX, safeY, safeW, safeH, settingsInfo.safeX, settingsInfo.safeY, settingsInfo.safeW, settingsInfo.safeH );
+         goto exit;
+      }
+
+      memset( &settingsInfo, 0, sizeof(settingsInfo) );
+      result= EssContextGetDisplaySafeArea( ctx, &settingsInfo.safeX, &settingsInfo.safeY, &settingsInfo.safeW, &settingsInfo.safeH );
+      if ( !result )
+      {
+         EMERROR("EssContextGetDisplaySafeArea failed");
+         goto exit;
+      }
 
       if ( (settingsInfo.safeX != safeX) ||
            (settingsInfo.safeY != safeY) ||
@@ -3260,6 +3424,338 @@ exit:
    if ( wctx )
    {
       WstCompositorDestroy( wctx );
+   }
+
+   return testResult;
+}
+
+namespace GamepadBasic
+{
+   typedef struct TestCtx_
+   {
+      bool connectedWasCalled;
+      bool buttonPressedWasCalled;
+      bool buttonReleasedWasCalled;
+      bool axisChangedWasCalled;
+      unsigned int version;
+      const char *name;
+      int buttonCount;
+      int *buttonMap;
+      int *buttonState;
+      int axisCount;
+      int *axisMap;
+      int *axisState;
+      EssGamepad *gp;
+      int lastId;
+      int lastValue;
+   } TestCtx;
+
+   static void buttonPressed( void *userData, int buttonId )
+   {
+      TestCtx *testCtx= (TestCtx*)userData;
+      printf("buttonPressed: id %x\n", buttonId);
+      testCtx->buttonPressedWasCalled= true;
+      testCtx->lastId= buttonId;
+   }
+
+   static void buttonReleased( void *userData, int buttonId )
+   {
+      TestCtx *testCtx= (TestCtx*)userData;
+      printf("buttonReleased: id %x\n", buttonId);
+      testCtx->buttonReleasedWasCalled= true;
+      testCtx->lastId= buttonId;
+   }
+
+   static void axisChanged( void *userData, int axisId, int value )
+   {
+      TestCtx *testCtx= (TestCtx*)userData;
+      printf("axisChanged: id %x value %d\n", axisId, value);
+      testCtx->axisChangedWasCalled= true;
+      testCtx->lastId= axisId;
+      testCtx->lastValue= value;
+   }
+
+   static EssGamepadEventListener eventListener=
+   {
+      buttonPressed,
+      buttonReleased,
+      axisChanged
+   };
+
+   static void connected( void *userData, EssGamepad *gp )
+   {
+      TestCtx *testCtx= (TestCtx*)userData;
+
+      printf("gamepad %p connected\n", gp );
+      if ( gp )
+      {
+         testCtx->gp= gp;
+         testCtx->connectedWasCalled= true;
+         testCtx->name= EssGamepadGetDeviceName( gp );
+         testCtx->version= EssGamepadGetDriverVersion( gp );
+         printf("gamepad %p name (%s) version (%X)\n", gp, testCtx->name, testCtx->version);
+
+         EssGamepadGetButtonMap( gp, &testCtx->buttonCount, NULL );
+         EssGamepadGetAxisMap( gp, &testCtx->axisCount, NULL );
+         printf("gampad %p has %d buttons %d axes\n", gp, testCtx->buttonCount, testCtx->axisCount);
+
+         if ( testCtx->buttonCount > 0 )
+         {
+            testCtx->buttonMap= (int*)calloc( testCtx->buttonCount, sizeof(int) );
+            if ( testCtx->buttonMap )
+            {
+               EssGamepadGetButtonMap( gp, &testCtx->buttonCount, testCtx->buttonMap );
+               for( int i= 0; i < testCtx->buttonCount; ++i )
+               {
+                  printf("  button %d id 0x%x\n", i, testCtx->buttonMap[i] );
+               }
+            }
+            testCtx->buttonState= (int*)calloc( testCtx->buttonCount, sizeof(int) );
+         }
+
+         if ( testCtx->axisCount > 0 )
+         {
+            testCtx->axisMap= (int*)calloc( testCtx->axisCount, sizeof(int) );
+            if ( testCtx->axisMap )
+            {
+               EssGamepadGetAxisMap( gp, &testCtx->axisCount, testCtx->axisMap );
+               for( int i= 0; i < testCtx->axisCount; ++i )
+               {
+                  printf("  axis %d id %d\n", i, testCtx->axisMap[i] );
+               }
+            }
+            testCtx->axisState= (int*)calloc( testCtx->axisCount, sizeof(int) );
+         }
+
+         EssGamepadSetEventListener( gp, userData, &eventListener );
+      }
+   }
+
+   static void disconnected( void *userData, EssGamepad *gp )
+   {
+      printf("gamepad %p disconnected\n", gp );
+   }
+
+   static EssGamepadConnectionListener connectionListener=
+   {
+      connected,
+      disconnected
+   };
+
+}; //namespace GamepadBasic
+
+bool testCaseEssosGamepadBasic( EMCTX *emctx )
+{
+   using namespace GamepadBasic;
+
+   bool testResult= false;
+   bool result;
+   EssCtx *ctx= 0;
+   TestCtx tCtx;
+   TestCtx *testCtx= &tCtx;
+   unsigned int version;
+   const char *name;
+   int buttonCount;
+   int axisCount;
+   int nameLen;
+   int buttonMap[]= { BTN_A, BTN_B, BTN_X, BTN_Y };
+   int axisMap[]= { ABS_X, ABS_Y, ABS_Z, ABS_RZ };
+
+   result= EssContextSetGamepadConnectionListener( (EssCtx*)0, testCtx, &connectionListener );
+   if ( result )
+   {
+      EMERROR("EssContextSetGamepadConnectionListner did not fail with null handle");
+      goto exit;
+   }
+
+   ctx= EssContextCreate();
+   if ( !ctx )
+   {
+      EMERROR("EssContextCreate failed");
+      goto exit;
+   }
+
+   result= EssContextSetGamepadConnectionListener( ctx, testCtx, &connectionListener );
+   if ( result == false )
+   {
+      EMERROR("EssContextSetGamepadConnectionListener failed");
+      goto exit;
+   }
+
+   result= EssContextStart( ctx );
+   if ( result == false )
+   {
+      EMERROR("EssContextStart failed");
+      goto exit;
+   }
+
+   usleep( 34000 );
+
+   if ( !testCtx->connectedWasCalled )
+   {
+      EMERROR("Gamepad connected callback was not called");
+      goto exit;
+   }
+
+   version= 0x010203;
+   name= "EMGamepad";
+   buttonCount= 4;
+   axisCount= 4;
+   nameLen= strlen(name);
+
+   if ( !testCtx->name ||
+        (nameLen != (int)strlen(testCtx->name)) ||
+        strncmp( name, testCtx->name, nameLen) )
+   {
+      EMERROR("Unexpected values: name: expected (%s) actual (%s)", name, testCtx->name );
+      goto exit;
+   }
+
+   if ( (testCtx->version != version) ||
+         (testCtx->buttonCount != buttonCount) ||
+         (testCtx->axisCount != axisCount) )
+   {
+      EMERROR("Unexpected values: version: expected %x actual %x, buttonCount: expected %d actual %d, axisCount: expected %d actual %d",
+               version, testCtx->version,
+               buttonCount, testCtx->buttonCount,
+               axisCount, testCtx->axisCount );
+      goto exit;
+   }
+
+   if ( memcmp( testCtx->buttonMap, buttonMap, buttonCount*sizeof(int) ) != 0 )
+   {
+      EMERROR("Unexpected values: button map:");
+      for( int i= 0; i < buttonCount; ++i )
+      {
+         EMERROR( "  %d: expected %x actual %x", i, buttonMap[i], testCtx->buttonMap[i] );
+      }
+      goto exit;
+   }
+
+   if ( memcmp( testCtx->axisMap, axisMap, axisCount*sizeof(int) ) != 0 )
+   {
+      EMERROR("Unexpected values: axis map:");
+      for( int i= 0; i < axisCount; ++i )
+      {
+         EMERROR( "  %d: expected %x actual %x", i, axisMap[i], testCtx->axisMap[i] );
+      }
+      goto exit;
+   }
+
+   EMPushGamepadEvent( emctx, JS_EVENT_BUTTON, BTN_X, 1 );
+   EssContextRunEventLoopOnce( ctx );
+
+   if ( testCtx->buttonPressedWasCalled == false )
+   {
+      EMERROR("buttonPressed callback not called");
+      goto exit;
+   }
+
+   if ( testCtx->lastId != BTN_X )
+   {
+      EMERROR("Unexpected button id: expected %d actual %d", BTN_X, testCtx->lastId );
+      goto exit;
+   }
+
+   EMPushGamepadEvent( emctx, JS_EVENT_BUTTON, BTN_X, 0 );
+   EssContextRunEventLoopOnce( ctx );
+
+   if ( testCtx->buttonReleasedWasCalled == false )
+   {
+      EMERROR("buttonReleased callback not called");
+      goto exit;
+   }
+
+   if ( testCtx->lastId != BTN_X )
+   {
+      EMERROR("Unexpected button id: expected %d actual %d", BTN_X, testCtx->lastId );
+      goto exit;
+   }
+
+   EMPushGamepadEvent( emctx, JS_EVENT_AXIS, ABS_RZ, -12000 );
+   EssContextRunEventLoopOnce( ctx );
+
+   if ( testCtx->axisChangedWasCalled == false )
+   {
+      EMERROR("axisChanged callback not called");
+      goto exit;
+   }
+
+   if ( testCtx->lastId != ABS_RZ )
+   {
+      EMERROR("Unexpected axis id: expected %d actual %d", ABS_RZ, testCtx->lastId );
+      goto exit;
+   }
+
+   if ( testCtx->lastValue != -12000 )
+   {
+      EMERROR("Unexpected axis value: expected %d actual %d", -12000, testCtx->lastValue );
+      goto exit;
+   }
+
+   EMPushGamepadEvent( emctx, JS_EVENT_BUTTON, BTN_B, 1 );
+   EssContextRunEventLoopOnce( ctx );
+
+   result= EssGamepadGetState( testCtx->gp, testCtx->buttonState, testCtx->axisState );
+   if ( result == false )
+   {
+      EMERROR("EssGamepadGetState failed");
+      goto exit;
+   }
+
+   if ( (testCtx->buttonState[0] != 0) ||
+        (testCtx->buttonState[1] != 1) ||
+        (testCtx->buttonState[2] != 0) ||
+        (testCtx->buttonState[3] != 0) )
+   {
+      EMERROR("Unexpected button state:");
+      for( int i= 0; i < testCtx->buttonCount; ++i )
+      {
+         EMERROR("  %d: expected %d actual %d", i, ((i==1)?1:0), testCtx->buttonState[i]);
+      }
+      goto exit;
+   }
+
+   if ( (testCtx->axisState[0] != 0) ||
+        (testCtx->axisState[1] != 0) ||
+        (testCtx->axisState[2] != 0) ||
+        (testCtx->axisState[3] != -12000) )
+   {
+      EMERROR("Unexpected axis state:");
+      for( int i= 0; i < testCtx->axisCount; ++i )
+      {
+         EMERROR("  %d: expected %d actual %d", i, ((i==3)?-12000:0), testCtx->axisState[i]);
+      }
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( testCtx->buttonMap )
+   {
+      free( testCtx->buttonMap );
+   }
+
+   if ( testCtx->buttonState )
+   {
+      free( testCtx->buttonState );
+   }
+
+   if ( testCtx->axisMap )
+   {
+      free( testCtx->axisMap );
+   }
+
+   if ( testCtx->axisState )
+   {
+      free( testCtx->axisState );
+   }
+
+   if ( ctx )
+   {
+      EssContextDestroy( ctx );
    }
 
    return testResult;
