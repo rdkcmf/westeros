@@ -67,7 +67,8 @@ typedef enum _WstClient_status
    WstClient_stoppedNormal,
    WstClient_stoppedAbnormal,
    WstClient_connected,
-   WstClient_disconnected
+   WstClient_disconnected,
+   WstClient_firstFrame
 } WstClient_status;
 
 typedef void (*WstTerminatedCallback)( WstCompositor *wctx, void *userData );
