@@ -477,6 +477,9 @@ typedef struct _WstCompositor
    bool isVirtual;
    WstContext *ctx;
    int clientPid;
+   bool clientCommit;
+   int clientCommitPid;
+   bool clientFirstFrame;
 
    char lastErrorDetail[WST_MAX_ERROR_DETAIL];
 
@@ -2381,6 +2384,7 @@ bool WstCompositorComposeEmbedded( WstCompositor *wctx,
    if ( wctx && wctx->ctx )
    {
       WstContext *ctx= wctx->ctx;
+      bool possibleFirstFrame= !wctx->isVirtual;
 
       pthread_mutex_lock( &ctx->mutex );
 
@@ -2418,7 +2422,11 @@ bool WstCompositorComposeEmbedded( WstCompositor *wctx,
             for (std::vector<WstSurface *>::iterator it = ctx->surfaces.begin(); it != ctx->surfaces.end(); ++it)
             {
                WstSurface *surface= (*it);
-               if ( surface->compositor != wctx )
+               if ( surface->compositor == wctx )
+               {
+                  possibleFirstFrame= true;
+               }
+               else
                {
                   WstRendererSurfaceGetVisible( ctx->renderer, surface->surface, &surface->tempVisible );
                   WstRendererSurfaceSetVisible( ctx->renderer, surface->surface, false );
@@ -2432,6 +2440,15 @@ bool WstCompositorComposeEmbedded( WstCompositor *wctx,
          }
          
          WstRendererUpdateScene( ctx->renderer );
+         if ( possibleFirstFrame && wctx->clientCommit && !wctx->clientFirstFrame )
+         {
+            wctx->clientFirstFrame= true;
+            if ( wctx->clientStatusCB )
+            {
+               INFO("display %s client pid %d first frame", ctx->displayName, wctx->clientCommitPid );
+               wctx->clientStatusCB( wctx, WstClient_firstFrame, wctx->clientCommitPid, 0, wctx->clientStatusUserData );
+            }
+         }
 
          if ( wctx->isVirtual )
          {
@@ -5028,9 +5045,13 @@ static void wstCompositorBind( struct wl_client *client, void *data, uint32_t ve
    wl_client_get_credentials( client, &pid, NULL, NULL );
    INFO("display %s client pid %d connected", ctx->displayName, pid );
    WstCompositor *wctx= wstGetCompositorFromClient( ctx, client );
-   if ( wctx && wctx->clientStatusCB )
+   if ( wctx )
    {
-      wctx->clientStatusCB( wctx, WstClient_connected, pid, 0, wctx->clientStatusUserData );
+      wctx->clientCommit= false;
+      if ( wctx->clientStatusCB )
+      {
+         wctx->clientStatusCB( wctx, WstClient_connected, pid, 0, wctx->clientStatusUserData );
+      }
    }
 }
 
@@ -5045,9 +5066,14 @@ static void wstDestroyCompositorCallback(struct wl_resource *resource)
    wl_client_get_credentials( client, &pid, NULL, NULL );
    INFO("display %s client pid %d disconnected", ctx->displayName, pid );
    WstCompositor *wctx= wstGetCompositorFromClient( ctx, client );
-   if ( wctx && wctx->clientStatusCB )
+   if ( wctx )
    {
-      wctx->clientStatusCB( wctx, WstClient_disconnected, pid, 0, wctx->clientStatusUserData );
+      wctx->clientCommit= false;
+      wctx->clientCommitPid= 0;
+      if ( wctx->clientStatusCB )
+      {
+         wctx->clientStatusCB( wctx, WstClient_disconnected, pid, 0, wctx->clientStatusUserData );
+      }
    }
 
    for( std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.begin(); it != ctx->clientInfoMap.end(); ++it )
@@ -5742,7 +5768,22 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
 
    committedBufferResource= surface->attachedBufferResource;
    if ( surface->attachedBufferResource )
-   {      
+   {
+      if ( !surface->compositor->clientCommit )
+      {
+         struct wl_client *client= wl_resource_get_client( surface->resource );
+         if ( client )
+         {
+            int pid= 0;
+            wl_client_get_credentials( client, &pid, NULL, NULL );
+            surface->compositor->clientCommit= true;
+            if ( pid != surface->compositor->clientCommitPid )
+            {
+               surface->compositor->clientCommitPid= pid;
+               surface->compositor->clientFirstFrame= false;
+            }
+         }
+      }
       if ( ctx->isRepeater )
       {
          int bufferWidth= 0, bufferHeight= 0;

@@ -546,6 +546,7 @@ typedef struct _ClientStatusCtx
    bool disconnected;
    bool stoppedNormal;
    bool stoppedAbnormal;
+   bool firstFrame;
 } ClientStatusCtx;
 
 typedef struct _LaunchCtx
@@ -582,6 +583,9 @@ static void clientStatus( WstCompositor *ctx, int status, int clientPID, int det
          break;
       case WstClient_disconnected:
          csctx->disconnected= true;
+         break;
+      case WstClient_firstFrame:
+         csctx->firstFrame= true;
          break;
    }
 }
@@ -637,6 +641,8 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
    float alpha= 1.0;
    bool needHolePunch;
    int hints;
+   bool firstFrameVirt1;
+   bool firstFrameVirt2;
 
    EMStart( emctx );
 
@@ -750,12 +756,16 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
       }
    }
 
+   firstFrameVirt1= false;
+   firstFrameVirt2= false;
    callbackCount=-1;
    hints= WstHints_noRotation;
    for( int i= 0; i < 20; ++i )
    {
       usleep( 32000 );
 
+      csctx1.firstFrame= false;
+      csctx2.firstFrame= false;
       WstCompositorComposeEmbedded( virt1,
                                     0, // x
                                     0, // y
@@ -772,8 +782,25 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
          EMERROR("Unexpected last texture bufferId: expected(600-603) actual(%d) iteration %d", ctx->lastTextureBufferId, i );
          goto exit;
       }
+      if ( (callbackCount != ctx->textureCallbackCount) &&
+           (
+             (!firstFrameVirt1 && !csctx1.firstFrame) ||
+             (!firstFrameVirt2 && csctx2.firstFrame)
+           ) )
+      {
+         EMERROR("Unexpected first frame: firstFrame1 %d firstFrame2 %d firstFrameVirt1 %d firstFrameVirt2 %d",
+                  csctx1.firstFrame, csctx2.firstFrame, firstFrameVirt1, firstFrameVirt2 );
+         goto exit;
+      }
+      if ( (callbackCount != ctx->textureCallbackCount) && csctx1.firstFrame  )
+      {
+         firstFrameVirt1= csctx1.firstFrame;
+      }
+
       callbackCount= ctx->textureCallbackCount;
 
+      csctx1.firstFrame= false;
+      csctx2.firstFrame= false;
       WstCompositorComposeEmbedded( virt2,
                                     0, // x
                                     0, // y
@@ -790,6 +817,21 @@ bool testCaseRenderBasicCompositionEmbeddedVirtual( EMCTX *emctx )
          EMERROR("Unexpected last texture bufferId: expected(700-703) actual(%d) iteration %d", ctx->lastTextureBufferId, i );
          goto exit;
       }
+      if ( (callbackCount != ctx->textureCallbackCount) &&
+           (
+             (!firstFrameVirt1 && csctx1.firstFrame) ||
+             (!firstFrameVirt2 && !csctx2.firstFrame)
+           ) )
+      {
+         EMERROR("Unexpected first frame: firstFrame1 %d firstFrame2 %d firstFrameVirt1 %d firstFrameVirt2 %d",
+                  csctx1.firstFrame, csctx2.firstFrame, firstFrameVirt1, firstFrameVirt2 );
+         goto exit;
+      }
+      if ( (callbackCount != ctx->textureCallbackCount) && csctx2.firstFrame  )
+      {
+         firstFrameVirt2= csctx2.firstFrame;
+      }
+
       callbackCount= ctx->textureCallbackCount;
 
       eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
@@ -2101,6 +2143,7 @@ typedef struct _ClientStatusCtx
    bool disconnected;
    bool stoppedNormal;
    bool stoppedAbnormal;
+   bool firstFrame;
 } ClientStatusCtx;
 
 static void clientStatus( WstCompositor *ctx, int status, int clientPID, int detail, void *userData )
@@ -2126,6 +2169,9 @@ static void clientStatus( WstCompositor *ctx, int status, int clientPID, int det
          break;
       case WstClient_disconnected:
          csctx->disconnected= true;
+         break;
+      case WstClient_firstFrame:
+         csctx->firstFrame= true;
          break;
    }
 }
@@ -2387,6 +2433,12 @@ bool testCaseRenderBasicCompositionEmbeddedRepeater( EMCTX *emctx )
       }
 
       usleep( 17000 );
+   }
+
+   if ( !csctx.firstFrame )
+   {
+      EMERROR("Failed to be notified of client first frame");
+      goto exit;
    }
 
    testResult= true;
