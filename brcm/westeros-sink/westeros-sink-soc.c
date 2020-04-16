@@ -2224,8 +2224,29 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
             vComposition.virtualDisplay.height= 480;
             break;
          default:
-            vComposition.virtualDisplay.width= 1280;
-            vComposition.virtualDisplay.height= 720;
+            {
+               NEXUS_SurfaceClientStatus scStatus;
+               bool using1080Graphics= false;
+               int rc= NEXUS_SurfaceClient_GetStatus( sink->soc.surfaceClient, &scStatus );
+               if ( rc == NEXUS_SUCCESS )
+               {
+                  if ( (scStatus.display.framebuffer.width == 1920) &&
+                       (scStatus.display.framebuffer.height == 1080) )
+                  {
+                     using1080Graphics= true;
+                  }
+               }
+               if ( using1080Graphics )
+               {
+                  vComposition.virtualDisplay.width= 1920;
+                  vComposition.virtualDisplay.height= 1080;
+               }
+               else
+               {
+                  vComposition.virtualDisplay.width= 1280;
+                  vComposition.virtualDisplay.height= 720;
+               }
+            }
             break;
       }
 
