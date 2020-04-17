@@ -1,0 +1,84 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.17 Release Notes
+------------------------------
+
+Date: Apr 16, 2020
+Tag: Westeros-1.01.17
+Changes:
+
+* V4l2 and drm updates plus automated tests:
+ -drm fixes for issues found when rapidly starting and stopping video server
+ -v4l2 setup input buffers upon receipt of first input buffer
+ -v4l2 fix preroll, seeking, frame stepping
+ -add a number of drm/v4l2 specific automated tests
+
+* Improve essos app ability to control EGL
+ -add EssContextSetEGLSurfaceAttributes, EssContextGetEGLSurfaceAttributes methods
+
+* Essos updates:
+ -add EssContextDestroyNativeWindow
+ -don't do internal EGL setup if app is doing external EGL
+
+* Sink restructuring:
+ -move wayland resource acquisition/release from init/term to state transition
+ -break out of wayland dispatch to prevent hang
+
+*  Essos updates:
+ -fix some names
+ -don't perform platform term in EssContextStop
+ -only run event loop if context running in EssContextRunEventLoopOnce
+
+* Sink updates for auto-plugging
+
+* Ensure sink rectangle property acted on first time
+ -rectangle property updates are ignored if the new values match the current values
+  but with this change, updates are done regardless for the first instance of
+  setting the property
+
+* Revert to previous behavior in EssContextRunEventLoopOnce 
+
+*  Restructure essos:
+ -divide API into app and system
+ -add explicit keyRepeat method to key listener
+
+* Remove duplicate API declaration 
+ -remove duplicate declaration for EssContextSetName that was inadvertently added
+  during restructuring
+
+* Fix video connection initialization error
+ -faulty initialization of a field holding a file descriptor lead to various errors
+
+* Sink updates for brcm:
+ -add property 'immediate-output' as alias for 'camera-latency'
+ -add property 'force-aspet-ratio' for use by playbin
+ -clean up some unneeded newlines in logs
+
+* Drm updates:
+ -use output fence in atomic updates
+ -handle devices that return null connector when HDMI cable is unplugged
+
+* Adjust output fence to maximize parallelism
+
+* Add gamepad support to Essos
+
+* WstCompositorFocusClientByName: check surface and surface->name are not null pointer
+
+* Add automated gamepad tests 
+
+* Add WstClient_firstFrame client status event 
+
+* Brcm sink: improve virtual size setting
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
