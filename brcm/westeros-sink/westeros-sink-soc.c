@@ -31,6 +31,11 @@
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
 #include <gst/video/video-color.h>
 #endif
+#if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
+#ifdef ENABLE_DOLBYVISION
+#include "nexus_hdmi_output_dbv.h"
+#endif
+#endif
 #include "bmedia_types.h"
 
 #define FRAME_POLL_TIME (8000)
@@ -357,7 +362,7 @@ static bool useSecureGraphics( void )
    return useSecure;
 }
 
-void resourceChangedCallback( void *context, int param )
+static void resourceChangedCallback( void *context, int param )
 {
    NEXUS_Error rc;
    GstWesterosSink *sink= (GstWesterosSink*)context;
@@ -377,6 +382,55 @@ void resourceChangedCallback( void *context, int param )
    }
 }
 
+#if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
+#ifdef ENABLE_DOLBYVISION
+static bool IsDbvUnsupportedFormat(void)
+{
+   bool result;
+   NxClient_DisplaySettings displaySettings;
+   NEXUS_HdmiOutputStatus hdmiStatus;
+   NEXUS_HdmiOutputHandle aliasedHdmi;
+   NEXUS_HdmiOutputDbvEdidData dbvEdid;
+   NEXUS_HdmiOutputEdidData edid;
+
+   aliasedHdmi= NEXUS_HdmiOutput_Open(NEXUS_ALIAS_ID, NULL);
+   NxClient_GetDisplaySettings(&displaySettings);
+   NEXUS_HdmiOutput_GetStatus(aliasedHdmi, &hdmiStatus);
+   NEXUS_HdmiOutput_GetDbvEdidData(aliasedHdmi, &dbvEdid);
+   NEXUS_HdmiOutput_GetEdidData(aliasedHdmi, &edid);
+
+   #define BHDM_HDMI_2_0_MAX_RATE 594
+
+   result=
+    (
+        ( displaySettings.format == NEXUS_VideoFormat_e1080i ) || /* 1080i is not supported */
+        (
+            displaySettings.format == NEXUS_VideoFormat_e3840x2160p60hz
+            &&
+            (
+                dbvEdid.supports2160p60 == NEXUS_TristateEnable_eDisable ||
+                !hdmiStatus.videoFormatSupported[NEXUS_VideoFormat_e3840x2160p60hz] || /* 4kp60 422-12 isn't supported */
+                !(edid.hdmiForumVsdb.valid) ||
+                (edid.hdmiForumVsdb.maxTMDSCharacterRate < BHDM_HDMI_2_0_MAX_RATE)
+            )
+        ) ||
+        (
+            displaySettings.format == NEXUS_VideoFormat_e3840x2160p50hz
+            &&
+            (
+                dbvEdid.supports2160p60 == NEXUS_TristateEnable_eDisable || /* also applies to 50 Hz */
+                !hdmiStatus.videoFormatSupported[NEXUS_VideoFormat_e3840x2160p50hz] || /* 4kp50 422-12 isn't supported */
+                !(edid.hdmiForumVsdb.valid) ||
+                (edid.hdmiForumVsdb.maxTMDSCharacterRate < BHDM_HDMI_2_0_MAX_RATE)
+            )
+        )
+    );
+
+   return result;
+}
+#endif
+#endif
+
 #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
 static void streamChangedCallback(void * context, int param)
 {
@@ -387,9 +441,17 @@ static void streamChangedCallback(void * context, int param)
 
    NEXUS_SimpleVideoDecoder_GetStreamInformation(decoderHandle, &streamInfo);
    #if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
+   #ifdef ENABLE_DOLBYVISION
+   NxClient_DisplaySettings displaySettings;
+   NEXUS_Error rc= NEXUS_SUCCESS;
+   NEXUS_VideoDynamicRangeMode dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eTrackInput;
+   #endif
    switch (streamInfo.dynamicMetadataType)
    {
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eDolbyVision:
+         #ifdef ENABLE_DOLBYVISION
+         dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eDolbyVision;
+         #endif
          GST_WARNING("Dolby Vision content decoding begins.");
          break;
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eTechnicolorPrime:
@@ -414,6 +476,25 @@ static void streamChangedCallback(void * context, int param)
          }
          break;
    }
+   #ifdef ENABLE_DOLBYVISION
+   NxClient_GetDisplaySettings(&displaySettings);
+   if(dynamicRangeMode == NEXUS_VideoDynamicRangeMode_eDolbyVision && IsDbvUnsupportedFormat())
+   {
+       dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eTrackInput;
+       GST_WARNING("Dolby Vision not supported with current video format setting output mode to eTrackInput.");
+   }
+
+   if(displaySettings.hdmiPreferences.dynamicRangeMode != dynamicRangeMode)
+   {
+      displaySettings.hdmiPreferences.dynamicRangeMode= dynamicRangeMode;
+      rc= NxClient_SetDisplaySettings(&displaySettings);
+      if (rc)
+      {
+         GST_WARNING("unable to set display format using NxClient_SetDisplaySettings (%d)...", rc);
+         return rc;
+      }
+   }
+   #endif
    #endif
 
    GST_INFO("\nNEXUS_SimpleVideoDecoder_GetStreamInformation\n \
