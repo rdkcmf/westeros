@@ -44,6 +44,9 @@
 #if defined (WESTEROS_HAVE_WAYLAND_EGL)
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#if defined (USE_MESA)
+#include <EGL/eglmesaext.h>
+#endif
 #if defined (WESTEROS_PLATFORM_RPI)
 #include <bcm_host.h>
 #endif
