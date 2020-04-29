@@ -20,6 +20,7 @@
 #define __WESTEROS_SINK_SOC_H__
 
 #include <stdlib.h>
+#include <stdint.h>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -29,7 +30,7 @@
 #include "simplebuffer-client-protocol.h"
 
 #define WESTEROS_SINK_CAPS \
-            "video/x-h264, " \
+      "video/x-h264, " \
       "parsed=(boolean) true, " \
       "alignment=(string) au, " \
       "stream-format=(string) byte-stream, " \
@@ -55,11 +56,24 @@ typedef struct _WstPlaneInfo
 } WstPlaneInfo;
 
 #define WST_MAX_PLANES (3)
+typedef struct _WstGemBuffer
+{
+   uint32_t width;
+   uint32_t height;
+   int planeCount;
+   unsigned int handle[WST_MAX_PLANES];
+   unsigned int stride[WST_MAX_PLANES];
+   unsigned int offset[WST_MAX_PLANES];
+   uint32_t size[WST_MAX_PLANES];
+   int fd[WST_MAX_PLANES];
+} WstGemBuffer;
+
 typedef struct _WstBufferInfo
 {
    struct v4l2_buffer buf;
    struct v4l2_plane planes[WST_MAX_PLANES];
    WstPlaneInfo planeInfo[WST_MAX_PLANES];
+   WstGemBuffer gemBuf;
    int planeCount;
    int fd;
    void *start;
@@ -84,6 +98,9 @@ struct _GstWesterosSinkSoc
    struct v4l2_capability caps;
    uint32_t deviceCaps;
    gboolean isMultiPlane;
+   gboolean preferNV12M;
+   uint32_t inputMemMode;
+   uint32_t outputMemMode;
    int numInputFormats;
    struct v4l2_fmtdesc *inputFormats;
    int numOutputFormats;
@@ -122,6 +139,10 @@ struct _GstWesterosSinkSoc
    int videoHeight;
 
    gboolean frameStepOnPreroll;
+
+   gboolean secureVideo;
+   gboolean useDmabufOutput;
+   int drmFd;
 
    #ifdef GLIB_VERSION_2_32 
    GMutex mutex;
