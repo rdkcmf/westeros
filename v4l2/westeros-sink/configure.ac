@@ -43,6 +43,7 @@ AC_TYPE_SIZE_T
 AC_HEADER_STDBOOL
 
 IARM_CFLAGS=" "
+GST_ALLOCATORS_DETECTED=" "
 
 # Checks for library functions.
 #Add the subdirectories to be considered for building.
@@ -64,6 +65,7 @@ AS_IF([test "x$enable_gstreamer1" = "xyes"], [
 
   AS_IF([test "x$have_gst1" = "xyes"], [
     PKG_CHECK_MODULES([GSTBASE], [gstreamer-base-1.0 >= 1.4])
+    PKG_CHECK_MODULES([GSTALLOCATORS], [gstreamer-allocators-1.0 >= 1.4],[GST_ALLOCATORS_DETECTED=true],[GST_ALLOCATORS_DETECTED=false])
     AC_DEFINE(USE_GST1, 1, [Build with GStreamer 1.x])
   ], [])
 ], [])
@@ -85,6 +87,8 @@ PKG_CHECK_MODULES([GLIB],[glib-2.0 >= 2.22.5])
 PKG_CHECK_MODULES([GTHREAD],[gthread-2.0 >= 2.38.2])
 PKG_CHECK_MODULES([WAYLAND_CLIENT],[wayland-client >= 1.6.0])
 PKG_CHECK_MODULES([WAYLAND_SERVER],[wayland-server >= 1.6.0])
+
+AM_CONDITIONAL([HAVE_GST_ALLOCATORS], [test x$GST_ALLOCATORS_DETECTED = xtrue])
 
 WAYLANDLIB="-lwayland-client"
 AC_SUBST(WAYLANDLIB)
