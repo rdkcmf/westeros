@@ -726,7 +726,10 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       #ifdef USE_GST_ALLOCATORS
       inSize= gst_memory_get_sizes( mem, NULL, NULL );
 
-      GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
+      if ( sink->soc.inputMemMode == V4L2_MEMORY_DMABUF )
+      {
+         GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
+      }
       #endif
 
       if ( GST_BUFFER_PTS_IS_VALID(buffer) )
@@ -770,6 +773,12 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             goto exit;
          }
 
+         if ( sink->soc.inBuffers[buffIndex].gstbuf )
+         {
+            gst_buffer_unref( sink->soc.inBuffers[buffIndex].gstbuf );
+            sink->soc.inBuffers[buffIndex].gstbuf= 0;
+         }
+
          if (GST_BUFFER_PTS_IS_VALID(buffer) )
          {
             GstClockTime timestamp= GST_BUFFER_PTS(buffer);
@@ -797,6 +806,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
             goto exit;
          }
+         sink->soc.inBuffers[buffIndex].gstbuf= gst_buffer_ref(buffer);
       }
       else
       #endif
@@ -812,9 +822,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          inData= GST_BUFFER_DATA(buffer);
          #endif
 
-         #ifndef USE_GST_ALLOCATORS
          GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
-         #endif
 
          if ( inSize )
          {
@@ -1854,6 +1862,13 @@ static void wstTearDownInputBuffers( GstWesterosSink *sink )
          {
             munmap( sink->soc.inBuffers[i].start, sink->soc.inBuffers[i].capacity );
          }
+         #ifdef USE_GST_ALLOCATORS
+         if ( sink->soc.inBuffers[i].gstbuf )
+         {
+            gst_buffer_unref( sink->soc.inBuffers[i].gstbuf );
+            sink->soc.inBuffers[i].gstbuf= 0;
+         }
+         #endif
       }
       free( sink->soc.inBuffers );
       sink->soc.inBuffers= 0;
@@ -2630,6 +2645,8 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
       {
          GST_ERROR("failed to open device (%s)", sink->soc.devname );
       }
+
+      wstStartEvents( sink );
    }
 
    sink->videoStarted= FALSE;
@@ -3094,7 +3111,7 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
 
    sink->soc.videoPlaying= TRUE;
 
-   if ( (GST_BASE_SINK(sink)->have_preroll == FALSE) || sink->soc.frameStepOnPreroll )
+   if ( sink->soc.frameStepOnPreroll )
    {
       gst_westeros_sink_soc_render( sink, buffer );
    }
