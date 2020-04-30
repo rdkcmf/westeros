@@ -74,6 +74,7 @@ typedef struct _WstBufferInfo
    struct v4l2_plane planes[WST_MAX_PLANES];
    WstPlaneInfo planeInfo[WST_MAX_PLANES];
    WstGemBuffer gemBuf;
+   GstBuffer *gstbuf;
    int planeCount;
    int fd;
    void *start;
