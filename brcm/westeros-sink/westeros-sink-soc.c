@@ -46,6 +46,7 @@
 #define MAX_PIP_HEIGHT (360)
 #define DEFAULT_LATENCY_TARGET (100)
 #define MAX_ZORDER (100)
+#define QOS_INTERVAL (1000)
 
 #ifndef DRM_FORMAT_RGBA8888
 #define DRM_FORMAT_RGBA8888 (0x34324152)
@@ -572,6 +573,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameCount= 0;
    sink->soc.framesBeforeHideVideo= 0;
    sink->soc.numDecoded= 0;
+   sink->soc.numDropped= 0;
    sink->soc.noFrameCount= 0;
    sink->soc.ignoreDiscontinuity= FALSE;
    sink->soc.checkForEOS= FALSE;
@@ -1363,6 +1365,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.captureCount= 0;
    sink->soc.frameCount= 0;
    sink->soc.numDecoded= 0;
+   sink->soc.numDropped= 0;
    sink->soc.ignoreDiscontinuity= TRUE;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
@@ -1552,6 +1555,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
    sink->soc.numDecoded= 0;
+   sink->soc.numDropped= 0;
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
@@ -2224,6 +2228,32 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->soc.frameCount++;
             sink->soc.noFrameCount= 0;
             sink->soc.presentationStarted= TRUE;
+
+            if ( (videoStatus.numDisplayDrops > sink->soc.numDropped) ||
+                 (((videoStatus.numDecoded % QOS_INTERVAL) == 0) && videoStatus.numDecoded) )
+            {
+               GstMessage *msg= gst_message_new_qos( GST_OBJECT_CAST(sink),
+                                                     FALSE, /* live */
+                                                     (sink->position-sink->positionSegmentStart), /* running time */
+                                                     (sink->position-sink->positionSegmentStart), /* stream time */
+                                                     sink->position, /* timestamp */
+                                                     16000000UL /* duration */ );
+               if ( msg )
+               {
+                  gst_message_set_qos_stats( msg,
+                                             GST_FORMAT_BUFFERS,
+                                             videoStatus.numDecoded,
+                                             videoStatus.numDisplayDrops );
+                  GST_INFO("post QoS: processed %u dropped %u", videoStatus.numDecoded, videoStatus.numDisplayDrops);
+                  if ( !gst_element_post_message( GST_ELEMENT(sink), msg ) )
+                  {
+                     GST_WARNING("unable to post QoS");
+                     gst_message_unref( msg );
+                  }
+               }
+
+               sink->soc.numDropped= videoStatus.numDisplayDrops;
+            }
          }
 
          if ( (sink->soc.prevQueueDepth == videoStatus.queueDepth) &&

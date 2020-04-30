@@ -49,6 +49,8 @@
 #define NUM_OUTPUT_BUFFERS (6)
 #define MIN_OUTPUT_BUFFERS (3)
 
+#define QOS_INTERVAL (1000)
+
 #define IOCTL ioctl_wrapper
 
 #ifdef GLIB_VERSION_2_32
@@ -231,6 +233,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameHeight= -1;
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
+   sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
    sink->soc.devname= strdup(gDeviceName);
@@ -904,6 +907,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    LOCK(sink);
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
+   sink->soc.numDropped= 0;
    UNLOCK(sink);
 }
 
@@ -913,6 +917,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    int rc;
 
    sink->soc.frameOutCount= 0;
+   sink->soc.numDropped= 0;
 
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
    if ( rc < 0 )
@@ -3004,6 +3009,29 @@ capture_start:
                   GST_ERROR("wstVideoOutputThread: failed to re-queue output buffer: rc %d errno %d", rc, errno);
                   UNLOCK(sink);
                   goto exit;
+               }
+            }
+
+            if ( ((sink->soc.frameInCount % QOS_INTERVAL) == 0) && sink->soc.frameInCount )
+            {
+               GstMessage *msg= gst_message_new_qos( GST_OBJECT_CAST(sink),
+                                                     FALSE, /* live */
+                                                     (sink->position-sink->positionSegmentStart), /* running time */
+                                                     (sink->position-sink->positionSegmentStart), /* stream time */
+                                                     sink->position, /* timestamp */
+                                                     16000000UL /* duration */ );
+               if ( msg )
+               {
+                  gst_message_set_qos_stats( msg,
+                                             GST_FORMAT_BUFFERS,
+                                             sink->soc.frameInCount,
+                                             sink->soc.numDropped );
+                  GST_INFO("post QoS: processed %u dropped %u", sink->soc.frameInCount, sink->soc.numDropped);
+                  if ( !gst_element_post_message( GST_ELEMENT(sink), msg ) )
+                  {
+                     GST_WARNING("unable to post QoS");
+                     gst_message_unref( msg );
+                  }
                }
             }
             UNLOCK(sink);

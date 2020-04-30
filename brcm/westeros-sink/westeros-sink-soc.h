@@ -79,6 +79,7 @@ struct _GstWesterosSinkSoc
    int frameCount;
    int noFrameCount;
    guint32 numDecoded;
+   guint32 numDropped;
    gboolean ignoreDiscontinuity;
    gboolean checkForEOS;
    gboolean emitEOS;
