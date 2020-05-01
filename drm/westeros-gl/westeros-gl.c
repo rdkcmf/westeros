@@ -628,6 +628,12 @@ static void *wstVideoServerConnectionThread( void *arg )
    conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false );
    INFO("video plane %p : zorder: %d", conn->videoPlane, (conn->videoPlane ? conn->videoPlane->zOrder: -1) );
 
+   if ( !conn->videoPlane )
+   {
+      ERROR("No video plane avaialble");
+      goto exit;
+   }
+
    conn->threadStarted= true;
    while( !conn->threadStopRequested )
    {
