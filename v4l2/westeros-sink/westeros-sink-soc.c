@@ -108,6 +108,7 @@ static void wstSetOutputMemMode( GstWesterosSink *sink, int mode );
 static void wstSetupOutput( GstWesterosSink *sink );
 static int wstGetOutputBuffer( GstWesterosSink *sink );
 static int wstFindOutputBuffer( GstWesterosSink *sink, int fd );
+static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex );
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name );
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
@@ -266,10 +267,13 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.eosDetectionThread= NULL;
    sink->soc.dispatchThread= NULL;
    sink->soc.videoPlaying= FALSE;
+   sink->soc.videoPaused= FALSE;
    sink->soc.hasEvents= FALSE;
    sink->soc.needCaptureRestart= FALSE;
    sink->soc.nextFrameFd= -1;
-   sink->soc.prevFrameFd= -1;
+   sink->soc.prevFrame1Fd= -1;
+   sink->soc.prevFrame2Fd= -1;
+   sink->soc.resubFd= -1;
    sink->soc.captureEnabled= FALSE;
    sink->soc.useCaptureOnly= FALSE;
    sink->soc.framesBeforeHideVideo= 0;
@@ -508,6 +512,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    LOCK(sink);
    sink->startAfterCaps= TRUE;
    sink->soc.videoPlaying= TRUE;
+   sink->soc.videoPaused= FALSE;
    UNLOCK(sink);
 
 exit:
@@ -520,6 +525,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
    LOCK( sink );
    sink->soc.videoPlaying= TRUE;
+   sink->soc.videoPaused= FALSE;
    UNLOCK( sink );
 
    return TRUE;
@@ -529,6 +535,7 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
 {
    LOCK( sink );
    sink->soc.videoPlaying= FALSE;
+   sink->soc.videoPaused= TRUE;
    UNLOCK( sink );
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
@@ -982,7 +989,8 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    else if ( !useGfxPath && sink->soc.captureEnabled )
    {
       sink->soc.captureEnabled= FALSE;
-      sink->soc.prevFrameFd= -1;
+      sink->soc.prevFrame1Fd= -1;
+      sink->soc.prevFrame2Fd= -1;
       sink->soc.nextFrameFd= -1;
 
       wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
@@ -1069,7 +1077,8 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    }
    UNLOCK(sink);
 
-   sink->soc.prevFrameFd= -1;
+   sink->soc.prevFrame1Fd= -1;
+   sink->soc.prevFrame2Fd= -1;
    sink->soc.nextFrameFd= -1;
    sink->soc.formatsSet= FALSE;
 
@@ -1414,7 +1423,8 @@ static void wstProcessEvents( GstWesterosSink *sink )
             }
             wstSetupOutput( sink );
             sink->soc.nextFrameFd= -1;
-            sink->soc.prevFrameFd= -1;
+            sink->soc.prevFrame1Fd= -1;
+            sink->soc.prevFrame2Fd= -1;
             sink->soc.needCaptureRestart= TRUE;
          }
       }
@@ -2278,6 +2288,18 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
 
 static void wstSetOutputMemMode( GstWesterosSink *sink, int mode )
 {
+   int rc;
+   int32_t bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
+
+   memset( &sink->soc.fmtOut, 0, sizeof(struct v4l2_format) );
+   sink->soc.fmtOut.type= bufferType;
+
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &sink->soc.fmtOut );
+   if ( rc < 0 )
+   {
+      GST_DEBUG("wstSetOutputFormat: initV4l2: failed get format for output: rc %d errno %d", rc, errno);
+   }
+
    sink->soc.outputMemMode= mode;
 
    #ifdef WESTEROS_SINK_SVP
@@ -2343,6 +2365,20 @@ static int wstFindOutputBuffer( GstWesterosSink *sink, int fd )
    return bufferIndex;
 }
 
+static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex )
+{
+   if ( !sink->soc.outBuffers[buffIndex].locked )
+   {
+      int rc;
+      GST_LOG( "%lld: re-queue: frame index %d", getCurrentTimeMillis(), buffIndex);
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[buffIndex].buf );
+      if ( rc < 0 )
+      {
+         GST_ERROR("wstRequeueOutputBuffer: failed to re-queue output buffer: rc %d errno %d", rc, errno);
+      }
+   }
+}
+
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name )
 {
    WstVideoClientConnection *conn= 0;
@@ -2357,6 +2393,9 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
       conn->socketFd= -1;
       conn->name= name;
       conn->sink= sink;
+      conn->buffPrev= -1;
+      conn->buffCurr= -1;
+      conn->buffNext= -1;
 
       workingDir= getenv("XDG_RUNTIME_DIR");
       if ( !workingDir )
@@ -2424,6 +2463,15 @@ static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn )
    }
 }
 
+static unsigned int getU32( unsigned char *p )
+{
+   unsigned n;
+
+   n= (p[0]<<24)|(p[1]<<16)|(p[2]<<8)|(p[3]);
+
+   return n;
+}
+
 static int putU32( unsigned char *p, unsigned n )
 {
    p[0]= (n>>24);
@@ -2437,6 +2485,113 @@ static int putU32( unsigned char *p, unsigned n )
 static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex )
 {
    int sentLen;
+
+   if ( conn )
+   {
+      struct pollfd pfd;
+      int rc;
+
+      pfd.fd= conn->socketFd;
+      pfd.events= POLLIN;
+      pfd.revents= 0;
+
+      rc= poll( &pfd, 1, 0);
+      if ( rc == 1 )
+      {
+         struct msghdr msg;
+         struct iovec iov[1];
+         unsigned char mbody[64];
+         int len;
+
+         iov[0].iov_base= (char*)mbody;
+         iov[0].iov_len= sizeof(mbody);
+
+         msg.msg_name= NULL;
+         msg.msg_namelen= 0;
+         msg.msg_iov= iov;
+         msg.msg_iovlen= 1;
+         msg.msg_control= 0;
+         msg.msg_controllen= 0;
+         msg.msg_flags= 0;
+
+         do
+         {
+            len= recvmsg( conn->socketFd, &msg, 0 );
+         }
+         while ( (len < 0) && (errno == EINTR));
+
+         if ( len >= 4 )
+         {
+            if ( (mbody[0] == 'V') && (mbody[1] == 'S') )
+            {
+               int mlen, id;
+               mlen= mbody[2];
+               if ( len >= (mlen+2) )
+               {
+                  id= mbody[3];
+                  switch( id )
+                  {
+                     case 'R':
+                        if ( mlen >= 6)
+                        {
+                          int rate= getU32( &mbody[4] );
+                          GST_DEBUG("got rate %d from video server", rate);
+                          conn->serverRefreshRate= rate;
+                          if ( rate )
+                          {
+                             conn->serverRefreshPeriod= 1000000LL/rate;
+                          }
+                        }
+                        break;
+                     default:
+                        break;
+                  }
+               }
+            }
+         }
+      }
+      if ( conn->serverRefreshRate && (buffIndex >= 0) )
+      {
+         GstWesterosSink *sink= conn->sink;
+         gint64 now= sink->soc.outBuffers[buffIndex].frameTime;
+         gint64 interval= now-conn->lastSendTime;
+         if ( interval <= 18333 )
+         {
+            interval= 16667;
+         }
+         else if ( (interval >= 30000) && (interval <= 36667) )
+         {
+            interval= 33333;
+         }
+         else if ( (interval >= 37500) && (interval <= 45833) )
+         {
+            interval= 41667;
+         }
+         if ( (conn->lastSendTime == 0) || (interval >= conn->serverRefreshPeriod) )
+         {
+            conn->lastSendTime= now;
+            sink->soc.resubFd= -1;
+            sink->soc.outBuffers[buffIndex].locked= true;
+            if ( conn->buffPrev >= 0 )
+            {
+               sink->soc.outBuffers[conn->buffPrev].locked= false;
+               wstRequeueOutputBuffer( sink, conn->buffPrev );
+            }
+            conn->buffPrev= conn->buffCurr;
+            conn->buffCurr= conn->buffNext;
+            conn->buffNext= buffIndex;
+
+            GST_LOG( "%lld: pass frame %lld", getCurrentTimeMillis(), now);
+         }
+         else
+         {
+            sink->soc.outBuffers[conn->buffPrev].locked= false;
+            wstRequeueOutputBuffer( sink, buffIndex );
+            GST_LOG( "%lld: drop frame %lld", getCurrentTimeMillis(), now);
+            return;
+         }
+      }
+   }
 
    if ( conn  )
    {
@@ -2596,6 +2751,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          fdToSend0= fdToSend1= fdToSend2= -1;
       }
 
+      GST_LOG( "%lld: send frame: %d, fd (%d, %d, %d [%d, %d, %d])", getCurrentTimeMillis(), buffIndex, frameFd0, frameFd1, frameFd2, fdToSend0, fdToSend1, fdToSend2);
       do
       {
          sentLen= sendmsg( conn->socketFd, &msg, 0 );
@@ -2656,7 +2812,8 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
 
    sink->videoStarted= FALSE;
    sink->startAfterCaps= TRUE;
-   sink->soc.prevFrameFd= -1;
+   sink->soc.prevFrame1Fd= -1;
+   sink->soc.prevFrame2Fd= -1;
    sink->soc.nextFrameFd= -1;
    sink->soc.formatsSet= FALSE;
 }
@@ -2703,8 +2860,8 @@ static gpointer wstVideoOutputThread(gpointer data)
    struct v4l2_selection selection;
    int i, j, buffIndex, rc;
    int32_t bufferType;
-   gint64 prevFrameTime= 0, currFrameTime;
-   gint64 prevFramePTS= 0, currFramePTS;
+   bool haveBaseTime= false;
+   bool wasPaused= false;
 
    GST_DEBUG("wstVideoOutputThread: enter");
 
@@ -2775,9 +2932,20 @@ capture_start:
       {
          break;
       }
+      else if ( sink->soc.videoPaused )
+      {
+         wasPaused= true;
+         usleep( 1000 );
+      }
       else
       {
          int rc;
+
+         if ( wasPaused )
+         {
+            wasPaused= false;
+            haveBaseTime= false;
+         }
 
          if ( sink->soc.hasEvents )
          {
@@ -2787,7 +2955,7 @@ capture_start:
             pfd.events= POLLIN | POLLRDNORM | POLLPRI;
             pfd.revents= 0;
 
-            poll( &pfd, 1, -1);
+            poll( &pfd, 1, 0);
 
             if ( sink->soc.quitVideoOutputThread ) break;
 
@@ -2804,6 +2972,7 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
+               usleep( 1000 );
                continue;
             }
          }
@@ -2812,25 +2981,12 @@ capture_start:
 
          if ( sink->soc.quitVideoOutputThread ) break;
 
-         if ( buffIndex >= 0 )
          {
-            int resubFd= -1;
+            sink->soc.resubFd= -1;
 
-            currFrameTime= g_get_monotonic_time();
-            currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
-            if ( prevFrameTime && prevFramePTS )
-            {
-               gint64 framePeriod= currFrameTime-prevFrameTime;
-               gint64 nominalFramePeriod= currFramePTS-prevFramePTS;
-               gint64 delay= (nominalFramePeriod-framePeriod)/1000;
-               if ( (delay > 2) && (delay <= nominalFramePeriod) )
-               {
-                  usleep( (delay-1)*1000 );
-                  currFrameTime= g_get_monotonic_time();
-               }
-            }
-            prevFrameTime= currFrameTime;
-            prevFramePTS= currFramePTS;
+            gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
+
+            sink->soc.outBuffers[buffIndex].frameTime= currFramePTS;
 
             LOCK(sink);
             if ( sink->soc.quitVideoOutputThread )
@@ -2983,8 +3139,9 @@ capture_start:
                      buffIndex= -1;
 
                      /* Advance any frames sent to video server towards requeueing to decoder */
-                     resubFd= sink->soc.prevFrameFd;
-                     sink->soc.prevFrameFd= sink->soc.nextFrameFd;
+                     sink->soc.resubFd= sink->soc.prevFrame2Fd;
+                     sink->soc.prevFrame2Fd=sink->soc.prevFrame1Fd;
+                     sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
                      sink->soc.nextFrameFd= -1;
 
                      if ( sink->soc.framesBeforeHideVideo )
@@ -3003,8 +3160,9 @@ capture_start:
             }
             else
             {
-               resubFd= sink->soc.prevFrameFd;
-               sink->soc.prevFrameFd= sink->soc.nextFrameFd;
+               sink->soc.resubFd= sink->soc.prevFrame2Fd;
+               sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
+               sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
                sink->soc.nextFrameFd= sink->soc.outBuffers[buffIndex].fd;
 
                wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex );
@@ -3012,21 +3170,16 @@ capture_start:
                buffIndex= -1;
             }
 
-            if ( resubFd >= 0 )
+            if ( sink->soc.resubFd >= 0 )
             {
-               buffIndex= wstFindOutputBuffer( sink, resubFd );
-               resubFd= -1;
+               buffIndex= wstFindOutputBuffer( sink, sink->soc.resubFd );
+               GST_LOG( "%lld: resub: frame fd %d index %d", getCurrentTimeMillis(), sink->soc.resubFd, buffIndex);
+               sink->soc.resubFd= -1;
             }
 
             if ( buffIndex >= 0 )
             {
-               rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[buffIndex].buf );
-               if ( rc < 0 )
-               {
-                  GST_ERROR("wstVideoOutputThread: failed to re-queue output buffer: rc %d errno %d", rc, errno);
-                  UNLOCK(sink);
-                  goto exit;
-               }
+               wstRequeueOutputBuffer( sink, buffIndex );
             }
 
             if ( ((sink->soc.frameInCount % QOS_INTERVAL) == 0) && sink->soc.frameInCount )

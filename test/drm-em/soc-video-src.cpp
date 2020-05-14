@@ -121,6 +121,7 @@ static GstStateChangeReturn emVideoSrcChangeState(GstElement *element, GstStateC
    {
       case GST_STATE_CHANGE_READY_TO_PAUSED:
          pthread_mutex_lock( &src->mutex );
+         src->frameNumber= 0;
          src->needSegment= true;
          pthread_mutex_unlock( &src->mutex );
          break;
@@ -419,6 +420,7 @@ static void emVideoSrcLoop( GstPad *pad )
 
             newSegEvent= gst_event_new_segment(&segment);
 
+            GST_LOG("push segment");
             gst_pad_push_event( pad, newSegEvent );
 
             src->needSegment= false;
@@ -430,6 +432,7 @@ static void emVideoSrcLoop( GstPad *pad )
 
          GST_LOG("push buffer for frame %d", src->frameNumber);
          rv= gst_pad_push( pad, buffer );
+         GST_LOG("done push buffer for frame %d rc %d", src->frameNumber, rv);
          if ( (rv != GST_FLOW_OK) && (rv != GST_FLOW_FLUSHING) )
          {
             g_print("Error: unable to push buffer: flow %d\n", rv);

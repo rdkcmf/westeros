@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define EGL_EGLEXT_PROTOTYPES
@@ -103,12 +104,10 @@ typedef struct _VideoServerConnection
    VideoServerCtx *server;
    WstOverlayPlane *videoPlane;
    int socketFd;
-   int prevFrameFd0;
-   int prevFrameFd1;
-   int prevFrameFd2;
    pthread_t threadId;
    bool threadStarted;
    bool threadStopRequested;
+   int refreshRate;
 } VideoServerConnection;
 
 #define MAX_SUN_PATH (80)
@@ -135,6 +134,9 @@ typedef struct _VideoFrame
    uint32_t fbId;
    uint32_t handle0;
    uint32_t handle1;
+   int fd0;
+   int fd1;
+   int fd2;
    uint32_t frameWidth;
    uint32_t frameHeight;
    uint32_t frameFormat;
@@ -162,7 +164,14 @@ typedef struct _WstOverlayPlane
    uint32_t fbIdPrev;
    uint32_t handle0Prev;
    uint32_t handle1Prev;
+   int fd0;
+   int fd1;
+   int fd2;
+   int prevFd0;
+   int prevFd1;
+   int prevFd2;
    VideoFrame videoFrameNext;
+   bool dirty;
 } WstOverlayPlane;
 
 typedef struct _WstOverlayPlanes
@@ -189,6 +198,7 @@ typedef struct _NativeWindowItem
    uint32_t prevFbId;
    int width;
    int height;
+   bool dirty;
 } NativeWindowItem;
 
 typedef struct _WstGLCtx
@@ -228,6 +238,10 @@ typedef struct _WstGLCtx
    #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
    int nativeOutputFenceFd;
    #endif
+   bool dirty;
+   pthread_t refreshThreadId;
+   bool refreshThreadStarted;
+   bool refreshThreadStopRequested;
 } WstGLCtx;
 
 typedef struct _WstGLSizeCBInfo
@@ -244,8 +258,9 @@ static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
 static void wstSelectMode( WstGLCtx *ctx, int width, int height );
-static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw );
-static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw );
+static void wstStartRefreshThread( WstGLCtx *ctx );
+static void wstSwapDRMBuffers( WstGLCtx *ctx );
+static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx );
 
 static PFNEGLGETPLATFORMDISPLAYEXTPROC gRealEGLGetPlatformDisplay= 0;
 static PREALEGLGETDISPLAY gRealEGLGetDisplay= 0;
@@ -309,6 +324,34 @@ static void wstLog( int level, const char *fmt, ... )
    }
 }
 
+static long long getMonotonicTimeMicros( void )
+{
+   int rc;
+   struct timespec tm;
+   long long timeMicro;
+   static bool reportedError= false;
+   if ( !reportedError )
+   {
+      rc= clock_gettime( CLOCK_MONOTONIC, &tm );
+   }
+   if ( reportedError || rc )
+   {
+      struct timeval tv;
+      if ( !reportedError )
+      {
+         reportedError= true;
+         ERROR("clock_gettime failed rc %d - using timeofday", rc);
+      }
+      gettimeofday(&tv,0);
+      timeMicro= tv.tv_sec*1000000LL+tv.tv_usec;
+   }
+   else
+   {
+      timeMicro= tm.tv_sec*1000000LL+(tm.tv_nsec/1000LL);
+   }
+   return timeMicro;
+}
+
 static void wstUpdateResources( int type, bool add, long long v, int line )
 {
    pthread_mutex_lock( &resMutex );
@@ -354,13 +397,13 @@ static void wstUpdateResources( int type, bool add, long long v, int line )
             break;
       }
    }
-   TRACE3("fdv %d hnv %d fbv %d bog %d fbg %d : v %llx line %d",
+   TRACE3("fdv %d hnv %d fbv %d bog %d fbg %d : v %llx (%lld) line %d",
           gResources->fdVideoCount,
           gResources->handleVideoCount,
           gResources->fbVideoCount,
           gResources->boGraphicsCount,
           gResources->fbGraphicsCount,
-          v, line
+          v, v, line
          );
    pthread_mutex_unlock( &resMutex );
 }
@@ -565,6 +608,16 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
    }
 }
 
+static int wstPutU32( unsigned char *p, unsigned n )
+{
+   p[0]= (n>>24);
+   p[1]= (n>>16);
+   p[2]= (n>>8);
+   p[3]= (n&0xFF);
+
+   return 4;
+}
+
 static unsigned int wstGetU32( unsigned char *p )
 {
    unsigned n;
@@ -605,6 +658,45 @@ static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t ha
    }
 }
 
+static void wstVideoServerSendRefreshRate( VideoServerConnection *conn, int rate )
+{
+   struct msghdr msg;
+   struct iovec iov[1];
+   unsigned char mbody[4+4];
+   int len;
+   int sentLen;
+
+   msg.msg_name= NULL;
+   msg.msg_namelen= 0;
+   msg.msg_iov= iov;
+   msg.msg_iovlen= 1;
+   msg.msg_control= 0;
+   msg.msg_controllen= 0;
+   msg.msg_flags= 0;
+
+   len= 0;
+   mbody[len++]= 'V';
+   mbody[len++]= 'S';
+   mbody[len++]= 6;
+   mbody[len++]= 'R';
+   len += wstPutU32( &mbody[4], rate );
+
+   iov[0].iov_base= (char*)mbody;
+   iov[0].iov_len= len;
+
+   do
+   {
+      sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+   }
+   while ( (sentLen < 0) && (errno == EINTR));
+
+   if ( sentLen == len )
+   {
+      DEBUG("sent rate %d to client", rate);
+      conn->refreshRate= rate;
+   }
+}
+
 static void *wstVideoServerConnectionThread( void *arg )
 {
    VideoServerConnection *conn= (VideoServerConnection*)arg;
@@ -637,6 +729,11 @@ static void *wstVideoServerConnectionThread( void *arg )
    conn->threadStarted= true;
    while( !conn->threadStopRequested )
    {
+      if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh != conn->refreshRate )
+      {
+         wstVideoServerSendRefreshRate( conn, gCtx->modeInfo->vrefresh );
+      }
+
       iov[0].iov_base= (char*)mbody;
       iov[0].iov_len= sizeof(mbody);
 
@@ -739,18 +836,6 @@ static void *wstVideoServerConnectionThread( void *arg )
                      }
                      #endif
 
-                     pthread_mutex_lock( &gCtx->mutex );
-                     if ( conn->videoPlane->fbIdPrev )
-                     {
-                        wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbIdPrev, __LINE__);
-                        drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbIdPrev );
-                        conn->videoPlane->fbIdPrev= 0;
-                        wstClosePrimeFDHandles( gCtx, conn->videoPlane->handle0Prev, conn->videoPlane->handle1Prev, __LINE__ );
-                        conn->videoPlane->handle0Prev= 0;
-                        conn->videoPlane->handle1Prev= 0;
-                     }
-                     pthread_mutex_unlock( &gCtx->mutex );
-
                      rc= drmPrimeFDToHandle( gCtx->drmFd, fd0, &handle0 );
                      if ( !rc )
                      {
@@ -792,12 +877,38 @@ static void *wstVideoServerConnectionThread( void *arg )
                                          );
                         if ( !rc )
                         {
+                           pthread_mutex_lock( &gMutex );
+                           if ( conn->videoPlane->videoFrameNext.fbId )
+                           {
+                              DEBUG("dropping fbid %d", conn->videoPlane->videoFrameNext.fbId);
+                              wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->videoFrameNext.fbId, __LINE__);
+                              drmModeRmFB( gCtx->drmFd, conn->videoPlane->videoFrameNext.fbId );
+                              conn->videoPlane->videoFrameNext.fbId= 0;
+                              wstClosePrimeFDHandles( gCtx, conn->videoPlane->videoFrameNext.handle0, conn->videoPlane->videoFrameNext.handle1, __LINE__ );
+                              conn->videoPlane->videoFrameNext.handle0= 0;
+                              conn->videoPlane->videoFrameNext.handle1= 0;
+                              wstUpdateResources( WSTRES_FD_VIDEO, false, conn->videoPlane->videoFrameNext.fd0, __LINE__);
+                              close( conn->videoPlane->videoFrameNext.fd0 );
+                              conn->videoPlane->videoFrameNext.fd0= -1;
+                              if ( conn->videoPlane->videoFrameNext.fd1 >= 0 )
+                              {
+                                 close( conn->videoPlane->videoFrameNext.fd1 );
+                                 conn->videoPlane->videoFrameNext.fd1= -1;
+                              }
+                              if ( conn->videoPlane->videoFrameNext.fd2 >= 0 )
+                              {
+                                 close( conn->videoPlane->videoFrameNext.fd2 );
+                                 conn->videoPlane->videoFrameNext.fd2= -1;
+                              }
+                           }
                            wstUpdateResources( WSTRES_FB_VIDEO, true, fbId, __LINE__);
-                           pthread_mutex_lock( &gCtx->mutex );
                            conn->videoPlane->videoFrameNext.hide= false;
                            conn->videoPlane->videoFrameNext.fbId= fbId;
                            conn->videoPlane->videoFrameNext.handle0= handle0;
                            conn->videoPlane->videoFrameNext.handle1= handle1;
+                           conn->videoPlane->videoFrameNext.fd0= fd0;
+                           conn->videoPlane->videoFrameNext.fd1= fd1;
+                           conn->videoPlane->videoFrameNext.fd2= fd2;
                            conn->videoPlane->videoFrameNext.frameWidth= frameWidth-frameSkipX;
                            conn->videoPlane->videoFrameNext.frameHeight= frameHeight-frameSkipY;
                            conn->videoPlane->videoFrameNext.frameFormat= frameFormat;
@@ -805,10 +916,8 @@ static void *wstVideoServerConnectionThread( void *arg )
                            conn->videoPlane->videoFrameNext.rectY= rectY+rectSkipY;
                            conn->videoPlane->videoFrameNext.rectW= rectW-rectSkipX;
                            conn->videoPlane->videoFrameNext.rectH= rectH-rectSkipY;
-                           pthread_mutex_unlock( &gCtx->mutex );
-
-                           pthread_mutex_lock( &gMutex );
-                           wstSwapDRMBuffers( gCtx, 0 );
+                           gCtx->dirty= true;
+                           conn->videoPlane->dirty= true;
                            pthread_mutex_unlock( &gMutex );
                         }
                         else
@@ -827,41 +936,13 @@ static void *wstVideoServerConnectionThread( void *arg )
                DEBUG("got hide video plane %d", conn->videoPlane->plane->plane_id);
                conn->videoPlane->videoFrameNext.hide= true;
                pthread_mutex_lock( &gMutex );
-               wstSwapDRMBuffers( gCtx, 0 );
+               gCtx->dirty= true;
+               conn->videoPlane->dirty= true;
                pthread_mutex_unlock( &gMutex );
                break;
             default:
                ERROR("got unknown video server message");
                break;
-         }
-
-         if ( conn->prevFrameFd0 >= 0 )
-         {
-            wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd0, __LINE__);
-            close( conn->prevFrameFd0 );
-            conn->prevFrameFd0= -1;
-            if ( conn->prevFrameFd1 >= 0 )
-            {
-               close( conn->prevFrameFd1 );
-               conn->prevFrameFd1= -1;
-            }
-            if ( conn->prevFrameFd2 >= 0 )
-            {
-               close( conn->prevFrameFd2 );
-               conn->prevFrameFd2= -1;
-            }
-         }
-         if ( fd0 >= 0 )
-         {
-            conn->prevFrameFd0= fd0;
-            if ( fd1 >= 0 )
-            {
-               conn->prevFrameFd1= fd1;
-            }
-            if ( fd2 >= 0 )
-            {
-               conn->prevFrameFd2= fd2;
-            }
          }
       }
       else
@@ -919,20 +1000,20 @@ exit:
          conn->videoPlane->handle0Prev= 0;
          conn->videoPlane->handle1Prev= 0;
       }
-      if ( conn->prevFrameFd0 >= 0 )
+      if ( conn->videoPlane->prevFd0 >= 0 )
       {
-         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->prevFrameFd0, __LINE__);
-         close( conn->prevFrameFd0 );
-         conn->prevFrameFd0= -1;
-         if ( conn->prevFrameFd1 >= 0 )
+         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->videoPlane->prevFd0, __LINE__);
+         close( conn->videoPlane->prevFd0 );
+         conn->videoPlane->prevFd0= -1;
+         if ( conn->videoPlane->prevFd1 >= 0 )
          {
-            close( conn->prevFrameFd1 );
-            conn->prevFrameFd1= -1;
+            close( conn->videoPlane->prevFd1 );
+            conn->videoPlane->prevFd1= -1;
          }
-         if ( conn->prevFrameFd2 >= 0 )
+         if ( conn->videoPlane->prevFd2 >= 0 )
          {
-            close( conn->prevFrameFd2 );
-            conn->prevFrameFd2= -1;
+            close( conn->videoPlane->prevFd2 );
+            conn->videoPlane->prevFd2= -1;
          }
       }
       pthread_mutex_unlock( &gCtx->mutex );
@@ -977,9 +1058,6 @@ static VideoServerConnection *wstCreateVideoServerConnection( VideoServerCtx *se
       pthread_mutex_init( &conn->mutex, 0 );
       conn->socketFd= fd;
       conn->server= server;
-      conn->prevFrameFd0= -1;
-      conn->prevFrameFd1= -1;
-      conn->prevFrameFd2= -1;
 
       rc= pthread_create( &conn->threadId, NULL, wstVideoServerConnectionThread, conn );
       if ( rc )
@@ -1847,6 +1925,9 @@ static WstGLCtx *wstInitCtx( void )
                         newPlane->zOrder= n + zpos*16+((isVideo && !isGraphics) ? 0 : 256);
                         newPlane->inUse= false;
                         newPlane->crtc_id= ctx->enc->crtc_id;
+                        newPlane->fd0= newPlane->prevFd0= -1;
+                        newPlane->fd1= newPlane->prevFd1= -1;
+                        newPlane->fd2= newPlane->prevFd2= -1;
                         TRACE3("plane zorder %d primary %d overlay %d video %d gfx %d crtc_id %d",
                                newPlane->zOrder, isPrimary, isOverlay, isVideo, isGraphics, newPlane->crtc_id);
                         if ( ctx->haveAtomic )
@@ -1926,6 +2007,8 @@ static WstGLCtx *wstInitCtx( void )
          }
       }
       #endif
+
+      wstStartRefreshThread(ctx);
    }
    else
    {
@@ -1950,6 +2033,14 @@ static void wstTermCtx( WstGLCtx *ctx )
    if ( ctx )
    {
       wstTermVideoServer( gServer );
+
+      pthread_mutex_unlock( &gMutex );
+      if ( ctx->refreshThreadStarted )
+      {
+         ctx->refreshThreadStopRequested= true;
+         pthread_join( ctx->refreshThreadId, NULL );
+      }
+      pthread_mutex_lock( &gMutex );
 
       wstReleaseConnectorProperties( ctx );
       wstReleaseCrtcProperties( ctx );
@@ -2201,6 +2292,63 @@ static void wstSelectMode( WstGLCtx *ctx, int width, int height )
    }
 }
 
+static void *wstRefreshThread( void *arg )
+{
+   WstGLCtx *ctx= (WstGLCtx*)arg;
+   long long start, end, adjust, delay;
+
+   DEBUG("refresh thread start");
+   ctx->refreshThreadStarted= true;
+   while( !ctx->refreshThreadStopRequested )
+   {
+      start= getMonotonicTimeMicros();
+      delay= 16667;
+
+      if ( !ctx->conn )
+      {
+         wstUpdateCtx( ctx );
+      }
+
+      if ( ctx->conn && ctx->modeInfo )
+      {
+         pthread_mutex_lock( &gMutex );
+         if ( ctx->modeInfo->vrefresh )
+         {
+            delay= 1000000/ctx->modeInfo->vrefresh;
+         }
+
+         if ( ctx->dirty )
+         {
+            ctx->dirty= false;
+            TRACE3("refresh thread calling wstSwapDRMBuffers");
+            wstSwapDRMBuffers( ctx );
+         }
+         pthread_mutex_unlock( &gMutex );
+      }
+
+      end= getMonotonicTimeMicros();
+      adjust= (end-start);
+      if ( (adjust > 0) && (adjust < delay) )
+      {
+         delay -= adjust;
+      }
+      usleep( delay );
+   }
+   ctx->refreshThreadStarted= false;
+   DEBUG("refresh thread exit");
+   return NULL;
+}
+
+static void wstStartRefreshThread( WstGLCtx *ctx )
+{
+   int rc;
+   rc= pthread_create( &ctx->refreshThreadId, NULL, wstRefreshThread, ctx );
+   if ( rc )
+   {
+      ERROR("unable to start refresh thread: rc %d errno %d", rc, errno);
+   }
+}
+
 static void wstAtomicAddProperty( WstGLCtx *ctx, drmModeAtomicReq *req, uint32_t objectId,
                                   int countProps, drmModePropertyRes **propRes, const char *name, uint64_t value )
 {
@@ -2243,7 +2391,7 @@ static void pageFlipEventHandler(int fd, unsigned int frame,
    }
 }
 
-static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
+static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
 {
    int rc;
    drmModeAtomicReq *req;
@@ -2251,38 +2399,9 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
    struct gbm_surface* gs;
    struct gbm_bo *bo;
    uint32_t handle, stride;
+   NativeWindowItem *nw;
 
    TRACE3("wstSwapDRMBuffersAtomic: atomic start");
-
-   #ifdef DRM_USE_OUT_FENCE
-   if ( ctx->nativeOutputFenceFd >= 0 )
-   {
-      int rc;
-      struct pollfd pfd;
-
-      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
-      pfd.fd= ctx->nativeOutputFenceFd;
-      pfd.events= POLLIN;
-      pfd.revents= 0;
-
-      for( ; ; )
-      {
-         rc= poll( &pfd, 1, 3000);
-         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
-         {
-            continue;
-         }
-         else if ( rc <= 0 )
-         {
-            if ( rc == 0 ) errno= ETIME;
-            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
-         }
-         break;
-      }
-      close( ctx->nativeOutputFenceFd );
-      ctx->nativeOutputFenceFd= -1;
-   }
-   #endif
 
    req= drmModeAtomicAlloc();
    if ( !req )
@@ -2340,101 +2459,110 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
    #endif
    #endif
 
-   if ( nw )
+   if ( gCtx )
    {
-      gs= (struct gbm_surface*)nw->nativeWindow;
-      if ( gs )
+      nw= gCtx->nwFirst;
+      while( nw )
       {
-         bo= gbm_surface_lock_front_buffer(gs);
-         wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
-
-         handle= gbm_bo_get_handle(bo).u32;
-         stride= gbm_bo_get_stride(bo);
-
-         if ( nw->handle != handle )
+         if ( nw->dirty )
          {
-            rc= drmModeAddFB( ctx->drmFd,
-                              nw->width,
-                              nw->height,
-                              32,
-                              32,
-                              stride,
-                              handle,
-                              &nw->fbId );
-             if ( rc )
-             {
-                ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
-                goto exit;
-             }
-             wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
-             nw->handle= handle;
-             nw->bo= bo;
-         }
-
-         #ifdef DRM_USE_NATIVE_FENCE
-         if ( ctx->fenceSync )
-         {
-            EGLint waitResult;
-            for( ; ; )
+            TRACE3("nw %p dirty", nw);
+            gs= (struct gbm_surface*)nw->nativeWindow;
+            if ( gs )
             {
-               waitResult= gRealEGLClientWaitSyncKHR( ctx->dpy,
-                                                 ctx->fenceSync,
-                                                 0, // flags
-                                                 EGL_FOREVER_KHR );
-               if ( waitResult == EGL_CONDITION_SATISFIED_KHR )
+               bo= gbm_surface_lock_front_buffer(gs);
+               wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
+
+               handle= gbm_bo_get_handle(bo).u32;
+               stride= gbm_bo_get_stride(bo);
+
+               if ( nw->handle != handle )
                {
-                  break;
+                  rc= drmModeAddFB( ctx->drmFd,
+                                    nw->width,
+                                    nw->height,
+                                    32,
+                                    32,
+                                    stride,
+                                    handle,
+                                    &nw->fbId );
+                   if ( rc )
+                   {
+                      ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
+                      goto exit;
+                   }
+                   wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
+                   nw->handle= handle;
+                   nw->bo= bo;
                }
+
+               #ifdef DRM_USE_NATIVE_FENCE
+               if ( ctx->fenceSync )
+               {
+                  EGLint waitResult;
+                  for( ; ; )
+                  {
+                     waitResult= gRealEGLClientWaitSyncKHR( ctx->dpy,
+                                                       ctx->fenceSync,
+                                                       0, // flags
+                                                       EGL_FOREVER_KHR );
+                     if ( waitResult == EGL_CONDITION_SATISFIED_KHR )
+                     {
+                        break;
+                     }
+                  }
+                  gRealEGLDestroySyncKHR( ctx->dpy, ctx->fenceSync );
+                  ctx->fenceSync= EGL_NO_SYNC_KHR;
+               }
+               #endif
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "FB_ID", nw->fbId );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "CRTC_ID", nw->windowPlane->crtc_id );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "SRC_X", 0 );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "SRC_Y", 0 );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "SRC_W", nw->width<<16 );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "SRC_H", nw->height<<16 );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "CRTC_X", 0 );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "CRTC_Y", 0 );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "CRTC_W", ctx->modeInfo->hdisplay );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "CRTC_H", ctx->modeInfo->vdisplay );
+
+               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                     "IN_FENCE_FD", -1 );
             }
-            gRealEGLDestroySyncKHR( ctx->dpy, ctx->fenceSync );
-            ctx->fenceSync= EGL_NO_SYNC_KHR;
          }
-         #endif
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "FB_ID", nw->fbId );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "CRTC_ID", nw->windowPlane->crtc_id );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "SRC_X", 0 );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "SRC_Y", 0 );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "SRC_W", nw->width<<16 );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "SRC_H", nw->height<<16 );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "CRTC_X", 0 );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "CRTC_Y", 0 );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "CRTC_W", ctx->modeInfo->hdisplay );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "CRTC_H", ctx->modeInfo->vdisplay );
-
-         wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                               nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                               "IN_FENCE_FD", -1 );
-      }
+         nw= nw->next;
+     }
    }
 
    pthread_mutex_lock( &ctx->mutex );
@@ -2443,344 +2571,16 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx, NativeWindowItem *nw )
       WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
       while( iter )
       {
-         if ( iter->fbIdPrev )
+         if ( iter->dirty )
          {
-            wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
-            drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
-            iter->fbIdPrev= 0;
-            wstClosePrimeFDHandles( ctx, iter->handle0Prev, iter->handle1Prev, __LINE__ );
-            iter->handle0Prev= 0;
-            iter->handle1Prev= 0;
-         }
-
-         if ( iter->videoFrameNext.fbId )
-         {
-            uint32_t fbId= iter->videoFrameNext.fbId;
-            uint32_t handle0= iter->videoFrameNext.handle0;
-            uint32_t handle1= iter->videoFrameNext.handle1;
-            uint32_t frameWidth= iter->videoFrameNext.frameWidth;
-            uint32_t frameHeight= iter->videoFrameNext.frameHeight;
-            int rectX= iter->videoFrameNext.rectX;
-            int rectY= iter->videoFrameNext.rectY;
-            int rectW= iter->videoFrameNext.rectW;
-            int rectH= iter->videoFrameNext.rectH;
-            uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
-            int modeWidth, modeHeight, gfxWidth, gfxHeight;
-
-            iter->fbIdPrev= iter->fbId;
-            iter->handle0Prev= iter->handle0;
-            iter->handle1Prev= iter->handle1;
-            iter->fbId= fbId;
-            iter->handle0= handle0;
-            iter->handle1= handle1;
-            iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
-
-            iter->videoFrameNext.fbId= 0;
-            iter->videoFrameNext.hide= false;
-            iter->videoFrameNext.hidden= false;
-
-            sw= frameWidth;
-            sh= frameHeight;
-            dw= rectW;
-            dh= rectH;
-            sx= 0;
-            dx= rectX;
-            if ( rectX < 0 )
-            {
-               sx= -rectX*frameWidth/rectW;
-               sw -= sx;
-               dx= 0;
-               dw += rectX;
-            }
-            sy= 0;
-            dy= rectY;
-            if ( rectY < 0 )
-            {
-               sy= -rectY*frameHeight/rectH;
-               sh -= sy;
-               dy= 0;
-               dh += rectY;
-            }
-
-            TRACE3("%dx%d %d,%d,%d,%d : s(%d,%d,%d,%d) d(%d,%d,%d,%d)",
-                    frameWidth, frameHeight,
-                    rectX, rectY, rectW, rectH,
-                    sx, sy, sw, sh,
-                    dx, dy, dw, dh );
-
-            /* Adjust video target rect based on output resolution.  Sink will be working
-               with graphics resolution coordinates which may differ from output resolution */
-            modeWidth= ctx->modeInfo->hdisplay;
-            modeHeight= ctx->modeInfo->vdisplay;
-            gfxWidth= ctx->nwFirst ? ctx->nwFirst->width : modeWidth;
-            gfxHeight= ctx->nwFirst ? ctx->nwFirst->height : modeWidth;
-
-            if ( (gfxWidth != modeWidth) || (gfxHeight != modeHeight) )
-            {
-               dx= dx*modeWidth/gfxWidth;
-               dy= dy*modeHeight/gfxHeight;
-               dw= dw*modeWidth/gfxWidth;
-               dh= dh*modeHeight/gfxHeight;
-
-               TRACE3("m %dx%d g %dx%d d(%d,%d,%d,%d)",
-                       modeWidth, modeHeight,
-                       gfxWidth, gfxHeight,
-                       dx, dy, dw, dh );
-            }
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "FB_ID", iter->fbId );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "CRTC_ID", iter->plane->crtc_id );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "SRC_X", sx<<16 );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "SRC_Y", sy<<16 );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "SRC_W", sw<<16 );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "SRC_H", sh<<16 );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "CRTC_X", dx );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "CRTC_Y", dy );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "CRTC_W", dw );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "CRTC_H", dh );
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "IN_FENCE_FD", -1 );
-         }
-         else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
-         {
-            iter->fbIdPrev= iter->fbId;
-            iter->handle0Prev= iter->handle0;
-            iter->handle1Prev= iter->handle1;
-
-            iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
-            DEBUG("hiding video plane %d", iter->plane->plane_id);
-
-            wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                  iter->planeProps->count_props, iter->planePropRes,
-                                  "FB_ID", 0 );
-
-            iter->fbId= 0;
-            iter->handle0= 0;
-            iter->handle1= 0;
-            iter->videoFrameNext.hide= false;
-            iter->videoFrameNext.hidden= true;
-         }
-
-         iter= iter->next;
-      }
-   }
-   pthread_mutex_unlock( &ctx->mutex );
-
-   rc= drmModeAtomicCommit( ctx->drmFd, req, flags, 0 );
-   if ( rc )
-   {
-      ERROR("drmModeAtomicCommit failed: rc %d errno %d", rc, errno );
-      goto exit;
-   }
-
-   if ( flags & DRM_MODE_ATOMIC_ALLOW_MODESET )
-   {
-      ctx->modeSet= true;
-   }
-
-exit:
-
-   TRACE3("wstSwapDRMBuffersAtomic: atomic stop");
-   if ( req )
-   {
-      drmModeAtomicFree( req );
-   }
-
-   return;
-}
-
-static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
-{
-   struct gbm_surface* gs;
-   struct gbm_bo *bo;
-   uint32_t handle, stride;
-   fd_set fds;
-   drmEventContext ev;
-   drmModePlane *plane= 0;
-   int rc;
-   bool eventPending= false;
-
-   if ( !ctx->conn )
-   {
-      wstUpdateCtx( ctx );
-      if ( !ctx->conn )
-      {
-         TRACE3("wstSwapDRMBuffersAtomic: no connector");
-         goto exit;
-      }
-   }
-
-   if ( ctx->modeSetPending )
-   {
-      ctx->notifySizeChange= true;
-      ctx->modeCurrent= ctx->modeNext;
-      ctx->modeSetPending= false;
-      ctx->modeSet= false;
-   }
-
-   if ( ctx->haveAtomic )
-   {
-      wstSwapDRMBuffersAtomic( ctx, nw );
-      goto done;
-   }
-
-   if ( nw )
-   {
-      gs= (struct gbm_surface*)nw->nativeWindow;
-      if ( gs )
-      {
-         bo= gbm_surface_lock_front_buffer(gs);
-         wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
-
-         handle= gbm_bo_get_handle(bo).u32;
-         stride= gbm_bo_get_stride(bo);
-
-         if ( nw->handle != handle )
-         {
-            rc= drmModeAddFB( ctx->drmFd,
-                              ctx->modeInfo->hdisplay,
-                              ctx->modeInfo->vdisplay,
-                              32,
-                              32,
-                              stride,
-                              handle,
-                              &nw->fbId );
-             if ( rc )
-             {
-                ERROR("wstSwapDRMBuffers: drmModeAddFB rc %d errno %d", rc, errno);
-                goto exit;
-             }
-             wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
-             nw->handle= handle;
-             nw->bo= bo;
-         }
-
-         if ( !ctx->modeSet )
-         {
-            rc= drmModeSetCrtc( ctx->drmFd,
-                                ctx->enc->crtc_id,
-                                nw->fbId,
-                                0,
-                                0,
-                                &gCtx->conn->connector_id,
-                                1,
-                                gCtx->modeInfo );
-             if ( rc )
-             {
-                ERROR("wstSwapDRMBuffers: drmModeSetCrtc: rc %d errno %d", rc, errno);
-                goto exit;
-             }
-             ctx->modeSet= true;
-         }
-         else if ( nw->windowPlane )
-         {
-            FD_ZERO(&fds);
-            memset(&ev, 0, sizeof(ev));
-
-            rc= drmModePageFlip( ctx->drmFd,
-                                 ctx->enc->crtc_id,
-                                 0, //fbid
-                                 DRM_MODE_PAGE_FLIP_EVENT,
-                                 ctx );
-            if ( !rc )
-            {
-               ctx->flipPending++;
-               eventPending= true;
-            }
-
-            plane= nw->windowPlane->plane;
-            plane->crtc_id= ctx->enc->crtc_id;
-            rc= drmModeSetPlane( ctx->drmFd,
-                                 plane->plane_id,
-                                 plane->crtc_id,
-                                 nw->fbId,
-                                 0,
-                                 0, // plane x
-                                 0, // plane y
-                                 ctx->modeInfo->hdisplay,
-                                 ctx->modeInfo->vdisplay,
-                                 0, // fb rect x
-                                 0, // fb rect y
-                                 ctx->modeInfo->hdisplay<<16,
-                                 ctx->modeInfo->vdisplay<<16 );
-            if ( rc )
-            {
-               ERROR("wstSwapDRMBuffers: drmModeSetPlane rc %d errno %d", rc, errno );
-            }
-         }
-         else
-         {
-            FD_ZERO(&fds);
-            memset(&ev, 0, sizeof(ev));
-
-            rc= drmModePageFlip( ctx->drmFd,
-                                 ctx->enc->crtc_id,
-                                 nw->fbId,
-                                 DRM_MODE_PAGE_FLIP_EVENT,
-                                 ctx );
-            if ( !rc )
-            {
-               ctx->flipPending++;
-               eventPending= true;
-            }
-         }
-      }
-   }
-
-   if ( !nw )
-   {
-      pthread_mutex_lock( &ctx->mutex );
-      if ( ctx->overlayPlanes.usedCount )
-      {
-         WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
-         while( iter )
-         {
-            if ( iter->fbIdPrev )
-            {
-               wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
-               drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
-               iter->fbIdPrev= 0;
-               wstClosePrimeFDHandles( ctx, iter->handle0Prev, iter->handle1Prev, __LINE__ );
-               iter->handle0Prev= 0;
-               iter->handle1Prev= 0;
-            }
-
             if ( iter->videoFrameNext.fbId )
             {
                uint32_t fbId= iter->videoFrameNext.fbId;
                uint32_t handle0= iter->videoFrameNext.handle0;
                uint32_t handle1= iter->videoFrameNext.handle1;
+               int fd0= iter->videoFrameNext.fd0;
+               int fd1= iter->videoFrameNext.fd1;
+               int fd2= iter->videoFrameNext.fd2;
                uint32_t frameWidth= iter->videoFrameNext.frameWidth;
                uint32_t frameHeight= iter->videoFrameNext.frameHeight;
                int rectX= iter->videoFrameNext.rectX;
@@ -2793,6 +2593,16 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
                iter->fbIdPrev= iter->fbId;
                iter->handle0Prev= iter->handle0;
                iter->handle1Prev= iter->handle1;
+               iter->prevFd0= iter->fd0;
+               iter->prevFd1= iter->fd1;
+               iter->prevFd2= iter->fd2;
+               iter->fbId= fbId;
+               iter->handle0= handle0;
+               iter->handle1= handle1;
+               iter->fd0= fd0;
+               iter->fd1= fd1;
+               iter->fd2= fd2;
+               iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
 
                iter->videoFrameNext.fbId= 0;
                iter->videoFrameNext.hide= false;
@@ -2820,6 +2630,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
                   dy= 0;
                   dh += rectY;
                }
+
                TRACE3("%dx%d %d,%d,%d,%d : s(%d,%d,%d,%d) d(%d,%d,%d,%d)",
                        frameWidth, frameHeight,
                        rectX, rectY, rectW, rectH,
@@ -2846,66 +2657,455 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
                           dx, dy, dw, dh );
                }
 
-               plane= iter->plane;
-               plane->crtc_id= ctx->enc->crtc_id;
-               rc= drmModeSetPlane( ctx->drmFd,
-                                    plane->plane_id,
-                                    plane->crtc_id,
-                                    fbId,
-                                    0,
-                                    dx,
-                                    dy,
-                                    dw,
-                                    dh,
-                                    sx<<16, // fb rect x
-                                    sy<<16, // fb rect y
-                                    sw<<16,
-                                    sh<<16 );
-               if ( !rc )
-               {
-                  iter->fbId= fbId;
-                  iter->handle0= handle0;
-                  iter->handle1= handle1;
-               }
-               else
-               {
-                  wstUpdateResources( WSTRES_FB_VIDEO, false, fbId, __LINE__);
-                  drmModeRmFB( gCtx->drmFd, fbId );
-                  wstClosePrimeFDHandles( ctx, handle0, handle1, __LINE__ );
-                  ERROR("wstSwapDRMBuffers: drmModeSetPlane rc %d errno %d", rc, errno );
-               }
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "FB_ID", iter->fbId );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "CRTC_ID", iter->plane->crtc_id );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "SRC_X", sx<<16 );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "SRC_Y", sy<<16 );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "SRC_W", sw<<16 );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "SRC_H", sh<<16 );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "CRTC_X", dx );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "CRTC_Y", dy );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "CRTC_W", dw );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "CRTC_H", dh );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "IN_FENCE_FD", -1 );
             }
             else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
             {
                iter->fbIdPrev= iter->fbId;
                iter->handle0Prev= iter->handle0;
                iter->handle1Prev= iter->handle1;
+               iter->prevFd0= iter->fd0;
+               iter->prevFd1= iter->fd1;
+               iter->prevFd2= iter->fd2;
 
-               plane= iter->plane;
-               plane->crtc_id= ctx->enc->crtc_id;
+               iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
                DEBUG("hiding video plane %d", iter->plane->plane_id);
-               rc= drmModeSetPlane( ctx->drmFd,
-                                    plane->plane_id,
-                                    plane->crtc_id,
-                                    0, // fbid
-                                    0, // flags
-                                    0, // plane x
-                                    0, // plane y
-                                    ctx->modeInfo->hdisplay,
-                                    ctx->modeInfo->vdisplay,
-                                    0, // fb rect x
-                                    0, // fb rect y
-                                    ctx->modeInfo->hdisplay<<16,
-                                    ctx->modeInfo->vdisplay<<16 );
-               if ( rc )
-               {
-                  ERROR("wstSwapDRMBuffers: hiding plane: drmModeSetPlane rc %d errno %d", rc, errno );
-               }
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "FB_ID", 0 );
+
+               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                     iter->planeProps->count_props, iter->planePropRes,
+                                     "CRTC_ID", 0 );
+
                iter->fbId= 0;
                iter->handle0= 0;
                iter->handle1= 0;
-               iter->videoFrameNext.hide= true;
+               iter->fd0= -1;
+               iter->fd1= -1;
+               iter->fd2= -1;
+               iter->videoFrameNext.hide= false;
                iter->videoFrameNext.hidden= true;
+            }
+         }
+
+         iter= iter->next;
+      }
+   }
+   pthread_mutex_unlock( &ctx->mutex );
+
+   rc= drmModeAtomicCommit( ctx->drmFd, req, flags, 0 );
+   if ( rc )
+   {
+      ERROR("drmModeAtomicCommit failed: rc %d errno %d", rc, errno );
+   }
+
+   if ( flags & DRM_MODE_ATOMIC_ALLOW_MODESET )
+   {
+      ctx->modeSet= true;
+   }
+
+   #ifdef DRM_USE_OUT_FENCE
+   if ( ctx->nativeOutputFenceFd >= 0 )
+   {
+      int rc;
+      struct pollfd pfd;
+
+      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
+      pfd.fd= ctx->nativeOutputFenceFd;
+      pfd.events= POLLIN;
+      pfd.revents= 0;
+
+      for( ; ; )
+      {
+         rc= poll( &pfd, 1, 3000);
+         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
+         {
+            continue;
+         }
+         else if ( rc <= 0 )
+         {
+            if ( rc == 0 ) errno= ETIME;
+            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
+         }
+         break;
+      }
+      close( ctx->nativeOutputFenceFd );
+      ctx->nativeOutputFenceFd= -1;
+   }
+   #endif
+
+exit:
+
+   TRACE3("wstSwapDRMBuffersAtomic: atomic stop");
+   if ( req )
+   {
+      drmModeAtomicFree( req );
+   }
+
+   return;
+}
+
+static void wstSwapDRMBuffers( WstGLCtx *ctx )
+{
+   struct gbm_surface* gs;
+   struct gbm_bo *bo;
+   uint32_t handle, stride;
+   fd_set fds;
+   drmEventContext ev;
+   drmModePlane *plane= 0;
+   int rc;
+   bool eventPending= false;
+   NativeWindowItem *nw;
+
+   if ( !ctx->conn )
+   {
+      wstUpdateCtx( ctx );
+      if ( !ctx->conn )
+      {
+         TRACE3("wstSwapDRMBuffers: no connector");
+         ctx->dirty= true;
+         goto exit;
+      }
+   }
+
+   if ( ctx->modeSetPending )
+   {
+      ctx->notifySizeChange= true;
+      ctx->modeCurrent= ctx->modeNext;
+      ctx->modeSetPending= false;
+      ctx->modeSet= false;
+   }
+
+   if ( ctx->haveAtomic )
+   {
+      wstSwapDRMBuffersAtomic( ctx );
+      goto done;
+   }
+
+   if ( gCtx )
+   {
+      nw= gCtx->nwFirst;
+      while( nw )
+      {
+         if ( nw->dirty )
+         {
+            TRACE3("nw %p dirty", nw);
+            gs= (struct gbm_surface*)nw->nativeWindow;
+            if ( gs )
+            {
+               bo= gbm_surface_lock_front_buffer(gs);
+               wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
+
+               handle= gbm_bo_get_handle(bo).u32;
+               stride= gbm_bo_get_stride(bo);
+
+               if ( nw->handle != handle )
+               {
+                  rc= drmModeAddFB( ctx->drmFd,
+                                    ctx->modeInfo->hdisplay,
+                                    ctx->modeInfo->vdisplay,
+                                    32,
+                                    32,
+                                    stride,
+                                    handle,
+                                    &nw->fbId );
+                   if ( rc )
+                   {
+                      ERROR("wstSwapDRMBuffers: drmModeAddFB rc %d errno %d", rc, errno);
+                      goto exit;
+                   }
+                   wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
+                   nw->handle= handle;
+                   nw->bo= bo;
+               }
+
+               if ( !ctx->modeSet )
+               {
+                  rc= drmModeSetCrtc( ctx->drmFd,
+                                      ctx->enc->crtc_id,
+                                      nw->fbId,
+                                      0,
+                                      0,
+                                      &gCtx->conn->connector_id,
+                                      1,
+                                      gCtx->modeInfo );
+                   if ( rc )
+                   {
+                      ERROR("wstSwapDRMBuffers: drmModeSetCrtc: rc %d errno %d", rc, errno);
+                      goto exit;
+                   }
+                   ctx->modeSet= true;
+               }
+               else if ( nw->windowPlane )
+               {
+                  FD_ZERO(&fds);
+                  memset(&ev, 0, sizeof(ev));
+
+                  rc= drmModePageFlip( ctx->drmFd,
+                                       ctx->enc->crtc_id,
+                                       0, //fbid
+                                       DRM_MODE_PAGE_FLIP_EVENT,
+                                       ctx );
+                  if ( !rc )
+                  {
+                     ctx->flipPending++;
+                     eventPending= true;
+                  }
+
+                  plane= nw->windowPlane->plane;
+                  plane->crtc_id= ctx->enc->crtc_id;
+                  rc= drmModeSetPlane( ctx->drmFd,
+                                       plane->plane_id,
+                                       plane->crtc_id,
+                                       nw->fbId,
+                                       0,
+                                       0, // plane x
+                                       0, // plane y
+                                       ctx->modeInfo->hdisplay,
+                                       ctx->modeInfo->vdisplay,
+                                       0, // fb rect x
+                                       0, // fb rect y
+                                       ctx->modeInfo->hdisplay<<16,
+                                       ctx->modeInfo->vdisplay<<16 );
+                  if ( rc )
+                  {
+                     ERROR("wstSwapDRMBuffers: drmModeSetPlane rc %d errno %d", rc, errno );
+                  }
+               }
+               else
+               {
+                  FD_ZERO(&fds);
+                  memset(&ev, 0, sizeof(ev));
+
+                  rc= drmModePageFlip( ctx->drmFd,
+                                       ctx->enc->crtc_id,
+                                       nw->fbId,
+                                       DRM_MODE_PAGE_FLIP_EVENT,
+                                       ctx );
+                  if ( !rc )
+                  {
+                     ctx->flipPending++;
+                     eventPending= true;
+                  }
+               }
+            }
+         }
+         nw= nw->next;
+      }
+   }
+
+   {
+      pthread_mutex_lock( &ctx->mutex );
+      if ( ctx->overlayPlanes.usedCount )
+      {
+         WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
+         while( iter )
+         {
+            if ( iter->dirty )
+            {
+               if ( iter->videoFrameNext.fbId )
+               {
+                  uint32_t fbId= iter->videoFrameNext.fbId;
+                  uint32_t handle0= iter->videoFrameNext.handle0;
+                  uint32_t handle1= iter->videoFrameNext.handle1;
+                  int fd0= iter->videoFrameNext.fd0;
+                  int fd1= iter->videoFrameNext.fd1;
+                  int fd2= iter->videoFrameNext.fd2;
+                  uint32_t frameWidth= iter->videoFrameNext.frameWidth;
+                  uint32_t frameHeight= iter->videoFrameNext.frameHeight;
+                  int rectX= iter->videoFrameNext.rectX;
+                  int rectY= iter->videoFrameNext.rectY;
+                  int rectW= iter->videoFrameNext.rectW;
+                  int rectH= iter->videoFrameNext.rectH;
+                  uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
+                  int modeWidth, modeHeight, gfxWidth, gfxHeight;
+
+                  iter->fbIdPrev= iter->fbId;
+                  iter->handle0Prev= iter->handle0;
+                  iter->handle1Prev= iter->handle1;
+                  iter->prevFd0= iter->fd0;
+                  iter->prevFd1= iter->fd1;
+                  iter->prevFd2= iter->fd2;
+
+                  iter->videoFrameNext.fbId= 0;
+                  iter->videoFrameNext.hide= false;
+                  iter->videoFrameNext.hidden= false;
+
+                  sw= frameWidth;
+                  sh= frameHeight;
+                  dw= rectW;
+                  dh= rectH;
+                  sx= 0;
+                  dx= rectX;
+                  if ( rectX < 0 )
+                  {
+                     sx= -rectX*frameWidth/rectW;
+                     sw -= sx;
+                     dx= 0;
+                     dw += rectX;
+                  }
+                  sy= 0;
+                  dy= rectY;
+                  if ( rectY < 0 )
+                  {
+                     sy= -rectY*frameHeight/rectH;
+                     sh -= sy;
+                     dy= 0;
+                     dh += rectY;
+                  }
+                  TRACE3("%dx%d %d,%d,%d,%d : s(%d,%d,%d,%d) d(%d,%d,%d,%d)",
+                          frameWidth, frameHeight,
+                          rectX, rectY, rectW, rectH,
+                          sx, sy, sw, sh,
+                          dx, dy, dw, dh );
+
+                  /* Adjust video target rect based on output resolution.  Sink will be working
+                     with graphics resolution coordinates which may differ from output resolution */
+                  modeWidth= ctx->modeInfo->hdisplay;
+                  modeHeight= ctx->modeInfo->vdisplay;
+                  gfxWidth= ctx->nwFirst ? ctx->nwFirst->width : modeWidth;
+                  gfxHeight= ctx->nwFirst ? ctx->nwFirst->height : modeWidth;
+
+                  if ( (gfxWidth != modeWidth) || (gfxHeight != modeHeight) )
+                  {
+                     dx= dx*modeWidth/gfxWidth;
+                     dy= dy*modeHeight/gfxHeight;
+                     dw= dw*modeWidth/gfxWidth;
+                     dh= dh*modeHeight/gfxHeight;
+
+                     TRACE3("m %dx%d g %dx%d d(%d,%d,%d,%d)",
+                             modeWidth, modeHeight,
+                             gfxWidth, gfxHeight,
+                             dx, dy, dw, dh );
+                  }
+
+                  plane= iter->plane;
+                  plane->crtc_id= ctx->enc->crtc_id;
+                  rc= drmModeSetPlane( ctx->drmFd,
+                                       plane->plane_id,
+                                       plane->crtc_id,
+                                       fbId,
+                                       0,
+                                       dx,
+                                       dy,
+                                       dw,
+                                       dh,
+                                       sx<<16, // fb rect x
+                                       sy<<16, // fb rect y
+                                       sw<<16,
+                                       sh<<16 );
+                  if ( !rc )
+                  {
+                     iter->fbId= fbId;
+                     iter->handle0= handle0;
+                     iter->handle1= handle1;
+                     iter->fd0= fd0;
+                     iter->fd1= fd1;
+                     iter->fd2= fd2;
+                  }
+                  else
+                  {
+                     wstUpdateResources( WSTRES_FB_VIDEO, false, fbId, __LINE__);
+                     drmModeRmFB( gCtx->drmFd, fbId );
+                     wstClosePrimeFDHandles( ctx, handle0, handle1, __LINE__ );
+                     if ( fd0 >= 0 )
+                     {
+                        wstUpdateResources( WSTRES_FD_VIDEO, false, fd0, __LINE__);
+                        close( fd0 );
+                        if ( fd1 >= 0 )
+                        {
+                           close( fd1 );
+                        }
+                        if ( fd2 >= 0 )
+                        {
+                           close( fd2 );
+                        }
+                     }
+                     ERROR("wstSwapDRMBuffers: drmModeSetPlane rc %d errno %d", rc, errno );
+                  }
+               }
+               else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
+               {
+                  iter->fbIdPrev= iter->fbId;
+                  iter->handle0Prev= iter->handle0;
+                  iter->handle1Prev= iter->handle1;
+                  iter->prevFd0= iter->fd0;
+                  iter->prevFd1= iter->fd1;
+                  iter->prevFd2= iter->fd2;
+
+                  plane= iter->plane;
+                  plane->crtc_id= ctx->enc->crtc_id;
+                  DEBUG("hiding video plane %d", iter->plane->plane_id);
+                  rc= drmModeSetPlane( ctx->drmFd,
+                                       plane->plane_id,
+                                       plane->crtc_id,
+                                       0, // fbid
+                                       0, // flags
+                                       0, // plane x
+                                       0, // plane y
+                                       ctx->modeInfo->hdisplay,
+                                       ctx->modeInfo->vdisplay,
+                                       0, // fb rect x
+                                       0, // fb rect y
+                                       ctx->modeInfo->hdisplay<<16,
+                                       ctx->modeInfo->vdisplay<<16 );
+                  if ( rc )
+                  {
+                     ERROR("wstSwapDRMBuffers: hiding plane: drmModeSetPlane rc %d errno %d", rc, errno );
+                  }
+                  iter->fbId= 0;
+                  iter->handle0= 0;
+                  iter->handle1= 0;
+                  iter->fd0= -1;
+                  iter->fd1= -1;
+                  iter->fd2= -1;
+                  iter->videoFrameNext.hide= true;
+                  iter->videoFrameNext.hidden= true;
+               }
             }
 
             iter= iter->next;
@@ -2931,42 +3131,79 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx, NativeWindowItem *nw )
    }
 
 done:
-   if ( nw )
+   if ( gCtx )
    {
-      if ( nw->prevBo )
+      nw= gCtx->nwFirst;
+      while( nw )
       {
-         gs= (struct gbm_surface*)nw->nativeWindow;
-         wstUpdateResources( WSTRES_FB_GRAPHICS, false, nw->prevFbId, __LINE__);
-         drmModeRmFB( ctx->drmFd, nw->prevFbId );
-         wstUpdateResources( WSTRES_BO_GRAPHICS, false, (long long)nw->prevBo, __LINE__);
-         gbm_surface_release_buffer(gs, nw->prevBo);
-      }
-      nw->prevBo= nw->bo;
-      nw->prevFbId= nw->fbId;
-
-      pthread_mutex_lock( &ctx->mutex );
-      if ( ctx->overlayPlanes.usedCount )
-      {
-         WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
-         while( iter )
+         if ( nw->dirty )
          {
-            if ( iter->videoFrameNext.hidden )
+            nw->dirty= false;
+            TRACE3("nw %p dirty, set dirty false", nw);
+
+            if ( nw->prevBo )
             {
-               iter->videoFrameNext.hidden= false;
-               if ( iter->fbIdPrev )
+               gs= (struct gbm_surface*)nw->nativeWindow;
+               wstUpdateResources( WSTRES_FB_GRAPHICS, false, nw->prevFbId, __LINE__);
+               drmModeRmFB( ctx->drmFd, nw->prevFbId );
+               wstUpdateResources( WSTRES_BO_GRAPHICS, false, (long long)nw->prevBo, __LINE__);
+               gbm_surface_release_buffer(gs, nw->prevBo);
+            }
+            nw->prevBo= nw->bo;
+            nw->prevFbId= nw->fbId;
+         }
+
+         nw= nw->next;
+      }
+   }
+
+   pthread_mutex_lock( &ctx->mutex );
+   if ( ctx->overlayPlanes.usedCount )
+   {
+      WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
+      while( iter )
+      {
+         if ( iter->dirty || iter->videoFrameNext.hidden )
+         {
+            iter->dirty= false;
+            iter->videoFrameNext.hidden= false;
+            if ( iter->fbIdPrev )
+            {
+               wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
+               drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
+               iter->fbIdPrev= 0;
+               wstClosePrimeFDHandles( ctx, iter->handle0Prev, iter->handle1Prev, __LINE__ );
+               iter->handle0Prev= 0;
+               iter->handle1Prev= 0;
+               if ( iter->prevFd0 >= 0 )
                {
-                  wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
-                  drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
-                  iter->fbIdPrev= 0;
-                  wstClosePrimeFDHandles( ctx, iter->handle0Prev, iter->handle1Prev, __LINE__ );
-                  iter->handle0Prev= 0;
-                  iter->handle1Prev= 0;
+                  wstUpdateResources( WSTRES_FD_VIDEO, false, iter->prevFd0, __LINE__);
+                  close( iter->prevFd0 );
+                  iter->prevFd0= -1;
+                  if ( iter->prevFd1 >= 0 )
+                  {
+                     close( iter->prevFd1 );
+                     iter->prevFd1= -1;
+                  }
+                  if ( iter->prevFd2 >= 0 )
+                  {
+                     close( iter->prevFd2 );
+                     iter->prevFd2= -1;
+                  }
                }
             }
-            iter= iter->next;
          }
+         iter= iter->next;
       }
-      pthread_mutex_unlock( &ctx->mutex );
+   }
+   pthread_mutex_unlock( &ctx->mutex );
+
+   if ( gCtx && gCtx->notifySizeChange )
+   {
+      gCtx->notifySizeChange= false;
+      pthread_mutex_unlock( &gMutex );
+      wstGLNotifySizeListeners();
+      pthread_mutex_lock( &gMutex );
    }
 
    if ( emitFPS )
@@ -3121,10 +3358,10 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          }
       }
       #endif
+      pthread_mutex_lock( &gMutex );
       result= gRealEGLSwapBuffers( dpy, surface );
       if ( EGL_TRUE == result )
       {
-         pthread_mutex_lock( &gMutex );
          if ( gCtx )
          {
             nwIter= gCtx->nwFirst;
@@ -3132,19 +3369,16 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
             {
                if ( nwIter->surface == surface )
                {
-                  wstSwapDRMBuffers( gCtx, nwIter );
+                  gCtx->dirty= true;
+                  nwIter->dirty= true;
+                  TRACE3("mark nw %p dirty", nwIter);
                   break;
                }
                nwIter= nwIter->next;
            }
          }
-         pthread_mutex_unlock( &gMutex );
       }
-      if ( gCtx->notifySizeChange )
-      {
-         gCtx->notifySizeChange= false;
-         wstGLNotifySizeListeners();
-      }
+      pthread_mutex_unlock( &gMutex );
    }
 
 exit:
@@ -3701,6 +3935,14 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
             }
             pthread_mutex_unlock( &gMutex );
          }
+      }
+   }
+
+   {
+      const char *mode= getenv("WESTEROS_GL_MODE");
+      if ( mode )
+      {
+         WstGLSetDisplayMode( ctx, mode );
       }
    }
 

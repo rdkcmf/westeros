@@ -268,7 +268,7 @@ static void wstSVPSetOutputMemMode( GstWesterosSink *sink, int mode )
 static void wstSVPDestroyGemBuffer( GstWesterosSink *sink, WstGemBuffer *gemBuf )
 {
    int rc, i;
-   struct drm_mode_destroy_dumb dd;
+   struct drm_gem_close gclose;
 
    for( i= 0; i < gemBuf->planeCount; ++i )
    {
@@ -279,9 +279,9 @@ static void wstSVPDestroyGemBuffer( GstWesterosSink *sink, WstGemBuffer *gemBuf 
       }
       if ( gemBuf->handle[i] > 0 )
       {
-         memset( &dd, 0, sizeof(dd) );
-         dd.handle= gemBuf->handle[i];
-         rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &dd );
+         memset( &gclose, 0, sizeof(gclose) );
+         gclose.handle= gemBuf->handle[i];
+         rc= ioctl( sink->soc.drmFd, DRM_IOCTL_GEM_CLOSE, &gclose );
          if ( rc < 0 )
          {
             GST_ERROR("Failed to release gem buffer handle %d: DRM_IOCTL_MODE_DESTROY_DUMB rc %d errno %d",
@@ -347,7 +347,7 @@ exit:
    return result;
 }
 
-#define DEFAULT_DRM_NAME "/dev/dri/card0"
+#define DEFAULT_DRM_NAME "/dev/dri/renderD128"
 
 static bool wstSVPSetupOutputBuffersDmabuf( GstWesterosSink *sink )
 {
