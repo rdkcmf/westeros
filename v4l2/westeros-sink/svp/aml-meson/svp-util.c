@@ -301,20 +301,29 @@ static bool wstSVPCreateGemBuffer( GstWesterosSink *sink, WstGemBuffer *gemBuf )
    {
       gemBuf->fd[i]= -1;
       memset( &gc, 0, sizeof(gc) );
-      gc.flags= MESON_USE_VIDEO_PLANE;
-      if ( sink->soc.secureVideo )
+      if ( sink->soc.fmtOut.fmt.pix_mp.pixelformat == V4L2_PIX_FMT_NV12 )
       {
-         gc.flags |= MESON_USE_PROTECTED;
-      }
-      if ( i == 0 )
-      {
-         gc.size= gemBuf->width*gemBuf->height;
+         gc.flags= MESON_USE_VIDEO_AFBC;
+         gc.size= gemBuf->width*gemBuf->height*2;
+         gemBuf->stride[i]= gemBuf->width*2;
       }
       else
       {
-         gc.size= gemBuf->width*gemBuf->height/2;
+         gc.flags= MESON_USE_VIDEO_PLANE;
+         if ( sink->soc.secureVideo )
+         {
+            gc.flags |= MESON_USE_PROTECTED;
+         }
+         if ( i == 0 )
+         {
+            gc.size= gemBuf->width*gemBuf->height;
+         }
+         else
+         {
+            gc.size= gemBuf->width*gemBuf->height/2;
+         }
+         gemBuf->stride[i]= gemBuf->width;
       }
-      gemBuf->stride[i]= gemBuf->width;
       gemBuf->size[i]= gc.size;
 
       rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MESON_GEM_CREATE, &gc );
