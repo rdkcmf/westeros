@@ -808,39 +808,50 @@ void EMPushGamepadEvent( EMCTX *ctx, int type, int id, int value )
    {
       if ( ctx->devices[i].type == EM_DEVICE_TYPE_GAMEPAD )
       {
-         int number= -1;
-         switch( type )
+         if ( !strcmp( ctx->devices[i].path, "/dev/input/event2" ) )
          {
-            case JS_EVENT_BUTTON:
-               for( int j= 0; j < ctx->devices[i].dev.gamepad.buttonCount; ++ j )
-               {
-                  if ( ctx->devices[i].dev.gamepad.buttonMap[j] == id )
-                  {
-                     number= j;
-                     break;
-                  }
-               }
-               break;
-            case JS_EVENT_AXIS:
-               for( int j= 0; j < ctx->devices[i].dev.gamepad.axisCount; ++ j )
-               {
-                  if ( ctx->devices[i].dev.gamepad.axisMap[j] == id )
-                  {
-                     number= j;
-                     break;
-                  }
-               }
-               break;
-         }
-         if ( number >= 0 )
-         {
-            TRACE1("EMPushGamepadEvent: event type %d number %d value %d pending", type, number, value);
+            TRACE1("EMPushGamepadEvent: event type %d id %d value %d pending", type, id, value);
             ctx->devices[i].dev.gamepad.eventType= type;
-            ctx->devices[i].dev.gamepad.eventNumber= number;
+            ctx->devices[i].dev.gamepad.eventNumber= id;
             ctx->devices[i].dev.gamepad.eventValue= value;
             ctx->devices[i].dev.gamepad.eventPending= true;
          }
-         break;
+         else if ( strstr( ctx->devices[i].path, "js" ) )
+         {
+            int number= -1;
+            switch( type )
+            {
+               case JS_EVENT_BUTTON:
+                  for( int j= 0; j < ctx->devices[i].dev.gamepad.buttonCount; ++ j )
+                  {
+                     if ( ctx->devices[i].dev.gamepad.buttonMap[j] == id )
+                     {
+                        number= j;
+                        break;
+                     }
+                  }
+                  break;
+               case JS_EVENT_AXIS:
+                  for( int j= 0; j < ctx->devices[i].dev.gamepad.axisCount; ++ j )
+                  {
+                     if ( ctx->devices[i].dev.gamepad.axisMap[j] == id )
+                     {
+                        number= j;
+                        break;
+                     }
+                  }
+                  break;
+            }
+            if ( number >= 0 )
+            {
+               TRACE1("EMPushGamepadEvent: event type %d number %d value %d pending", type, number, value);
+               ctx->devices[i].dev.gamepad.eventType= type;
+               ctx->devices[i].dev.gamepad.eventNumber= number;
+               ctx->devices[i].dev.gamepad.eventValue= value;
+               ctx->devices[i].dev.gamepad.eventPending= true;
+            }
+            break;
+         }
       }
    }
 }
@@ -983,45 +994,113 @@ static void EMGamepadDeviceTerm( EMDevice *d )
    TRACE1("EMGamepadDeviceTerm");
 }
 
+static void emSetBit( unsigned char *bits, int bit )
+{
+   int i= (bit/8);
+   int m= (bit%8);
+   bits[i] |= (1<<m);
+}
+
 static int EMGamepadIOctl( EMDevice *dev, int fd, int request, void *arg )
 {
    int rc= -1;
-   switch( request )
+   if ( !strcmp( dev->path, "/dev/input/event2" ) )
    {
-      case JSIOCGVERSION:
-         *((unsigned int*)arg)= dev->dev.gamepad.version;
-         rc= 0;
-         break;
-      case JSIOCGBUTTONS:
-         *((int*)arg)= dev->dev.gamepad.buttonCount;
-         rc= 0;
-         break;
-      case JSIOCGAXES:
-         *((int*)arg)= dev->dev.gamepad.axisCount;
-         rc= 0;
-         break;
-      case JSIOCGBTNMAP:
-         {
-            uint16_t *map= (uint16_t*)arg;
-            memcpy( map, dev->dev.gamepad.buttonMap, dev->dev.gamepad.buttonCount*sizeof(uint16_t) );
+      switch( request )
+      {
+         case EVIOCGVERSION:
+            *((unsigned int*)arg)= dev->dev.gamepad.version;
             rc= 0;
-         }
-         break;
-      case JSIOCGAXMAP:
-         {
-            uint8_t *map= (uint8_t*)arg;
-            memcpy( map, dev->dev.gamepad.axisMap, dev->dev.gamepad.axisCount*sizeof(uint8_t) );
+            break;
+          default:
+            if ( (request & ~IOCSIZE_MASK) == EVIOCGNAME(0) )
+            {
+               int len= _IOC_SIZE(request);
+               strncpy( (char*)arg, dev->dev.gamepad.deviceName, len );
+               rc= strlen(dev->dev.gamepad.deviceName);
+            }
+            else if ( (request & ~(IOCSIZE_MASK|EV_MAX)) == EVIOCGBIT(0,0) )
+            {
+               int len= _IOC_SIZE(request);
+               int ev= (request&EV_MAX);
+               switch( ev )
+               {
+                  case EV_SYN:
+                     memset( arg, 0, len);
+                     ((unsigned char *)arg)[0]= ((1<<EV_KEY)|(1<<EV_ABS));
+                     rc= 0;
+                     break;
+                  case EV_KEY:
+                     memset( arg, 0, len);
+                     emSetBit( (unsigned char*)arg, BTN_SOUTH );
+                     emSetBit( (unsigned char*)arg, BTN_A );
+                     emSetBit( (unsigned char*)arg, BTN_B );
+                     emSetBit( (unsigned char*)arg, BTN_X );
+                     emSetBit( (unsigned char*)arg, BTN_Y );
+                     rc= 0;
+                     break;
+                  case EV_ABS:
+                     memset( arg, 0, len);
+                     emSetBit( (unsigned char*)arg, ABS_X );
+                     emSetBit( (unsigned char*)arg, ABS_Y );
+                     emSetBit( (unsigned char*)arg, ABS_Z );
+                     emSetBit( (unsigned char*)arg, ABS_RZ );
+                     rc= 0;
+                     break;
+                  default:
+                     break;
+               }
+            }
+            else if ( (_IOC_NR(request) & ~ABS_MAX) == _IOC_NR(EVIOCGABS(0)) )
+            {
+               struct input_absinfo *info= (struct input_absinfo*)arg;
+               int ev= (request&ABS_MAX);
+               info->minimum= -32768;
+               info->maximum= 32767;
+               rc= 0;
+            }
+            break;
+      }
+   }
+   else if ( strstr( dev->path, "js" ) )
+   {
+      switch( request )
+      {
+         case JSIOCGVERSION:
+            *((unsigned int*)arg)= dev->dev.gamepad.version;
             rc= 0;
-         }
-         break;
-       default:
-         if ( (request & ~IOCSIZE_MASK) == JSIOCGNAME(0) )
-         {
-            int len= _IOC_SIZE(request);
-            strncpy( (char*)arg, dev->dev.gamepad.deviceName, len );
-            rc= strlen(dev->dev.gamepad.deviceName);
-         }
-         break;
+            break;
+         case JSIOCGBUTTONS:
+            *((int*)arg)= dev->dev.gamepad.buttonCount;
+            rc= 0;
+            break;
+         case JSIOCGAXES:
+            *((int*)arg)= dev->dev.gamepad.axisCount;
+            rc= 0;
+            break;
+         case JSIOCGBTNMAP:
+            {
+               uint16_t *map= (uint16_t*)arg;
+               memcpy( map, dev->dev.gamepad.buttonMap, dev->dev.gamepad.buttonCount*sizeof(uint16_t) );
+               rc= 0;
+            }
+            break;
+         case JSIOCGAXMAP:
+            {
+               uint8_t *map= (uint8_t*)arg;
+               memcpy( map, dev->dev.gamepad.axisMap, dev->dev.gamepad.axisCount*sizeof(uint8_t) );
+               rc= 0;
+            }
+            break;
+          default:
+            if ( (request & ~IOCSIZE_MASK) == JSIOCGNAME(0) )
+            {
+               int len= _IOC_SIZE(request);
+               strncpy( (char*)arg, dev->dev.gamepad.deviceName, len );
+               rc= strlen(dev->dev.gamepad.deviceName);
+            }
+            break;
+      }
    }
    return rc;
 }
@@ -1052,14 +1131,28 @@ static int EMGamepadRead( EMDevice *dev, void *buf, size_t count )
    TRACE1("EMGamepadRead: eventPending %d", dev->dev.gamepad.eventPending);
    if ( dev->dev.gamepad.eventPending )
    {
-      struct js_event js;
-      memset( &js, 0, sizeof(js) );
-      js.type= dev->dev.gamepad.eventType;
-      js.number= dev->dev.gamepad.eventNumber;
-      js.value= dev->dev.gamepad.eventValue;
-      dev->dev.gamepad.eventPending= false;
-      memcpy( buf, &js, sizeof(js) );
-      rc= sizeof(js);
+      if ( !strcmp( dev->path, "/dev/input/event2" ) )
+      {
+         struct input_event ev;
+         memset( &ev, 0, sizeof(ev) );
+         ev.type= dev->dev.gamepad.eventType;
+         ev.code= dev->dev.gamepad.eventNumber;
+         ev.value= dev->dev.gamepad.eventValue;
+         dev->dev.gamepad.eventPending= false;
+         memcpy( buf, &ev, sizeof(ev) );
+         rc= sizeof(ev);
+      }
+      else if ( strstr( dev->path, "js" ) )
+      {
+         struct js_event js;
+         memset( &js, 0, sizeof(js) );
+         js.type= dev->dev.gamepad.eventType;
+         js.number= dev->dev.gamepad.eventNumber;
+         js.value= dev->dev.gamepad.eventValue;
+         dev->dev.gamepad.eventPending= false;
+         memcpy( buf, &js, sizeof(js) );
+         rc= sizeof(js);
+      }
    }
 
    return rc;
@@ -1219,6 +1312,7 @@ static int EMDeviceOpen( int type, const char *pathname, int flags )
             break;
          }
       }
+
    }
 
 exit:
@@ -1496,7 +1590,11 @@ int EMStat(const char *path, struct stat *buf) __THROW
    int rc= -1;
 
    TRACE1("EMStat (%s)", path);
-   if ( strstr( path, "/dev/input/js" ) )
+   if ( strstr( path, "/dev/input/event" ) )
+   {
+      TRACE1("intercept stat of %s", path );
+   }
+   else if ( strstr( path, "/dev/input/js" ) )
    {
       TRACE1("intercept stat of %s", path );
    }
@@ -1523,7 +1621,12 @@ int EMOpen2( const char *pathname, int flags )
 
    TRACE1("open name %s flags %x", pathname, flags);
 
-   if ( strstr( pathname, "/dev/input/js" ) )
+   if ( !strcmp( pathname, "/dev/input/event2" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_GAMEPAD;
+   }
+   else if ( strstr( pathname, "/dev/input/js" ) )
    {
       TRACE1("intercept open of %s", pathname );
       type= EM_DEVICE_TYPE_GAMEPAD;
@@ -1550,7 +1653,12 @@ int EMOpen3( const char *pathname, int flags, mode_t mode )
 
    TRACE1("open name %s flags %x mode %x\n", pathname, flags, mode);
 
-   if ( strstr( pathname, "/dev/input/js" ) )
+   if ( !strcmp( pathname, "/dev/input/event2" ) )
+   {
+      TRACE1("intercept open of %s", pathname );
+      type= EM_DEVICE_TYPE_GAMEPAD;
+   }
+   else if ( strstr( pathname, "/dev/input/js" ) )
    {
       TRACE1("intercept open of %s", pathname );
       type= EM_DEVICE_TYPE_GAMEPAD;
@@ -1625,8 +1733,9 @@ DIR *EMOpenDir(const char *name)
       else
       if ( (len == 11) && !strncmp( name, "/dev/input/", len) )
       {
-         dir->count= 1;
-         dir->names[0]= "js0";
+         dir->count= 2;
+         dir->names[0]= "event2";
+         dir->names[1]= "js0";
       }
       else
       {

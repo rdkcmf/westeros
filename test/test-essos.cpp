@@ -3561,6 +3561,8 @@ bool testCaseEssosGamepadBasic( EMCTX *emctx )
    int buttonMap[]= { BTN_A, BTN_B, BTN_X, BTN_Y };
    int axisMap[]= { ABS_X, ABS_Y, ABS_Z, ABS_RZ };
 
+   memset( testCtx, 0, sizeof(TestCtx) );
+
    result= EssContextSetGamepadConnectionListener( (EssCtx*)0, testCtx, &connectionListener );
    if ( result )
    {
@@ -3642,7 +3644,7 @@ bool testCaseEssosGamepadBasic( EMCTX *emctx )
       goto exit;
    }
 
-   EMPushGamepadEvent( emctx, JS_EVENT_BUTTON, BTN_X, 1 );
+   EMPushGamepadEvent( emctx, EV_KEY, BTN_X, 1 );
    EssContextRunEventLoopOnce( ctx );
 
    if ( testCtx->buttonPressedWasCalled == false )
@@ -3657,7 +3659,7 @@ bool testCaseEssosGamepadBasic( EMCTX *emctx )
       goto exit;
    }
 
-   EMPushGamepadEvent( emctx, JS_EVENT_BUTTON, BTN_X, 0 );
+   EMPushGamepadEvent( emctx, EV_KEY, BTN_X, 0 );
    EssContextRunEventLoopOnce( ctx );
 
    if ( testCtx->buttonReleasedWasCalled == false )
@@ -3672,7 +3674,7 @@ bool testCaseEssosGamepadBasic( EMCTX *emctx )
       goto exit;
    }
 
-   EMPushGamepadEvent( emctx, JS_EVENT_AXIS, ABS_RZ, -12000 );
+   EMPushGamepadEvent( emctx, EV_ABS, ABS_RZ, -12000 );
    EssContextRunEventLoopOnce( ctx );
 
    if ( testCtx->axisChangedWasCalled == false )
@@ -3693,7 +3695,7 @@ bool testCaseEssosGamepadBasic( EMCTX *emctx )
       goto exit;
    }
 
-   EMPushGamepadEvent( emctx, JS_EVENT_BUTTON, BTN_B, 1 );
+   EMPushGamepadEvent( emctx, EV_KEY, BTN_B, 1 );
    EssContextRunEventLoopOnce( ctx );
 
    result= EssGamepadGetState( testCtx->gp, testCtx->buttonState, testCtx->axisState );
