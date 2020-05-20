@@ -246,7 +246,6 @@ static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx );
 static bool essPlatformInitDirect( EssCtx *ctx );
 static void essPlatformTermDirect( EssCtx *ctx );
 static bool essPlatformSetDisplayModeDirect( EssCtx *ctx, const char *mode );
-static int essOpenGamepadDevice( EssCtx *ctx, const char *devPathName );
 static int essOpenInputDevice( EssCtx *ctx, const char *devPathName );
 static char *essGetInputDevice( EssCtx *ctx, const char *path, char *devName );
 static void essGetInputDevices( EssCtx *ctx );
@@ -1040,7 +1039,7 @@ const char *EssGamepadGetDeviceName( EssGamepad *gp )
          if ( !gp->name )
          {
             work[0]= '\0';
-            rc= ioctl( gp->fd, JSIOCGNAME(sizeof(work)), work);
+            rc= ioctl( gp->fd, EVIOCGNAME(sizeof(work)), work);
             if ( rc > 0 )
             {
                len= strlen(work);
@@ -1083,7 +1082,7 @@ unsigned int EssGamepadGetDriverVersion( EssGamepad *gp )
       {
          pthread_mutex_lock( &ctx->mutex );
 
-         rc= ioctl( gp->fd, JSIOCGVERSION, &version );
+         rc= ioctl( gp->fd, EVIOCGVERSION, &version );
          if ( rc != 0 )
          {
             sprintf( ctx->lastErrorDetail,
@@ -3065,11 +3064,141 @@ exit:
 
 static const char *inputPath= "/dev/input/";
 
-static int essOpenGamepadDevice( EssCtx *ctx, const char *devPathName )
+static bool essCheckBit( unsigned char *bits, int bit )
 {
-   int fd= -1;
-   struct stat buf;
+   int i= (bit/8);
+   int m= (bit%8);
+   return (bits[i] & (1<<m));
+}
 
+static void essGamepadBuildButtonMap( EssCtx *ctx, EssGamepad *gp, unsigned char *bits, int numBits )
+{
+   int buttonCount= 0;
+   int i;
+
+   for( i= BTN_MISC; i < numBits; ++i )
+   {
+      if ( essCheckBit( bits, i ) )
+      {
+         gp->buttonMap[buttonCount++]= i;
+      }
+   }
+   gp->buttonCount= buttonCount;
+}
+
+static void essGamepadBuildAxisMap( EssCtx *ctx, EssGamepad *gp, unsigned char *bits, int numBits )
+{
+   int axisCount= 0;
+   int i;
+
+   for( i= 0; i < numBits; ++i )
+   {
+      if ( essCheckBit( bits, i ) )
+      {
+         gp->axisMap[axisCount++]= i;
+      }
+   }
+   gp->axisCount= axisCount;
+}
+
+static void essCheckForGamepad( EssCtx *ctx, int fd, const char *devPathName )
+{
+   int rc;
+   unsigned int evbits= 0;
+   int buttonMapSize= KEY_CNT;
+   int axisMapSize= ABS_CNT;
+   unsigned char *bits= 0;
+   int bitsSize;
+
+   rc= ioctl( fd, EVIOCGBIT(0,sizeof(evbits)), &evbits);
+   if ( rc >= 0 )
+   {
+      bool hasKey= essCheckBit((unsigned char*)&evbits, EV_KEY);
+      bool hasAbs= essCheckBit((unsigned char*)&evbits, EV_ABS);
+      if ( hasKey && hasAbs )
+      {
+         bitsSize= ((buttonMapSize+7)/8);
+         bits= (unsigned char*)calloc( 1, bitsSize );
+         if ( !bits )
+         {
+            ERROR("No memory for EV key bits");
+            goto exit;
+         }
+
+         rc= ioctl( fd, EVIOCGBIT(EV_KEY, bitsSize), bits );
+         if ( rc >= 0 )
+         {
+            if ( essCheckBit( bits, BTN_SOUTH ) )
+            {
+               EssGamepad *gp;
+
+               gp= (EssGamepad*)calloc( 1, sizeof(EssGamepad));
+               if ( gp )
+               {
+                  gp->ctx= ctx;
+                  gp->devicePath= strdup(devPathName);
+                  gp->fd= fd;
+                  ctx->gamepads.push_back( gp );
+
+                  essGamepadBuildButtonMap( ctx, gp, bits, buttonMapSize );
+
+                  if ( axisMapSize <= buttonMapSize )
+                  {
+                     memset( bits, 0, bitsSize );
+                  }
+                  else
+                  {
+                     free( bits );
+                     bitsSize= ((axisMapSize+7)/8);
+                     bits= (unsigned char*)calloc( 1, bitsSize );
+                     if ( !bits )
+                     {
+                        ERROR("No memory for EV axis bits");
+                        goto exit;
+                     }
+                  }
+
+                  rc= ioctl( fd, EVIOCGBIT(EV_ABS, bitsSize), bits );
+                  if ( rc >= 0 )
+                  {
+                     essGamepadBuildAxisMap( ctx, gp, bits, axisMapSize );
+                  }
+                  DEBUG("essCheckForGamepad: gp %p has %d buttons %d axes", gp, gp->buttonCount, gp->axisCount);
+                  INFO("essCheckForGamepad: gp %p has %d buttons %d axes", gp, gp->buttonCount, gp->axisCount);
+
+                  pthread_mutex_unlock( &ctx->mutex );
+                  essGamepadNotifyConnected( ctx, gp );
+                  pthread_mutex_lock( &ctx->mutex );
+               }
+               else
+               {
+                  ERROR("Error: unable to allocate gamepad");
+               }
+            }
+         }
+         else
+         {
+            ERROR("EVIOGCBIT for keymap failed");
+         }
+      }
+   }
+   else
+   {
+      ERROR("EVIOGCBIT for caps failed");
+   }
+
+exit:
+   if ( bits )
+   {
+      free( bits );
+   }
+}
+
+static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
+{
+   int fd= -1;   
+   struct stat buf;
+   
    if ( stat( devPathName, &buf ) == 0 )
    {
       if ( S_ISCHR(buf.st_mode) )
@@ -3082,77 +3211,9 @@ static int essOpenGamepadDevice( EssCtx *ctx, const char *devPathName )
          else
          {
             fd= open( devPathName, O_RDONLY | O_CLOEXEC );
-            DEBUG( "essOpenGamepadDevice: opened device %s : fd %d", devPathName, fd );
+            DEBUG( "essOpenInputDevice: opened device %s : fd %d", devPathName, fd );
          }
 
-         if ( fd < 0 )
-         {
-            snprintf( ctx->lastErrorDetail, ESS_MAX_ERROR_DETAIL,
-            "Error: error opening gamepad device: %s\n", devPathName );
-         }
-         else
-         {
-            pollfd pfd;
-            pfd.fd= fd;
-            ctx->inputDeviceFds.push_back( pfd );
-
-            if ( !gp )
-            {
-               gp= (EssGamepad*)calloc( 1, sizeof(EssGamepad));
-               if ( gp )
-               {
-                  gp->ctx= ctx;
-                  gp->devicePath= strdup(devPathName);
-                  gp->fd= fd;
-                  ctx->gamepads.push_back( gp );
-
-                  ioctl( gp->fd, JSIOCGBUTTONS, &gp->buttonCount );
-                  ioctl( gp->fd, JSIOCGBTNMAP, gp->buttonMap );
-                  ioctl( gp->fd, JSIOCGAXES, &gp->axisCount );
-                  ioctl( gp->fd, JSIOCGAXMAP, gp->axisMap );
-                  DEBUG("essOpenGamepadDevice: gp %p has %d buttons %d axes", gp, gp->buttonCount, gp->axisCount);
-
-                  pfd.events= POLLIN;
-                  pfd.revents= 0;
-                  while ( poll(&pfd, 1, 0 ) > 0 )
-                  {
-                     essProcessGamepad( ctx, gp );
-                  }
-
-                  pthread_mutex_unlock( &ctx->mutex );
-                  essGamepadNotifyConnected( ctx, gp );
-                  pthread_mutex_lock( &ctx->mutex );
-               }
-               else
-               {
-                  ERROR("Error: unable to allocate gamepad");
-               }
-            }
-         }
-      }
-      else
-      {
-         DEBUG("essOpenGamepadDevice: ignoring non character device %s", devPathName );
-      }
-   }
-   else
-   {
-      DEBUG( "essOpenGamepadDevice: error performing stat on device: %s", devPathName );
-   }
-
-   return fd;
-}
-
-static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
-{
-   int fd= -1;   
-   struct stat buf;
-   
-   if ( stat( devPathName, &buf ) == 0 )
-   {
-      if ( S_ISCHR(buf.st_mode) )
-      {
-         fd= open( devPathName, O_RDONLY | O_CLOEXEC );
          if ( fd < 0 )
          {
             snprintf( ctx->lastErrorDetail, ESS_MAX_ERROR_DETAIL,
@@ -3164,6 +3225,11 @@ static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
             DEBUG( "essOpenInputDevice: opened device %s : fd %d", devPathName, fd );
             pfd.fd= fd;
             ctx->inputDeviceFds.push_back( pfd );
+
+            if ( !gp )
+            {
+               essCheckForGamepad( ctx, fd, devPathName );
+            }
          }
       }
       else
@@ -3229,13 +3295,6 @@ static void essGetInputDevices( EssCtx *ctx )
                   if (essOpenInputDevice( ctx, devPathName ) < 0 )
                   {
                      ERROR("essos: could not open device %s", devPathName);
-                  }
-               }
-               else if ( !strncmp(result->d_name, "js", 2) )
-               {
-                  if ( essOpenGamepadDevice( ctx, devPathName ) < 0 )
-                  {
-                     ERROR("essos: could not open gamepad device %s", devPathName);
                   }
                }
                free( devPathName );
@@ -3544,29 +3603,64 @@ static void essProcessInputDevices( EssCtx *ctx )
 static void essProcessGamepad( EssCtx *ctx, EssGamepad *gp )
 {
    int rc;
-   struct js_event js;
+   struct input_event ev;
 
-   rc= read( gp->fd, &js, sizeof(struct js_event) );
-   if ( rc == sizeof(struct js_event) )
+   rc= read( gp->fd, &ev, sizeof(struct input_event) );
+   if ( rc == sizeof(struct input_event) )
    {
-      switch( js.type & ~JS_EVENT_INIT )
+      int i;
+      switch( ev.type )
       {
-         case JS_EVENT_BUTTON:
-            gp->buttonState[js.number]= js.value;
-            if ( js.value )
+         case EV_KEY:
+            for( i= 0; i < gp->buttonCount; i++ )
             {
-               essProcessGamepadButtonPressed( gp, gp->buttonMap[js.number] );
-            }
-            else
-            {
-               essProcessGamepadButtonReleased( gp, gp->buttonMap[js.number] );
+               if ( gp->buttonMap[i] == ev.code )
+               {
+                  gp->buttonState[i]= ev.value;
+                  if ( ev.value )
+                  {
+                     essProcessGamepadButtonPressed( gp, ev.code );
+                  }
+                  else
+                  {
+                     essProcessGamepadButtonReleased( gp, ev.code );
+                  }
+                  break;
+               }
             }
             break;
-         case JS_EVENT_AXIS:
-            gp->axisState[js.number]= js.value;
-            essProcessGamepadAxisChanged( gp, gp->axisMap[js.number], js.value );
-            break;
-         default:
+         case EV_ABS:
+            for( i= 0; i < gp->axisCount; i++ )
+            {
+               if ( gp->axisMap[i] == ev.code )
+               {
+                  struct input_absinfo info;
+                  rc= ioctl( gp->fd, EVIOCGABS(ev.code), &info );
+                  if ( rc == 0 )
+                  {
+                     int value;
+                     if ( ev.value == info.minimum )
+                     {
+                        value= -32768;
+                     }
+                     else if ( ev.value == info.maximum )
+                     {
+                        value= 32767;
+                     }
+                     else if ( ev.value == 0 )
+                     {
+                        value= 0;
+                     }
+                     else
+                     {
+                        value= ((ev.value-info.minimum)*65536)/(info.maximum-info.minimum+1)-32768;
+                     }
+                     gp->axisState[i]= value;
+                     essProcessGamepadAxisChanged( gp, ev.code, value );
+                  }
+                  break;
+               }
+            }
             break;
       }
    }
