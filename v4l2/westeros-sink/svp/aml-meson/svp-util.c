@@ -142,17 +142,14 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       case V4L2_PIX_FMT_VP9:
          if ( sink->soc.isMultiPlane )
          {
-            frameWidth= sink->soc.fmtOut.fmt.pix_mp.width;
-            frameHeight= sink->soc.fmtOut.fmt.pix_mp.height;
+            frameWidth= sink->soc.fmtIn.fmt.pix_mp.width;
+            frameHeight= sink->soc.fmtIn.fmt.pix_mp.height;
          }
          else
          {
-            frameWidth= sink->soc.fmtOut.fmt.pix.width;
-            frameHeight= sink->soc.fmtOut.fmt.pix.height;
+            frameWidth= sink->soc.fmtIn.fmt.pix.width;
+            frameHeight= sink->soc.fmtIn.fmt.pix.height;
          }
-         GST_DEBUG("format %s size %dx%d",
-                    (sink->soc.inputFormat == V4L2_PIX_FMT_HEVC ? "HEVC" : "VP9"),
-                    frameWidth, frameHeight);
          if ( (frameWidth > 1920) || (frameHeight > 1080) )
          {
             decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_2_DW;
@@ -161,6 +158,9 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          {
             decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_1_DW;
          }
+         GST_DEBUG("format %s size %dx%d dw mode %d",
+                    (sink->soc.inputFormat == V4L2_PIX_FMT_HEVC ? "HEVC" : "VP9"),
+                    frameWidth, frameHeight, decParm->cfg.double_write_mode);
          break;
    }
 
@@ -219,6 +219,7 @@ static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
             if ( sink->soc.secureVideo || getenv("WESTEROS_SINK_AMLOGIC_USE_DMABUF") )
             {
                sink->soc.useDmabufOutput= TRUE;
+               wstSVPDecoderConfig( sink );
             }
 
             memset (&control, 0, sizeof (control) );
@@ -248,21 +249,7 @@ static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
 
 static void wstSVPSetOutputMemMode( GstWesterosSink *sink, int mode )
 {
-   int len= strlen( (char*)sink->soc.caps.driver );
-
    sink->soc.outputMemMode= mode;
-
-   if ( (len == 14) && !strncmp( (char*)sink->soc.caps.driver, "aml-vcodec-dec", len) )
-   {
-      if ( mode == V4L2_MEMORY_DMABUF )
-      {
-         wstSVPDecoderConfig( sink );
-      }
-   }
-   else
-   {
-      GST_ERROR("Not aml-vcodec-dec: driver (%s)", sink->soc.caps.driver );
-   }
 }
 
 static void wstSVPDestroyGemBuffer( GstWesterosSink *sink, WstGemBuffer *gemBuf )

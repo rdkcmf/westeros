@@ -1616,8 +1616,18 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
    bool result= false;
    int rc;
    int32_t bufferType;
+   int bufferSize;
 
    bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
+
+   if ( (sink->soc.frameWidth > 1920) || (sink->soc.frameHeight > 1080) )
+   {
+      bufferSize= 4*1024*1024;
+   }
+   else
+   {
+      bufferSize= 2*1024*1024;
+   }
 
    memset( &sink->soc.fmtIn, 0, sizeof(struct v4l2_format) );
    sink->soc.fmtIn.type= bufferType;
@@ -1627,7 +1637,7 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
       sink->soc.fmtIn.fmt.pix_mp.width= sink->soc.frameWidth;
       sink->soc.fmtIn.fmt.pix_mp.height= sink->soc.frameHeight;
       sink->soc.fmtIn.fmt.pix_mp.num_planes= 1;
-      sink->soc.fmtIn.fmt.pix_mp.plane_fmt[0].sizeimage= 1024*1024;
+      sink->soc.fmtIn.fmt.pix_mp.plane_fmt[0].sizeimage= bufferSize;
       sink->soc.fmtIn.fmt.pix_mp.plane_fmt[0].bytesperline= 0;
       sink->soc.fmtIn.fmt.pix_mp.field= V4L2_FIELD_NONE;
    }
@@ -1636,7 +1646,7 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
       sink->soc.fmtIn.fmt.pix.pixelformat= sink->soc.inputFormat;
       sink->soc.fmtIn.fmt.pix.width= sink->soc.frameWidth;
       sink->soc.fmtIn.fmt.pix.height= sink->soc.frameHeight;
-      sink->soc.fmtIn.fmt.pix.sizeimage= 1024*1024;
+      sink->soc.fmtIn.fmt.pix.sizeimage= bufferSize;
       sink->soc.fmtIn.fmt.pix.field= V4L2_FIELD_NONE;
    }
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_FMT, &sink->soc.fmtIn );
