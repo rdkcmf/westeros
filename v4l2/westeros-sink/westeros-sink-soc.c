@@ -284,6 +284,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameStepOnPreroll= FALSE;
    sink->soc.secureVideo= FALSE;
    sink->soc.useDmabufOutput= FALSE;
+   sink->soc.dwMode= -1;
    sink->soc.drmFd= -1;
 
    /* Request caps updates */
@@ -1628,14 +1629,7 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
 
    bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
 
-   if ( (sink->soc.frameWidth > 1920) || (sink->soc.frameHeight > 1080) )
-   {
-      bufferSize= 4*1024*1024;
-   }
-   else
-   {
-      bufferSize= 2*1024*1024;
-   }
+   bufferSize= 4*1024*1024;
 
    memset( &sink->soc.fmtIn, 0, sizeof(struct v4l2_format) );
    sink->soc.fmtIn.type= bufferType;
@@ -2231,10 +2225,6 @@ static void wstTearDownOutputBuffersMMap( GstWesterosSink *sink )
 
 static void wstSetInputMemMode( GstWesterosSink *sink, int mode )
 {
-   #ifdef WESTEROS_SINK_SVP
-   wstSVPSetInputMemMode( sink, mode );
-   #endif
-
    sink->soc.inputMemMode= mode;
 }
 
@@ -2254,6 +2244,9 @@ static void wstSetupInput( GstWesterosSink *sink )
            (sink->soc.frameHeight > 0) )
       {
          wstGetMaxFrameSize( sink );
+         #ifdef WESTEROS_SINK_SVP
+         wstSVPSetInputMemMode( sink, sink->soc.inputMemMode );
+         #endif
          wstSetInputFormat( sink );
          wstSetupInputBuffers( sink );
          sink->soc.formatsSet= TRUE;
