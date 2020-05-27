@@ -634,16 +634,20 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             }
             result= TRUE;
          }
+         #ifdef V4L2_PIX_FMT_HEVC
          else if ( (len == 12) && !strncmp("video/x-h265", mime, len) )
          {
             sink->soc.inputFormat= V4L2_PIX_FMT_HEVC;
             result= TRUE;
          }
+         #endif
+         #ifdef V4L2_PIX_FMT_VP9
          else if ( (len == 11) && !strncmp("video/x-vp9", mime, len) )
          {
             sink->soc.inputFormat= V4L2_PIX_FMT_VP9;
             result= TRUE;
          }
+         #endif
          else
          {
             GST_ERROR("gst_westeros_sink_soc_accept_caps: not accepting caps (%s)", mime );
@@ -1170,6 +1174,7 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                                 "width=(int) [1,MAX], " "height=(int) [1,MAX] ; " \
                                              );
                break;
+            #ifdef V4L2_PIX_FMT_VP9
             case V4L2_PIX_FMT_VP9:
                capsTemp= gst_caps_from_string(
                                                 "video/x-vp9, " \
@@ -1177,6 +1182,8 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                                 "height=(int) [1,MAX] ; "
                                              );
                break;
+            #endif
+            #ifdef V4L2_PIX_FMT_HEVC
             case V4L2_PIX_FMT_HEVC:
                capsTemp= gst_caps_from_string(
                                                 "video/x-h265, " \
@@ -1187,6 +1194,7 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                                 "height=(int) [1,MAX] ; "
                                              );
                break;
+            #endif
             default:
                break;
          }
