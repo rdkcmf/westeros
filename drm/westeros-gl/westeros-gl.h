@@ -18,7 +18,6 @@
  */
 #ifndef _WESTEROS_GL_H
 #define _WESTEROS_GL_H
-//#include "config.h"
 
 #ifndef __cplusplus
 #include <stdbool.h>

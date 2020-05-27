@@ -155,6 +155,7 @@ struct _GstWesterosSinkSoc
 
    gboolean secureVideo;
    gboolean useDmabufOutput;
+   int dwMode;
    int drmFd;
 
    #ifdef GLIB_VERSION_2_32 

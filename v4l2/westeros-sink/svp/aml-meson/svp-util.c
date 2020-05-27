@@ -140,16 +140,8 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          break;
       case V4L2_PIX_FMT_HEVC:
       case V4L2_PIX_FMT_VP9:
-         if ( sink->soc.isMultiPlane )
-         {
-            frameWidth= sink->soc.fmtIn.fmt.pix_mp.width;
-            frameHeight= sink->soc.fmtIn.fmt.pix_mp.height;
-         }
-         else
-         {
-            frameWidth= sink->soc.fmtIn.fmt.pix.width;
-            frameHeight= sink->soc.fmtIn.fmt.pix.height;
-         }
+         frameWidth= sink->soc.frameWidth;
+         frameHeight= sink->soc.frameHeight;
          if ( (frameWidth > 1920) || (frameHeight > 1080) )
          {
             decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_2_DW;
@@ -176,7 +168,11 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       }
    }
 
-   g_print("wstSVPDecoderConfig: dw mode %d\n", decParm->cfg.double_write_mode);
+   if ( decParm->cfg.double_write_mode != sink->soc.dwMode )
+   {
+      sink->soc.dwMode= decParm->cfg.double_write_mode;
+      g_print("wstSVPDecoderConfig: dw mode %d\n", decParm->cfg.double_write_mode);
+   }
 
    if ( decParm->cfg.double_write_mode == VDEC_DW_AFBC_ONLY )
    {
@@ -249,7 +245,21 @@ static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
 
 static void wstSVPSetOutputMemMode( GstWesterosSink *sink, int mode )
 {
+   int len= strlen( (char*)sink->soc.caps.driver );
+
    sink->soc.outputMemMode= mode;
+
+   if ( (len == 14) && !strncmp( (char*)sink->soc.caps.driver, "aml-vcodec-dec", len) )
+   {
+      if ( mode == V4L2_MEMORY_DMABUF )
+      {
+         wstSVPDecoderConfig( sink );
+      }
+   }
+   else
+   {
+      GST_ERROR("Not aml-vcodec-dec: driver (%s)", sink->soc.caps.driver );
+   }
 }
 
 static void wstSVPDestroyGemBuffer( GstWesterosSink *sink, WstGemBuffer *gemBuf )
