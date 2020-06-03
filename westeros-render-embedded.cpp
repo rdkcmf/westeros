@@ -1423,6 +1423,9 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
    float *matrix= (renderer->renderer->hints & WstHints_applyTransform
                   ? renderer->renderer->matrix : (float*)identityMatrix);
 
+   float alpha= (renderer->renderer->hints & WstHints_applyTransform
+                ? surface->opacity*renderer->renderer->alpha : surface->opacity );
+
    int resW, resH;
    GLint viewport[4];
 
@@ -1444,7 +1447,7 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
                                 resW,
                                 resH,
                                 (float*)matrix,
-                                surface->opacity,
+                                alpha,
                                 surface->textureId[0],
                                 GL_NONE,
                                 4,
@@ -1457,7 +1460,7 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
                                 resW,
                                 resH,
                                 (float*)matrix,
-                                surface->opacity,
+                                alpha,
                                 surface->textureId[0],
                                 surface->textureId[1],
                                 4,
