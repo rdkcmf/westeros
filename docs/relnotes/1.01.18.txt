@@ -1,0 +1,65 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.18 Release Notes
+------------------------------
+
+Date: June 10, 2020
+Tag: Westeros-1.01.18
+Changes:
+
+* Add icegdl support files
+
+* Accommodate newer versions of mesa
+
+* Initial support for secure video on AmLogic-Meson
+
+* Use QoS to signal dropped frames
+
+* v4l2 updates
+ -re-subscribe for events after hard decoder reset
+ -avoid double rendering of buffer during preroll
+ -retain reference on input dma-buf gstbuffer until dequeued from driver
+
+* Fix crash on video server over subscribe
+
+* Fix crash on video server over subscribe
+ -handle asynchronous frame updates at various rates and update display at mode rate
+ -video server informs clients of display refresh rate
+ -sink drops frames if video frame rate exceeds display rate
+ -improve sink pause/resume
+ -automatic screen refresh on HDMI hot plug
+ -rely on gstreamer for AV sync
+ -fixes for some sources of tearing
+ -sink uses /dev/dri/renderD128 for SVP
+
+* v4l2: fix gem allocation for amlogic dw mode 0
+
+* v4l2 updates
+ -increase input buffer sizes
+ -fix sequencing of Amlogic svp decoder configuration
+
+* Move gamepad from joystick to evdev api 
+
+* drm+v4l2 updates
+ -remove reference to unneeded header file
+ -add compilation guards for references to newer V4L2 formats
+
+* v4l2 updates
+ -adjusting management of Amlogic dw mode
+ -move to 4M input buffers
+
+* Fix alpha application with WstHints_applyTransform
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
