@@ -64,6 +64,9 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
+#define INT_FRAME(FORMAT, ...)      frameLog( "FRAME: " FORMAT "\n", __VA_ARGS__)
+#define FRAME(...)                  INT_FRAME(__VA_ARGS__, "")
+
 enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
@@ -77,6 +80,7 @@ enum
    MAX_SIGNAL
 };
 
+static bool g_frameDebug= false;
 static const char *gDeviceName= DEFAULT_DEVICE_NAME;
 static guint g_signals[MAX_SIGNAL]= {0};
 
@@ -134,6 +138,30 @@ static long long getCurrentTimeMillis(void)
    utcCurrentTimeMillis= tv.tv_sec*1000LL+(tv.tv_usec/1000LL);
 
    return utcCurrentTimeMillis;
+}
+
+static gint64 getGstClockTime( GstWesterosSink *sink )
+{
+   gint64 time= 0;
+   GstElement *element= GST_ELEMENT(sink);
+   GstClock *clock= GST_ELEMENT_CLOCK(element);
+   if ( clock )
+   {
+      time= gst_clock_get_time(clock);
+   }
+   return time;
+}
+
+static void frameLog( const char *fmt, ... )
+{
+   if ( g_frameDebug )
+   {
+      va_list argptr;
+      fprintf( stderr, "%lld: ", getCurrentTimeMillis());
+      va_start( argptr, fmt );
+      vfprintf( stderr, fmt, argptr );
+      va_end( argptr );
+   }
 }
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
@@ -220,6 +248,7 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 {
    gboolean result= FALSE;
+   const char *env;
 
    #ifdef GLIB_VERSION_2_32
    g_mutex_init( &sink->soc.mutex );
@@ -259,6 +288,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.numBuffersIn= 0;
    sink->soc.inBuffers= 0;
    sink->soc.numBuffersOut= 0;
+   sink->soc.bufferIdOutBase= 0;
    sink->soc.outBuffers= 0;
    sink->soc.quitVideoOutputThread= FALSE;
    sink->soc.quitEOSDetectionThread= FALSE;
@@ -304,6 +334,13 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       sink->soc.useCaptureOnly= TRUE;
       sink->soc.captureEnabled= TRUE;
       printf("westeros-sink: capture only\n");
+   }
+
+   env= getenv( "WESTEROS_SINK_DEBUG_FRAME" );
+   if ( env )
+   {
+      int level= atoi( env );
+      g_frameDebug= (level > 0 ? true : false);
    }
 
    result= TRUE;
@@ -752,6 +789,13 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          guint64 prevPTS;
 
          nanoTime= GST_BUFFER_PTS(buffer);
+         {
+            guint64 gstNow= getGstClockTime(sink);
+            if ( gstNow <= nanoTime )
+               FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (nanoTime-gstNow)/1000LL);
+            else
+               FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (gstNow-nanoTime)/1000LL);
+         }
          LOCK(sink)
          prevPTS= sink->currentPTS;
          sink->currentPTS= ((nanoTime * 90000LL)/GST_SECOND);
@@ -1973,6 +2017,7 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
 
    for( i= 0; i < reqbuf.count; ++i )
    {
+      sink->soc.outBuffers[i].bufferId= sink->soc.bufferIdOutBase+i;
       sink->soc.outBuffers[i].fd= -1;
       for( j= 0; j < 3; ++j )
       {
@@ -2152,6 +2197,8 @@ static void wstTearDownOutputBuffers( GstWesterosSink *sink )
       {
          GST_ERROR("wstTearDownOutputBuffers: streamoff failed for output: rc %d errno %d", rc, errno );
       }
+
+      sink->soc.bufferIdOutBase += sink->soc.numBuffersOut;
 
       if ( sink->soc.outputMemMode == V4L2_MEMORY_DMABUF )
       {
@@ -2381,7 +2428,9 @@ static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex )
    if ( !sink->soc.outBuffers[buffIndex].locked )
    {
       int rc;
-      GST_LOG( "%lld: re-queue: frame index %d", getCurrentTimeMillis(), buffIndex);
+      sink->soc.outBuffers[buffIndex].drop= false;
+      FRAME("out:       requeue buffer %d (%d)", sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
+      GST_LOG( "%lld: requeue: buffer %d (%d)", getCurrentTimeMillis(), sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
       rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[buffIndex].buf );
       if ( rc < 0 )
       {
@@ -2404,9 +2453,6 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
       conn->socketFd= -1;
       conn->name= name;
       conn->sink= sink;
-      conn->buffPrev= -1;
-      conn->buffCurr= -1;
-      conn->buffNext= -1;
 
       workingDir= getenv("XDG_RUNTIME_DIR");
       if ( !workingDir )
@@ -2493,12 +2539,49 @@ static int putU32( unsigned char *p, unsigned n )
    return 4;
 }
 
-static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex )
+static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
 {
-   int sentLen;
-
    if ( conn )
    {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[4];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'S';
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent flush to video server");
+         FRAME("sent flush to video server");
+      }
+   }
+}
+
+static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      GstWesterosSink *sink= conn->sink;
       struct pollfd pfd;
       int rc;
 
@@ -2512,6 +2595,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          struct msghdr msg;
          struct iovec iov[1];
          unsigned char mbody[64];
+         unsigned char *m= mbody;
          int len;
 
          iov[0].iov_base= (char*)mbody;
@@ -2531,21 +2615,21 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          }
          while ( (len < 0) && (errno == EINTR));
 
-         if ( len >= 4 )
+         while ( len >= 4 )
          {
-            if ( (mbody[0] == 'V') && (mbody[1] == 'S') )
+            if ( (m[0] == 'V') && (m[1] == 'S') )
             {
                int mlen, id;
-               mlen= mbody[2];
+               mlen= m[2];
                if ( len >= (mlen+2) )
                {
-                  id= mbody[3];
+                  id= m[3];
                   switch( id )
                   {
                      case 'R':
                         if ( mlen >= 6)
                         {
-                          int rate= getU32( &mbody[4] );
+                          int rate= getU32( &m[4] );
                           GST_DEBUG("got rate %d from video server", rate);
                           conn->serverRefreshRate= rate;
                           if ( rate )
@@ -2554,18 +2638,95 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
                           }
                         }
                         break;
+                     case 'B':
+                        if ( mlen >= 6)
+                        {
+                          int bid= getU32( &m[4] );
+                          if ( (bid >= sink->soc.bufferIdOutBase) && (bid < sink->soc.bufferIdOutBase+sink->soc.numBuffersOut) )
+                          {
+                             int bi= bid-sink->soc.bufferIdOutBase;
+                             if ( sink->soc.outBuffers[bi].locked )
+                             {
+                                FRAME("out:       release received for buffer %d (%d)", bid, bi);
+                                sink->soc.outBuffers[bi].locked= false;
+                                wstRequeueOutputBuffer( sink, bi );
+                             }
+                             else
+                             {
+                                GST_ERROR("release received for non-locked buffer %d (%d)\n", bid, bi );
+                                FRAME("out:       error: release received for non-locked buffer %d (%d)", bid, bi);
+                             }
+                          }
+                          else
+                          {
+                             GST_DEBUG("release received for stale buffer %d\n", bid );
+                             FRAME("out:       note: release received for stale buffer %d", bid);
+                          }
+                        }
+                        break;
                      default:
                         break;
                   }
+                  m += (mlen+2);
+                  len -= (mlen+2);
                }
             }
          }
       }
+   }
+}
+
+static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex )
+{
+   GstWesterosSink *sink= conn->sink;
+   int sentLen;
+   int bufferId;
+
+   bufferId= sink->soc.outBuffers[buffIndex].bufferId;
+
+   if ( conn )
+   {
+      guint64 videoPeriod= ((sink->soc.frameRate != 0.0) ? 1000000LL/sink->soc.frameRate : 333333LL);
+      int retries= ((videoPeriod/1000LL)-1LL);
+
+      again:
+
+      wstProcessMessagesVideoClientConnection( conn );
+
+
+      /*
+       * Only allow 3 outstanding buffers.  If we are at the limit,
+       * delay until we have received a buffer release message from the server.
+       * If more than a frame interval elapses, drop the frame.
+       */
+      {
+         int i, numLocked= 0;;
+         for( i= 0; i < sink->soc.numBuffersOut; ++i )
+         {
+            if ( sink->soc.outBuffers[i].locked )
+            {
+               ++numLocked;
+            }
+         }
+         if ( numLocked >= 3 && !sink->soc.quitVideoOutputThread )
+         {
+            usleep( 1000 );
+            if ( --retries > 0 )
+               goto again;
+            else
+               sink->soc.outBuffers[buffIndex].drop= true;
+         }
+      }
+
+      /*
+       * If the stream frame rate is greater than the display
+       * refresh rate reported by the server, drop frames as necessary
+       */
       if ( conn->serverRefreshRate && (buffIndex >= 0) )
       {
-         GstWesterosSink *sink= conn->sink;
          gint64 now= sink->soc.outBuffers[buffIndex].frameTime;
          gint64 interval= now-conn->lastSendTime;
+         bool drop= sink->soc.outBuffers[buffIndex].drop;
          if ( interval <= 18333 )
          {
             interval= 16667;
@@ -2578,27 +2739,21 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          {
             interval= 41667;
          }
-         if ( (conn->lastSendTime == 0) || (interval >= conn->serverRefreshPeriod) )
+         if ( !drop && ((conn->lastSendTime == 0) || (interval >= conn->serverRefreshPeriod)) )
          {
             conn->lastSendTime= now;
             sink->soc.resubFd= -1;
             sink->soc.outBuffers[buffIndex].locked= true;
-            if ( conn->buffPrev >= 0 )
-            {
-               sink->soc.outBuffers[conn->buffPrev].locked= false;
-               wstRequeueOutputBuffer( sink, conn->buffPrev );
-            }
-            conn->buffPrev= conn->buffCurr;
-            conn->buffCurr= conn->buffNext;
-            conn->buffNext= buffIndex;
 
             GST_LOG( "%lld: pass frame %lld", getCurrentTimeMillis(), now);
          }
          else
          {
-            sink->soc.outBuffers[conn->buffPrev].locked= false;
-            wstRequeueOutputBuffer( sink, buffIndex );
+            sink->soc.resubFd= -1;
+            sink->soc.outBuffers[buffIndex].locked= false;
             GST_LOG( "%lld: drop frame %lld", getCurrentTimeMillis(), now);
+            FRAME("out:       drop frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
+            wstRequeueOutputBuffer( sink, buffIndex );
             return;
          }
       }
@@ -2609,7 +2764,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       struct msghdr msg;
       struct cmsghdr *cmsg;
       struct iovec iov[1];
-      unsigned char mbody[1+13*4];
+      unsigned char mbody[1+13*4+4];
       char cmbody[CMSG_SPACE(3*sizeof(int))];
       int i, len;
       int *fd;
@@ -2622,8 +2777,6 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
 
       if ( buffIndex >= 0 )
       {
-         GstWesterosSink *sink= conn->sink;
-
          numFdToSend= 1;
          offset0= offset1= offset2= 0;
          stride0= stride1= stride2= sink->soc.frameWidth;
@@ -2715,6 +2868,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          i += putU32( &mbody[i], stride1 );
          i += putU32( &mbody[i], offset2 );
          i += putU32( &mbody[i], stride2 );
+         i += putU32( &mbody[i], bufferId );
 
          iov[0].iov_base= (char*)mbody;
          iov[0].iov_len= i;
@@ -2763,6 +2917,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       }
 
       GST_LOG( "%lld: send frame: %d, fd (%d, %d, %d [%d, %d, %d])", getCurrentTimeMillis(), buffIndex, frameFd0, frameFd1, frameFd2, fdToSend0, fdToSend1, fdToSend2);
+      FRAME("out:       send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
       do
       {
          sentLen= sendmsg( conn->socketFd, &msg, 0 );
@@ -2983,6 +3138,7 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
+               wstProcessMessagesVideoClientConnection( sink->soc.conn );
                usleep( 1000 );
                continue;
             }
@@ -2996,6 +3152,8 @@ capture_start:
             sink->soc.resubFd= -1;
 
             gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
+            guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
+            FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
 
             sink->soc.outBuffers[buffIndex].frameTime= currFramePTS;
 
@@ -3219,6 +3377,8 @@ capture_start:
          }
       }
    }
+
+   wstSendFlushVideoClientConnection( sink->soc.conn );
 
    if ( sink->soc.needCaptureRestart )
    {

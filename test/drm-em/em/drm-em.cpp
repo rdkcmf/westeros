@@ -2463,14 +2463,21 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                   break;
                case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
                   rc= -1;
-                  for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+                  if ( dev->dev.v4l2.outputStreaming )
                   {
-                     if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+                     for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
                      {
-                        dev->dev.v4l2.outputBuffers[i].flags &= ~(V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE);
-                        *buf= dev->dev.v4l2.outputBuffers[i];
-                        rc= 0;
-                        break;
+                        if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+                        {
+                           usleep( 16000 );
+                           if ( dev->dev.v4l2.outputStreaming )
+                           {
+                              dev->dev.v4l2.outputBuffers[i].flags &= ~(V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE);
+                              *buf= dev->dev.v4l2.outputBuffers[i];
+                              rc= 0;
+                           }
+                           break;
+                        }
                      }
                   }
                   if ( rc < 0 )

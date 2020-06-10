@@ -51,6 +51,7 @@
 #define INT_TRACE1(FORMAT, ...)     wstLog(4, "TRACE: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define INT_TRACE2(FORMAT, ...)     wstLog(5, "TRACE: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define INT_TRACE3(FORMAT, ...)     wstLog(6, "TRACE: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
+#define INT_FRAME(FORMAT, ...)      wstFrameLog( "FRAME: " FORMAT "\n", __VA_ARGS__)
 
 #define FATAL(...)                  INT_FATAL(__VA_ARGS__, "")
 #define ERROR(...)                  INT_ERROR(__VA_ARGS__, "")
@@ -60,6 +61,7 @@
 #define TRACE1(...)                 INT_TRACE1(__VA_ARGS__, "")
 #define TRACE2(...)                 INT_TRACE2(__VA_ARGS__, "")
 #define TRACE3(...)                 INT_TRACE3(__VA_ARGS__, "")
+#define FRAME(...)                  INT_FRAME(__VA_ARGS__, "")
 
 #define DEFAULT_CARD "/dev/dri/card0"
 #ifdef WESTEROS_PLATFORM_QEMUX86
@@ -144,6 +146,7 @@ typedef struct _VideoFrame
    int rectY;
    int rectW;
    int rectH;
+   int bufferId;
 } VideoFrame;
 
 typedef struct _WstOverlayPlane
@@ -164,14 +167,24 @@ typedef struct _WstOverlayPlane
    uint32_t fbIdPrev;
    uint32_t handle0Prev;
    uint32_t handle1Prev;
+   uint32_t fbIdPrevPrev;
+   uint32_t handle0PrevPrev;
+   uint32_t handle1PrevPrev;
    int fd0;
    int fd1;
    int fd2;
    int prevFd0;
    int prevFd1;
    int prevFd2;
+   int prevprevFd0;
+   int prevprevFd1;
+   int prevprevFd2;
    VideoFrame videoFrameNext;
    bool dirty;
+   int frameCount;
+   int bufferId;
+   int bufferIdPrev;
+   int bufferIdPrevPrev;
 } WstOverlayPlane;
 
 typedef struct _WstOverlayPlanes
@@ -254,6 +267,8 @@ typedef struct _WstGLSizeCBInfo
    int height;
 } WstGLSizeCBInfo;
 
+static void wstLog( int level, const char *fmt, ... );
+static void wstFrameLog( const char *fmt, ... );
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
@@ -280,6 +295,7 @@ static int gGraphicsMaxWidth= 0;
 static int gGraphicsMaxHeight= 0;
 static bool emitFPS= false;
 static int g_activeLevel= 2;
+static bool g_frameDebug= false;
 
 #define WSTGL_CHECK_GRAPHICS_SIZE(w, h) \
    if ( gGraphicsMaxWidth && ((w) > gGraphicsMaxWidth) ) (w)= gGraphicsMaxWidth; \
@@ -312,18 +328,6 @@ static long long getCurrentTimeMillis(void)
    return utcCurrentTimeMillis;
 }
 
-static void wstLog( int level, const char *fmt, ... )
-{
-   if ( level <= g_activeLevel )
-   {
-      va_list argptr;
-      fprintf( stderr, "%lld: ", getCurrentTimeMillis());
-      va_start( argptr, fmt );
-      vfprintf( stderr, fmt, argptr );
-      va_end( argptr );
-   }
-}
-
 static long long getMonotonicTimeMicros( void )
 {
    int rc;
@@ -350,6 +354,30 @@ static long long getMonotonicTimeMicros( void )
       timeMicro= tm.tv_sec*1000000LL+(tm.tv_nsec/1000LL);
    }
    return timeMicro;
+}
+
+static void wstLog( int level, const char *fmt, ... )
+{
+   if ( level <= g_activeLevel )
+   {
+      va_list argptr;
+      fprintf( stderr, "%lld: ", getCurrentTimeMillis());
+      va_start( argptr, fmt );
+      vfprintf( stderr, fmt, argptr );
+      va_end( argptr );
+   }
+}
+
+static void wstFrameLog( const char *fmt, ... )
+{
+   if ( g_frameDebug )
+   {
+      va_list argptr;
+      fprintf( stderr, "%lld: ", getCurrentTimeMillis());
+      va_start( argptr, fmt );
+      vfprintf( stderr, fmt, argptr );
+      va_end( argptr );
+   }
 }
 
 static void wstUpdateResources( int type, bool add, long long v, int line )
@@ -578,6 +606,10 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
    {
       pthread_mutex_lock( &gCtx->mutex );
 
+      overlay->frameCount= 0;
+      overlay->bufferId= -1;
+      overlay->bufferIdPrev= -1;
+      overlay->bufferIdPrevPrev= -1;
       overlay->inUse= false;
       if ( planes->usedCount <= 0 )
       {
@@ -658,6 +690,97 @@ static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t ha
    }
 }
 
+static void wstVideoServerFreeBuffers( VideoServerConnection *conn, bool full )
+{
+   if ( full )
+   {
+      if ( conn->videoPlane->videoFrameNext.fbId )
+      {
+         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->videoFrameNext.fbId, __LINE__);
+         drmModeRmFB( gCtx->drmFd, conn->videoPlane->videoFrameNext.fbId );
+         conn->videoPlane->videoFrameNext.fbId= 0;
+         wstClosePrimeFDHandles( gCtx, conn->videoPlane->videoFrameNext.handle0, conn->videoPlane->videoFrameNext.handle1, __LINE__ );
+         conn->videoPlane->videoFrameNext.handle0= 0;
+         conn->videoPlane->videoFrameNext.handle1= 0;
+      }
+      if ( conn->videoPlane->videoFrameNext.fd0 >= 0 )
+      {
+         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->videoPlane->videoFrameNext.fd0, __LINE__);
+         close( conn->videoPlane->videoFrameNext.fd0 );
+         conn->videoPlane->videoFrameNext.fd0= -1;
+         if ( conn->videoPlane->videoFrameNext.fd1 >= 0 )
+         {
+            close( conn->videoPlane->videoFrameNext.fd1 );
+            conn->videoPlane->videoFrameNext.fd1= -1;
+         }
+         if ( conn->videoPlane->videoFrameNext.fd2 >= 0 )
+         {
+            close( conn->videoPlane->videoFrameNext.fd2 );
+            conn->videoPlane->videoFrameNext.fd2= -1;
+         }
+      }
+      if ( conn->videoPlane->fbId )
+      {
+         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbId, __LINE__);
+         drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbId );
+         conn->videoPlane->fbId= 0;
+         wstClosePrimeFDHandles( gCtx, conn->videoPlane->handle0, conn->videoPlane->handle1, __LINE__ );
+         conn->videoPlane->handle0= 0;
+         conn->videoPlane->handle1= 0;
+      }
+   }
+   if ( conn->videoPlane->fbIdPrev )
+   {
+      wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbIdPrev, __LINE__);
+      drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbIdPrev );
+      conn->videoPlane->fbIdPrev= 0;
+      wstClosePrimeFDHandles( gCtx, conn->videoPlane->handle0Prev, conn->videoPlane->handle1Prev, __LINE__ );
+      conn->videoPlane->handle0Prev= 0;
+      conn->videoPlane->handle1Prev= 0;
+   }
+   if ( conn->videoPlane->fbIdPrevPrev )
+   {
+      wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbIdPrevPrev, __LINE__);
+      drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbIdPrevPrev );
+      conn->videoPlane->fbIdPrevPrev= 0;
+      wstClosePrimeFDHandles( gCtx, conn->videoPlane->handle0PrevPrev, conn->videoPlane->handle1PrevPrev, __LINE__ );
+      conn->videoPlane->handle0PrevPrev= 0;
+      conn->videoPlane->handle1PrevPrev= 0;
+   }
+   if ( conn->videoPlane->prevFd0 >= 0 )
+   {
+      wstUpdateResources( WSTRES_FD_VIDEO, false, conn->videoPlane->prevFd0, __LINE__);
+      close( conn->videoPlane->prevFd0 );
+      conn->videoPlane->prevFd0= -1;
+      if ( conn->videoPlane->prevFd1 >= 0 )
+      {
+         close( conn->videoPlane->prevFd1 );
+         conn->videoPlane->prevFd1= -1;
+      }
+      if ( conn->videoPlane->prevFd2 >= 0 )
+      {
+         close( conn->videoPlane->prevFd2 );
+         conn->videoPlane->prevFd2= -1;
+      }
+   }
+   if ( conn->videoPlane->prevprevFd0 >= 0 )
+   {
+      wstUpdateResources( WSTRES_FD_VIDEO, false, conn->videoPlane->prevprevFd0, __LINE__);
+      close( conn->videoPlane->prevprevFd0 );
+      conn->videoPlane->prevprevFd0= -1;
+      if ( conn->videoPlane->prevprevFd1 >= 0 )
+      {
+         close( conn->videoPlane->prevprevFd1 );
+         conn->videoPlane->prevprevFd1= -1;
+      }
+      if ( conn->videoPlane->prevprevFd2 >= 0 )
+      {
+         close( conn->videoPlane->prevprevFd2 );
+         conn->videoPlane->prevprevFd2= -1;
+      }
+   }
+}
+
 static void wstVideoServerSendRefreshRate( VideoServerConnection *conn, int rate )
 {
    struct msghdr msg;
@@ -697,13 +820,52 @@ static void wstVideoServerSendRefreshRate( VideoServerConnection *conn, int rate
    }
 }
 
+static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bufferId )
+{
+   struct msghdr msg;
+   struct iovec iov[1];
+   unsigned char mbody[4+4];
+   int len;
+   int sentLen;
+
+   msg.msg_name= NULL;
+   msg.msg_namelen= 0;
+   msg.msg_iov= iov;
+   msg.msg_iovlen= 1;
+   msg.msg_control= 0;
+   msg.msg_controllen= 0;
+   msg.msg_flags= 0;
+
+   len= 0;
+   mbody[len++]= 'V';
+   mbody[len++]= 'S';
+   mbody[len++]= 6;
+   mbody[len++]= 'B';
+   len += wstPutU32( &mbody[4], bufferId );
+
+   iov[0].iov_base= (char*)mbody;
+   iov[0].iov_len= len;
+
+   do
+   {
+      sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+   }
+   while ( (sentLen < 0) && (errno == EINTR));
+
+   if ( sentLen == len )
+   {
+      FRAME("send release buffer %d to client", bufferId);
+      //fprintf(stderr,"%lld: TRACE: send release buffer %d\n", getCurrentTimeMillis(), buffIndex );
+   }
+}
+
 static void *wstVideoServerConnectionThread( void *arg )
 {
    VideoServerConnection *conn= (VideoServerConnection*)arg;
    struct msghdr msg;
    struct cmsghdr *cmsg;
    struct iovec iov[1];
-   unsigned char mbody[1+13*4];
+   unsigned char mbody[1+13*4+4];
    char cmbody[CMSG_SPACE(3*sizeof(int))];
    int len, rc;
    uint32_t fbId= 0;
@@ -714,6 +876,8 @@ static void *wstVideoServerConnectionThread( void *arg )
    int fd0, fd1, fd2;
    int offset0, offset1, offset2;
    int stride0, stride1, stride2;
+   int bufferId= 0;
+   int bufferIdRel;
 
    DEBUG("wstVideoServerConnectionThread: enter");
 
@@ -732,6 +896,32 @@ static void *wstVideoServerConnectionThread( void *arg )
       if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh != conn->refreshRate )
       {
          wstVideoServerSendRefreshRate( conn, gCtx->modeInfo->vrefresh );
+      }
+
+      /*
+       * Don't accept another frame from client if we have a frame pending
+       * the next display vertical interval
+       */
+      while ( conn->videoPlane->dirty )
+      {
+         usleep( 1000 );
+         if ( conn->threadStopRequested )
+         {
+            break;
+         }
+      }
+
+      /*
+       * Send buffer release to client
+       */
+      pthread_mutex_lock( &gMutex );
+      bufferIdRel= conn->videoPlane->bufferIdPrevPrev;
+      conn->videoPlane->bufferIdPrevPrev= -1;
+      pthread_mutex_unlock( &gMutex );
+
+      if ( bufferIdRel != -1 )
+      {
+         wstVideoServerSendBufferRelease( conn, bufferIdRel );
       }
 
       iov[0].iov_base= (char*)mbody;
@@ -798,6 +988,12 @@ static void *wstVideoServerConnectionThread( void *arg )
                         stride1= (int)wstGetU32( mbody+41 );
                         offset2= (int)wstGetU32( mbody+45 );
                         stride2= (int)wstGetU32( mbody+49 );
+
+                        if ( len >= (1+13*4+4) )
+                        {
+                           bufferId= (int)wstGetU32( mbody+53 );
+                        }
+                        FRAME("got frame %d buffer %d", conn->videoPlane->frameCount, bufferId);
 
                         TRACE2("got frame fd %d,%d,%d (%dx%d) %X (%d, %d, %d, %d) off(%d, %d, %d) stride(%d, %d, %d)",
                                fd0, fd1, fd2, frameWidth, frameHeight, frameFormat, rectX, rectY, rectW, rectH,
@@ -880,6 +1076,8 @@ static void *wstVideoServerConnectionThread( void *arg )
                            pthread_mutex_lock( &gMutex );
                            if ( conn->videoPlane->videoFrameNext.fbId )
                            {
+                              FRAME("Unexpected drop: dropping frame %d", conn->videoPlane->frameCount);
+                              ++conn->videoPlane->frameCount;
                               DEBUG("dropping fbid %d", conn->videoPlane->videoFrameNext.fbId);
                               wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->videoFrameNext.fbId, __LINE__);
                               drmModeRmFB( gCtx->drmFd, conn->videoPlane->videoFrameNext.fbId );
@@ -916,6 +1114,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                            conn->videoPlane->videoFrameNext.rectY= rectY+rectSkipY;
                            conn->videoPlane->videoFrameNext.rectW= rectW-rectSkipX;
                            conn->videoPlane->videoFrameNext.rectH= rectH-rectSkipY;
+                           conn->videoPlane->videoFrameNext.bufferId= bufferId;
                            gCtx->dirty= true;
                            conn->videoPlane->dirty= true;
                            pthread_mutex_unlock( &gMutex );
@@ -938,6 +1137,13 @@ static void *wstVideoServerConnectionThread( void *arg )
                pthread_mutex_lock( &gMutex );
                gCtx->dirty= true;
                conn->videoPlane->dirty= true;
+               pthread_mutex_unlock( &gMutex );
+               break;
+            case 'S':
+               DEBUG("got flush video plane %d", conn->videoPlane->plane->plane_id);
+               FRAME("got flush video plane %d", conn->videoPlane->plane->plane_id);
+               pthread_mutex_lock( &gMutex );
+               wstVideoServerFreeBuffers( conn, false );
                pthread_mutex_unlock( &gMutex );
                break;
             default:
@@ -973,49 +1179,9 @@ exit:
                            0, // fb rect y
                            gCtx->modeInfo->hdisplay<<16,
                            gCtx->modeInfo->hdisplay<<16 );
-      if ( conn->videoPlane->videoFrameNext.fbId )
-      {
-         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->videoFrameNext.fbId, __LINE__);
-         drmModeRmFB( gCtx->drmFd, conn->videoPlane->videoFrameNext.fbId );
-         conn->videoPlane->videoFrameNext.fbId= 0;
-         wstClosePrimeFDHandles( gCtx, conn->videoPlane->videoFrameNext.handle0, conn->videoPlane->videoFrameNext.handle1, __LINE__ );
-         conn->videoPlane->videoFrameNext.handle0= 0;
-         conn->videoPlane->videoFrameNext.handle1= 0;
-      }
-      if ( conn->videoPlane->fbId )
-      {
-         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbId, __LINE__);
-         drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbId );
-         conn->videoPlane->fbId= 0;
-         wstClosePrimeFDHandles( gCtx, conn->videoPlane->handle0, conn->videoPlane->handle1, __LINE__ );
-         conn->videoPlane->handle0= 0;
-         conn->videoPlane->handle1= 0;
-      }
-      if ( conn->videoPlane->fbIdPrev )
-      {
-         wstUpdateResources( WSTRES_FB_VIDEO, false, conn->videoPlane->fbIdPrev, __LINE__);
-         drmModeRmFB( gCtx->drmFd, conn->videoPlane->fbIdPrev );
-         conn->videoPlane->fbIdPrev= 0;
-         wstClosePrimeFDHandles( gCtx, conn->videoPlane->handle0Prev, conn->videoPlane->handle1Prev, __LINE__ );
-         conn->videoPlane->handle0Prev= 0;
-         conn->videoPlane->handle1Prev= 0;
-      }
-      if ( conn->videoPlane->prevFd0 >= 0 )
-      {
-         wstUpdateResources( WSTRES_FD_VIDEO, false, conn->videoPlane->prevFd0, __LINE__);
-         close( conn->videoPlane->prevFd0 );
-         conn->videoPlane->prevFd0= -1;
-         if ( conn->videoPlane->prevFd1 >= 0 )
-         {
-            close( conn->videoPlane->prevFd1 );
-            conn->videoPlane->prevFd1= -1;
-         }
-         if ( conn->videoPlane->prevFd2 >= 0 )
-         {
-            close( conn->videoPlane->prevFd2 );
-            conn->videoPlane->prevFd2= -1;
-         }
-      }
+
+      wstVideoServerFreeBuffers( conn, true );
+
       pthread_mutex_unlock( &gCtx->mutex );
 
       wstOverlayFree( &gCtx->overlayPlanes, conn->videoPlane );
@@ -1266,6 +1432,11 @@ static bool wstInitVideoServer( VideoServerCtx *server )
 
 exit:
 
+   if ( !result )
+   {
+      server->addr.sun_path[0]= '\0';
+      server->lock[0]= '\0';
+   }
    return result;
 }
 
@@ -1300,7 +1471,9 @@ static void wstTermVideoServer( VideoServerCtx *server )
          VideoServerConnection *conn= server->connections[i];
          if ( conn )
          {
+            pthread_mutex_unlock( &gMutex );
             wstDestroyVideoServerConnection( conn );
+            pthread_mutex_lock( &gMutex );
             server->connections[i]= 0;
          }
       }
@@ -1925,9 +2098,10 @@ static WstGLCtx *wstInitCtx( void )
                         newPlane->zOrder= n + zpos*16+((isVideo && !isGraphics) ? 0 : 256);
                         newPlane->inUse= false;
                         newPlane->crtc_id= ctx->enc->crtc_id;
-                        newPlane->fd0= newPlane->prevFd0= -1;
-                        newPlane->fd1= newPlane->prevFd1= -1;
-                        newPlane->fd2= newPlane->prevFd2= -1;
+                        newPlane->fd0= newPlane->prevFd0= newPlane->prevprevFd0= -1;
+                        newPlane->fd1= newPlane->prevFd1= newPlane->prevprevFd1= -1;
+                        newPlane->fd2= newPlane->prevFd2= newPlane->prevprevFd2= -1;
+                        newPlane->bufferId= newPlane->bufferIdPrev= newPlane->bufferIdPrevPrev= -1;
                         TRACE3("plane zorder %d primary %d overlay %d video %d gfx %d crtc_id %d",
                                newPlane->zOrder, isPrimary, isOverlay, isVideo, isGraphics, newPlane->crtc_id);
                         if ( ctx->haveAtomic )
@@ -2295,14 +2469,14 @@ static void wstSelectMode( WstGLCtx *ctx, int width, int height )
 static void *wstRefreshThread( void *arg )
 {
    WstGLCtx *ctx= (WstGLCtx*)arg;
-   long long start, end, adjust, delay;
+   long long delay;
+   long long refreshInterval= 0;
 
    DEBUG("refresh thread start");
    ctx->refreshThreadStarted= true;
    while( !ctx->refreshThreadStopRequested )
    {
-      start= getMonotonicTimeMicros();
-      delay= 16667;
+      delay= 16667LL;
 
       if ( !ctx->conn )
       {
@@ -2314,7 +2488,8 @@ static void *wstRefreshThread( void *arg )
          pthread_mutex_lock( &gMutex );
          if ( ctx->modeInfo->vrefresh )
          {
-            delay= 1000000/ctx->modeInfo->vrefresh;
+            refreshInterval= (1000000LL+(ctx->modeInfo->vrefresh/2))/ctx->modeInfo->vrefresh;
+            delay= refreshInterval;
          }
 
          if ( ctx->dirty )
@@ -2322,17 +2497,19 @@ static void *wstRefreshThread( void *arg )
             ctx->dirty= false;
             TRACE3("refresh thread calling wstSwapDRMBuffers");
             wstSwapDRMBuffers( ctx );
+
+            /*
+             * Align with 1/4 vertical interval lead time
+             */
+            delay= 3LL*refreshInterval/4LL;
          }
          pthread_mutex_unlock( &gMutex );
       }
 
-      end= getMonotonicTimeMicros();
-      adjust= (end-start);
-      if ( (adjust > 0) && (adjust < delay) )
+      if ( delay )
       {
-         delay -= adjust;
+         usleep( delay );
       }
-      usleep( delay );
    }
    ctx->refreshThreadStarted= false;
    DEBUG("refresh thread exit");
@@ -2587,21 +2764,31 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                int rectY= iter->videoFrameNext.rectY;
                int rectW= iter->videoFrameNext.rectW;
                int rectH= iter->videoFrameNext.rectH;
+               int bufferId= iter->videoFrameNext.bufferId;
                uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
                int modeWidth, modeHeight, gfxWidth, gfxHeight;
 
+               iter->fbIdPrevPrev= iter->fbIdPrev;
+               iter->handle0PrevPrev= iter->handle0Prev;
+               iter->handle1PrevPrev= iter->handle1Prev;
                iter->fbIdPrev= iter->fbId;
                iter->handle0Prev= iter->handle0;
                iter->handle1Prev= iter->handle1;
+               iter->prevprevFd0= iter->prevFd0;
+               iter->prevprevFd1= iter->prevFd1;
+               iter->prevprevFd2= iter->prevFd2;
                iter->prevFd0= iter->fd0;
                iter->prevFd1= iter->fd1;
                iter->prevFd2= iter->fd2;
+               iter->bufferIdPrevPrev= iter->bufferIdPrev;
+               iter->bufferIdPrev= iter->bufferId;
                iter->fbId= fbId;
                iter->handle0= handle0;
                iter->handle1= handle1;
                iter->fd0= fd0;
                iter->fd1= fd1;
                iter->fd2= fd2;
+               iter->bufferId= bufferId;
                iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
 
                iter->videoFrameNext.fbId= 0;
@@ -2700,15 +2887,26 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
                                      iter->planeProps->count_props, iter->planePropRes,
                                      "IN_FENCE_FD", -1 );
+
+               FRAME("commit frame %d buffer %d", iter->frameCount, iter->bufferId);
+               ++iter->frameCount;
             }
             else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
             {
+               iter->fbIdPrevPrev= iter->fbIdPrev;
+               iter->handle0PrevPrev= iter->handle0Prev;
+               iter->handle1PrevPrev= iter->handle1Prev;
                iter->fbIdPrev= iter->fbId;
                iter->handle0Prev= iter->handle0;
                iter->handle1Prev= iter->handle1;
+               iter->prevprevFd0= iter->prevFd0;
+               iter->prevprevFd1= iter->prevFd1;
+               iter->prevprevFd2= iter->prevFd2;
                iter->prevFd0= iter->fd0;
                iter->prevFd1= iter->fd1;
                iter->prevFd2= iter->fd2;
+               iter->bufferIdPrevPrev= iter->bufferIdPrev;
+               iter->bufferIdPrev= iter->bufferId;
 
                iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
                DEBUG("hiding video plane %d", iter->plane->plane_id);
@@ -2727,6 +2925,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                iter->fd0= -1;
                iter->fd1= -1;
                iter->fd2= -1;
+               iter->bufferId= -1;
                iter->videoFrameNext.hide= false;
                iter->videoFrameNext.hidden= true;
             }
@@ -2961,15 +3160,24 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx )
                   int rectY= iter->videoFrameNext.rectY;
                   int rectW= iter->videoFrameNext.rectW;
                   int rectH= iter->videoFrameNext.rectH;
+                  int bufferId= iter->videoFrameNext.bufferId;
                   uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
                   int modeWidth, modeHeight, gfxWidth, gfxHeight;
 
+                  iter->fbIdPrevPrev= iter->fbIdPrev;
+                  iter->handle0PrevPrev= iter->handle0Prev;
+                  iter->handle1PrevPrev= iter->handle1Prev;
                   iter->fbIdPrev= iter->fbId;
                   iter->handle0Prev= iter->handle0;
                   iter->handle1Prev= iter->handle1;
+                  iter->prevprevFd0= iter->prevFd0;
+                  iter->prevprevFd1= iter->prevFd1;
+                  iter->prevprevFd2= iter->prevFd2;
                   iter->prevFd0= iter->fd0;
                   iter->prevFd1= iter->fd1;
                   iter->prevFd2= iter->fd2;
+                  iter->bufferIdPrevPrev= iter->bufferIdPrev;
+                  iter->bufferIdPrev= iter->bufferId;
 
                   iter->videoFrameNext.fbId= 0;
                   iter->videoFrameNext.hide= false;
@@ -3046,6 +3254,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx )
                      iter->fd0= fd0;
                      iter->fd1= fd1;
                      iter->fd2= fd2;
+                     iter->bufferId= bufferId;
                   }
                   else
                   {
@@ -3070,12 +3279,20 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx )
                }
                else if ( iter->videoFrameNext.hide && !iter->videoFrameNext.hidden )
                {
+                  iter->fbIdPrevPrev= iter->fbIdPrev;
+                  iter->handle0PrevPrev= iter->handle0Prev;
+                  iter->handle1PrevPrev= iter->handle1Prev;
                   iter->fbIdPrev= iter->fbId;
                   iter->handle0Prev= iter->handle0;
                   iter->handle1Prev= iter->handle1;
+                  iter->prevprevFd0= iter->prevFd0;
+                  iter->prevprevFd1= iter->prevFd1;
+                  iter->prevprevFd2= iter->prevFd2;
                   iter->prevFd0= iter->fd0;
                   iter->prevFd1= iter->fd1;
                   iter->prevFd2= iter->fd2;
+                  iter->bufferIdPrevPrev= iter->bufferIdPrev;
+                  iter->bufferIdPrev= iter->bufferId;
 
                   plane= iter->plane;
                   plane->crtc_id= ctx->enc->crtc_id;
@@ -3103,6 +3320,7 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx )
                   iter->fd0= -1;
                   iter->fd1= -1;
                   iter->fd2= -1;
+                  iter->bufferId= -1;
                   iter->videoFrameNext.hide= true;
                   iter->videoFrameNext.hidden= true;
                }
@@ -3167,28 +3385,28 @@ done:
          {
             iter->dirty= false;
             iter->videoFrameNext.hidden= false;
-            if ( iter->fbIdPrev )
+            if ( iter->fbIdPrevPrev )
             {
-               wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrev, __LINE__);
-               drmModeRmFB( ctx->drmFd, iter->fbIdPrev );
-               iter->fbIdPrev= 0;
-               wstClosePrimeFDHandles( ctx, iter->handle0Prev, iter->handle1Prev, __LINE__ );
-               iter->handle0Prev= 0;
-               iter->handle1Prev= 0;
-               if ( iter->prevFd0 >= 0 )
+               wstUpdateResources( WSTRES_FB_VIDEO, false, iter->fbIdPrevPrev, __LINE__);
+               drmModeRmFB( ctx->drmFd, iter->fbIdPrevPrev );
+               iter->fbIdPrevPrev= 0;
+               wstClosePrimeFDHandles( ctx, iter->handle0PrevPrev, iter->handle1PrevPrev, __LINE__ );
+               iter->handle0PrevPrev= 0;
+               iter->handle1PrevPrev= 0;
+               if ( iter->prevprevFd0 >= 0 )
                {
-                  wstUpdateResources( WSTRES_FD_VIDEO, false, iter->prevFd0, __LINE__);
-                  close( iter->prevFd0 );
-                  iter->prevFd0= -1;
-                  if ( iter->prevFd1 >= 0 )
+                  wstUpdateResources( WSTRES_FD_VIDEO, false, iter->prevprevFd0, __LINE__);
+                  close( iter->prevprevFd0 );
+                  iter->prevprevFd0= -1;
+                  if ( iter->prevprevFd1 >= 0 )
                   {
-                     close( iter->prevFd1 );
-                     iter->prevFd1= -1;
+                     close( iter->prevprevFd1 );
+                     iter->prevprevFd1= -1;
                   }
-                  if ( iter->prevFd2 >= 0 )
+                  if ( iter->prevprevFd2 >= 0 )
                   {
-                     close( iter->prevFd2 );
-                     iter->prevFd2= -1;
+                     close( iter->prevprevFd2 );
+                     iter->prevprevFd2= -1;
                   }
                }
             }
@@ -3395,6 +3613,13 @@ WstGLCtx* WstGLInit()
    {
       int level= atoi( env );
       g_activeLevel= level;
+   }
+
+   env= getenv( "WESTEROS_GL_DEBUG_FRAME" );
+   if ( env )
+   {
+      int level= atoi( env );
+      g_frameDebug= (level > 0 ? true : false);
    }
 
    /*
