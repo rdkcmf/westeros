@@ -49,9 +49,6 @@ typedef struct _WstVideoClientConnection
    int serverRefreshRate;
    gint64 serverRefreshPeriod;
    gint64 lastSendTime;
-   int buffPrev;
-   int buffCurr;
-   int buffNext;
 } WstVideoClientConnection;
 
 typedef struct _WstPlaneInfo
@@ -81,12 +78,14 @@ typedef struct _WstBufferInfo
    WstPlaneInfo planeInfo[WST_MAX_PLANES];
    WstGemBuffer gemBuf;
    GstBuffer *gstbuf;
+   int bufferId;
    bool locked;
    int planeCount;
    int fd;
    void *start;
    int capacity;
    gint64 frameTime;
+   bool drop;
 } WstBufferInfo;
 
 struct _GstWesterosSinkSoc
@@ -124,6 +123,7 @@ struct _GstWesterosSinkSoc
    int numBuffersIn;
    WstBufferInfo *inBuffers;
    int numBuffersOut;
+   int bufferIdOutBase;
    WstBufferInfo *outBuffers;
 
    int nextFrameFd;
