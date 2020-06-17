@@ -145,6 +145,8 @@ struct _GstWesterosSinkSoc
    gboolean useCaptureOnly;
    gboolean captureEnabled;
    int framesBeforeHideVideo;
+   gint64 prevFrameTimeGfx;
+   gint64 prevFramePTSGfx;
    WstVideoClientConnection *conn;
    int videoX;
    int videoY;
@@ -157,6 +159,10 @@ struct _GstWesterosSinkSoc
    gboolean useDmabufOutput;
    int dwMode;
    int drmFd;
+
+   #ifdef USE_GST1
+   GstPadChainFunction chainOrg;
+   #endif
 
    #ifdef GLIB_VERSION_2_32 
    GMutex mutex;

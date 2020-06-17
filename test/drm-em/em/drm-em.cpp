@@ -310,6 +310,10 @@ typedef struct _EMDevice
          int frameHeightSrc;
          int frameWidth;
          int frameHeight;
+         int readyFrameCount;
+         int outputFrameCount;
+         bool needBaseTime;
+         struct timeval baseTime;
       } v4l2;
       struct _gamepad
       {
@@ -2211,6 +2215,7 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                         errno= EINVAL;
                         break;
                   }
+                  dev->dev.v4l2.needBaseTime= true;
                   break;
                case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
                   switch( reqbuf->memory )
@@ -2353,6 +2358,12 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                   {
                      int i;
                      buf->flags |= V4L2_BUF_FLAG_QUEUED;
+                     if ( dev->dev.v4l2.needBaseTime )
+                     {
+                        dev->dev.v4l2.needBaseTime= false;
+                        dev->dev.v4l2.baseTime= buf->timestamp;
+                     }
+                     ++dev->dev.v4l2.readyFrameCount;
                      dev->dev.v4l2.inputBuffers[buf->index].flags |= V4L2_BUF_FLAG_QUEUED;
                      i= ((buf->index+1) % dev->dev.v4l2.countInputBuffers);
                      while( i != buf->index )
@@ -2465,18 +2476,38 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                   rc= -1;
                   if ( dev->dev.v4l2.outputStreaming )
                   {
-                     for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+                     bool gotFrame= false;
+                     while( dev->dev.v4l2.outputStreaming && !gotFrame )
                      {
-                        if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+                        if ( dev->dev.v4l2.readyFrameCount > 0 )
+                        {
+                           --dev->dev.v4l2.readyFrameCount;
+                           for( int i= 0; i < dev->dev.v4l2.countOutputBuffers; ++i )
+                           {
+                              if ( dev->dev.v4l2.outputBuffers[i].flags & V4L2_BUF_FLAG_DONE )
+                              {
+                                 if ( dev->dev.v4l2.outputStreaming )
+                                 {
+                                    time_t sec;
+                                    suseconds_t usec;
+                                    long long time;
+                                    time= dev->dev.v4l2.baseTime.tv_sec * 1000000LL + dev->dev.v4l2.baseTime.tv_usec;
+                                    time += ((dev->dev.v4l2.outputFrameCount * 1000000LL) / dev->ctx->simpleVideoDecoderMain.videoFrameRate);
+                                    dev->dev.v4l2.outputBuffers[i].flags &= ~(V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE);
+                                    *buf= dev->dev.v4l2.outputBuffers[i];
+                                    buf->timestamp.tv_sec= (time / 1000000LL);
+                                    buf->timestamp.tv_usec= (time % 1000000LL);
+                                    ++dev->dev.v4l2.outputFrameCount;
+                                    gotFrame= true;
+                                    rc= 0;
+                                 }
+                                 break;
+                              }
+                           }
+                        }
+                        if ( !gotFrame )
                         {
                            usleep( 16000 );
-                           if ( dev->dev.v4l2.outputStreaming )
-                           {
-                              dev->dev.v4l2.outputBuffers[i].flags &= ~(V4L2_BUF_FLAG_QUEUED | V4L2_BUF_FLAG_DONE);
-                              *buf= dev->dev.v4l2.outputBuffers[i];
-                              rc= 0;
-                           }
-                           break;
                         }
                      }
                   }
@@ -2506,6 +2537,7 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                   break;
                case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
                   dev->dev.v4l2.outputStreaming= true;
+                  dev->dev.v4l2.outputFrameCount= 0;
                   rc= 0;
                   break;
                default:
@@ -2529,6 +2561,7 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                   break;
                case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
                   dev->dev.v4l2.outputStreaming= false;
+                  dev->dev.v4l2.readyFrameCount= 0;
                   rc= 0;
                   break;
                default:
@@ -3083,6 +3116,13 @@ void drmFreeVersion( drmVersionPtr ver )
       }
       free( ver );
    }
+}
+
+int drmWaitVBlank( int fd, drmVBlankPtr vbl )
+{
+   TRACE1("drmWaitVBlank");
+
+   usleep( 16667 );
 }
 
 drmModeResPtr drmModeGetResources(int fd)

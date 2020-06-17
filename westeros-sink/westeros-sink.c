@@ -1229,6 +1229,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                                         &segmentFormat, &segmentStart, 
                                         NULL, &segmentPosition);
             #endif
+            gst_event_copy_segment( event, &sink->segment );
             
             GST_LOG_OBJECT(sink, 
                            "segment: start %" GST_TIME_FORMAT ", position %" GST_TIME_FORMAT,
