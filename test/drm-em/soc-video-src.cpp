@@ -426,7 +426,7 @@ static void emVideoSrcLoop( GstPad *pad )
             src->needSegment= false;
          }
 
-         nanoTime= ((EMSimpleVideoDecoderGetBasePTS(src->dec)/90000.0)+(src->frameNumber/frameRate))*GST_SECOND;
+         nanoTime= src->segStartTime+((EMSimpleVideoDecoderGetBasePTS(src->dec)/90000.0)+(src->frameNumber/frameRate))*GST_SECOND;
 
          GST_BUFFER_PTS(buffer)= nanoTime;
 
