@@ -833,7 +833,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          }
          LOCK(sink)
          prevPTS= sink->currentPTS;
-         sink->currentPTS= ((nanoTime * 90000LL)/GST_SECOND);
+         sink->currentPTS= ((nanoTime * 90000LL + GST_SECOND/2)/GST_SECOND);
          if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
          {
             sink->firstPTS= sink->currentPTS;
@@ -2743,6 +2743,11 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       gint64 frameTime= sink->soc.outBuffers[buffIndex].frameTime;
       gint64 interval= (conn->lastSendTime != -1LL) ? frameTime-conn->lastSendTime : 0LL;
 
+      if ( conn->serverRefreshPeriod && (interval >= 3*conn->serverRefreshPeriod) )
+      {
+         conn->lastSendTime= -1LL;
+      }
+
       again:
 
       wstProcessMessagesVideoClientConnection( conn );
@@ -3259,7 +3264,7 @@ capture_start:
 
             gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
-            gint64 currentPTS= ((frameTime * 90000LL)/GST_SECOND);
+            gint64 currentPTS= ((frameTime * 90000LL + GST_SECOND/2)/GST_SECOND);
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
 
             sink->soc.outBuffers[buffIndex].frameTime= currFramePTS;
@@ -3532,6 +3537,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
       videoPlaying= sink->soc.videoPlaying;
       eosEventSeen= sink->eosEventSeen;
       UNLOCK(sink)
+
       if ( videoPlaying && eosEventSeen && (outputFrameCount > 0) && (outputFrameCount == count) )
       {
          --eosCountDown;
