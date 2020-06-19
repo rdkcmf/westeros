@@ -3120,9 +3120,29 @@ void drmFreeVersion( drmVersionPtr ver )
 
 int drmWaitVBlank( int fd, drmVBlankPtr vbl )
 {
+   int rc= 0;
+
    TRACE1("drmWaitVBlank");
 
    usleep( 16667 );
+
+   if ( vbl )
+   {
+      int rc;
+      struct timespec tm;
+      rc= clock_gettime( CLOCK_MONOTONIC, &tm );
+      if ( !rc )
+      {
+         vbl->reply.tval_sec= tm.tv_sec;
+         vbl->reply.tval_usec= tm.tv_nsec/1000LL;
+      }
+      else
+      {
+         ERROR("clock_gettime failed: rc %d errno %d\n", rc, errno);
+      }
+   }
+
+   return rc;
 }
 
 drmModeResPtr drmModeGetResources(int fd)

@@ -2655,6 +2655,7 @@ static void *wstRefreshThread( void *arg )
       }
 
       vblankTime += refreshInterval;
+
       FRAME("refresh: vblankTime %lld", vblankTime);
 
       if ( ctx->conn && ctx->modeInfo )
@@ -2686,7 +2687,11 @@ static void *wstRefreshThread( void *arg )
          int rc;
 
          rc= drmWaitVBlank( ctx->drmFd, &vbl );
-         if ( rc )
+         if ( !rc )
+         {
+            vblankTime= vbl.reply.tval_sec*1000000LL + vbl.reply.tval_usec;
+         }
+         else
          {
             TRACE3("drmWaitVBlank failed: rc %d errno %d", rc, errno);
          }
