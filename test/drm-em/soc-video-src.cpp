@@ -91,7 +91,7 @@ static void em_video_src_init(EMVideoSrc* src)
 
    pthread_mutex_init( &src->mutex, 0 );
    src->paused= true;
-   src->frameNumber= 0;
+   src->frameNumber= -1;
    src->needSegment= true;
    src->needStep= false;
    src->segRate= 1.0;
@@ -121,7 +121,7 @@ static GstStateChangeReturn emVideoSrcChangeState(GstElement *element, GstStateC
    {
       case GST_STATE_CHANGE_READY_TO_PAUSED:
          pthread_mutex_lock( &src->mutex );
-         src->frameNumber= 0;
+         src->frameNumber= -1;
          src->needSegment= true;
          pthread_mutex_unlock( &src->mutex );
          break;
@@ -362,17 +362,19 @@ static void emVideoSrcLoop( GstPad *pad )
    float bitRate;
    long long nanoTime;
    bool needStep= false;
+   bool wasPaused= false;
 
    pthread_mutex_lock( &src->mutex );
    if ( src->paused  )
    {
-      needStep= src->needStep;
+      needStep= (src->needStep || !wasPaused);
       if ( needStep )
       {
          ++src->frameNumber;
       }
       src->needStep= false;
    }
+   wasPaused= src->paused;
    if ( !src->paused || src->needSegment || needStep )
    {
       frameRate= EMSimpleVideoDecoderGetFrameRate( src->dec );
@@ -521,7 +523,7 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
          gst_pad_push_event( pad, gst_event_new_flush_start() );
          gst_pad_push_event( pad, gst_event_new_flush_stop(TRUE) );
          gst_pad_push_event( pad, event );
-         src->frameNumber= 0;
+         src->frameNumber= -1;
          src->needSegment= true;
          GST_PAD_STREAM_UNLOCK(pad);
       }
