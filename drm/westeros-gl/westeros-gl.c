@@ -1150,11 +1150,32 @@ static void *wstVideoServerConnectionThread( void *arg )
                         else
                         {
                            ERROR("wstVideoServerConnectionThread: drmModeAddFB2 failed: rc %d errno %d", rc, errno);
+                           wstClosePrimeFDHandles( gCtx, handle0, handle1, __LINE__ );
+                           wstUpdateResources( WSTRES_FD_VIDEO, false, fd0, __LINE__);
+                           close( fd0 );
+                           if ( fd1 >= 0 )
+                           {
+                              close( fd1 );
+                           }
+                           if ( fd2 >= 0 )
+                           {
+                              close( fd2 );
+                           }
                         }
                      }
                      else
                      {
                         ERROR("wstVideoServerConnectionThread: drmPrimeFDToHandle failed: rc %d errno %d", rc, errno);
+                        wstUpdateResources( WSTRES_FD_VIDEO, false, fd0, __LINE__);
+                        close( fd0 );
+                        if ( fd1 >= 0 )
+                        {
+                           close( fd1 );
+                        }
+                        if ( fd2 >= 0 )
+                        {
+                           close( fd2 );
+                        }
                      }
                   }
                }
@@ -3102,16 +3123,19 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                iter->bufferIdPrevPrev= iter->bufferIdPrev;
                iter->bufferIdPrev= iter->bufferId;
 
-               iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
-               DEBUG("hiding video plane %d", iter->plane->plane_id);
+               if ( iter->fbId != 0 )
+               {
+                  iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
+                  DEBUG("hiding video plane %d", iter->plane->plane_id);
 
-               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                     iter->planeProps->count_props, iter->planePropRes,
-                                     "FB_ID", 0 );
+                  wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                        iter->planeProps->count_props, iter->planePropRes,
+                                        "FB_ID", 0 );
 
-               wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                     iter->planeProps->count_props, iter->planePropRes,
-                                     "CRTC_ID", 0 );
+                  wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                        iter->planeProps->count_props, iter->planePropRes,
+                                        "CRTC_ID", 0 );
+               }
 
                iter->fbId= 0;
                iter->handle0= 0;
@@ -3120,8 +3144,16 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                iter->fd1= -1;
                iter->fd2= -1;
                iter->bufferId= -1;
-               iter->videoFrameNext.hide= false;
-               iter->videoFrameNext.hidden= true;
+               if ( iter->fbIdPrev )
+               {
+                  ctx->dirty= true;
+                  iter->dirty= true;
+               }
+               else
+               {
+                  iter->videoFrameNext.hide= false;
+                  iter->videoFrameNext.hidden= true;
+               }
             }
          }
 
@@ -3562,7 +3594,7 @@ done:
       WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
       while( iter )
       {
-         if ( (iter->dirty && iter->readyToFlip) || iter->videoFrameNext.hidden )
+         if ( (iter->dirty && iter->readyToFlip && !iter->videoFrameNext.hide) || iter->videoFrameNext.hidden )
          {
             iter->dirty= false;
             iter->readyToFlip= false;
