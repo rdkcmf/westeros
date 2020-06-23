@@ -438,6 +438,7 @@ typedef struct _WstContext
    PFNEGLUNBINDWAYLANDDISPLAYWL eglUnbindWaylandDisplayWL;
    PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL;
    PFNGETDEVICEBUFFERFROMRESOURCE getDeviceBufferFromResource;
+   bool haveRepeaterSupport;
    bool canRemoteClone;
    PFNREMOTEBEGIN remoteBegin;
    PFNREMOTEEND remoteEnd;
@@ -1381,6 +1382,7 @@ bool WstCompositorSetIsEmbedded( WstCompositor *wctx, bool isEmbedded )
             ctx->nestedDisplayName= strdup(var);
             ctx->hasVpcBridge= true;
          }
+         wstCompositorCheckForRepeaterSupport( ctx );
       }
                
       pthread_mutex_unlock( &ctx->mutex );
@@ -3999,12 +4001,15 @@ static bool wstCompositorCheckForRepeaterSupport( WstContext *ctx )
 
    #if defined (WESTEROS_PLATFORM_RPI)
    ctx->mustInitRendererModule= true;
-   if ( ctx->rendererModule )
+   if ( !ctx->isEmbedded )
    {
-      free( (void*)ctx->rendererModule );
-      ctx->rendererModule= 0;
+      if ( ctx->rendererModule )
+      {
+         free( (void*)ctx->rendererModule );
+         ctx->rendererModule= 0;
+      }
+      ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
    }
-   ctx->rendererModule= strdup("libwesteros_render_gl.so.0");
    ctx->getDeviceBufferFromResource= (PFNGETDEVICEBUFFERFROMRESOURCE)vc_dispmanx_get_handle_from_wl_buffer;
    #else
    void *module;
@@ -4046,6 +4051,7 @@ exit:
    #endif
 
    INFO("checking repeating composition supported: %s", (supportsRepeater ? "yes" : "no") );
+   ctx->haveRepeaterSupport= supportsRepeater;
 
    return supportsRepeater;
 }
@@ -8299,7 +8305,7 @@ static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resou
          {
             wl_vpc_surface_set_geometry( vpcSurface->vpcSurfaceNested, x, y, width, height );
          }
-         else
+         if ( surface->compositor->ctx->renderer )
          {
             WstRendererSurfaceSetGeometry( surface->compositor->ctx->renderer, surface->surface, x, y, width, height );
          }
@@ -8394,7 +8400,7 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
          {
             DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPathEffective );
             vpcSurface->useHWPathNext= useHWPathEffective;
-            if ( vpcSurface->videoPathSet )
+            if ( vpcSurface->videoPathSet && ctx->haveRepeaterSupport )
             {
                vpcSurface->pathTransitionPending= true;
             }
