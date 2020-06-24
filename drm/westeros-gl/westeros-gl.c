@@ -996,7 +996,7 @@ static void *wstVideoServerConnectionThread( void *arg )
 
                      wstUpdateResources( WSTRES_FD_VIDEO, true, fd0, __LINE__);
                      frameWidth= wstGetU32( mbody+1 );
-                     frameHeight= wstGetU32( mbody+5);
+                     frameHeight= ((wstGetU32( mbody+5)+2) & ~1);
                      frameFormat= wstGetU32( mbody+9);
                      rectX= (int)wstGetU32( mbody+13 );
                      rectY= (int)wstGetU32( mbody+17 );
@@ -2715,6 +2715,10 @@ static void *wstRefreshThread( void *arg )
          else
          {
             TRACE3("drmWaitVBlank failed: rc %d errno %d", rc, errno);
+            if ( errno == 16 )
+            {
+               ERROR("drmWaitVBlank failed: rc %d errno %d - try running with 'export WESTEROS_GL_NO_VBLANK=1'", rc, errno);
+            }
          }
       }
       else

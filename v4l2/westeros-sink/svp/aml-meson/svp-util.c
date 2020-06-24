@@ -17,6 +17,9 @@
  * limitations under the License.
  */
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
 #include "../svp-util.h"
 
 enum vdec_dw_mode
@@ -120,6 +123,27 @@ struct aml_dec_params
    struct aml_vdec_cnt_infos cnt;
 };
 
+static int wstSVPConfigSysNode(const char* path, const char* value)
+{
+    int fd;
+    fd = open(path, O_RDWR);
+    if (fd < 0)
+    {
+        GST_ERROR("fail to open %s\n", path);
+        return -1;
+    }
+    if ( write(fd, value, strlen(value)) != strlen(value) )
+    {
+        GST_ERROR("fail to write %s to %s\n", value, path);
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    g_print("set sysnode %s to %s\n", path, value);
+
+    return 0;
+}
+
 static void wstSVPDecoderConfig( GstWesterosSink *sink )
 {
    int rc;
@@ -216,6 +240,33 @@ static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
             {
                sink->soc.useDmabufOutput= TRUE;
                wstSVPDecoderConfig( sink );
+            }
+
+            #define CODEC_MM_TVP "/sys/class/codec_mm/tvp_enable"
+            if ( sink->soc.secureVideo )
+            {
+               int frameWidth, frameHeight;
+               frameWidth= sink->soc.frameWidth;
+               frameHeight= sink->soc.frameHeight;
+
+               g_print("secure video %dx%d\n", frameWidth, frameHeight);
+               if ( (frameWidth > 1920) || (frameHeight > 1080) )
+               {
+                  wstSVPConfigSysNode(CODEC_MM_TVP, "2");
+               }
+               else if (frameWidth == 0 || frameHeight == 0)
+               {
+                  wstSVPConfigSysNode(CODEC_MM_TVP, "2");
+               }
+               else
+               {
+                  wstSVPConfigSysNode(CODEC_MM_TVP, "1");
+               }
+            }
+            else
+            {
+               g_print("non-secure video\n");
+               wstSVPConfigSysNode(CODEC_MM_TVP, "0");
             }
 
             memset (&control, 0, sizeof (control) );
