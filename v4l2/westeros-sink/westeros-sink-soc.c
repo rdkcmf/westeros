@@ -187,7 +187,7 @@ static GstFlowReturn wstChain(GstPad *pad, GstObject *parent, GstBuffer *buf)
       pts= GST_BUFFER_PTS(buf);
       if ( pts < sink->segment.start )
       {
-         GST_LOG("wstChain: accept buf %p pts %lld segment start %lld\n", buf, pts, sink->segment.start);
+         GST_LOG("wstChain: accept buf %p pts %lld segment start %lld", buf, pts, sink->segment.start);
          gst_westeros_sink_soc_render( sink, buf );
       }
    }
@@ -746,7 +746,10 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                frameSizeChange= true;
             }
-            sink->soc.frameWidth= width;
+            if ( (sink->soc.frameWidth == -1) || (sink->soc.hasEvents == FALSE) )
+            {
+               sink->soc.frameWidth= width;
+            }
          }
          if ( gst_structure_get_int( structure, "height", &height ) )
          {
@@ -754,7 +757,10 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                frameSizeChange= true;
             }
-            sink->soc.frameHeight= height;
+            if ( (sink->soc.frameHeight == -1) || (sink->soc.hasEvents == FALSE) )
+            {
+               sink->soc.frameHeight= height;
+            }
          }
 
          if ( frameSizeChange && (sink->soc.hasEvents == FALSE) )
@@ -1255,6 +1261,7 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                                 "alignment=(string) au, " \
                                                 "stream-format=(string) byte-stream, " \
                                                 "width=(int) [1,MAX], " "height=(int) [1,MAX] ; " \
+                                                "video/x-h264(memory:DMABuf) ; "
                                              );
                break;
             #ifdef V4L2_PIX_FMT_VP9
@@ -1262,7 +1269,8 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                capsTemp= gst_caps_from_string(
                                                 "video/x-vp9, " \
                                                 "width=(int) [1,MAX], " \
-                                                "height=(int) [1,MAX] ; "
+                                                "height=(int) [1,MAX] ; " \
+                                                "video/x-vp9(memory:DMABuf) ; "
                                              );
                break;
             #endif
@@ -1274,7 +1282,8 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                                 "alignment=(string) au, " \
                                                 "stream-format=(string) byte-stream, " \
                                                 "width=(int) [1,MAX], " \
-                                                "height=(int) [1,MAX] ; "
+                                                "height=(int) [1,MAX] ; " \
+                                                "video/x-h265(memory:DMABuf) ; "
                                              );
                break;
             #endif
@@ -1512,6 +1521,9 @@ static void wstProcessEvents( GstWesterosSink *sink )
                sink->soc.frameWidth= fmtOut.fmt.pix.width;
                sink->soc.frameHeight= fmtOut.fmt.pix.height;
             }
+            #ifdef WESTEROS_SINK_SVP
+            wstSVPSetInputMemMode( sink, sink->soc.inputMemMode );
+            #endif
             wstSetupOutput( sink );
             sink->soc.nextFrameFd= -1;
             sink->soc.prevFrame1Fd= -1;
