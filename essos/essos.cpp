@@ -327,6 +327,8 @@ EssCtx* EssContextCreate()
 
       ctx->inputDeviceFds= std::vector<pollfd>();
       ctx->gamepads= std::vector<EssGamepad*>();
+
+      INFO("westeros (essos) config supports: direct %d wayland %d", EssContextSupportDirect(ctx), EssContextSupportWayland(ctx));
    }
 
    return ctx;
@@ -720,7 +722,7 @@ exit:
 bool EssContextInit( EssCtx *ctx )
 {
    bool result= false;
-                  
+
    if ( ctx )
    {
       pthread_mutex_lock( &ctx->mutex );
