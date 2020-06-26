@@ -54,7 +54,7 @@ HAVE_WAYLAND_EGL=" "
 HAVE_XKB=" "
 PKG_CHECK_MODULES([EGL], [egl >= 0.0], [HAVE_EGL=true], [HAVE_EGL=false])
 PKG_CHECK_MODULES([WAYLAND],[wayland-client >= 1.6.0], [HAVE_WAYLAND=true], [HAVE_WAYLAND=false])
-PKG_CHECK_MODULES([WAYLAND_EGL],[wayland-egl >= 1.0.0], [HAVE_WAYLAND_EGL=true], [HAVE_WAYLAND_EGL=false])
+PKG_CHECK_MODULES([WAYLAND_EGL],[wayland-egl >= 0.0.0], [HAVE_WAYLAND_EGL=true], [HAVE_WAYLAND_EGL=false])
 PKG_CHECK_MODULES([XKBCOMMON],[xkbcommon >= 0.5.0], [HAVE_XKB=true], [HAVE_XKB=false])
 
 AM_CONDITIONAL([HAVE_EGL], [test x$HAVE_EGL = xtrue])
