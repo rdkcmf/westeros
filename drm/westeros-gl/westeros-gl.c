@@ -614,6 +614,8 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
       pthread_mutex_lock( &gCtx->mutex );
 
       overlay->frameCount= 0;
+      overlay->frameTimeBase= 0;
+      overlay->flipTimeBase= 0;
       overlay->bufferId= -1;
       overlay->bufferIdPrev= -1;
       overlay->bufferIdPrevPrev= -1;
