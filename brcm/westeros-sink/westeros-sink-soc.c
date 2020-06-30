@@ -492,7 +492,7 @@ static void streamChangedCallback(void * context, int param)
       if (rc)
       {
          GST_WARNING("unable to set display format using NxClient_SetDisplaySettings (%d)...", rc);
-         return rc;
+         return;
       }
    }
    #endif
@@ -2670,6 +2670,16 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
       return;
    }
 
+   if ( sink->soc.useImmediateOutput )
+   {
+       NEXUS_VideoDecoderTrickState trickState;
+       NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+       trickState.rate= NEXUS_NORMAL_DECODE_RATE * 2;
+       trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
+       NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+       return;
+   }
+
    if ( clientPlaySpeed < 0 )
    {
       GST_WARNING_OBJECT(sink, "Ignoring negative play speed");
@@ -3039,10 +3049,6 @@ static int sinkAcquireResources( GstWesterosSink *sink )
          }
          if ( sink->soc.useImmediateOutput )
          {
-            NEXUS_VideoDecoderTrickState trickState;
-            NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
-            trickState.rate= 2000;
-            NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
             ext_settings.zeroDelayOutputMode= true;
             ext_settings.ignoreDpbOutputDelaySyntax= true;
             printf("westerossink: using immediate output mode\n");
