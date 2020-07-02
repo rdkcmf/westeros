@@ -164,8 +164,8 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          break;
       case V4L2_PIX_FMT_HEVC:
       case V4L2_PIX_FMT_VP9:
-         frameWidth= sink->soc.frameWidth;
-         frameHeight= sink->soc.frameHeight;
+         frameWidth= sink->soc.frameWidthStream;
+         frameHeight= sink->soc.frameHeightStream;
          if ( (frameWidth > 1920) || (frameHeight > 1080) )
          {
             decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_2_DW;

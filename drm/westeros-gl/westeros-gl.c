@@ -1196,7 +1196,6 @@ static void *wstVideoServerConnectionThread( void *arg )
                pthread_mutex_lock( &gMutex );
                conn->videoPlane->flipTimeBase= 0LL;
                conn->videoPlane->frameTimeBase= 0LL;
-               wstVideoServerFreeBuffers( conn, false );
                pthread_mutex_unlock( &gMutex );
                break;
             default:
