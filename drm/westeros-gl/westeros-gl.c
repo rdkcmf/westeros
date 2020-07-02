@@ -1213,6 +1213,7 @@ static void *wstVideoServerConnectionThread( void *arg )
 exit:
    if ( conn->videoPlane && gCtx )
    {
+      pthread_mutex_lock( &gMutex );
       pthread_mutex_lock( &gCtx->mutex );
 
       drmModePlane *plane= conn->videoPlane->plane;
@@ -1238,6 +1239,8 @@ exit:
 
       wstOverlayFree( &gCtx->overlayPlanes, conn->videoPlane );
       conn->videoPlane= 0;
+
+      pthread_mutex_unlock( &gMutex );
    }
 
    conn->threadStarted= false;
