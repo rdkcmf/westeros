@@ -86,6 +86,7 @@ typedef struct _WstBufferInfo
    int capacity;
    gint64 frameTime;
    bool drop;
+   bool queued;
 } WstBufferInfo;
 
 struct _GstWesterosSinkSoc
@@ -95,6 +96,8 @@ struct _GstWesterosSinkSoc
    double frameRate;
    int frameWidth;
    int frameHeight;
+   int frameWidthStream;
+   int frameHeightStream;
    int frameInCount;
    int frameOutCount;
    uint32_t numDropped;

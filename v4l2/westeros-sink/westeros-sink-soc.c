@@ -281,6 +281,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameRate= 0.0;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
+   sink->soc.frameWidthStream= -1;
+   sink->soc.frameHeightStream= -1;
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
    sink->soc.numDropped= 0;
@@ -750,6 +752,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                sink->soc.frameWidth= width;
             }
+            sink->soc.frameWidthStream= width;
          }
          if ( gst_structure_get_int( structure, "height", &height ) )
          {
@@ -761,6 +764,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                sink->soc.frameHeight= height;
             }
+            sink->soc.frameHeightStream= height;
          }
 
          if ( frameSizeChange && (sink->soc.hasEvents == FALSE) )
@@ -838,22 +842,25 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (gstNow-nanoTime)/1000LL);
          }
          LOCK(sink)
-         prevPTS= sink->currentPTS;
-         sink->currentPTS= ((nanoTime * 90000LL + GST_SECOND/2)/GST_SECOND);
-         if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
+         if ( nanoTime >= sink->segment.start )
          {
-            sink->firstPTS= sink->currentPTS;
-            sink->prevPositionSegmentStart = sink->positionSegmentStart;
-            GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
-         }
-         if ( sink->currentPTS != 0 || sink->soc.frameInCount == 0 )
-         {
-            if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
+            prevPTS= sink->currentPTS;
+            sink->currentPTS= ((nanoTime * 90000LL + GST_SECOND/2)/GST_SECOND);
+            if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
-               /* If we have hit a discontinuity that doesn't look like rollover, then
-                  treat this as the case of looping a short clip.  Adjust our firstPTS
-                  to keep our running time correct. */
-               sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
+               sink->firstPTS= sink->currentPTS;
+               sink->prevPositionSegmentStart = sink->positionSegmentStart;
+               GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
+            }
+            if ( sink->currentPTS != 0 || sink->soc.frameInCount == 0 )
+            {
+               if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
+               {
+                  /* If we have hit a discontinuity that doesn't look like rollover, then
+                     treat this as the case of looping a short clip.  Adjust our firstPTS
+                     to keep our running time correct. */
+                  sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
+               }
             }
          }
          UNLOCK(sink);
@@ -905,6 +912,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
             goto exit;
          }
+         sink->soc.inBuffers[buffIndex].queued= true;
          sink->soc.inBuffers[buffIndex].gstbuf= gst_buffer_ref(buffer);
       }
       else
@@ -968,6 +976,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
                   goto exit;
                }
+               sink->soc.inBuffers[buffIndex].queued= true;
             }
          }
 
@@ -1174,6 +1183,10 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.prevFrame2Fd= -1;
    sink->soc.nextFrameFd= -1;
    sink->soc.formatsSet= FALSE;
+   sink->soc.frameWidth= -1;
+   sink->soc.frameHeight= -1;
+   sink->soc.frameWidthStream= -1;
+   sink->soc.frameHeightStream= -1;
 
    if ( sink->soc.inputFormats )
    {
@@ -2334,8 +2347,8 @@ static void wstSetupInput( GstWesterosSink *sink )
            (sink->soc.hasEvents == TRUE) )
       {
          /* Set defaults and update on source change event */
-         sink->soc.frameWidth= DEFAULT_FRAME_WIDTH;
-         sink->soc.frameHeight= DEFAULT_FRAME_HEIGHT;
+         sink->soc.frameWidth= sink->soc.frameWidthStream= DEFAULT_FRAME_WIDTH;
+         sink->soc.frameHeight= sink->soc.frameHeightStream= DEFAULT_FRAME_HEIGHT;
       }
       if ( (sink->soc.frameWidth > 0) &&
            (sink->soc.frameHeight > 0) )
@@ -2357,8 +2370,7 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
    int i;
    for( i= 0; i < sink->soc.numBuffersIn; ++i )
    {
-      if ( !(sink->soc.inBuffers[i].buf.flags & V4L2_BUF_FLAG_QUEUED) ||
-           sink->soc.inBuffers[i].buf.flags & V4L2_BUF_FLAG_DONE )
+      if ( !sink->soc.inBuffers[i].queued )
       {
          bufferIndex= i;
          break;
@@ -2388,6 +2400,7 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
             buf.m.planes= sink->soc.inBuffers[bufferIndex].buf.m.planes;
          }
          sink->soc.inBuffers[bufferIndex].buf= buf;
+         sink->soc.inBuffers[bufferIndex].queued= false;
       }
    }
 
@@ -2451,6 +2464,7 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
          buf.m.planes= sink->soc.outBuffers[bufferIndex].buf.m.planes;
       }
       sink->soc.outBuffers[bufferIndex].buf= buf;
+      sink->soc.outBuffers[bufferIndex].queued= false;
    }
 
    return bufferIndex;
@@ -2485,6 +2499,10 @@ static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex )
       if ( rc < 0 )
       {
          GST_ERROR("wstRequeueOutputBuffer: failed to re-queue output buffer: rc %d errno %d", rc, errno);
+      }
+      else
+      {
+         sink->soc.outBuffers[buffIndex].queued= true;
       }
    }
 }
@@ -3071,6 +3089,10 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
       {
          GST_ERROR("failed to re-queue output buffer: rc %d errno %d", rc, errno);
       }
+      else
+      {
+         sink->soc.outBuffers[binfo->buffIndex].queued= true;
+      }
    }
 
    --sink->soc.activeBuffers;
@@ -3169,6 +3191,7 @@ capture_start:
          GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
          goto exit;
       }
+      sink->soc.outBuffers[i].queued= true;
    }
 
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtOut.type );
