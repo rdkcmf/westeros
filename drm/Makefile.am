@@ -32,6 +32,10 @@ endif
 
 lib_LTLIBRARIES = libwesteros_gl.la
 
+bin_PROGRAMS = westeros-gl-console
+
+BUILT_SOURCES = libwesteros_gl.la
+
 libwesteros_gl_la_SOURCES = westeros-gl/westeros-gl.c
 
 libwesteros_gl_la_include_HEADERS = westeros-gl/westeros-gl.h
@@ -42,6 +46,10 @@ libwesteros_gl_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    -ldrm \
    -lgbm
+
+westeros_gl_console_SOURCES = westeros-gl/westeros-gl-console.c
+westeros_gl_consoloe_CFLAGS = $(AM_CFLAGS) -D_GNU_SOURCE
+westeros_gl_LDFLAGS = $(AM_LDFLAGS)
 
 pkgconfigdir = $(libdir)/pkgconfig
    
