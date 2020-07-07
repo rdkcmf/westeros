@@ -601,6 +601,7 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
    float frameRate;
    int frameNumber;
    gint64 pos, posExpected;
+   gint64 diff;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
@@ -680,7 +681,8 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
          goto exit;
       }
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
-      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
+      if ( diff > 10*1000000000LL/60LL )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
@@ -841,6 +843,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
    float frameRate;
    int frameNumber;
    gint64 pos, posExpected= 0;
+   gint64 diff;
    bool isPaused;
    int windowWidth= 1920;
    int windowHeight= 1080;
@@ -939,7 +942,8 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
 
       g_print("%d paused %d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, isPaused, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
 
-      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
+      if ( diff > 10*1000000000LL/60LL )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
@@ -981,6 +985,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
    int frameNumber;
    gint64 pos, posExpected;
    gint64 seekPos;
+   gint64 diff;
    gboolean rv;
    int windowWidth= 1920;
    int windowHeight= 1080;
@@ -1064,7 +1069,8 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
 
-      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
+      if ( diff > 10*1000000000LL/60LL )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
@@ -1107,7 +1113,8 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
 
-      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
+      if ( diff > 10*1000000000LL/60LL )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));

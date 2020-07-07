@@ -115,6 +115,7 @@ static int wstFindOutputBuffer( GstWesterosSink *sink, int fd );
 static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex );
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name );
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
 static gpointer wstVideoOutputThread(gpointer data);
@@ -357,8 +358,17 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    /* Request caps updates */
    sink->passCaps= TRUE;
 
-   /* We will use gstreamer for AV sync */
-   gst_base_sink_set_sync(GST_BASE_SINK(sink), TRUE);
+   if ( getenv("WESTEROS_SINK_USE_FREERUN") )
+   {
+      // in data gets > 4 sec ahead of output and decoder skips data
+      gst_base_sink_set_sync(GST_BASE_SINK(sink), FALSE);
+      printf("westeros-sink: using freerun\n");
+   }
+   else
+   {
+      gst_base_sink_set_sync(GST_BASE_SINK(sink), TRUE);
+   }
+
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), TRUE);
 
    if ( getenv("WESTEROS_SINK_USE_NV21") )
@@ -887,7 +897,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
          if (GST_BUFFER_PTS_IS_VALID(buffer) )
          {
-            GstClockTime timestamp= GST_BUFFER_PTS(buffer);
+            GstClockTime timestamp= GST_BUFFER_PTS(buffer) + 500LL;
             GST_TIME_TO_TIMEVAL( timestamp, sink->soc.inBuffers[buffIndex].buf.timestamp );
          }
 
@@ -962,7 +972,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
                if (GST_BUFFER_PTS_IS_VALID(buffer) )
                {
-                  GstClockTime timestamp= GST_BUFFER_PTS(buffer);
+                  GstClockTime timestamp= GST_BUFFER_PTS(buffer) + 500LL;
                   GST_TIME_TO_TIMEVAL( timestamp, sink->soc.inBuffers[buffIndex].buf.timestamp );
                }
                sink->soc.inBuffers[buffIndex].buf.bytesused= copylen;
@@ -1522,6 +1532,8 @@ static void wstProcessEvents( GstWesterosSink *sink )
                 ( (fmtOut.fmt.pix.width != sink->soc.fmtOut.fmt.pix.width) ||
                   (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) )
          {
+            wstSendFlushVideoClientConnection( sink->soc.conn );
+
             wstTearDownOutputBuffers( sink );
 
             if ( sink->soc.isMultiPlane )
@@ -2418,7 +2430,7 @@ static void wstSetOutputMemMode( GstWesterosSink *sink, int mode )
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &sink->soc.fmtOut );
    if ( rc < 0 )
    {
-      GST_DEBUG("wstSetOutputFormat: initV4l2: failed get format for output: rc %d errno %d", rc, errno);
+      GST_DEBUG("wstSetOutputMemMode: initV4l2: failed get format for output: rc %d errno %d", rc, errno);
    }
 
    sink->soc.outputMemMode= mode;
@@ -2641,6 +2653,9 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
       msg.msg_flags= 0;
 
       len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 1;
       mbody[len++]= 'S';
 
       iov[0].iov_base= (char*)mbody;
@@ -2656,6 +2671,49 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
       {
          GST_LOG("sent flush to video server");
          FRAME("sent flush to video server");
+      }
+   }
+}
+
+
+static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, bool pause )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[7];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 2;
+      mbody[len++]= 'P';
+      mbody[len++]= (pause ? 1 : 0);
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent pause %d to video server", pause);
+         FRAME("sent pause %d to video server", pause);
       }
    }
 }
@@ -2704,13 +2762,13 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
             {
                int mlen, id;
                mlen= m[2];
-               if ( len >= (mlen+2) )
+               if ( len >= (mlen+3) )
                {
                   id= m[3];
                   switch( id )
                   {
                      case 'R':
-                        if ( mlen >= 6)
+                        if ( mlen >= 5)
                         {
                           int rate= getU32( &m[4] );
                           GST_DEBUG("got rate %d from video server", rate);
@@ -2723,7 +2781,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                         }
                         break;
                      case 'B':
-                        if ( mlen >= 6)
+                        if ( mlen >= 5)
                         {
                           int bid= getU32( &m[4] );
                           if ( (bid >= sink->soc.bufferIdOutBase) && (bid < sink->soc.bufferIdOutBase+sink->soc.numBuffersOut) )
@@ -2751,9 +2809,17 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                      default:
                         break;
                   }
-                  m += (mlen+2);
-                  len -= (mlen+2);
+                  m += (mlen+3);
+                  len -= (mlen+3);
                }
+               else
+               {
+                  len= 0;
+               }
+            }
+            else
+            {
+               len= 0;
             }
          }
       }
@@ -2782,42 +2848,6 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
 
       wstProcessMessagesVideoClientConnection( conn );
 
-      /*
-       * If the stream frame rate is greater than the display
-       * refresh rate reported by the server, drop frames as necessary
-       */
-      if ( conn->serverRefreshRate && (buffIndex >= 0) )
-      {
-         if ( (conn->lastSendTime != -1LL) && (interval < conn->serverRefreshPeriod) )
-         {
-            FRAME("set drop true: interval %lld refresh period %lld", interval, conn->serverRefreshPeriod);
-            sink->soc.outBuffers[buffIndex].drop= true;
-         }
-      }
-
-      if ( !sink->soc.outBuffers[buffIndex].drop )
-      {
-         /*
-          * Only allow 4 outstanding buffers.  If we are at the limit,
-          * delay until we have received a buffer release message from the server.
-          */
-         {
-            int i, numLocked= 0;;
-            for( i= 0; i < sink->soc.numBuffersOut; ++i )
-            {
-               if ( sink->soc.outBuffers[i].locked )
-               {
-                  ++numLocked;
-               }
-            }
-            if ( numLocked >= 4 && !sink->soc.quitVideoOutputThread )
-            {
-               usleep( 1000 );
-               goto again;
-            }
-         }
-      }
-
       if ( !sink->soc.outBuffers[buffIndex].drop )
       {
          long long adjust= ((conn->lastSendTime != -1LL) ? (conn->serverRefreshPeriod - interval) : 0);
@@ -2843,7 +2873,7 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       struct msghdr msg;
       struct cmsghdr *cmsg;
       struct iovec iov[1];
-      unsigned char mbody[1+16*4];
+      unsigned char mbody[4+64];
       char cmbody[CMSG_SPACE(3*sizeof(int))];
       int i, len;
       int *fd;
@@ -2933,6 +2963,9 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          }
 
          i= 0;
+         mbody[i++]= 'V';
+         mbody[i++]= 'S';
+         mbody[i++]= 65;
          mbody[i++]= 'F';
          i += putU32( &mbody[i], conn->sink->soc.frameWidth );
          i += putU32( &mbody[i], conn->sink->soc.frameHeight );
@@ -2980,6 +3013,9 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       else
       {
          i= 0;
+         mbody[i++]= 'V';
+         mbody[i++]= 'S';
+         mbody[i++]= 1;
          mbody[i++]= 'H';
 
          iov[0].iov_base= (char*)mbody;
@@ -3084,6 +3120,7 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
         (binfo->buffIndex >= 0) &&
         (binfo->cohort == sink->soc.bufferCohort) )
    {
+      sink->soc.outBuffers[binfo->buffIndex].drop= false;
       rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[binfo->buffIndex].buf );
       if ( rc < 0 )
       {
@@ -3245,6 +3282,10 @@ capture_start:
       }
       else if ( sink->soc.videoPaused )
       {
+         if ( !wasPaused )
+         {
+            wstSendPauseVideoClientConnection( sink->soc.conn, true);
+         }
          wasPaused= true;
          usleep( 1000 );
       }
@@ -3256,6 +3297,7 @@ capture_start:
 
          if ( wasPaused )
          {
+            wstSendPauseVideoClientConnection( sink->soc.conn, false);
             wasPaused= false;
             haveBaseTime= false;
          }
@@ -3533,8 +3575,6 @@ capture_start:
       }
    }
 
-   wstSendFlushVideoClientConnection( sink->soc.conn );
-
    if ( sink->soc.needCaptureRestart )
    {
       sink->soc.needCaptureRestart= FALSE;
@@ -3542,6 +3582,8 @@ capture_start:
    }
 
 exit:
+
+   wstSendFlushVideoClientConnection( sink->soc.conn );
 
    GST_DEBUG("wstVideoOutputThread: exit");
 

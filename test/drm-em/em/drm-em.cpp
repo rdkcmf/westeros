@@ -54,6 +54,7 @@
 #include <syscall.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/stat.h>
@@ -486,6 +487,9 @@ static void wlSwapBuffers( struct wl_egl_window *egl_window );
 static pthread_mutex_t gMutex= PTHREAD_MUTEX_INITIALIZER;
 static EMCTX *gCtx= 0;
 static int gActiveLevel= 2;
+static int gDrmOpenCount= 0;
+static bool gDrmHaveMaster= false;
+static int gDrmLockFd= -1;
 static std::vector<struct wl_egl_window*> gNativeWindows= std::vector<struct wl_egl_window*>();
 
 static long long getCurrentTimeMillis(void)
@@ -1174,11 +1178,50 @@ static void EMDrmDeviceInit( EMDevice *d )
       d->dev.drm.handles[i].fd= -1;
       d->dev.drm.handles[i].fbId= 0;
    }
+
+   if ( gDrmOpenCount == 0 )
+   {
+      int fd= open( "/tmp/em-drm.lock",
+                        O_CREAT|O_CLOEXEC,
+                        S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
+      if ( fd >= 0 )
+      {
+         int rc= flock( fd, LOCK_NB|LOCK_EX );
+         if ( rc < 0 )
+         {
+            gDrmHaveMaster= true;
+            close( fd );
+         }
+         else
+         {
+            gDrmLockFd= fd;
+         }
+      }
+      else
+      {
+         gDrmHaveMaster= true;
+      }
+   }
+   ++gDrmOpenCount;
 }
 
 static void EMDrmDeviceTerm( EMDevice *d )
 {
    TRACE1("EMDrmDeviceTerm");
+   if ( gDrmOpenCount > 0 )
+   {
+      --gDrmOpenCount;
+      if ( gDrmOpenCount == 0 )
+      {
+         if ( gDrmLockFd >= 0 )
+         {
+            flock( gDrmLockFd, LOCK_UN );
+            close( gDrmLockFd );
+            gDrmLockFd= -1;
+         }
+         gDrmHaveMaster= false;
+      }
+   }
 }
 
 static void EMV4l2DeviceInit( EMDevice *d )
@@ -3116,6 +3159,29 @@ void drmFreeVersion( drmVersionPtr ver )
       }
       free( ver );
    }
+}
+
+int drmSetMaster( int fd )
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+
+   TRACE1("drmSetMaster: fd %d", fd);
+
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      if ( gDrmHaveMaster )
+      {
+         rc= 13;
+      }
+      else
+      {
+         gDrmHaveMaster= true;
+         rc= 0;
+      }
+   }
+   return rc;
 }
 
 int drmWaitVBlank( int fd, drmVBlankPtr vbl )
