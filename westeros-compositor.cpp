@@ -2690,6 +2690,7 @@ void WstCompositorStop( WstCompositor *wctx )
          pthread_join( ctx->compositorThreadId, NULL );
          pthread_mutex_lock( &ctx->mutex );
 
+         ctx->compositorThreadStarted= false;
          wstCompositorReleaseResources( ctx );
 
          if ( !ctx->isNested )
