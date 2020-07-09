@@ -451,7 +451,11 @@ static void streamChangedCallback(void * context, int param)
    {
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eDolbyVision:
          #ifdef ENABLE_DOLBYVISION
+         #if (NEXUS_PLATFORM_VERSION_MAJOR >= 19)
+         dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eDolbyVisionSourceLed;
+         #else
          dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eDolbyVision;
+         #endif
          #endif
          GST_WARNING("Dolby Vision content decoding begins.");
          break;
@@ -479,7 +483,11 @@ static void streamChangedCallback(void * context, int param)
    }
    #ifdef ENABLE_DOLBYVISION
    NxClient_GetDisplaySettings(&displaySettings);
+   #if (NEXUS_PLATFORM_VERSION_MAJOR >= 19)
+   if(dynamicRangeMode == NEXUS_VideoDynamicRangeMode_eDolbyVisionSourceLed && IsDbvUnsupportedFormat())
+   #else
    if(dynamicRangeMode == NEXUS_VideoDynamicRangeMode_eDolbyVision && IsDbvUnsupportedFormat())
+   #endif
    {
        dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eTrackInput;
        GST_WARNING("Dolby Vision not supported with current video format setting output mode to eTrackInput.");
