@@ -1855,6 +1855,17 @@ static void wstRendererUpdateScene( WstRenderer *renderer )
    {
       rendererGL->outputWidth= renderer->outputWidth;
       rendererGL->outputHeight= renderer->outputHeight;
+      if ( renderer->displayNested )
+      {
+         if ( rendererGL->nativeWindow )
+         {
+            wl_egl_window_resize( (struct wl_egl_window *)rendererGL->nativeWindow,
+                                   renderer->outputWidth,
+                                   renderer->outputHeight,
+                                   0,
+                                   0 );
+         }
+      }
    }
 
    eglMakeCurrent( rendererGL->eglDisplay, 
