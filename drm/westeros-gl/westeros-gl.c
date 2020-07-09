@@ -5227,6 +5227,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
 {
    void *nativeWindow= 0;
    NativeWindowItem *nwItem= 0;
+   bool modeSetPending= false;
 
    if ( ctx )
    {
@@ -5237,6 +5238,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
       if ( !ctx->modeSet && !ctx->modeSetPending && ctx->conn )
       {
          wstSelectMode( ctx, width, height );
+         modeSetPending= true;
       }
 
       nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
@@ -5277,6 +5279,11 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
             else
             {
                ctx->nwFirst= ctx->nwLast= nwItem;
+            }
+            if ( modeSetPending )
+            {
+               ctx->modeNext= ctx->modeCurrent;
+               ctx->modeSetPending= true;
             }
             pthread_mutex_unlock( &gMutex );
          }
