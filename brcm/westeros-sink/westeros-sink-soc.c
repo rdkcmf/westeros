@@ -1344,7 +1344,28 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
 void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 {
    unsigned int pts45k= (unsigned int)( pts / 2 );
-   NEXUS_SimpleVideoDecoder_SetStartPts( sink->soc.videoDecoder, pts45k );
+   NEXUS_VideoDecoderStatus videoStatus;
+   if ( pts == 0 )
+   {
+      NEXUS_Error rc;
+      rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
+      if ( rc == NEXUS_SUCCESS )
+      {
+         if ( videoStatus.fifoDepth || videoStatus.queueDepth )
+         {
+            GST_WARNING("flushing video decoder data: fifo depth: %d frames: %d", videoStatus.fifoDepth, videoStatus.queueDepth);
+         }
+         NEXUS_SimpleVideoDecoder_Flush( sink->soc.videoDecoder );
+      }
+      else
+      {
+         GST_ERROR("NEXUS_SimpleVideoDecoder_GetStatus failed");
+      }
+   }
+   else
+   {
+      NEXUS_SimpleVideoDecoder_SetStartPts( sink->soc.videoDecoder, pts45k );
+   }
 
    if ( sink->soc.clientPlaySpeed != sink->playbackRate )
    {
