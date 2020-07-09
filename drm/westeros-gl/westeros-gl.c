@@ -1696,8 +1696,8 @@ static void wstDisplayServerSendResponse( DisplayServerConnection *conn )
    len= 0;
    mbody[len++]= 'D';
    mbody[len++]= 'S';
-   mbody[len++]= conn->responseLen;
-   strncpy( &mbody[len], conn->response, conn->responseLen );
+   mbody[len++]= conn->responseLen+1;
+   strncpy( &mbody[len], conn->response, conn->responseLen+1 );
    len += (conn->responseLen+1);
 
    iov[0].iov_base= (char*)mbody;
