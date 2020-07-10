@@ -48,7 +48,6 @@ typedef struct _WstVideoClientConnection
    int socketFd;
    int serverRefreshRate;
    gint64 serverRefreshPeriod;
-   gint64 lastSendTime;
 } WstVideoClientConnection;
 
 typedef struct _WstPlaneInfo
