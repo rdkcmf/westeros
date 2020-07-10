@@ -1026,10 +1026,6 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    if ( sink->videoStarted )
    {
       wstDecoderReset( sink, false );
-      if ( sink->soc.conn )
-      {
-         sink->soc.conn->lastSendTime= -1LL;
-      }
    }
    LOCK(sink);
    sink->soc.frameInCount= 0;
@@ -2533,7 +2529,6 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
       conn->socketFd= -1;
       conn->name= name;
       conn->sink= sink;
-      conn->lastSendTime= -1LL;
 
       workingDir= getenv("XDG_RUNTIME_DIR");
       if ( !workingDir )
@@ -2830,43 +2825,6 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
 {
    GstWesterosSink *sink= conn->sink;
    int sentLen;
-   int bufferId;
-
-   bufferId= sink->soc.outBuffers[buffIndex].bufferId;
-
-   if ( conn )
-   {
-      gint64 frameTime= sink->soc.outBuffers[buffIndex].frameTime;
-      gint64 interval= (conn->lastSendTime != -1LL) ? frameTime-conn->lastSendTime : 0LL;
-
-      if ( conn->serverRefreshPeriod && (interval >= 3*conn->serverRefreshPeriod) )
-      {
-         conn->lastSendTime= -1LL;
-      }
-
-      again:
-
-      wstProcessMessagesVideoClientConnection( conn );
-
-      if ( !sink->soc.outBuffers[buffIndex].drop )
-      {
-         long long adjust= ((conn->lastSendTime != -1LL) ? (conn->serverRefreshPeriod - interval) : 0);
-         conn->lastSendTime= frameTime + adjust;
-         sink->soc.resubFd= -1;
-         sink->soc.outBuffers[buffIndex].locked= true;
-
-         GST_LOG( "%lld: pass frame %lld", getCurrentTimeMillis(), frameTime);
-      }
-      else
-      {
-         sink->soc.resubFd= -1;
-         sink->soc.outBuffers[buffIndex].locked= false;
-         GST_LOG( "%lld: drop frame %lld", getCurrentTimeMillis(), frameTime);
-         FRAME("out:       drop frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
-         wstRequeueOutputBuffer( sink, buffIndex );
-         return;
-      }
-   }
 
    if ( conn  )
    {
@@ -2883,9 +2841,17 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       int offset0, offset1, offset2;
       int stride0, stride1, stride2;
       uint32_t pixelFormat;
+      int bufferId= -1;
+
+      wstProcessMessagesVideoClientConnection( conn );
 
       if ( buffIndex >= 0 )
       {
+         sink->soc.resubFd= -1;
+         sink->soc.outBuffers[buffIndex].locked= true;
+
+         bufferId= sink->soc.outBuffers[buffIndex].bufferId;
+
          numFdToSend= 1;
          offset0= offset1= offset2= 0;
          stride0= stride1= stride2= sink->soc.frameWidth;
@@ -3033,7 +2999,10 @@ static void wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       }
 
       GST_LOG( "%lld: send frame: %d, fd (%d, %d, %d [%d, %d, %d])", getCurrentTimeMillis(), buffIndex, frameFd0, frameFd1, frameFd2, fdToSend0, fdToSend1, fdToSend2);
-      FRAME("out:       send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
+      if ( buffIndex > 0 )
+      {
+         FRAME("out:       send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
+      }
       do
       {
          sentLen= sendmsg( conn->socketFd, &msg, 0 );

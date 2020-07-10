@@ -826,7 +826,6 @@ static void wstVideoServerFreeBuffers( VideoServerConnection *conn, bool full )
 
 static void wstVideoServerFlush( VideoServerConnection *conn )
 {
-   struct pollfd pfd;
    int rc;
    int len;
 
@@ -1221,6 +1220,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                         conn->videoPlane->videoFrame[FRAME_NEXT].hide= true;
                         gCtx->dirty= true;
                         conn->videoPlane->dirty= true;
+                        wstVideoServerFlush( conn );
                         pthread_mutex_unlock( &gMutex );
                      }
                      break;
@@ -3529,11 +3529,20 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
             {
                if ( frame->fbId != iter->videoFrame[FRAME_CURR].fbId )
                {
-                  iter->videoFrame[FRAME_NEXT]= *frame;
+                  if ( !iter->videoFrame[FRAME_NEXT].hide )
+                  {
+                     iter->videoFrame[FRAME_NEXT]= *frame;
+                  }
                   iter->dirty= true;
                   iter->readyToFlip= true;
                   dirty= true;
                }
+            }
+            if ( iter->videoFrame[FRAME_NEXT].hide )
+            {
+               iter->dirty= true;
+               iter->readyToFlip= true;
+               dirty= true;
             }
          }
          iter= iter->next;
