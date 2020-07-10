@@ -1722,7 +1722,7 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
    char *tok, *ctx;
    int tlen;
 
-   INFO("ds msg len %d (%s)", mlen, m);
+   DEBUG("ds msg len %d (%s)", mlen, m);
 
    if ( m && (mlen > 0) )
    {
@@ -1814,6 +1814,10 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                      {
                         sprintf( conn->response, "%d: %s", -1, "get video missing argument(s)" );
                      }
+                  }
+                  else if ( (tlen == 8) && !strncmp( tok, "loglevel", tlen ) )
+                  {
+                     sprintf( conn->response, "%d: loglevel %d", 0, g_activeLevel );
                   }
                   else
                   {
@@ -1979,6 +1983,18 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                         {
                            sprintf( conn->response, "%d: %s", -1, "set video missing argument(s)" );
                         }
+                     }
+                  }
+                  else if ( (tlen == 8) && !strncmp( tok, "loglevel", tlen ) )
+                  {
+                     tok= strtok_r( 0, " ", &ctx );
+                     if ( tok )
+                     {
+                        int value= atoi(tok);
+                        if ( value < 0 ) value= 0;
+                        if ( value > 6 ) value= 6;
+                        g_activeLevel= value;
+                        sprintf( conn->response, "%d: set loglevel %d", 0, g_activeLevel );
                      }
                   }
                   else
