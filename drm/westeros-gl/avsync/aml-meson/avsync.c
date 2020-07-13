@@ -19,6 +19,7 @@
 
 #include "../avsync.h"
 #include "aml_avsync.h"
+#include "aml_avsync_log.h"
 
 
 static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
@@ -28,7 +29,33 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
    env= getenv("WESTEROS_GL_USE_AMLOGIC_AVSYNC");
    if ( env )
    {
-      int refreshRate= 60;
+      int refreshRate;
+      int level;
+      switch( g_activeLevel )
+      {
+         case 0:
+         default:
+            level= LOG_ERROR;
+            break;
+         case 1:
+            level= LOG_WARN;
+            break;
+         case 2:
+            level= LOG_INFO;
+            break;
+         case 3:
+         case 4:
+         case 5:
+            level= LOG_DEBUG;
+            break;
+            break;
+         case 6:
+            level= LOG_TRACE;
+            break;
+      }
+      log_set_level( level );
+
+      refreshRate= 60;
       if ( gCtx->modeInfo )
       {
          refreshRate= gCtx->modeInfo->vrefresh;
