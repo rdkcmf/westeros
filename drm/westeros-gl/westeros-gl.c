@@ -4118,6 +4118,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                iter->videoFrame[FRAME_CURR].fd1= -1;
                iter->videoFrame[FRAME_CURR].fd2= -1;
                iter->videoFrame[FRAME_CURR].bufferId= -1;
+               iter->videoFrame[FRAME_CURR].vf= 0;
                if ( iter->videoFrame[FRAME_PREV].fbId )
                {
                   ctx->dirty= true;

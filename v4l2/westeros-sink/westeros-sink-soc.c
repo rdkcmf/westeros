@@ -329,7 +329,10 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.resubFd= -1;
    sink->soc.captureEnabled= FALSE;
    sink->soc.useCaptureOnly= FALSE;
+   sink->soc.hideVideoFramesDelay= 2;
+   sink->soc.hideGfxFramesDelay= 1;
    sink->soc.framesBeforeHideVideo= 0;
+   sink->soc.framesBeforeHideGfx= 0;
    sink->soc.prevFrameTimeGfx= 0;
    sink->soc.prevFramePTSGfx= 0;
    sink->soc.videoX= sink->windowX;
@@ -518,7 +521,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
 {
    WESTEROS_UNUSED(passToDefault);
 
-   int rc;
+   int rc, len;
    struct v4l2_exportbuffer eb;
 
    sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
@@ -556,6 +559,13 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    {
       GST_DEBUG("device is multiplane");
       sink->soc.isMultiPlane= TRUE;
+   }
+
+   len= strlen( (char*)sink->soc.caps.driver );
+   if ( (len == 14) && !strncmp( (char*)sink->soc.caps.driver, "aml-vcodec-dec", len) )
+   {
+      sink->soc.hideVideoFramesDelay= 2;
+      sink->soc.hideGfxFramesDelay= 3;
    }
 
    eb.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -1092,7 +1102,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    {
       sink->soc.captureEnabled= TRUE;
 
-      sink->soc.framesBeforeHideVideo= 2;
+      sink->soc.framesBeforeHideVideo= sink->soc.hideVideoFramesDelay;
    }
    else if ( !useGfxPath && sink->soc.captureEnabled )
    {
@@ -1101,11 +1111,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       sink->soc.prevFrame2Fd= -1;
       sink->soc.nextFrameFd= -1;
 
-      wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
-      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-      wl_surface_commit( sink->surface );
-      wl_display_flush(sink->display);
-      wl_display_dispatch_queue_pending(sink->display, sink->queue);
+      sink->soc.framesBeforeHideGfx= sink->soc.hideGfxFramesDelay;
    }
 }
 
@@ -3503,6 +3509,18 @@ capture_start:
                wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex );
 
                buffIndex= -1;
+
+               if ( sink->soc.framesBeforeHideGfx )
+               {
+                  if ( --sink->soc.framesBeforeHideGfx == 0 )
+                  {
+                     wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
+                     wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+                     wl_surface_commit( sink->surface );
+                     wl_display_flush(sink->display);
+                     wl_display_dispatch_queue_pending(sink->display, sink->queue);
+                  }
+               }
             }
 
             if ( sink->soc.resubFd >= 0 )

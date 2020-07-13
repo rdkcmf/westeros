@@ -146,7 +146,10 @@ struct _GstWesterosSinkSoc
 
    gboolean useCaptureOnly;
    gboolean captureEnabled;
+   int hideVideoFramesDelay;
+   int hideGfxFramesDelay;
    int framesBeforeHideVideo;
+   int framesBeforeHideGfx;
    gint64 prevFrameTimeGfx;
    gint64 prevFramePTSGfx;
    WstVideoClientConnection *conn;
