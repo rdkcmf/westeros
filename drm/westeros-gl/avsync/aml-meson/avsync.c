@@ -144,7 +144,20 @@ static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm )
    VideoFrame *f= 0;
    if ( vfm->sync )
    {
-      struct vframe *vf= av_sync_pop_frame( vfm->sync );
+      struct vframe *vf;
+
+      if ( vfm->vblankIntervalPrev != vfm->vblankInterval )
+      {
+         if ( vfm->vblankIntervalPrev )
+         {
+            pts90K vsyncInterval= (90000LL*vfm->vblankInterval+500000LL)/1000000LL;
+            INFO("updating vblankInterval to %d (%lld us)", vsyncInterval, vfm->vblankInterval);
+            av_sync_update_vsync_interval( vfm->sync, vsyncInterval );
+         }
+         vfm->vblankIntervalPrev= vfm->vblankInterval;
+      }
+
+      vf= av_sync_pop_frame( vfm->sync );
       if ( vf )
       {
          int i;

@@ -189,6 +189,7 @@ typedef struct _VideoFrameManager
    bool paused;
    long long vblankTime;
    long long vblankInterval;
+   long long vblankIntervalPrev;
    long long flipTimeBase;
    long long frameTimeBase;
    long long flipTimeCurrent;
@@ -3842,32 +3843,40 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
          if ( nw->dirty )
          {
             TRACE3("nw %p dirty", nw);
-            nw->prevBo= nw->bo;
-            nw->prevFbId= nw->fbId;
             gs= (struct gbm_surface*)nw->nativeWindow;
             if ( gs )
             {
                bo= gbm_surface_lock_front_buffer(gs);
-               wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
+               if ( bo )
+               {
+                  uint32_t fbId;
+                  wstUpdateResources( WSTRES_BO_GRAPHICS, true, (long long)bo, __LINE__);
 
-               handle= gbm_bo_get_handle(bo).u32;
-               stride= gbm_bo_get_stride(bo);
+                  handle= gbm_bo_get_handle(bo).u32;
+                  stride= gbm_bo_get_stride(bo);
 
-               rc= drmModeAddFB( ctx->drmFd,
-                                 nw->width,
-                                 nw->height,
-                                 32,
-                                 32,
-                                 stride,
-                                 handle,
-                                 &nw->fbId );
-                if ( rc )
-                {
-                   ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
-                   goto exit;
-                }
-                wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
-                nw->bo= bo;
+                  rc= drmModeAddFB( ctx->drmFd,
+                                    nw->width,
+                                    nw->height,
+                                    32,
+                                    32,
+                                    stride,
+                                    handle,
+                                    &fbId );
+                  if ( rc )
+                  {
+                     ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
+                     gbm_surface_release_buffer(gs, bo);
+                  }
+                  else
+                  {
+                     nw->prevBo= nw->bo;
+                     nw->prevFbId= nw->fbId;
+                     nw->fbId= fbId;
+                     wstUpdateResources( WSTRES_FB_GRAPHICS, true, nw->fbId, __LINE__);
+                     nw->bo= bo;
+                  }
+               }
             }
          }
          if ( nw->fbId )
@@ -4722,12 +4731,12 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          }
       }
       #endif
-      pthread_mutex_lock( &gMutex );
       result= gRealEGLSwapBuffers( dpy, surface );
       if ( EGL_TRUE == result )
       {
          if ( gCtx )
          {
+            pthread_mutex_lock( &gMutex );
             nwIter= gCtx->nwFirst;
             while( nwIter )
             {
@@ -4740,9 +4749,9 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
                }
                nwIter= nwIter->next;
            }
+           pthread_mutex_unlock( &gMutex );
          }
       }
-      pthread_mutex_unlock( &gMutex );
    }
 
 exit:
