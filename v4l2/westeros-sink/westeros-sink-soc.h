@@ -79,10 +79,12 @@ typedef struct _WstBufferInfo
    GstBuffer *gstbuf;
    int bufferId;
    bool locked;
+   int lockCount;
    int planeCount;
    int fd;
    void *start;
    int capacity;
+   int frameNumber;
    gint64 frameTime;
    bool drop;
    bool queued;
@@ -146,6 +148,9 @@ struct _GstWesterosSinkSoc
 
    gboolean useCaptureOnly;
    gboolean captureEnabled;
+   gboolean pauseException;
+   gboolean pauseGetGfxFrame;
+   int pauseGfxBuffIndex;
    int hideVideoFramesDelay;
    int hideGfxFramesDelay;
    int framesBeforeHideVideo;

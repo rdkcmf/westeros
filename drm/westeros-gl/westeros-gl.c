@@ -1013,8 +1013,8 @@ static void *wstVideoServerConnectionThread( void *arg )
          wstVideoServerSendRefreshRate( conn, gCtx->modeInfo->vrefresh );
       }
 
-      iov[0].iov_base= (char*)mbody+moff;
-      iov[0].iov_len= sizeof(mbody)-moff;
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= 4;
 
       cmsg= (struct cmsghdr*)cmbody;
       cmsg->cmsg_len= CMSG_LEN(3*sizeof(int));
@@ -1037,18 +1037,20 @@ static void *wstVideoServerConnectionThread( void *arg )
 
       if ( len > 0 )
       {
-         unsigned char *m= mbody;
-         len += moff;
-         moff= 0;
-         if ( (m[0] == 'V') && (m[1] == 'S') )
+         fd0= fd1= fd2= -1;
+
+         if ( g_activeLevel >= 7 )
          {
-            int mlen, id;
-            mlen= m[2];
-            if ( len >= (mlen+3) )
+            wstDumpMessage( mbody, len );
+         }
+         if ( len == 4 )
+         {
+            unsigned char *m= mbody;
+            if ( (m[0] == 'V') && (m[1] == 'S') )
             {
-               fd0= fd1= fd2= -1;
+               int mlen, id;
+               mlen= m[2];
                id= m[3];
-               m += 3;
                switch( id )
                {
                   case 'F':
@@ -1067,6 +1069,48 @@ static void *wstVideoServerConnectionThread( void *arg )
                         {
                            fd2 = ((int*)CMSG_DATA(cmsg))[2];
                         }
+                     }
+                     break;
+                  default:
+                     break;
+               }
+
+               if ( mlen > sizeof(mbody) )
+               {
+                  ERROR("bad message length: %d : truncating");
+                  mlen= sizeof(mbody);
+               }
+               if ( mlen > 1 )
+               {
+                  iov[0].iov_base= (char*)mbody+4;
+                  iov[0].iov_len= mlen-1;
+
+                  msg.msg_name= NULL;
+                  msg.msg_namelen= 0;
+                  msg.msg_iov= iov;
+                  msg.msg_iovlen= 1;
+                  msg.msg_control= 0;
+                  msg.msg_controllen= 0;
+                  msg.msg_flags= 0;
+
+                  do
+                  {
+                     len= recvmsg( conn->socketFd, &msg, 0 );
+                  }
+                  while ( (len < 0) && (errno == EINTR));
+               }
+
+               if ( len > 0 )
+               {
+                  len += 4;
+                  m += 3;
+                  if ( g_activeLevel >= 7 )
+                  {
+                     wstDumpMessage( mbody, len );
+                  }
+                  switch( id )
+                  {
+                     case 'F':
                         if ( fd0 >= 0 )
                         {
                            uint32_t handle0, handle1;
@@ -1212,61 +1256,51 @@ static void *wstVideoServerConnectionThread( void *arg )
                               }
                            }
                         }
-                     }
-                     break;
-                  case 'H':
-                     {
-                        DEBUG("got hide video plane %d", conn->videoPlane->plane->plane_id);
-                        pthread_mutex_lock( &gMutex );
-                        conn->videoPlane->videoFrame[FRAME_NEXT].hide= true;
-                        gCtx->dirty= true;
-                        conn->videoPlane->dirty= true;
-                        wstVideoServerFlush( conn );
-                        pthread_mutex_unlock( &gMutex );
-                     }
-                     break;
-                  case 'S':
-                     {
-                        DEBUG("got flush video plane %d", conn->videoPlane->plane->plane_id);
-                        FRAME("got flush video plane %d", conn->videoPlane->plane->plane_id);
-                        pthread_mutex_lock( &gMutex );
-                        conn->videoPlane->flipTimeBase= 0LL;
-                        conn->videoPlane->frameTimeBase= 0LL;
-                        wstVideoServerFlush( conn );
-                        pthread_mutex_unlock( &gMutex );
-                     }
-                     break;
-                  case 'P':
-                     {
-                        bool pause= (m[1] == 1);
-                        DEBUG("got pause (%d) video plane %d", pause, conn->videoPlane->plane->plane_id);
-                        pthread_mutex_lock( &gMutex );
-                        wstVideoFrameManagerPause( conn->videoPlane->vfm, pause );
-                        pthread_mutex_unlock( &gMutex );
-                     }
-                     break;
-                  default:
-                     ERROR("got unknown video server message: mlen %d", mlen);
-                     wstDumpMessage( mbody, mlen+3 );
-                     break;
-               }
-               m += (mlen+3);
-               len -= (mlen+3);
-               if ( len > 0 )
-               {
-                  DEBUG("saved data: %d bytes", len);
-                  memmove( mbody, m, len );
-                  moff= len;
+                        break;
+                     case 'H':
+                        {
+                           DEBUG("got hide video plane %d", conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           conn->videoPlane->videoFrame[FRAME_NEXT].hide= true;
+                           gCtx->dirty= true;
+                           conn->videoPlane->dirty= true;
+                           wstVideoServerFlush( conn );
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                     case 'S':
+                        {
+                           DEBUG("got flush video plane %d", conn->videoPlane->plane->plane_id);
+                           FRAME("got flush video plane %d", conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           conn->videoPlane->flipTimeBase= 0LL;
+                           conn->videoPlane->frameTimeBase= 0LL;
+                           wstVideoServerFlush( conn );
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                     case 'P':
+                        {
+                           bool pause= (m[1] == 1);
+                           DEBUG("got pause (%d) video plane %d", pause, conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           wstVideoFrameManagerPause( conn->videoPlane->vfm, pause );
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                     default:
+                        ERROR("got unknown video server message: mlen %d", mlen);
+                        wstDumpMessage( mbody, mlen+3 );
+                        break;
+                  }
                }
             }
             else
             {
+               ERROR("msg bad header");
+               wstDumpMessage( mbody, len );
                len= 0;
             }
-         }
-         else
-         {
-            len= 0;
          }
       }
       else
@@ -2297,6 +2331,7 @@ static void wstDestroyVideoFrameManager( VideoFrameManager *vfm )
             if ( vfm->bufferIdCurrent != vfm->queue[i].bufferId )
             {
                wstFreeVideoFrameResources( &vfm->queue[i] );
+               wstVideoServerSendBufferRelease( vfm->conn, vfm->queue[i].bufferId );
             }
          }
          free( vfm->queue );
