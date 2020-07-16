@@ -28,6 +28,8 @@
 extern "C" {
 #endif
 
+#include <linux/input.h>
+
 /**
  * EssContextSupportWayland
  *
@@ -200,6 +202,31 @@ bool EssContextSetEGLContextAttributes( EssCtx *ctx, EGLint *attrs, EGLint size 
  * when creating an EGL context..
  */
 bool EssContextGetEGLContextAttributes( EssCtx *ctx, EGLint **attrs, EGLint *size );
+
+typedef struct _EssInputDeviceMetadata
+{
+    dev_t deviceNumber;
+    char * devicePhysicalAddress;
+    input_id id;
+} EssInputDeviceMetadata;
+
+typedef struct _EssKeyAndMetadataListener
+{
+   void (*keyPressed)( void *userData, unsigned int key, EssInputDeviceMetadata *metadata );
+   void (*keyReleased)( void *userData, unsigned int key, EssInputDeviceMetadata *metadata );
+   void (*keyRepeat)( void *userData, unsigned int key, EssInputDeviceMetadata *metadata );
+} EssKeyAndMetadataListener;
+
+
+/**
+ * EssContextSetKeyAndMetadataListener
+ *
+ * Set a key listener (see EssKeyListener) to receive key event callbacks. Key
+ * codes are Linux codes defined by linux/input.h.
+ * Metadata contain an additional information specific for a source of key input
+ */
+bool EssContextSetKeyAndMetadataListener( EssCtx *ctx, void *userData, EssKeyAndMetadataListener *listener, EssInputDeviceMetadata *metadata );
+
 
 #if defined(__cplusplus)
 } //extern "C"
