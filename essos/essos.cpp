@@ -35,6 +35,8 @@
 #include <sys/time.h>
 
 #include <vector>
+#include <map>
+#include <string>
 
 #ifdef HAVE_WAYLAND
 #include <xkbcommon/xkbcommon.h>
@@ -137,6 +139,7 @@ typedef struct _EssCtx
    int notifyFd;
    int watchFd;
    std::vector<pollfd> inputDeviceFds;
+   std::map<int, EssInputDeviceMetadata*> inputDeviceMetadata;
    std::vector<EssGamepad*> gamepads;
    int eventLoopPeriodMS;
    long long eventLoopLastTimeStamp;
@@ -155,6 +158,9 @@ typedef struct _EssCtx
 
    void *keyListenerUserData;
    EssKeyListener *keyListener;
+   void *keyAndMetadataListenerUserData;
+   EssInputDeviceMetadata *keyAndMetadataListenerMetadata;
+   EssKeyAndMetadataListener *keyAndMetadataListener;
    void *pointerListenerUserData;
    EssPointerListener *pointerListener;
    void *touchListenerUserData;
@@ -327,6 +333,7 @@ EssCtx* EssContextCreate()
 
       ctx->inputDeviceFds= std::vector<pollfd>();
       ctx->gamepads= std::vector<EssGamepad*>();
+      ctx->inputDeviceMetadata = std::map<int, EssInputDeviceMetadata*>();
 
       INFO("westeros (essos) config supports: direct %d wayland %d", EssContextSupportDirect(ctx), EssContextSupportWayland(ctx));
    }
@@ -880,6 +887,26 @@ bool EssContextSetKeyListener( EssCtx *ctx, void *userData, EssKeyListener *list
 
       ctx->keyListenerUserData= userData;
       ctx->keyListener= listener;
+
+      result= true;
+
+      pthread_mutex_unlock( &ctx->mutex );
+   }
+
+   return result;
+}
+
+bool EssContextSetKeyAndMetadataListener( EssCtx *ctx, void *userData, EssKeyAndMetadataListener *listener, EssInputDeviceMetadata *metadata )
+{
+   bool result= false;
+
+   if ( ctx )
+   {
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->keyAndMetadataListenerUserData= userData;
+      ctx->keyAndMetadataListenerMetadata= metadata;
+      ctx->keyAndMetadataListener= listener;
 
       result= true;
 
@@ -2041,6 +2068,11 @@ static void essProcessKeyPressed( EssCtx *ctx, int linuxKeyCode )
       {
          ctx->keyListener->keyPressed( ctx->keyListenerUserData, linuxKeyCode );
       }
+      if ( ctx->keyAndMetadataListener && ctx->keyAndMetadataListener->keyPressed )
+      {
+         ctx->keyAndMetadataListener->keyPressed( ctx->keyAndMetadataListenerUserData, linuxKeyCode,
+                                                  ctx->keyAndMetadataListenerMetadata );
+      }
    }
 }
 
@@ -2052,6 +2084,11 @@ static void essProcessKeyReleased( EssCtx *ctx, int linuxKeyCode )
       if ( ctx->keyListener && ctx->keyListener->keyReleased )
       {
          ctx->keyListener->keyReleased( ctx->keyListenerUserData, linuxKeyCode );
+      }
+      if ( ctx->keyAndMetadataListener && ctx->keyAndMetadataListener->keyReleased )
+      {
+         ctx->keyAndMetadataListener->keyReleased( ctx->keyAndMetadataListenerUserData, linuxKeyCode,
+                                                   ctx->keyAndMetadataListenerMetadata );
       }
    }
 }
@@ -2070,6 +2107,19 @@ static void essProcessKeyRepeat( EssCtx *ctx, int linuxKeyCode )
          else if ( ctx->keyListener->keyPressed )
          {
             ctx->keyListener->keyPressed( ctx->keyListenerUserData, linuxKeyCode );
+         }
+      }
+      if ( ctx->keyAndMetadataListener )
+      {
+         if ( ctx->keyAndMetadataListener->keyRepeat )
+         {
+            ctx->keyAndMetadataListener->keyRepeat( ctx->keyAndMetadataListenerUserData, linuxKeyCode,
+                                                    ctx->keyAndMetadataListenerMetadata );
+         }
+         else if ( ctx->keyAndMetadataListener->keyPressed )
+         {
+            ctx->keyAndMetadataListener->keyPressed( ctx->keyAndMetadataListenerUserData, linuxKeyCode,
+                                                     ctx->keyAndMetadataListenerMetadata );
          }
       }
    }
@@ -3196,6 +3246,90 @@ exit:
    }
 }
 
+static void essReadInputDeviceMetaData(EssCtx *ctx, int fd, const char * devicePathName)
+{
+   DEBUG("essReadInputDeviceMetaData: Read metadata for %s", devicePathName);
+
+   EssInputDeviceMetadata * meta = (EssInputDeviceMetadata*)calloc( 1, sizeof(EssInputDeviceMetadata));
+
+   struct stat buf = {};
+   if (fstat(fd, &buf) != 0 || !S_ISCHR(buf.st_mode))
+   {
+      ERROR("essReadInputDeviceMetaData: failed to get input device number of '%s'", devicePathName);
+   }
+
+   meta->deviceNumber = buf.st_rdev;
+
+   // try and get the device id, we use this to determine if any special
+   // handling needs to be done for the input events
+   struct input_id id = {};
+   if (ioctl(fd, EVIOCGID, &id) != 0)
+   {
+      ERROR("essReadInputDeviceMetaData: failed to get input device id");
+   }
+
+   meta->id = id;
+
+   // try and get the device 'physical address' for bluetooth this is the
+   // BD_ADDR in string form
+   std::string physAddress(256, '\0');
+   int ret = ioctl(fd, EVIOCGPHYS(physAddress.size()), physAddress.data());
+   if (ret < 0)
+   {
+      DEBUG("essReadInputDeviceMetaData: failed to get physical address");
+
+      // if the kernel hasn't given us a physical address then try using the
+      // unique id
+      ret = ioctl(fd, EVIOCGUNIQ(physAddress.size()), physAddress.data());
+      if (ret < 0)
+      {
+         DEBUG("essReadInputDeviceMetaData: failed to get unique identifier");
+
+         // getting the unique id also failed then use the device path
+         physAddress = devicePathName;
+      }
+   }
+
+   if (ret >= 0)
+   {
+      physAddress.resize(ret);
+   }
+
+   // trim any trailing null terminating chars
+   while (!physAddress.empty() && (physAddress.at(physAddress.size()-1) == '\0'))
+   {
+      physAddress.erase(physAddress.size()-1,1);
+   }
+
+   meta->devicePhysicalAddress = strdup(physAddress.c_str());
+
+   ctx->inputDeviceMetadata[fd] = meta;
+
+   DEBUG("essReadInputDeviceMetaData: metadata for input device type %d, details 0x%04x:0x%04x:0x%04x, physical '%s'",
+           meta->id.bustype, meta->id.vendor, meta->id.product, meta->id.version, meta->devicePhysicalAddress);
+}
+
+static void essReleaseInputDeviceMetaData(EssCtx *ctx, int fd)
+{
+   std::map<int, EssInputDeviceMetadata*>::iterator metaIter = ctx->inputDeviceMetadata.find(fd);
+
+   if (metaIter != ctx->inputDeviceMetadata.end())
+   {
+      DEBUG("essReleaseInputDeviceMetaData: Release metadata for '%s'", metaIter->second->devicePhysicalAddress );
+
+      if (metaIter->second->devicePhysicalAddress != 0)
+      {
+         free((char *)metaIter->second->devicePhysicalAddress);
+         metaIter->second->devicePhysicalAddress = 0;
+      }
+      ctx->inputDeviceMetadata.erase(fd);
+   }
+   else
+   {
+      WARNING("essReleaseInputDeviceMetaData: failed to find metadata for fd %d", fd);
+   }
+}
+
 static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
 {
    int fd= -1;   
@@ -3227,6 +3361,8 @@ static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
             DEBUG( "essOpenInputDevice: opened device %s : fd %d", devPathName, fd );
             pfd.fd= fd;
             ctx->inputDeviceFds.push_back( pfd );
+
+            essReadInputDeviceMetaData(ctx, fd, devPathName);
 
             if ( !gp )
             {
@@ -3342,8 +3478,37 @@ static void essReleaseInputDevices( EssCtx *ctx )
    {
       pollfd pfd= ctx->inputDeviceFds[0];
       DEBUG( "essos: closing device fd: %d", pfd.fd );
+      essReleaseInputDeviceMetaData(ctx, pfd.fd);
       close( pfd.fd );
       ctx->inputDeviceFds.erase( ctx->inputDeviceFds.begin() );
+   }
+}
+
+static void essFillKeyAndMetadataListenerMetadata( EssCtx *ctx, int fd )
+{
+   if (ctx->keyAndMetadataListener != 0 && ctx->keyAndMetadataListenerMetadata != 0)
+   {
+      std::map<int, EssInputDeviceMetadata*>::iterator storedMetadataIter
+            = ctx->inputDeviceMetadata.find(fd);
+
+      if (storedMetadataIter != ctx->inputDeviceMetadata.end())
+      {
+         EssInputDeviceMetadata* storedMetadata = storedMetadataIter->second;
+
+         if (ctx->keyAndMetadataListenerMetadata->devicePhysicalAddress != 0)
+         {
+            free((char*) ctx->keyAndMetadataListenerMetadata->devicePhysicalAddress);
+            ctx->keyAndMetadataListenerMetadata->devicePhysicalAddress = 0;
+         }
+
+         ctx->keyAndMetadataListenerMetadata->devicePhysicalAddress = strdup(storedMetadata->devicePhysicalAddress);
+         ctx->keyAndMetadataListenerMetadata->id = storedMetadata->id;
+         ctx->keyAndMetadataListenerMetadata->deviceNumber = storedMetadata->deviceNumber;
+      }
+      else
+      {
+         WARNING("essProcessInputDevices metadata not found for fd: %d", fd);
+      }
    }
 }
 
@@ -3451,6 +3616,7 @@ static void essProcessInputDevices( EssCtx *ctx )
                                  switch ( e.value )
                                  {
                                     case 0:
+                                       essFillKeyAndMetadataListenerMetadata(ctx, ctx->inputDeviceFds[i].fd);
                                        ctx->keyPressed= false;
                                        essProcessKeyReleased( ctx, keyCode );
                                        break;
@@ -3459,6 +3625,7 @@ static void essProcessInputDevices( EssCtx *ctx )
                                        ctx->lastKeyCode= keyCode;
                                        ctx->keyPressed= true;
                                        ctx->keyRepeating= false;
+                                       essFillKeyAndMetadataListenerMetadata(ctx, ctx->inputDeviceFds[i].fd);
                                        essProcessKeyPressed( ctx, keyCode );
                                        break;
                                     default:
