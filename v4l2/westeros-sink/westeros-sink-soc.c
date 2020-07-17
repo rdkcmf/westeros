@@ -183,12 +183,25 @@ static const struct wl_sb_listener sbListener = {
 static GstFlowReturn wstChain(GstPad *pad, GstObject *parent, GstBuffer *buf)
 {
    GstWesterosSink *sink= GST_WESTEROS_SINK(parent);
-   long long pts;
+   long long pts, duration;
 
    if ( buf )
    {
       pts= GST_BUFFER_PTS(buf);
-      if ( pts < sink->segment.start )
+      duration= GST_BUFFER_DURATION(buf);
+      if ( !GST_CLOCK_TIME_IS_VALID(duration) )
+      {
+         if ( sink->soc.frameRate != 0 )
+         {
+            duration= GST_SECOND / sink->soc.frameRate;
+            GST_BUFFER_DURATION(buf)= duration;
+         }
+         else
+         {
+            GST_LOG("wstChain: buffer duration not available");
+         }
+      }
+      if ( GST_CLOCK_TIME_IS_VALID(duration) && (pts+duration < sink->segment.start) )
       {
          GST_LOG("wstChain: accept buf %p pts %lld segment start %lld", buf, pts, sink->segment.start);
          gst_westeros_sink_soc_render( sink, buf );
