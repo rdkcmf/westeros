@@ -1078,7 +1078,7 @@ static gboolean gst_westeros_sink_query(GstElement *element, GstQuery *query)
                LOCK( sink );
                gint64 position= sink->position;
                UNLOCK( sink );
-               GST_DEBUG_OBJECT(sink, "POSITION: %" GST_TIME_FORMAT, GST_TIME_ARGS (position));
+               GST_LOG_OBJECT(sink, "POSITION: %" GST_TIME_FORMAT, GST_TIME_ARGS (position));
                gst_query_set_position(query, GST_FORMAT_TIME, position);
                return TRUE;
             }
@@ -1146,6 +1146,8 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          goto done;
       }
    }
+
+   GST_DEBUG_OBJECT (sink, "received event %p %" GST_PTR_FORMAT, event, event);
 
    switch (GST_EVENT_TYPE(event))
    {

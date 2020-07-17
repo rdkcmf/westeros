@@ -307,6 +307,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.fmtIn= {0};
    sink->soc.fmtOut= {0};
    sink->soc.formatsSet= FALSE;
+   sink->soc.syncType= -1;
+   sink->soc.sessionId= 0;
    sink->soc.bufferCohort= 0;
    sink->soc.minBuffersIn= 0;
    sink->soc.minBuffersOut= 0;
@@ -1223,6 +1225,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
    sink->soc.frameHeightStream= -1;
+   sink->soc.syncType= -1;
 
    if ( sink->soc.inputFormats )
    {
@@ -2725,7 +2728,6 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
    }
 }
 
-
 static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, bool pause )
 {
    if ( conn )
@@ -2766,6 +2768,86 @@ static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, b
          FRAME("sent pause %d to video server", pause);
       }
    }
+}
+
+static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      GstWesterosSink *sink= conn->sink;
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[7];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 6;
+      mbody[len++]= 'I';
+      mbody[len++]= sink->soc.syncType;
+      len += putU32( &mbody[len], conn->sink->soc.sessionId );
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_DEBUG("sent session info: type %d sessionId %d to video server", sink->soc.syncType, sink->soc.sessionId);
+         g_print("sent session info: type %d sessionId %d to video server\n", sink->soc.syncType, sink->soc.sessionId);
+      }
+   }
+}
+
+static void wstSetSessionInfo( GstWesterosSink *sink )
+{
+   #ifdef USE_AMLOGIC_MESON
+   if ( sink->soc.conn )
+   {
+      GstElement *element= GST_ELEMENT(sink);
+      GstClock *clock= GST_ELEMENT_CLOCK(element);
+      sink->soc.syncType= 0;
+      sink->soc.sessionId= 0;
+      if ( clock )
+      {
+         const char *socClockName;
+         gchar *clockName;
+         clockName= gst_object_get_name(GST_OBJECT_CAST(clock));
+         if ( clockName )
+         {
+            int sclen;
+            int len= strlen(clockName);
+            socClockName= getenv("WESTEROS_SINK_CLOCK");
+            if ( !socClockName )
+            {
+               socClockName= "GstAmlSinkClock";
+            }
+            sclen= strlen(socClockName);
+            if ( (len == sclen) && !strncmp(clockName, socClockName, len) )
+            {
+               sink->soc.syncType= 1;
+               /* TBD: set sessionid */
+            }
+         }
+      }
+      wstSendSessionInfoVideoClientConnection( sink->soc.conn );
+   }
+   #endif
 }
 
 static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *conn )
@@ -3493,6 +3575,8 @@ capture_start:
    }
 
    g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
+
+   wstSetSessionInfo( sink );
 
    for( ; ; )
    {

@@ -63,7 +63,7 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       pts90K vsyncInterval= 90000LL/refreshRate;
 
       vfm->sync= av_sync_create( sessionId, /* session_id */
-                                 AV_SYNC_MODE_VMASTER,
+                                 vfm->conn->syncType,
                                  3, /* start threshold */
                                  2, /* delay */
                                  vsyncInterval );
