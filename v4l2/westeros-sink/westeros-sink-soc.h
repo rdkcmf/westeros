@@ -121,6 +121,8 @@ struct _GstWesterosSinkSoc
    struct v4l2_format fmtIn;
    struct v4l2_format fmtOut;
    gboolean formatsSet;
+   int syncType;
+   int sessionId;
    int bufferCohort;
    uint32_t minBuffersIn;
    uint32_t minBuffersOut;

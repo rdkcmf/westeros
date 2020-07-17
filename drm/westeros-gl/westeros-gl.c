@@ -111,6 +111,8 @@ typedef struct _VideoServerConnection
    bool threadStarted;
    bool threadStopRequested;
    int refreshRate;
+   int syncType;
+   int sessionId;
 } VideoServerConnection;
 
 typedef struct _DisplayServerConnection
@@ -1288,6 +1290,22 @@ static void *wstVideoServerConnectionThread( void *arg )
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
+                     case 'I':
+                        {
+                           int syncType= m[1];
+                           int sessionId= wstGetU32( m+2 );
+                           DEBUG("got session info: sync type %d sessionId %d video plane %d", syncType, sessionId, conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           if ( conn->videoPlane->vfm )
+                           {
+                              wstDestroyVideoFrameManager( conn->videoPlane->vfm );
+                           }
+                           conn->syncType= syncType;
+                           conn->sessionId= sessionId;
+                           conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
                      default:
                         ERROR("got unknown video server message: mlen %d", mlen);
                         wstDumpMessage( mbody, mlen+3 );
@@ -2372,7 +2390,7 @@ static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *con
       }
 
       #ifdef WESTEROS_GL_AVSYNC
-      wstAVSyncInit( vfm, 1 );
+      wstAVSyncInit( vfm, conn->sessionId );
       #endif
    }
 
