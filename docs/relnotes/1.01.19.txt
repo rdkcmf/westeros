@@ -1,0 +1,105 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.19 Release Notes
+------------------------------
+
+Date: July 17, 2020
+Tag: Westeros-1.01.19
+Changes:
+
+* v4l1+drm updates
+-accept out-of-segment data after a seek to provide context to the v4l2 decoder but start display with first in-segment frame
+-sink passes pts value to video server
+-drm refresh thread now uses drmWaitVBlank
+(drmWaitVBlank use can be disabled with 'export WESTEROS_GL_NO_VBLANK=1' for devices like RaspberryPi3 where it doesn't seem to work)
+-improvements to video rate control
+
+* drm use vblank time from drmWaitVBlank reply 
+
+* v4l2 updates
+-make conversion from nanoseconds to 90KHz consistent
+-rate control handles discontinuities from decoder
+
+* Fix resource cleanup when hiding video plane and frame import error
+
+* Fix vpc for non-repeating nested composition
+
+* v4l2 + drm updates
+-add 'memory:DMABuf' to sink caps
+-secure video updates for AmLogic
+-round up odd video frame height in video server
+
+* essos updates
+-fix wayland-egl detection on amlogic
+-add log showing supported operating modes
+
+* Reset base times when freeing overlay plane
+
+* Fix rate setup for immediate output
+
+* v4l2+drm updates
+-fix flash on video stream resolution change
+-fix potential bad amlogic dw mode after stream resolution change
+-fix improper queuing of v4l2 output buffers
+-fix sink position reporting after seek
+
+* drm: prevent bad video flip on client disconnect
+
+* v4l2+drm updates
+-restructure westeros-gl video server to use VideoFrameManager
+-add display server and westeros-gl-console
+-initial support for amlogic av sync module (enable with 'export WESTEROS_GL_USE_AVLOGIC_AVSYNC=1)
+-allow sink to freerun with 'export WESTEROS_SINK_USE_FREERUN=1'
+
+* Clear flag after thread join
+
+* Ensure listeners called when mode set by create native window
+
+* Add missing resize for nested renderer
+
+* Fix garbage trailing display server response messages
+
+* Flush decoder if start pts is 0
+
+* DolbyVision update
+
+* drm updates
+-add log level control via consol
+-control amlogic avsync log level
+
+* v4l2+drm updates
+-fix client hide frame with frame manager
+-remove dead code
+
+* v4l2+drm updates
+-fix double free after video client hide
+-improve video-gfx transitions
+
+* drm updates
+-fix potential issue on graphics flip
+-notify amlogic avsync module of output rate changes
+
+* v4l2+drm updates
+-support gfx/video transitions while paused
+-improve robustness of video server message processing
+-send buffer release msgs when destroy vfm
+
+* Add support for key meta data to essos
+
+* v4l2: fix handling of out-of-segment buffers
+
+* v4l2+drm updates
+-add support for audio/video master with amlogic avsync
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
