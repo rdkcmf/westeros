@@ -832,7 +832,7 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
-   if ( sink->soc.videoPlaying && !sink->flushStarted )
+   if ( !sink->flushStarted )
    {
       gint64 nanoTime;
       int rc, buffIndex;
@@ -980,13 +980,13 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             while( offset < inSize )
             {
                buffIndex= wstGetInputBuffer( sink );
-               if ( buffIndex < 0 )
+               if ( (buffIndex < 0) && !sink->flushStarted )
                {
                   GST_ERROR("gst_westeros_sink_soc_render: unable to get input buffer");
                   goto exit;
                }
 
-               if ( !sink->soc.videoPlaying || sink->flushStarted )
+               if ( sink->flushStarted )
                {
                   break;
                }
