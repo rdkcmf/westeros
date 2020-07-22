@@ -8324,8 +8324,9 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
    float m12= ctx->renderer->matrix[1];
    float m21= ctx->renderer->matrix[4];
    float epsilon= 1.0e-2;
-   if ( (fabs(m12) > epsilon) &&
-        (fabs(m21) > epsilon) )
+   if ( ((m12 > epsilon) &&
+         (m21 > epsilon)) ||
+        ((m12  < 0) || (m21 < 0)) )
    {
       isRotated= true;
    }
