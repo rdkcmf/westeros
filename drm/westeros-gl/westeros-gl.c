@@ -4784,12 +4784,12 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          }
       }
       #endif
+      pthread_mutex_lock( &gMutex );
       result= gRealEGLSwapBuffers( dpy, surface );
       if ( EGL_TRUE == result )
       {
          if ( gCtx )
          {
-            pthread_mutex_lock( &gMutex );
             nwIter= gCtx->nwFirst;
             while( nwIter )
             {
@@ -4802,9 +4802,9 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
                }
                nwIter= nwIter->next;
            }
-           pthread_mutex_unlock( &gMutex );
          }
       }
+      pthread_mutex_unlock( &gMutex );
    }
 
 exit:
