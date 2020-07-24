@@ -6011,6 +6011,7 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
                                               );
          }
       }
+      wstCompositorReleaseDetachedBuffers( ctx );
    }
 
    if ( surface->vpcSurface && surface->vpcSurface->pathTransitionPending )
