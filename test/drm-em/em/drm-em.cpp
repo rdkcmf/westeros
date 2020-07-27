@@ -4364,6 +4364,16 @@ EGLAPI __eglMustCastToProperFunctionPointerType EGLAPIENTRY eglGetProcAddress(co
       proc= (void*)glEGLImageTargetTexture2DOES;
    }
    else
+   if ( (len == 7) && !strncmp( procname, "glFlush", len ) )
+   {
+      proc= (void*)glFlush;
+   }
+   else
+   if ( (len == 8) && !strncmp( procname, "glFinish", len ) )
+   {
+      proc= (void*)glFinish;
+   }
+   else
    {
       proc= (void*)0;
    }

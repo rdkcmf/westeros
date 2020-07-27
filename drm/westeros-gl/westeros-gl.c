@@ -73,6 +73,10 @@
 
 #define DRM_NO_SRC_CROP
 
+#ifndef DRM_NO_REFRESH_LOCK
+#define USE_REFRESH_LOCK
+#endif
+
 #ifndef DRM_NO_OUT_FENCE
 #define DRM_USE_OUT_FENCE
 #define DRM_NO_NATIVE_FENCE
@@ -95,6 +99,11 @@ typedef EGLSyncKHR (*PREALEGLCREATESYNCKHR)(EGLDisplay, EGLenum, const EGLint *a
 typedef EGLBoolean (*PREALEGLDESTROYSYNCKHR)(EGLDisplay, EGLSyncKHR);
 typedef EGLint (*PREALEGLCLIENTWAITSYNCKHR)(EGLDisplay, EGLSyncKHR, EGLint, EGLint);
 typedef EGLint (*PREALEGLWAITSYNCKHR)(EGLDisplay, EGLSyncKHR, EGLint);
+#endif
+
+#ifdef USE_REFRESH_LOCK
+typedef void (*PREALGLFLUSH)( void );
+typedef void (*PREALGLFINISH)( void );
 #endif
 
 typedef struct _VideoServerCtx VideoServerCtx;
@@ -257,6 +266,11 @@ typedef struct _NativeWindowItem
    int width;
    int height;
    bool dirty;
+   #ifdef USE_REFRESH_LOCK
+   bool active;
+   pthread_mutex_t mutexRefresh;
+   pthread_cond_t condRefresh;
+   #endif
 } NativeWindowItem;
 
 typedef struct _WstGLCtx
@@ -353,7 +367,12 @@ static VideoServerCtx *gVideoServer= 0;
 static DisplayServerCtx *gDisplayServer= 0;
 static int gGraphicsMaxWidth= 0;
 static int gGraphicsMaxHeight= 0;
-static bool emitFPS= false;
+static bool g_emitFPS= false;
+#ifdef USE_REFRESH_LOCK
+static PREALGLFLUSH gRealGLFlush= 0;
+static PREALGLFINISH gRealGLFinish= 0;
+static bool g_useRefreshLock= false;
+#endif
 static int g_activeLevel= 2;
 static bool g_frameDebug= false;
 
@@ -2835,7 +2854,7 @@ static WstGLCtx *wstInitCtx( void )
 
    if ( getenv("WESTEROS_GL_FPS" ) )
    {
-      emitFPS= true;
+      g_emitFPS= true;
    }
 
    card= getenv("WESTEROS_DRM_CARD");
@@ -2894,11 +2913,29 @@ static WstGLCtx *wstInitCtx( void )
       drmver= drmGetVersion( ctx->drmFd );
       if ( drmver )
       {
+         int len;
+
          DEBUG("westeros-gl: drmGetVersion: %d.%d.%d name (%.*s) date (%.*s) desc (%.*s)",
                drmver->version_major, drmver->version_minor, drmver->version_patchlevel,
                drmver->name_len, drmver->name,
                drmver->date_len, drmver->date,
                drmver->desc_len, drmver->desc );
+
+         len= strlen( drmver->name );
+         if ( (len == 5) && !strncmp( drmver->name, "meson", len ) )
+         {
+            #ifdef USE_REFRESH_LOCK
+            if ( getenv("WESTEROS_GL_USE_REFRESH_LOCK") )
+            {
+               g_useRefreshLock= true;
+
+               gRealGLFlush= eglGetProcAddress("glFlush");
+               gRealGLFinish= eglGetProcAddress("glFinish");
+            }
+            INFO("using refresh lock: %d", g_useRefreshLock);
+            #endif
+         }
+
          drmFreeVersion( drmver );
       }
 
@@ -3673,6 +3710,37 @@ static void wstReleasePreviousBuffers( WstGLCtx *ctx )
    pthread_mutex_unlock( &ctx->mutex );
 }
 
+#ifdef USE_REFRESH_LOCK
+static void wstWindowsRefreshStart( WstGLCtx *ctx )
+{
+   NativeWindowItem *nw;
+   nw= gCtx->nwFirst;
+   while( nw )
+   {
+      if ( nw->active )
+      {
+         pthread_mutex_lock( &nw->mutexRefresh );
+         pthread_cond_signal( &nw->condRefresh );
+         pthread_mutex_unlock( &nw->mutexRefresh );
+      }
+      nw= nw->next;
+   }
+}
+
+static void wstWindowsRefreshStop( WstGLCtx *ctx )
+{
+   NativeWindowItem *nw;
+   nw= gCtx->nwFirst;
+   while( nw )
+   {
+      pthread_mutex_lock( &nw->mutexRefresh );
+      nw->active= true;
+      pthread_mutex_unlock( &nw->mutexRefresh );
+      nw= nw->next;
+   }
+}
+#endif
+
 static void *wstRefreshThread( void *arg )
 {
    WstGLCtx *ctx= (WstGLCtx*)arg;
@@ -3714,6 +3782,13 @@ static void *wstRefreshThread( void *arg )
             wstSwapDRMBuffers( ctx );
             delay= 3LL*refreshInterval/4LL;
          }
+         #ifdef USE_REFRESH_LOCK
+         if ( g_useRefreshLock )
+         {
+            wstWindowsRefreshStart( ctx );
+            wstWindowsRefreshStop( ctx );
+         }
+         #endif
          pthread_mutex_unlock( &gMutex );
       }
 
@@ -3800,6 +3875,39 @@ static void pageFlipEventHandler(int fd, unsigned int frame,
    }
 }
 
+#ifdef DRM_USE_OUT_FENCE
+static void wstSwapWaitFence( WstGLCtx *ctx )
+{
+   if ( ctx->nativeOutputFenceFd >= 0 )
+   {
+      int rc;
+      struct pollfd pfd;
+
+      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
+      pfd.fd= ctx->nativeOutputFenceFd;
+      pfd.events= POLLIN;
+      pfd.revents= 0;
+
+      for( ; ; )
+      {
+         rc= poll( &pfd, 1, 3000);
+         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
+         {
+            continue;
+         }
+         else if ( rc <= 0 )
+         {
+            if ( rc == 0 ) errno= ETIME;
+            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
+         }
+         break;
+      }
+      close( ctx->nativeOutputFenceFd );
+      ctx->nativeOutputFenceFd= -1;
+   }
+}
+#endif
+
 static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
 {
    int rc;
@@ -3811,6 +3919,17 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
    NativeWindowItem *nw;
 
    TRACE3("wstSwapDRMBuffersAtomic: atomic start");
+
+   #ifdef DRM_USE_OUT_FENCE
+   #ifdef USE_REFRESH_LOCK
+   if ( ctx->modeSet && g_useRefreshLock )
+   {
+   #endif
+   wstSwapWaitFence( ctx );
+   #ifdef USE_REFRESH_LOCK
+   }
+   #endif
+   #endif
 
    req= drmModeAtomicAlloc();
    if ( !req )
@@ -3874,7 +3993,14 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
       }
    }
 
-   if ( ctx->outputEnable && (!ctx->useVBlank || !ctx->modeSet) )
+   if ( ctx->outputEnable &&
+        (
+          !ctx->useVBlank || !ctx->modeSet
+          #ifdef USE_REFRESH_LOCK
+          || g_useRefreshLock
+          #endif
+        )
+      )
    {
       #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
       #ifdef DRM_USE_NATIVE_FENCE
@@ -4207,40 +4333,21 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
       ERROR("drmModeAtomicCommit failed: rc %d errno %d", rc, errno );
    }
 
+   #ifdef DRM_USE_OUT_FENCE
+   #ifdef USE_REFRESH_LOCK
+   if ( !ctx->modeSet || !g_useRefreshLock )
+   {
+   #endif
+   wstSwapWaitFence( ctx );
+   #ifdef USE_REFRESH_LOCK
+   }
+   #endif
+   #endif
+
    if ( flags & DRM_MODE_ATOMIC_ALLOW_MODESET )
    {
       ctx->modeSet= true;
    }
-
-   #ifdef DRM_USE_OUT_FENCE
-   if ( ctx->nativeOutputFenceFd >= 0 )
-   {
-      int rc;
-      struct pollfd pfd;
-
-      TRACE3("waiting on out fence fd %d", ctx->nativeOutputFenceFd);
-      pfd.fd= ctx->nativeOutputFenceFd;
-      pfd.events= POLLIN;
-      pfd.revents= 0;
-
-      for( ; ; )
-      {
-         rc= poll( &pfd, 1, 3000);
-         if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
-         {
-            continue;
-         }
-         else if ( rc <= 0 )
-         {
-            if ( rc == 0 ) errno= ETIME;
-            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
-         }
-         break;
-      }
-      close( ctx->nativeOutputFenceFd );
-      ctx->nativeOutputFenceFd= -1;
-   }
-   #endif
 
 exit:
 
@@ -4634,7 +4741,7 @@ done:
       pthread_mutex_lock( &gMutex );
    }
 
-   if ( emitFPS )
+   if ( g_emitFPS )
    {
       static int frameCount= 0;
       static long long lastReportTime= -1LL;
@@ -4786,27 +4893,65 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          }
       }
       #endif
-      pthread_mutex_lock( &gMutex );
-      result= gRealEGLSwapBuffers( dpy, surface );
-      if ( EGL_TRUE == result )
+      #ifdef USE_REFRESH_LOCK
+      if ( g_useRefreshLock )
       {
-         if ( gCtx )
+         nwIter= 0;
+         if ( gCtx && gCtx->isMaster )
          {
             nwIter= gCtx->nwFirst;
             while( nwIter )
             {
                if ( nwIter->surface == surface )
                {
-                  gCtx->dirty= true;
-                  nwIter->dirty= true;
                   TRACE3("mark nw %p dirty", nwIter);
                   break;
                }
                nwIter= nwIter->next;
            }
          }
+         if ( nwIter )
+         {
+            if ( gRealGLFlush ) gRealGLFlush();
+            if ( gRealGLFinish ) gRealGLFinish();
+            pthread_mutex_lock( &nwIter->mutexRefresh );
+            pthread_cond_wait( &nwIter->condRefresh, &nwIter->mutexRefresh );
+         }
+         result= gRealEGLSwapBuffers( dpy, surface );
+         if ( nwIter )
+         {
+            gCtx->dirty= true;
+            nwIter->dirty= true;
+            pthread_mutex_unlock( &nwIter->mutexRefresh );
+         }
       }
-      pthread_mutex_unlock( &gMutex );
+      else
+      {
+      #endif
+         pthread_mutex_lock( &gMutex );
+         result= gRealEGLSwapBuffers( dpy, surface );
+         if ( EGL_TRUE == result )
+         {
+            if ( gCtx )
+            {
+               nwIter= gCtx->nwFirst;
+               while( nwIter )
+               {
+                  if ( nwIter->surface == surface )
+                  {
+                     gCtx->dirty= true;
+                     nwIter->dirty= true;
+                     TRACE3("mark nw %p dirty", nwIter);
+                     break;
+                  }
+                  nwIter= nwIter->next;
+              }
+            }
+         }
+         pthread_mutex_unlock( &gMutex );
+      #ifdef USE_REFRESH_LOCK
+      }
+      #endif
    }
 
 exit:
@@ -5334,6 +5479,10 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
       nwItem= (NativeWindowItem*)calloc( 1, sizeof(NativeWindowItem) );
       if ( nwItem )
       {
+         #ifdef USE_REFRESH_LOCK
+         pthread_mutex_init( &nwItem->mutexRefresh, 0 );
+         pthread_cond_init( &nwItem->condRefresh, 0);
+         #endif
          nativeWindow= gbm_surface_create(ctx->gbm,
                                           width, height,
                                           GBM_FORMAT_ARGB8888,
@@ -5431,6 +5580,10 @@ void WstGLDestroyNativeWindow( WstGLCtx *ctx, void *nativeWindow )
                {
                   ctx->nwLast= nwPrev;
                }
+               #ifdef USE_REFRESH_LOCK
+               pthread_mutex_destroy( &nwIter->mutexRefresh );
+               pthread_cond_destroy( &nwIter->condRefresh );
+               #endif
                free( nwIter );
                if ( !ctx->nwFirst && !ctx->usingSetDisplayMode )
                {
