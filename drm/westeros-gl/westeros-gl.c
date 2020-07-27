@@ -198,6 +198,7 @@ typedef struct _VideoFrameManager
    long long frameTimeCurrent;
    long long adjust;
    int bufferIdCurrent;
+   bool syncInit;
    void *sync;
 } VideoFrameManager;
 
@@ -2388,10 +2389,6 @@ static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *con
          vfm->queue[i].fd2= -1;
          vfm->queue[i].bufferId= -1;
       }
-
-      #ifdef WESTEROS_GL_AVSYNC
-      wstAVSyncInit( vfm, conn->sessionId );
-      #endif
    }
 
 exit:
@@ -2435,6 +2432,11 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
    FRAME("vfm push frame %d bufferId %d", f->frameNumber, f->bufferId);
 
    #ifdef WESTEROS_GL_AVSYNC
+   if ( !vfm->syncInit )
+   {
+      vfm->syncInit= true;
+      wstAVSyncInit( vfm, vfm->conn->sessionId );
+   }
    if ( vfm->sync )
    {
       wstAVSyncPush( vfm, f );
