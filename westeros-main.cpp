@@ -2367,12 +2367,14 @@ int main( int argc, char** argv)
 
             while( g_running )
             {
-               usleep( 10000 );
-
                if ( appCtx->dirty )
                {
                   appCtx->dirty= false;
                   draw( wctx, appCtx );
+               }
+               else
+               {
+                  usleep( 10000 );
                }
             }
             
