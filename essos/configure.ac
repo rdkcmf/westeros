@@ -62,6 +62,15 @@ AM_CONDITIONAL([HAVE_WAYLAND], [test x$HAVE_WAYLAND = xtrue])
 AM_CONDITIONAL([HAVE_WAYLAND_EGL], [test x$HAVE_WAYLAND_EGL = xtrue])
 AM_CONDITIONAL([HAVE_XKB], [test x$HAVE_XKB = xtrue])
 
+AC_ARG_ENABLE([essoswesterosfree],
+  [ --enable-essoswesterosfree   Build Essos without Westeros],
+  [ case "${enableval}" in
+    yes) essoswesterosfree=true ;;
+    no)  essoswesterosfree=false ;;
+    *) AC_MSG_ERROR([bad value ${enableval} for --enable-essoswesterosfree]) ;;
+   esac],[essoswesterosfree=false])
+AM_CONDITIONAL([NO_WESTEROS], [test x$essoswesterosfree = xtrue])
+
 AC_CONFIG_FILES([Makefile])
 AC_SUBST(HAVE_EGL)
 AC_SUBST(HAVE_WAYLAND)
