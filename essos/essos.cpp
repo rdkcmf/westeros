@@ -655,10 +655,12 @@ bool EssContextSetDisplayMode( EssCtx *ctx, const char *mode )
          WARNING("EssContextSetDisplayMode ignored for Wayland");
          result= true;
       }
+      #ifdef HAVE_WESTEROS
       else
       {
          result= essPlatformSetDisplayModeDirect( ctx, mode );
       }
+      #endif
 
       pthread_mutex_unlock( &ctx->mutex );
    }
@@ -1019,12 +1021,14 @@ bool EssContextSetGamepadConnectionListener( EssCtx *ctx, void *userData, EssGam
 
       pthread_mutex_unlock( &ctx->mutex );
 
+      #ifdef HAVE_WESTEROS
       // Notify listener of any existing gamepads
       for( int i= 0; i < pads.size(); ++i )
       {
          EssGamepad *gp= pads[i];
          essGamepadNotifyConnected( ctx, gp );
       }
+      #endif
    }
 
    return result;
@@ -1034,6 +1038,7 @@ bool EssGamepadSetEventListener( EssGamepad *gp, void *userData, EssGamepadEvent
 {
    bool result= false;
 
+   #ifdef HAVE_WESTEROS
    if ( gp )
    {
       EssCtx *ctx= gp->ctx;
@@ -1047,6 +1052,7 @@ bool EssGamepadSetEventListener( EssGamepad *gp, void *userData, EssGamepadEvent
 
       pthread_mutex_unlock( &ctx->mutex );
    }
+   #endif
 
    return result;
 }
@@ -1055,6 +1061,7 @@ const char *EssGamepadGetDeviceName( EssGamepad *gp )
 {
    const char *name= 0;
 
+   #ifdef HAVE_WESTEROS
    if ( gp )
    {
       EssCtx *ctx= gp->ctx;
@@ -1094,6 +1101,7 @@ const char *EssGamepadGetDeviceName( EssGamepad *gp )
 
       pthread_mutex_unlock( &ctx->mutex );
    }
+   #endif
 
    return name;
 }
@@ -1102,6 +1110,7 @@ unsigned int EssGamepadGetDriverVersion( EssGamepad *gp )
 {
    unsigned int version= 0;
 
+   #ifdef HAVE_WESTEROS
    if ( gp )
    {
       EssCtx *ctx= gp->ctx;
@@ -1121,6 +1130,7 @@ unsigned int EssGamepadGetDriverVersion( EssGamepad *gp )
          pthread_mutex_unlock( &ctx->mutex );
       }
    }
+   #endif
 
    return version;
 }
@@ -1129,6 +1139,7 @@ bool EssGamepadGetButtonMap( EssGamepad *gp, int *count, int *map )
 {
    bool result= false;
 
+   #ifdef HAVE_WESTEROS
    if ( gp )
    {
       EssCtx *ctx= gp->ctx;
@@ -1158,6 +1169,7 @@ bool EssGamepadGetButtonMap( EssGamepad *gp, int *count, int *map )
          pthread_mutex_unlock( &ctx->mutex );
       }
    }
+   #endif
 
    return result;
 }
@@ -1166,6 +1178,7 @@ bool EssGamepadGetAxisMap( EssGamepad *gp, int *count, int *map )
 {
    bool result= false;
 
+   #ifdef HAVE_WESTEROS
    if ( gp )
    {
       EssCtx *ctx= gp->ctx;
@@ -1195,6 +1208,7 @@ bool EssGamepadGetAxisMap( EssGamepad *gp, int *count, int *map )
          pthread_mutex_unlock( &ctx->mutex );
       }
    }
+   #endif
 
    return result;
 }
@@ -1203,6 +1217,7 @@ bool EssGamepadGetState( EssGamepad *gp, int *buttonState, int *axisState )
 {
    bool result= false;
 
+   #ifdef HAVE_WESTEROS
    if ( gp )
    {
       EssCtx *ctx= gp->ctx;
@@ -1226,6 +1241,7 @@ bool EssGamepadGetState( EssGamepad *gp, int *buttonState, int *axisState )
          pthread_mutex_unlock( &ctx->mutex );
       }
    }
+   #endif
 
    return result;
 }
@@ -1326,11 +1342,13 @@ void EssContextStop( EssCtx *ctx )
 
       if ( ctx->isRunning )
       {
+         #ifdef HAVE_WESTEROS
          if  (!ctx->isWayland )
          {
             essMonitorInputDevicesLifecycleEnd( ctx );
             essReleaseInputDevices( ctx );
          }
+         #endif
 
          essEGLTerm( ctx );
 
@@ -1473,9 +1491,11 @@ bool EssContextSetWindowPosition( EssCtx *ctx, int x, int y )
          {
             if ( !ctx->fullScreen )
             {
+               #ifdef HAVE_WESTEROS
                wl_simple_shell_set_geometry( ctx->shell, ctx->appSurfaceId,
                                              ctx->windowX, ctx->windowY,
                                              ctx->windowWidth, ctx->windowHeight );
+               #endif
             }
          }
          else
@@ -1806,11 +1826,13 @@ static void essInitInput( EssCtx *ctx )
       {
          // Setup during wayland registry processing
       }
+      #ifdef HAVE_WESTEROS
       else
       {
          essGetInputDevices( ctx );
          essMonitorInputDevicesLifecycleBegin( ctx );
       }
+      #endif
    }
 }
 
@@ -1949,6 +1971,7 @@ static bool essResize( EssCtx *ctx, int width, int height )
       }
       #endif
    }
+   #ifdef HAVE_WESTEROS
    else
    {
       if ( ctx->eglDisplay != EGL_NO_DISPLAY )
@@ -1997,6 +2020,7 @@ static bool essResize( EssCtx *ctx, int width, int height )
          }
       }
    }
+   #endif
 
    if ( result )
    {
@@ -2691,6 +2715,7 @@ static const struct wl_output_listener essOutputListener = {
    essOutputScale
 };
 
+#ifdef HAVE_WESTEROS
 static void essShellSurfaceId(void *data,
                            struct wl_simple_shell *wl_simple_shell,
                            struct wl_surface *surface,
@@ -2783,6 +2808,7 @@ static const struct wl_simple_shell_listener shellListener =
    essShellSurfaceStatus,
    essShellGetSurfacesDone
 };
+#endif
 
 static void essRegistryHandleGlobal(void *data, 
                                     struct wl_registry *registry, uint32_t id,
@@ -2809,11 +2835,13 @@ static void essRegistryHandleGlobal(void *data,
       wl_output_add_listener(ctx->wloutput, &essOutputListener, ctx);
       wl_display_roundtrip(ctx->wldisplay);
    }
+   #ifdef HAVE_WESTEROS
    else if ( (len==15) && !strncmp(interface, "wl_simple_shell", len) ) {
       ctx->shell= (struct wl_simple_shell*)wl_registry_bind(registry, id, &wl_simple_shell_interface, 1);
       DEBUG("shell %p", ctx->shell );
       wl_simple_shell_add_listener(ctx->shell, &shellListener, ctx);
    }
+   #endif
 }
 
 static void essRegistryHandleGlobalRemove(void *data, 
