@@ -152,6 +152,7 @@ struct _GstWesterosSinkSoc
    gboolean captureEnabled;
    gboolean pauseException;
    gboolean pauseGetGfxFrame;
+   gboolean useGfxSync;
    int pauseGfxBuffIndex;
    int hideVideoFramesDelay;
    int hideGfxFramesDelay;

@@ -3217,6 +3217,9 @@ static bool testCaseSocSinkBasicPipelineGfx( EMCTX *emctx )
    bool needHolePunch;
    int hints;
 
+   memset( matrix, 0, sizeof(matrix) );
+   matrix[0]= matrix[5]= matrix[10]= matrix[15]= 1.0;
+
    wctx= WstCompositorCreate();
    if ( !wctx )
    {
@@ -5870,6 +5873,9 @@ static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx 
    int bufferIdBase= 1700;
    int bufferIdCount= 3;
    int retryCount;
+
+   memset( matrix, 0, sizeof(matrix) );
+   matrix[0]= matrix[5]= matrix[10]= matrix[15]= 1.0;
 
    memset( &testCtx, 0, sizeof(TestCtx) );
 

@@ -120,6 +120,10 @@ static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
+static void wstProcessTextureSignal( GstWesterosSink *sink, int buffIndex );
+static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex );
+static int wstFindVideoBuffer( GstWesterosSink *sink, int frameNumber );
+static int wstFindCurrentVideoBuffer( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
@@ -350,6 +354,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.useCaptureOnly= FALSE;
    sink->soc.pauseException= FALSE;
    sink->soc.pauseGetGfxFrame= FALSE;
+   sink->soc.useGfxSync= FALSE;
    sink->soc.pauseGfxBuffIndex= -1;
    sink->soc.hideVideoFramesDelay= 2;
    sink->soc.hideGfxFramesDelay= 1;
@@ -385,7 +390,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
    if ( getenv("WESTEROS_SINK_USE_FREERUN") )
    {
-      // in data gets > 4 sec ahead of output and decoder skips data
       gst_base_sink_set_sync(GST_BASE_SINK(sink), FALSE);
       printf("westeros-sink: using freerun\n");
    }
@@ -588,6 +592,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    {
       sink->soc.hideVideoFramesDelay= 2;
       sink->soc.hideGfxFramesDelay= 3;
+      sink->soc.useGfxSync= TRUE;
    }
 
    eb.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -1240,6 +1245,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
    sink->soc.frameHeightStream= -1;
+   sink->soc.pauseGfxBuffIndex= -1;
    sink->soc.syncType= -1;
 
    if ( sink->soc.inputFormats )
@@ -2787,6 +2793,48 @@ static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, b
    }
 }
 
+static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bool hide )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[7];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 2;
+      mbody[len++]= 'H';
+      mbody[len++]= (hide ? 1 : 0);
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent hide %d to video server", hide);
+         FRAME("sent hide %d to video server", hide);
+      }
+   }
+}
+
 static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *conn )
 {
    if ( conn )
@@ -2939,6 +2987,25 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                              if ( sink->soc.outBuffers[bi].locked )
                              {
                                 FRAME("out:       release received for buffer %d (%d)", bid, bi);
+                                if ( sink->soc.useGfxSync &&
+                                     !sink->soc.videoPaused &&
+                                     (bi != sink->soc.pauseGfxBuffIndex) &&
+                                     (sink->soc.enableTextureSignal ||
+                                      (sink->soc.captureEnabled && sink->soc.sb)) )
+                                {
+                                   int buffIndex= wstFindVideoBuffer( sink, sink->soc.outBuffers[bi].frameNumber+2 );
+                                   if ( buffIndex >= 0 )
+                                   {
+                                      if ( sink->soc.enableTextureSignal )
+                                      {
+                                         wstProcessTextureSignal( sink, buffIndex );
+                                      }
+                                      else if ( sink->soc.captureEnabled && sink->soc.sb )
+                                      {
+                                         wstProcessTextureWayland( sink, buffIndex );
+                                      }
+                                   }
+                                }
                                 if ( wstUnlockOutputBuffer( sink, bi ) )
                                 {
                                    wstRequeueOutputBuffer( sink, bi );
@@ -3131,51 +3198,27 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          {
             fd[2]= fdToSend2;
          }
-      }
-      else
-      {
-         i= 0;
-         mbody[i++]= 'V';
-         mbody[i++]= 'S';
-         mbody[i++]= 1;
-         mbody[i++]= 'H';
-
-         iov[0].iov_base= (char*)mbody;
-         iov[0].iov_len= i;
-
-         msg.msg_name= NULL;
-         msg.msg_namelen= 0;
-         msg.msg_iov= iov;
-         msg.msg_iovlen= 1;
-         msg.msg_control= 0;
-         msg.msg_controllen= 0;
-         msg.msg_flags= 0;
-
-         fdToSend0= fdToSend1= fdToSend2= -1;
-      }
-
-      GST_LOG( "%lld: send frame: %d, fd (%d, %d, %d [%d, %d, %d])", getCurrentTimeMillis(), buffIndex, frameFd0, frameFd1, frameFd2, fdToSend0, fdToSend1, fdToSend2);
-      if ( buffIndex >= 0 )
-      {
+         GST_LOG( "%lld: send frame: %d, fd (%d, %d, %d [%d, %d, %d])", getCurrentTimeMillis(), buffIndex, frameFd0, frameFd1, frameFd2, fdToSend0, fdToSend1, fdToSend2);
          wstLockOutputBuffer( sink, buffIndex );
          FRAME("out:       send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
-      }
-      do
-      {
-         sentLen= sendmsg( conn->socketFd, &msg, 0 );
-      }
-      while ( (sentLen < 0) && (errno == EINTR));
 
-      conn->sink->soc.outBuffers[buffIndex].frameNumber= conn->sink->soc.frameOutCount-1;
+         do
+         {
+            sentLen= sendmsg( conn->socketFd, &msg, 0 );
+         }
+         while ( (sentLen < 0) && (errno == EINTR));
 
-      if ( sentLen == iov[0].iov_len )
-      {
-         result= true;
-      }
-      else
-      {
-         FRAME("out:       failed send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
-         wstUnlockOutputBuffer( sink, buffIndex );
+         conn->sink->soc.outBuffers[buffIndex].frameNumber= conn->sink->soc.frameOutCount-1;
+
+         if ( sentLen == iov[0].iov_len )
+         {
+            result= true;
+         }
+         else
+         {
+            FRAME("out:       failed send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
+            wstUnlockOutputBuffer( sink, buffIndex );
+         }
       }
 
 exit:
@@ -3259,12 +3302,13 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
         (binfo->buffIndex >= 0) &&
         (binfo->cohort == sink->soc.bufferCohort) )
    {
+      FRAME("out:       wayland release received for buffer %d", binfo->buffIndex);
       LOCK(sink);
-      if ( sink->soc.pauseGfxBuffIndex == binfo->buffIndex )
+      if ( binfo->buffIndex == sink->soc.pauseGfxBuffIndex )
       {
-         wstUnlockOutputBuffer( sink, binfo->buffIndex );
+         sink->soc.pauseGfxBuffIndex= -1;
       }
-      if ( !sink->soc.outBuffers[binfo->buffIndex].queued )
+      if ( wstUnlockOutputBuffer( sink, binfo->buffIndex ) )
       {
          wstRequeueOutputBuffer( sink, binfo->buffIndex );
       }
@@ -3298,42 +3342,45 @@ static bool wstLocalRateControl( GstWesterosSink *sink, int buffIndex )
       goto exit;
    }
 
-   if ( sink->soc.enableTextureSignal ||
-        (sink->soc.captureEnabled && sink->soc.sb) )
+   if ( !sink->soc.conn || !sink->soc.useGfxSync )
    {
-      if ( conn )
+      if ( sink->soc.enableTextureSignal ||
+           (sink->soc.captureEnabled && sink->soc.sb) )
       {
-         gint64 interval= (sink->soc.prevFramePTSGfx != 0LL) ? framePTS-sink->soc.prevFramePTSGfx : 0LL;
-
-         /*
-          * If the stream frame rate is greater than the display
-          * refresh rate reported by the server, drop frames as necessary
-          */
-         if ( conn->serverRefreshRate && (buffIndex >= 0) )
+         if ( conn )
          {
-            if ( (sink->soc.prevFramePTSGfx != 0LL) && (interval < conn->serverRefreshPeriod) )
+            gint64 interval= (sink->soc.prevFramePTSGfx != 0LL) ? framePTS-sink->soc.prevFramePTSGfx : 0LL;
+
+            /*
+             * If the stream frame rate is greater than the display
+             * refresh rate reported by the server, drop frames as necessary
+             */
+            if ( conn->serverRefreshRate && (buffIndex >= 0) )
             {
-               FRAME("set drop true: interval %lld refresh period %lld gfx", interval, conn->serverRefreshPeriod);
-               drop= true;
-               goto exit;
+               if ( (sink->soc.prevFramePTSGfx != 0LL) && (interval < conn->serverRefreshPeriod) )
+               {
+                  FRAME("set drop true: interval %lld refresh period %lld gfx", interval, conn->serverRefreshPeriod);
+                  drop= true;
+                  goto exit;
+               }
             }
          }
-      }
 
-      currFrameTime= g_get_monotonic_time();
-      if ( sink->soc.prevFrameTimeGfx && sink->soc.prevFramePTSGfx )
-      {
-         gint64 framePeriod= currFrameTime-sink->soc.prevFrameTimeGfx;
-         gint64 nominalFramePeriod= framePTS-sink->soc.prevFramePTSGfx;
-         gint64 delay= (nominalFramePeriod-framePeriod)/1000;
-         if ( (delay > 2) && (delay <= nominalFramePeriod) )
+         currFrameTime= g_get_monotonic_time();
+         if ( sink->soc.prevFrameTimeGfx && sink->soc.prevFramePTSGfx )
          {
-            usleep( (delay-1)*1000 );
-            currFrameTime= g_get_monotonic_time();
+            gint64 framePeriod= currFrameTime-sink->soc.prevFrameTimeGfx;
+            gint64 nominalFramePeriod= framePTS-sink->soc.prevFramePTSGfx;
+            gint64 delay= (nominalFramePeriod-framePeriod)/1000;
+            if ( (delay > 2) && (delay <= nominalFramePeriod) )
+            {
+               usleep( (delay-1)*1000 );
+               currFrameTime= g_get_monotonic_time();
+            }
          }
+         sink->soc.prevFrameTimeGfx= currFrameTime;
+         sink->soc.prevFramePTSGfx= framePTS;
       }
-      sink->soc.prevFrameTimeGfx= currFrameTime;
-      sink->soc.prevFramePTSGfx= framePTS;
    }
 
 exit:
@@ -3471,6 +3518,8 @@ static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex )
          wl_surface_commit( sink->surface );
          wl_display_flush( sink->display );
 
+         wstLockOutputBuffer( sink, buffIndex );
+
          ++sink->soc.activeBuffers;
 
          result= true;;
@@ -3485,7 +3534,11 @@ static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex )
          {
             if ( --sink->soc.framesBeforeHideVideo == 0 )
             {
-               wstSendFrameVideoClientConnection( sink->soc.conn, -1 );
+               wstSendHideVideoClientConnection( sink->soc.conn, true );
+               if ( !sink->soc.useGfxSync )
+               {
+                  wstSendFlushVideoClientConnection( sink->soc.conn );
+               }
             }
          }
       }
@@ -3498,12 +3551,31 @@ static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex )
    return result;
 }
 
+static int wstFindVideoBuffer( GstWesterosSink *sink, int frameNumber )
+{
+   int buffIndex= -1;
+   int i;
+
+   for( i= 0; i < sink->soc.numBuffersOut; ++i )
+   {
+      if ( sink->soc.outBuffers[i].locked )
+      {
+         if ( sink->soc.outBuffers[i].frameNumber == frameNumber )
+         {
+            buffIndex= i;
+            break;
+         }
+      }
+   }
+
+   return buffIndex;
+}
+
 static int wstFindCurrentVideoBuffer( GstWesterosSink *sink )
 {
    int buffIndex= -1;
    int i, oldestFrame= INT_MAX;
 
-   LOCK(sink);
    for( i= 0; i < sink->soc.numBuffersOut; ++i )
    {
       if ( sink->soc.outBuffers[i].locked )
@@ -3515,7 +3587,6 @@ static int wstFindCurrentVideoBuffer( GstWesterosSink *sink )
          }
       }
    }
-   UNLOCK(sink);
 
    return buffIndex;
 }
@@ -3611,14 +3682,14 @@ capture_start:
 
          if ( sink->soc.pauseException )
          {
+            LOCK(sink);
             sink->soc.pauseException= FALSE;
-            if ( sink->soc.pauseGetGfxFrame )
+            if ( sink->soc.useGfxSync && sink->soc.pauseGetGfxFrame )
             {
                sink->soc.pauseGetGfxFrame= FALSE;
                buffIndex= wstFindCurrentVideoBuffer( sink );
                if ( buffIndex >= 0 )
                {
-                  wstLockOutputBuffer( sink, buffIndex );
                   sink->soc.pauseGfxBuffIndex= buffIndex;
                   if ( sink->soc.enableTextureSignal )
                   {
@@ -3630,6 +3701,7 @@ capture_start:
                   }
                }
             }
+            UNLOCK(sink);
          }
 
          usleep( 1000 );
@@ -3643,14 +3715,6 @@ capture_start:
 
          if ( wasPaused && !sink->soc.videoPaused )
          {
-            if ( sink->soc.pauseGfxBuffIndex >= 0 )
-            {
-               if ( wstUnlockOutputBuffer( sink, sink->soc.pauseGfxBuffIndex ) )
-               {
-                  wstRequeueOutputBuffer( sink, sink->soc.pauseGfxBuffIndex );
-               }
-               sink->soc.pauseGfxBuffIndex= -1;
-            }
             wstSendPauseVideoClientConnection( sink->soc.conn, false);
             wasPaused= false;
             haveBaseTime= false;
@@ -3692,6 +3756,7 @@ capture_start:
          if ( sink->soc.quitVideoOutputThread ) break;
 
          {
+            bool gfxFrame= false;
             sink->soc.resubFd= -1;
 
             gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
@@ -3727,18 +3792,23 @@ capture_start:
                gst_westeros_sink_soc_update_video_position( sink );
             }
 
-            if ( sink->soc.enableTextureSignal )
+            if ( !sink->soc.useGfxSync || !sink->soc.conn )
             {
-               wstProcessTextureSignal( sink, buffIndex );
-            }
-            else if ( sink->soc.captureEnabled && sink->soc.sb )
-            {
-               if ( wstProcessTextureWayland( sink, buffIndex ) )
+               if ( sink->soc.enableTextureSignal )
                {
-                  buffIndex= -1;
+                  gfxFrame= true;
+                  wstProcessTextureSignal( sink, buffIndex );
+               }
+               else if ( sink->soc.captureEnabled && sink->soc.sb )
+               {
+                  if ( wstProcessTextureWayland( sink, buffIndex ) )
+                  {
+                     gfxFrame= true;
+                     buffIndex= -1;
+                  }
                }
             }
-            else
+            if ( sink->soc.conn && !gfxFrame )
             {
                sink->soc.resubFd= sink->soc.prevFrame2Fd;
                sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
@@ -3759,6 +3829,7 @@ capture_start:
                      wl_surface_commit( sink->surface );
                      wl_display_flush(sink->display);
                      wl_display_dispatch_queue_pending(sink->display, sink->queue);
+                     wstSendHideVideoClientConnection( sink->soc.conn, false );
                   }
                }
             }
