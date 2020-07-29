@@ -1750,6 +1750,9 @@ static bool testCaseSocSinkBasicPipelineGfx( EMCTX *emctx )
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( matrix, 0, sizeof(matrix) );
+   matrix[0]= matrix[5]= matrix[10]= matrix[15]= 1.0;
+
    EMStart( emctx );
 
    result= testSetupEGL( &eglCtxS, 0 );

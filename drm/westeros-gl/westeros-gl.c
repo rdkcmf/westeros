@@ -234,6 +234,8 @@ typedef struct _WstOverlayPlane
    VideoFrameManager *vfm;
    bool dirty;
    bool readyToFlip;
+   bool hide;
+   bool hidden;
    int frameCount;
    long long flipTimeBase;
    long long frameTimeBase;
@@ -694,6 +696,8 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
       overlay->frameCount= 0;
       overlay->frameTimeBase= 0;
       overlay->flipTimeBase= 0;
+      overlay->hide= false;
+      overlay->hidden= false;
       for( i= 0; i < ACTIVE_FRAMES; ++i )
       {
          overlay->videoFrame[i].plane= 0;
@@ -1244,6 +1248,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                                  videoFrame.frameTime= frameTime;
                                  videoFrame.frameNumber= conn->videoPlane->frameCount++;
                                  videoFrame.vf= 0;
+                                 conn->videoPlane->hidden= false;
                                  wstVideoFrameManagerPushFrame( conn->videoPlane->vfm, &videoFrame );
                                  pthread_mutex_unlock( &gMutex );
                               }
@@ -1281,12 +1286,12 @@ static void *wstVideoServerConnectionThread( void *arg )
                         break;
                      case 'H':
                         {
-                           DEBUG("got hide video plane %d", conn->videoPlane->plane->plane_id);
+                           bool hide= (m[1] == 1);
+                           DEBUG("got hide (%d) video plane %d", hide, conn->videoPlane->plane->plane_id);
                            pthread_mutex_lock( &gMutex );
-                           conn->videoPlane->videoFrame[FRAME_NEXT].hide= true;
                            gCtx->dirty= true;
                            conn->videoPlane->dirty= true;
-                           wstVideoServerFlush( conn );
+                           conn->videoPlane->hide= hide;
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
@@ -3289,7 +3294,10 @@ static WstGLCtx *wstInitCtx( void )
       }
       #endif
 
-      wstStartRefreshThread(ctx);
+      if ( ctx->isMaster )
+      {
+         wstStartRefreshThread(ctx);
+      }
    }
    else
    {
@@ -3622,20 +3630,11 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
             {
                if ( frame->fbId != iter->videoFrame[FRAME_CURR].fbId )
                {
-                  if ( !iter->videoFrame[FRAME_NEXT].hide )
-                  {
-                     iter->videoFrame[FRAME_NEXT]= *frame;
-                  }
+                  iter->videoFrame[FRAME_NEXT]= *frame;
                   iter->dirty= true;
                   iter->readyToFlip= true;
                   dirty= true;
                }
-            }
-            if ( iter->videoFrame[FRAME_NEXT].hide )
-            {
-               iter->dirty= true;
-               iter->readyToFlip= true;
-               dirty= true;
             }
          }
          iter= iter->next;
@@ -4059,83 +4058,83 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                   }
                }
             }
-         }
-         if ( nw->fbId )
-         {
-            #ifdef DRM_USE_NATIVE_FENCE
-            if ( ctx->fenceSync )
+            if ( nw->fbId )
             {
-               EGLint waitResult;
-               for( ; ; )
+               #ifdef DRM_USE_NATIVE_FENCE
+               if ( ctx->fenceSync )
                {
-                  waitResult= gRealEGLClientWaitSyncKHR( ctx->dpy,
-                                                    ctx->fenceSync,
-                                                    0, // flags
-                                                    EGL_FOREVER_KHR );
-                  if ( waitResult == EGL_CONDITION_SATISFIED_KHR )
+                  EGLint waitResult;
+                  for( ; ; )
                   {
-                     break;
+                     waitResult= gRealEGLClientWaitSyncKHR( ctx->dpy,
+                                                       ctx->fenceSync,
+                                                       0, // flags
+                                                       EGL_FOREVER_KHR );
+                     if ( waitResult == EGL_CONDITION_SATISFIED_KHR )
+                     {
+                        break;
+                     }
                   }
+                  gRealEGLDestroySyncKHR( ctx->dpy, ctx->fenceSync );
+                  ctx->fenceSync= EGL_NO_SYNC_KHR;
                }
-               gRealEGLDestroySyncKHR( ctx->dpy, ctx->fenceSync );
-               ctx->fenceSync= EGL_NO_SYNC_KHR;
-            }
-            #endif
+               #endif
 
-            if ( ctx->outputEnable )
-            {
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "FB_ID", nw->fbId );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "CRTC_ID", nw->windowPlane->crtc_id );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "SRC_X", 0 );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "SRC_Y", 0 );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "SRC_W", nw->width<<16 );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "SRC_H", nw->height<<16 );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "CRTC_X", 0 );
-
-               if ( ctx->graphicsEnable )
+               if ( ctx->outputEnable )
                {
                   wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                         nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                        "CRTC_Y", 0 );
-               }
-               else
-               {
+                                        "FB_ID", nw->fbId );
+
                   wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                         nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                        "CRTC_Y", -ctx->modeInfo->vdisplay+2 );
+                                        "CRTC_ID", nw->windowPlane->crtc_id );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "SRC_X", 0 );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "SRC_Y", 0 );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "SRC_W", nw->width<<16 );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "SRC_H", nw->height<<16 );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "CRTC_X", 0 );
+
+                  if ( ctx->graphicsEnable )
+                  {
+                     wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                           nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                           "CRTC_Y", 0 );
+                  }
+                  else
+                  {
+                     wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                           nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                           "CRTC_Y", -ctx->modeInfo->vdisplay+2 );
+                  }
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "CRTC_W", ctx->modeInfo->hdisplay );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "CRTC_H", ctx->modeInfo->vdisplay );
+
+                  wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                        nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                        "IN_FENCE_FD", -1 );
                }
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "CRTC_W", ctx->modeInfo->hdisplay );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "CRTC_H", ctx->modeInfo->vdisplay );
-
-               wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
-                                     nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
-                                     "IN_FENCE_FD", -1 );
             }
          }
          nw= nw->next;
@@ -4259,13 +4258,26 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                                         iter->planeProps->count_props, iter->planePropRes,
                                         "SRC_H", sh<<16 );
 
-                  wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                        iter->planeProps->count_props, iter->planePropRes,
-                                        "CRTC_X", dx );
+                  if ( iter->hide )
+                  {
+                     wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                           iter->planeProps->count_props, iter->planePropRes,
+                                           "CRTC_X", ctx->modeInfo->hdisplay-2 );
 
-                  wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                        iter->planeProps->count_props, iter->planePropRes,
-                                        "CRTC_Y", dy );
+                     wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                           iter->planeProps->count_props, iter->planePropRes,
+                                           "CRTC_Y", ctx->modeInfo->vdisplay-2 );
+                  }
+                  else
+                  {
+                     wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                           iter->planeProps->count_props, iter->planePropRes,
+                                           "CRTC_X", dx );
+
+                     wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                           iter->planeProps->count_props, iter->planePropRes,
+                                           "CRTC_Y", dy );
+                  }
 
                   wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
                                         iter->planeProps->count_props, iter->planePropRes,
@@ -4280,44 +4292,6 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                                         "IN_FENCE_FD", -1 );
 
                   FRAME("commit frame %d buffer %d", iter->videoFrame[FRAME_CURR].frameNumber, iter->videoFrame[FRAME_CURR].bufferId);
-               }
-            }
-            else if ( iter->videoFrame[FRAME_NEXT].hide && !iter->videoFrame[FRAME_NEXT].hidden )
-            {
-               iter->videoFrame[FRAME_FREE]= iter->videoFrame[FRAME_PREV];
-               iter->videoFrame[FRAME_PREV]= iter->videoFrame[FRAME_CURR];
-
-               if ( iter->videoFrame[FRAME_CURR].fbId != 0 )
-               {
-                  iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
-                  DEBUG("hiding video plane %d", iter->plane->plane_id);
-
-                  wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                        iter->planeProps->count_props, iter->planePropRes,
-                                        "FB_ID", 0 );
-
-                  wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
-                                        iter->planeProps->count_props, iter->planePropRes,
-                                        "CRTC_ID", 0 );
-               }
-
-               iter->videoFrame[FRAME_CURR].fbId= 0;
-               iter->videoFrame[FRAME_CURR].handle0= 0;
-               iter->videoFrame[FRAME_CURR].handle1= 0;
-               iter->videoFrame[FRAME_CURR].fd0= -1;
-               iter->videoFrame[FRAME_CURR].fd1= -1;
-               iter->videoFrame[FRAME_CURR].fd2= -1;
-               iter->videoFrame[FRAME_CURR].bufferId= -1;
-               iter->videoFrame[FRAME_CURR].vf= 0;
-               if ( iter->videoFrame[FRAME_PREV].fbId )
-               {
-                  ctx->dirty= true;
-                  iter->dirty= true;
-               }
-               else
-               {
-                  iter->videoFrame[FRAME_NEXT].hide= false;
-                  iter->videoFrame[FRAME_NEXT].hidden= true;
                }
             }
          }
