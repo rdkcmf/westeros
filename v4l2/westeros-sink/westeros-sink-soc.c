@@ -1214,7 +1214,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       wstDestroyVideoClientConnection( sink->soc.conn );
       sink->soc.conn= 0;
    }
-   if ( sink->videoStarted )
+   if ( sink->soc.videoOutputThread || sink->soc.eosDetectionThread || sink->soc.dispatchThread )
    {
       sink->videoStarted= FALSE;
       sink->soc.quitVideoOutputThread= TRUE;
@@ -1266,12 +1266,14 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
 
    if ( sink->soc.videoOutputThread )
    {
+      sink->soc.quitVideoOutputThread= TRUE;
       g_thread_join( sink->soc.videoOutputThread );
       sink->soc.videoOutputThread= NULL;
    }
 
    if ( sink->soc.eosDetectionThread )
    {
+      sink->soc.quitEOSDetectionThread= TRUE;
       g_thread_join( sink->soc.eosDetectionThread );
       sink->soc.eosDetectionThread= NULL;
    }
@@ -3907,26 +3909,29 @@ static gpointer wstEOSDetectionThread(gpointer data)
    {
       usleep( 1000000/frameRate );
 
-      LOCK(sink)
-      count= sink->soc.frameOutCount;
-      videoPlaying= sink->soc.videoPlaying;
-      eosEventSeen= sink->eosEventSeen;
-      UNLOCK(sink)
+      if ( !sink->soc.quitEOSDetectionThread )
+      {
+         LOCK(sink)
+         count= sink->soc.frameOutCount;
+         videoPlaying= sink->soc.videoPlaying;
+         eosEventSeen= sink->eosEventSeen;
+         UNLOCK(sink)
 
-      if ( videoPlaying && eosEventSeen && (outputFrameCount > 0) && (outputFrameCount == count) )
-      {
-         --eosCountDown;
-         if ( eosCountDown == 0 )
+         if ( videoPlaying && eosEventSeen && (outputFrameCount > 0) && (outputFrameCount == count) )
          {
-            g_print("westeros-sink: EOS detected\n");
-            gst_westeros_sink_eos_detected( sink );
-            break;
+            --eosCountDown;
+            if ( eosCountDown == 0 )
+            {
+               g_print("westeros-sink: EOS detected\n");
+               gst_westeros_sink_eos_detected( sink );
+               break;
+            }
          }
-      }
-      else
-      {
-         outputFrameCount= count;
-         eosCountDown= 10;
+         else
+         {
+            outputFrameCount= count;
+            eosCountDown= 10;
+         }
       }
    }
 
