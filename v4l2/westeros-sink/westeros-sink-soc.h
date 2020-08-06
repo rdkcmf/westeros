@@ -167,6 +167,7 @@ struct _GstWesterosSinkSoc
    int videoHeight;
 
    gboolean frameStepOnPreroll;
+   gboolean forceAspectRatio;
 
    gboolean secureVideo;
    gboolean useDmabufOutput;

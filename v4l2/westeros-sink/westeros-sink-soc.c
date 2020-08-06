@@ -71,6 +71,7 @@ enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
   PROP_FRAME_STEP_ON_PREROLL,
+  PROP_FORCE_ASPECT_RATIO,
   PROP_ENABLE_TEXTURE
 };
 enum
@@ -120,6 +121,7 @@ static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
+static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h );
 static void wstProcessTextureSignal( GstWesterosSink *sink, int buffIndex );
 static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex );
 static int wstFindVideoBuffer( GstWesterosSink *sink, int frameNumber );
@@ -242,11 +244,16 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "frame step on preroll",
                            "allow frame stepping on preroll into pause", FALSE, G_PARAM_READWRITE));
 
+
    g_object_class_install_property (gobject_class, PROP_ENABLE_TEXTURE,
      g_param_spec_boolean ("enable-texture",
                            "enable texture signal",
                            "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_FORCE_ASPECT_RATIO,
+     g_param_spec_boolean ("force-aspect-ratio",
+                           "force aspect ratio",
+                           "When enabled scaling respects source aspect ratio", FALSE, G_PARAM_READWRITE));
 
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -367,6 +374,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoWidth= sink->windowWidth;
    sink->soc.videoHeight= sink->windowHeight;
    sink->soc.frameStepOnPreroll= FALSE;
+   sink->soc.forceAspectRatio= FALSE;
    sink->soc.secureVideo= FALSE;
    sink->soc.useDmabufOutput= FALSE;
    sink->soc.dwMode= -1;
@@ -460,6 +468,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
             break;
          }
+      case PROP_FORCE_ASPECT_RATIO:
+         {
+            sink->soc.forceAspectRatio= g_value_get_boolean(value);
+            break;
+         }
       case PROP_ENABLE_TEXTURE:
          {
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
@@ -484,6 +497,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_FRAME_STEP_ON_PREROLL:
          g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
+         break;
+      case PROP_FORCE_ASPECT_RATIO:
+         g_value_set_boolean(value, sink->soc.forceAspectRatio);
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
@@ -1158,6 +1174,12 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
          }
       }
       sink->soc.framesBeforeHideGfx= sink->soc.hideGfxFramesDelay;
+   }
+   if ( !sink->windowSizeOverride && sink->soc.forceAspectRatio && sink->vpcSurface )
+   {
+      int vx, vy, vw, vh;
+      wstGetVideoBounds( sink, &vx, &vw, &vw, &vh );
+      wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
    }
 }
 
@@ -3068,6 +3090,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
       int stride0, stride1, stride2;
       uint32_t pixelFormat;
       int bufferId= -1;
+      int vx, vy, vw, vh;
 
       wstProcessMessagesVideoClientConnection( conn );
 
@@ -3153,6 +3176,15 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
             ++numFdToSend;
          }
 
+         vx= sink->soc.videoX;
+         vy= sink->soc.videoY;
+         vw= sink->soc.videoWidth;
+         vh= sink->soc.videoHeight;
+         if ( sink->soc.forceAspectRatio )
+         {
+            wstGetVideoBounds( sink, &vx, &vw, &vw, &vh );
+         }
+
          i= 0;
          mbody[i++]= 'V';
          mbody[i++]= 'S';
@@ -3161,10 +3193,10 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          i += putU32( &mbody[i], conn->sink->soc.frameWidth );
          i += putU32( &mbody[i], conn->sink->soc.frameHeight );
          i += putU32( &mbody[i], pixelFormat );
-         i += putU32( &mbody[i], conn->sink->soc.videoX );
-         i += putU32( &mbody[i], conn->sink->soc.videoY );
-         i += putU32( &mbody[i], conn->sink->soc.videoWidth );
-         i += putU32( &mbody[i], conn->sink->soc.videoHeight );
+         i += putU32( &mbody[i], vx );
+         i += putU32( &mbody[i], vy );
+         i += putU32( &mbody[i], vw );
+         i += putU32( &mbody[i], vh );
          i += putU32( &mbody[i], offset0 );
          i += putU32( &mbody[i], stride0 );
          i += putU32( &mbody[i], offset1 );
@@ -3387,6 +3419,32 @@ static bool wstLocalRateControl( GstWesterosSink *sink, int buffIndex )
 
 exit:
    return drop;
+}
+
+static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h )
+{
+   int vx, vy, vw, vh;
+   double arf, ard;
+   vx= sink->soc.videoX;
+   vy= sink->soc.videoY;
+   vw= sink->soc.videoWidth;
+   vh= sink->soc.videoHeight;
+   ard= (double)sink->soc.videoWidth/(double)sink->soc.videoHeight;
+   arf= (double)sink->soc.frameWidth/(double)sink->soc.frameHeight;
+   if ( arf >= ard )
+   {
+      vh= (sink->soc.frameHeight * sink->soc.videoWidth) / sink->soc.frameWidth;
+      vy= (sink->soc.videoHeight-vh)/2;
+   }
+   else
+   {
+      vw= (sink->soc.frameWidth * sink->soc.videoHeight) / sink->soc.frameHeight;
+      vx= (sink->soc.videoWidth-vw)/2;
+   }
+   *x= vx;
+   *y= vy;
+   *w= vw;
+   *h= vh;
 }
 
 static void wstProcessTextureSignal( GstWesterosSink *sink, int buffIndex )
@@ -3830,7 +3888,9 @@ capture_start:
                      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
                      wl_surface_commit( sink->surface );
                      wl_display_flush(sink->display);
+                     UNLOCK(sink);
                      wl_display_dispatch_queue_pending(sink->display, sink->queue);
+                     LOCK(sink);
                      wstSendHideVideoClientConnection( sink->soc.conn, false );
                   }
                }
