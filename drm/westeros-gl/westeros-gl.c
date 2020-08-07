@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <linux/netlink.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -75,6 +76,10 @@
 
 #ifndef DRM_NO_REFRESH_LOCK
 #define USE_REFRESH_LOCK
+#endif
+
+#ifndef DRM_NO_UEVENT_HOTPLUG
+#define USE_UEVENT_HOTPLUG
 #endif
 
 #ifndef DRM_NO_OUT_FENCE
@@ -315,6 +320,9 @@ typedef struct _WstGLCtx
    #endif
    #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
    int nativeOutputFenceFd;
+   #endif
+   #ifdef USE_UEVENT_HOTPLUG
+   int ueventFd;
    #endif
    bool dirty;
    bool forceDirty;
@@ -2824,6 +2832,83 @@ static bool wstAcquirePlaneProperties( WstGLCtx *ctx, WstOverlayPlane *plane )
    return !error;
 }
 
+#ifdef USE_UEVENT_HOTPLUG
+static void wstInitUEvent( WstGLCtx *ctx )
+{
+   bool useUEventHotPlug= false;
+   if ( getenv("WESTEROS_GL_USE_UEVENT_HOTPLUG") )
+   {
+      ctx->ueventFd= socket(PF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT);
+      INFO("refresh thread: ueventFd %d", ctx->ueventFd);
+      if ( ctx->ueventFd >= 0 )
+      {
+         int rc;
+         struct sockaddr_nl nlAddr;
+         memset(&nlAddr, 0, sizeof(nlAddr));
+         nlAddr.nl_family= AF_NETLINK;
+         nlAddr.nl_pid= 0;
+         nlAddr.nl_groups= 0xFFFFFFFF;
+         rc= bind( ctx->ueventFd, (struct sockaddr *)&nlAddr, sizeof(nlAddr));
+         if ( !rc )
+         {
+            useUEventHotPlug= true;
+         }
+         else
+         {
+            ERROR("bind failed for ueventFd: rc %d", rc);
+            close( ctx->ueventFd );
+            ctx->ueventFd= -1;
+         }
+      }
+   }
+   INFO("using uevent hotplug: %d", useUEventHotPlug);
+}
+
+static void wstProcessUEvent( WstGLCtx *ctx )
+{
+   if ( ctx->ueventFd >= 0 )
+   {
+      struct pollfd pfd;
+      pfd.fd= ctx->ueventFd;
+      pfd.events= POLLIN;
+      pfd.revents= 0;
+      poll( &pfd, 1, 0);
+      if ( pfd.revents & POLLIN )
+      {
+         int rc, i;
+         char buff[1024];
+         rc= read( ctx->ueventFd, buff, sizeof(buff) );
+         if ( rc > 0 )
+         {
+            bool drmEvent= false;
+            bool hotPlugEvent= false;
+            for( i= 0; i < rc; )
+            {
+               char *uevent= &buff[i];
+               if ( strcmp( uevent, "DEVTYPE=drm_minor" ) )
+               {
+                  drmEvent= true;
+               }
+               else if ( strcmp( uevent, "HOTPLUG=1" ) )
+               {
+                  hotPlugEvent= true;
+               }
+               i += (strlen(uevent) + 1);
+            }
+            if ( drmEvent && hotPlugEvent )
+            {
+               INFO("Hotplug event detected" );
+               drmModeFreeConnector(ctx->conn);
+               ctx->conn= 0;
+               ctx->modeSet= false;
+               ctx->forceDirty= true;
+            }
+         }
+      }
+   }
+}
+#endif
+
 static WstGLCtx *wstInitCtx( void )
 {
    WstGLCtx *ctx= 0;
@@ -2880,6 +2965,9 @@ static WstGLCtx *wstInitCtx( void )
       ctx->videoEnable= true;
       #ifndef WESTEROS_GL_NO_PLANES
       ctx->usePlanes= true;
+      #endif
+      #ifdef USE_UEVENT_HOTPLUG
+      ctx->ueventFd= -1;
       #endif
       ctx->drmFd= -1;
       ctx->drmFd= open(card, O_RDWR);
@@ -2938,6 +3026,9 @@ static WstGLCtx *wstInitCtx( void )
                gRealGLFinish= eglGetProcAddress("glFinish");
             }
             INFO("using refresh lock: %d", g_useRefreshLock);
+            #endif
+            #ifdef USE_UEVENT_HOTPLUG
+            wstInitUEvent( ctx );
             #endif
          }
 
@@ -3340,6 +3431,13 @@ static void wstTermCtx( WstGLCtx *ctx )
          pthread_join( ctx->refreshThreadId, NULL );
       }
       pthread_mutex_lock( &gMutex );
+
+      #ifdef USE_UEVENT_HOTPLUG
+      if ( ctx->ueventFd >= 0 )
+      {
+         close( ctx->ueventFd );
+      }
+      #endif
 
       wstReleaseConnectorProperties( ctx );
       wstReleaseCrtcProperties( ctx );
@@ -3750,6 +3848,7 @@ static void *wstRefreshThread( void *arg )
 
    DEBUG("refresh thread start");
    ctx->refreshThreadStarted= true;
+
    while( !ctx->refreshThreadStopRequested )
    {
       delay= 16667LL;
@@ -3791,6 +3890,10 @@ static void *wstRefreshThread( void *arg )
          pthread_mutex_unlock( &gMutex );
       }
 
+      #ifdef USE_UEVENT_HOTPLUG
+      wstProcessUEvent( ctx );
+      #endif
+
       if ( ctx->modeSet && ctx->useVBlank )
       {
          int rc;
@@ -3818,6 +3921,7 @@ static void *wstRefreshThread( void *arg )
       }
    }
    ctx->refreshThreadStarted= false;
+
    DEBUG("refresh thread exit");
    return NULL;
 }
