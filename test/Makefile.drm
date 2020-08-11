@@ -183,7 +183,8 @@ westeros-simplebuffer: .simplebuffer
 	wget https://git.linuxtv.org/linux.git/plain/include/uapi/linux/videodev2.h -O $(WID)/include/linux/.videodev2.h && \
 	wget https://git.linuxtv.org/linux.git/plain/include/linux/compiler.h -O $(WID)/include/linux/compiler.h && \
 	wget https://git.linuxtv.org/linux.git/plain/include/linux/compiler_types.h -O $(WID)/include/linux/compiler_types.h && \
-	sed '/v4l2-controls/ a\#include "westeros-ut-open.h"' $(WID)/include/linux/.videodev2.h > $(WID)/include/linux/videodev2.h && \
+	sed 's/__user//g; /v4l2-controls/ a\#include "westeros-ut-open.h"' $(WID)/include/linux/.videodev2.h > $(WID)/include/linux/videodev2.h && \
+	sed '/#include <asm\/rwonce.h>/d' $(WID)/include/linux/compiler.h > $(WID)/include/linux/compiler.h && \
 	$(call setenv) && \
 	export SCANNER_TOOL=$(CID)/bin/wayland-scanner && \
 	make -C protocol && \

@@ -1178,7 +1178,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    if ( !sink->windowSizeOverride && sink->soc.forceAspectRatio && sink->vpcSurface )
    {
       int vx, vy, vw, vh;
-      wstGetVideoBounds( sink, &vx, &vw, &vw, &vh );
+      wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
       wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
    }
 }
@@ -3182,7 +3182,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          vh= sink->soc.videoHeight;
          if ( sink->soc.forceAspectRatio )
          {
-            wstGetVideoBounds( sink, &vx, &vw, &vw, &vh );
+            wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
          }
 
          i= 0;
