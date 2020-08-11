@@ -1175,7 +1175,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       }
       sink->soc.framesBeforeHideGfx= sink->soc.hideGfxFramesDelay;
    }
-   if ( !sink->windowSizeOverride && sink->soc.forceAspectRatio && sink->vpcSurface )
+   if ( sink->soc.forceAspectRatio && sink->vpcSurface )
    {
       int vx, vy, vw, vh;
       wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
@@ -3434,12 +3434,12 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    if ( arf >= ard )
    {
       vh= (sink->soc.frameHeight * sink->soc.videoWidth) / sink->soc.frameWidth;
-      vy= (sink->soc.videoHeight-vh)/2;
+      vy= vy+(sink->soc.videoHeight-vh)/2;
    }
    else
    {
       vw= (sink->soc.frameWidth * sink->soc.videoHeight) / sink->soc.frameHeight;
-      vx= (sink->soc.videoWidth-vw)/2;
+      vx= vx+(sink->soc.videoWidth-vw)/2;
    }
    *x= vx;
    *y= vy;
