@@ -3764,6 +3764,30 @@ capture_start:
             UNLOCK(sink);
          }
 
+         if ( sink->soc.hasEvents )
+         {
+            struct pollfd pfd;
+
+            pfd.fd= sink->soc.v4l2Fd;
+            pfd.events= POLLIN | POLLRDNORM | POLLPRI;
+            pfd.revents= 0;
+
+            poll( &pfd, 1, 0);
+
+            if ( sink->soc.quitVideoOutputThread ) break;
+
+            if ( pfd.revents & POLLPRI )
+            {
+               wstProcessEvents( sink );
+               if ( sink->soc.needCaptureRestart )
+               {
+                  break;
+               }
+            }
+
+            if ( sink->soc.quitVideoOutputThread ) break;
+         }
+
          usleep( 1000 );
       }
       else
