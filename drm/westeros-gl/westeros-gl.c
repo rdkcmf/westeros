@@ -115,6 +115,24 @@ typedef struct _VideoServerCtx VideoServerCtx;
 typedef struct _DisplayServerCtx DisplayServerCtx;
 typedef struct _WstOverlayPlane WstOverlayPlane;
 
+typedef enum _ConnectorColorDepth
+{
+   ColorDepth_24B= 4,
+   ColorDepth_30B= 5,
+   ColorDepth_36B= 6,
+   ColorDepth_48B= 7,
+   ColorDepth_reserved
+} ConnectorColorDepth;
+
+typedef enum ConnectorColorSpace
+{
+   ColorSpace_RGB444= 0,
+   ColorSpace_YUV422= 1,
+   ColorSpace_YUV444= 2,
+   ColorSpace_YUV420= 3,
+   ColorSpace_reserved
+} ConnectorColorSpace;
+
 typedef struct _VideoServerConnection
 {
    pthread_mutex_t mutex;
@@ -305,6 +323,7 @@ typedef struct _WstGLCtx
    bool useVideoServer;
    bool usePlanes;
    bool haveAtomic;
+   bool haveColorSpace;
    bool haveNativeFence;
    bool graphicsPreferPrimary;
    drmModeObjectProperties *connectorProps;
@@ -2649,7 +2668,7 @@ static void wstReleaseConnectorProperties( WstGLCtx *ctx )
 static bool wstAcquireConnectorProperties( WstGLCtx *ctx )
 {
    bool error= false;
-   int i;
+   int i, len;
 
    if ( ctx->conn )
    {
@@ -2671,6 +2690,11 @@ static bool wstAcquireConnectorProperties( WstGLCtx *ctx )
                {
                   error= true;
                   break;
+               }
+               len= strlen( ctx->connectorPropRes[i]->name );
+               if ( (len == 11) && !strncmp( ctx->connectorPropRes[i]->name, "Color Space", len ) )
+               {
+                  ctx->haveColorSpace= true;
                }
             }
          }
@@ -4089,6 +4113,36 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
          wstAtomicAddProperty( ctx, req, ctx->crtc->crtc_id,
                                ctx->crtcProps->count_props, ctx->crtcPropRes,
                                "ACTIVE", 1 );
+         if ( ctx->haveColorSpace )
+         {
+            int modeNameLen;
+            int colorSuffixLen= 3;
+            int colorSpace= ColorSpace_RGB444;
+
+            modeNameLen= strlen( ctx->modeInfo->name );
+            if ( modeNameLen >= colorSuffixLen )
+            {
+               const char *suffix= &ctx->modeInfo->name[modeNameLen-colorSuffixLen];
+               if ( !strncmp( suffix, "420", colorSuffixLen ) )
+               {
+                  colorSpace= ColorSpace_YUV420;
+               }
+               else if ( !strncmp( suffix, "422", colorSuffixLen ) )
+               {
+                  colorSpace= ColorSpace_YUV422;
+               }
+               else if ( !strncmp( suffix, "444", colorSuffixLen ) )
+               {
+                  colorSpace= ColorSpace_YUV444;
+               }
+            }
+
+            DEBUG("mode: %s, colorSpace: %d", ctx->modeInfo->name, colorSpace);
+
+            wstAtomicAddProperty( ctx, req, ctx->conn->connector_id,
+                                  ctx->connectorProps->count_props, ctx->connectorPropRes,
+                                  "Color Space", colorSpace);
+         }
       }
       else
       {
