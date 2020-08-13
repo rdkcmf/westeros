@@ -1606,8 +1606,6 @@ static void wstProcessEvents( GstWesterosSink *sink )
                 ( (fmtOut.fmt.pix.width != sink->soc.fmtOut.fmt.pix.width) ||
                   (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) )
          {
-            wstSendFlushVideoClientConnection( sink->soc.conn );
-
             wstTearDownOutputBuffers( sink );
 
             if ( sink->soc.isMultiPlane )
@@ -2910,6 +2908,8 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
    {
       GstElement *element= GST_ELEMENT(sink);
       GstClock *clock= GST_ELEMENT_CLOCK(element);
+      int syncTypePrev= sink->soc.syncType;
+      int sessionIdPrev= sink->soc.sessionId;
       sink->soc.syncType= 0;
       sink->soc.sessionId= 0;
       if ( clock )
@@ -2934,7 +2934,10 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
             }
          }
       }
-      wstSendSessionInfoVideoClientConnection( sink->soc.conn );
+      if ( (syncTypePrev != sink->soc.syncType) || (sessionIdPrev != sink->soc.sessionId) )
+      {
+         wstSendSessionInfoVideoClientConnection( sink->soc.conn );
+      }
    }
    #endif
 }
