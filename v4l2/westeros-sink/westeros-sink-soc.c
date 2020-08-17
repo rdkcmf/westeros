@@ -1889,10 +1889,17 @@ static bool wstSetOutputFormat( GstWesterosSink *sink )
             }
          }
       }
+      if ( pixelFormat == V4L2_PIX_FMT_NV12 )
+      {
+         sink->soc.fmtOut.fmt.pix_mp.num_planes= 1;
+      }
+      else
+      {
+         sink->soc.fmtOut.fmt.pix_mp.num_planes= 2;
+      }
       sink->soc.fmtOut.fmt.pix_mp.pixelformat= pixelFormat;
       sink->soc.fmtOut.fmt.pix_mp.width= sink->soc.frameWidth;
       sink->soc.fmtOut.fmt.pix_mp.height= sink->soc.frameHeight;
-      sink->soc.fmtOut.fmt.pix_mp.num_planes= 2;
       sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].sizeimage= sink->soc.frameWidth*sink->soc.frameHeight;
       sink->soc.fmtOut.fmt.pix_mp.plane_fmt[0].bytesperline= sink->soc.frameWidth;
       sink->soc.fmtOut.fmt.pix_mp.plane_fmt[1].sizeimage= sink->soc.frameWidth*sink->soc.frameHeight/2;
