@@ -1300,6 +1300,13 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       sink->soc.eosDetectionThread= NULL;
    }
 
+   if ( sink->soc.dispatchThread )
+   {
+      sink->soc.quitDispatchThread= TRUE;
+      g_thread_join( sink->soc.dispatchThread );
+      sink->soc.dispatchThread= NULL;
+   }
+
    if ( sink->soc.sb )
    {
       wl_sb_destroy( sink->soc.sb );
