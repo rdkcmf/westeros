@@ -1452,11 +1452,24 @@ static VideoServerConnection *wstCreateVideoServerConnection( VideoServerCtx *se
    conn= (VideoServerConnection*)calloc( 1, sizeof(VideoServerConnection) );
    if ( conn )
    {
+      pthread_attr_t attr;
       pthread_mutex_init( &conn->mutex, 0 );
       conn->socketFd= fd;
       conn->server= server;
 
-      rc= pthread_create( &conn->threadId, NULL, wstVideoServerConnectionThread, conn );
+      rc= pthread_attr_init( &attr );
+      if ( rc )
+      {
+         ERROR("unable to init pthread attr: errno %d", errno);
+      }
+
+      rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
+      if ( rc )
+      {
+         ERROR("unable to set pthread attr detached: errno %d", errno);
+      }
+
+      rc= pthread_create( &conn->threadId, &attr, wstVideoServerConnectionThread, conn );
       if ( rc )
       {
          ERROR("unable to start video connection thread: rc %d errno %d", rc, errno);
@@ -2226,11 +2239,24 @@ static DisplayServerConnection *wstCreateDisplayServerConnection( DisplayServerC
    conn= (DisplayServerConnection*)calloc( 1, sizeof(DisplayServerConnection) );
    if ( conn )
    {
+      pthread_attr_t attr;
       pthread_mutex_init( &conn->mutex, 0 );
       conn->socketFd= fd;
       conn->server= server;
 
-      rc= pthread_create( &conn->threadId, NULL, wstDisplayServerConnectionThread, conn );
+      rc= pthread_attr_init( &attr );
+      if ( rc )
+      {
+         ERROR("unable to init pthread attr: errno %d", errno);
+      }
+
+      rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
+      if ( rc )
+      {
+         ERROR("unable to set pthread attr detached: errno %d", errno);
+      }
+
+      rc= pthread_create( &conn->threadId, &attr, wstDisplayServerConnectionThread, conn );
       if ( rc )
       {
          ERROR("unable to start display connection thread: rc %d errno %d", rc, errno);
