@@ -1611,7 +1611,8 @@ static void wstProcessEvents( GstWesterosSink *sink )
                   (fmtOut.fmt.pix_mp.height != sink->soc.fmtOut.fmt.pix_mp.height) ) ) ||
               (!sink->soc.isMultiPlane &&
                 ( (fmtOut.fmt.pix.width != sink->soc.fmtOut.fmt.pix.width) ||
-                  (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) )
+                  (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) ||
+              (sink->soc.frameOutCount > 0) )
          {
             wstTearDownOutputBuffers( sink );
 
