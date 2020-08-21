@@ -93,6 +93,13 @@ typedef struct _EssTouchInfo
    bool moved;
 } EssTouchInfo;
 
+typedef struct _EssInputDeviceScanCode
+{
+   uint8_t filterByte;
+   uint8_t prevFilterByte;
+   uint8_t shortCustomerCode;
+} EssInputDeviceScanCode;
+
 typedef struct _EssGamepad
 {
    EssCtx *ctx;
@@ -140,6 +147,7 @@ typedef struct _EssCtx
    int watchFd;
    std::vector<pollfd> inputDeviceFds;
    std::map<int, EssInputDeviceMetadata*> inputDeviceMetadata;
+   std::map<int, EssInputDeviceScanCode> inputDeviceScanCode;
    std::vector<EssGamepad*> gamepads;
    int eventLoopPeriodMS;
    long long eventLoopLastTimeStamp;
@@ -334,6 +342,7 @@ EssCtx* EssContextCreate()
       ctx->inputDeviceFds= std::vector<pollfd>();
       ctx->gamepads= std::vector<EssGamepad*>();
       ctx->inputDeviceMetadata = std::map<int, EssInputDeviceMetadata*>();
+      ctx->inputDeviceScanCode = std::map<int, EssInputDeviceScanCode>();
 
       INFO("westeros (essos) config supports: direct %d wayland %d", EssContextSupportDirect(ctx), EssContextSupportWayland(ctx));
    }
@@ -3389,8 +3398,8 @@ static int essOpenInputDevice( EssCtx *ctx, const char *devPathName )
             DEBUG( "essOpenInputDevice: opened device %s : fd %d", devPathName, fd );
             pfd.fd= fd;
             ctx->inputDeviceFds.push_back( pfd );
-
             essReadInputDeviceMetaData(ctx, fd, devPathName);
+            ctx->inputDeviceScanCode[fd] = {};
 
             if ( !gp )
             {
@@ -3507,6 +3516,7 @@ static void essReleaseInputDevices( EssCtx *ctx )
       pollfd pfd= ctx->inputDeviceFds[0];
       DEBUG( "essos: closing device fd: %d", pfd.fd );
       essReleaseInputDeviceMetaData(ctx, pfd.fd);
+      ctx->inputDeviceScanCode.erase(pfd.fd);
       close( pfd.fd );
       ctx->inputDeviceFds.erase( ctx->inputDeviceFds.begin() );
    }
@@ -3532,12 +3542,42 @@ static void essFillKeyAndMetadataListenerMetadata( EssCtx *ctx, int fd )
          ctx->keyAndMetadataListenerMetadata->devicePhysicalAddress = strdup(storedMetadata->devicePhysicalAddress);
          ctx->keyAndMetadataListenerMetadata->id = storedMetadata->id;
          ctx->keyAndMetadataListenerMetadata->deviceNumber = storedMetadata->deviceNumber;
+         ctx->keyAndMetadataListenerMetadata->filterCode = storedMetadata->filterCode;
       }
       else
       {
          WARNING("essProcessInputDevices metadata not found for fd: %d", fd);
       }
    }
+}
+
+static const uint8_t SCC_PAIRING_MODE = 5;
+
+void essUpdateMetadataFilterCode(EssCtx *ctx,  int fd)
+{
+   if (ctx->inputDeviceScanCode[fd].shortCustomerCode != SCC_PAIRING_MODE)
+   {
+      if (ctx->inputDeviceScanCode[fd].filterByte != ctx->inputDeviceScanCode[fd].prevFilterByte)
+      {
+         ctx->inputDeviceMetadata[fd]->filterCode = ctx->inputDeviceScanCode[fd].filterByte;
+         ctx->inputDeviceScanCode[fd].prevFilterByte = ctx->inputDeviceScanCode[fd].filterByte;
+         DEBUG("essUpdateMetadataFilterCode: update fd: %d, filterCode: 0x%02x", fd, ctx->inputDeviceMetadata[fd]->filterCode);
+      }
+   }
+   ctx->inputDeviceScanCode[fd].filterByte = 0x0;
+   ctx->inputDeviceScanCode[fd].shortCustomerCode = 0x0;
+}
+
+void essClearInputDeviceScanCode(EssCtx *ctx,  int fd)
+{
+   ctx->inputDeviceScanCode[fd].filterByte = 0x0;
+   ctx->inputDeviceScanCode[fd].shortCustomerCode = 0x0;
+}
+
+void essReadInputDeviceScanCode(EssCtx *ctx,  int fd, int32_t inputEventValue)
+{
+   ctx->inputDeviceScanCode[fd].filterByte = ((inputEventValue >> 8) & 0xff);
+   ctx->inputDeviceScanCode[fd].shortCustomerCode = ((inputEventValue >> 20) & 0x0f);
 }
 
 static void essProcessInputDevices( EssCtx *ctx )
@@ -3610,6 +3650,9 @@ static void essProcessInputDevices( EssCtx *ctx )
                   switch( e.type )
                   {
                      case EV_KEY:
+
+                        essUpdateMetadataFilterCode(ctx, ctx->inputDeviceFds[i].fd);
+
                         switch( e.code )
                         {
                            case BTN_LEFT:
@@ -3736,6 +3779,8 @@ static void essProcessInputDevices( EssCtx *ctx )
                               }
                               touchChanges= false;
                            }
+
+                           essClearInputDeviceScanCode(ctx, ctx->inputDeviceFds[i].fd);
                         }
                         break;
                      case EV_ABS:
@@ -3779,6 +3824,13 @@ static void essProcessInputDevices( EssCtx *ctx )
                               break;
                            default:
                               break;
+                        }
+                        break;
+
+                     case EV_MSC:
+                        if (e.code == MSC_SCAN)
+                        {
+                           essReadInputDeviceScanCode(ctx, ctx->inputDeviceFds[i].fd, e.value);
                         }
                         break;
                      default:
