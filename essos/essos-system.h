@@ -208,6 +208,7 @@ typedef struct _EssInputDeviceMetadata
     dev_t deviceNumber;
     char * devicePhysicalAddress;
     input_id id;
+    uint8_t filterCode;
 } EssInputDeviceMetadata;
 
 typedef struct _EssKeyAndMetadataListener
