@@ -35,7 +35,8 @@ typedef enum _WstKeyboad_modifiers
    WstKeyboard_shift= (1<<0),
    WstKeyboard_alt=   (1<<1),
    WstKeyboard_ctrl=  (1<<2),
-   WstKeyboard_caps=  (1<<3)
+   WstKeyboard_caps=  (1<<3),
+   WstKeyboard_meta= (1<<4)
 } WstKeyboard_modifiers;
 
 typedef enum _WstPointer_buttonState
