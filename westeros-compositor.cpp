@@ -209,6 +209,7 @@ typedef struct _WstKeyboard
    xkb_mod_index_t modAlt;
    xkb_mod_index_t modCtrl;
    xkb_mod_index_t modCaps;
+   xkb_mod_index_t modMeta;
 } WstKeyboard;
 
 typedef struct _WstPointer
@@ -7710,6 +7711,7 @@ static void wstSeatCreateDevices( WstCompositor *wctx )
                      keyboard->modAlt= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_ALT );
                      keyboard->modCtrl= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CTRL );
                      keyboard->modCaps= xkb_keymap_mod_get_index( ctx->xkbKeymap, XKB_MOD_NAME_CAPS );
+                     keyboard->modMeta= xkb_keymap_mod_get_index( ctx->xkbKeymap, "Meta" );
                   }
                   else
                   {
@@ -8684,6 +8686,10 @@ static void wstProcessKeyEvent( WstKeyboard *keyboard, uint32_t keyCode, uint32_
    {
       modDepressed |= (1 << keyboard->modCtrl);
    }
+   if ( keyboard->currentModifiers & WstKeyboard_meta )
+   {
+      modDepressed |= (1 << keyboard->modMeta);
+   }
    if ( keyboard->currentModifiers & WstKeyboard_caps )
    {
       modLocked |= (1 << keyboard->modCaps);
@@ -8741,6 +8747,10 @@ static void wstKeyboardSendModifiers( WstKeyboard *keyboard, struct wl_resource 
    if ( keyboard->currentModifiers & WstKeyboard_ctrl )
    {
       modDepressed |= (1 << keyboard->modCtrl);
+   }
+   if ( keyboard->currentModifiers & WstKeyboard_meta )
+   {
+      modDepressed |= (1 << keyboard->modMeta);
    }
    if ( keyboard->currentModifiers & WstKeyboard_caps )
    {
