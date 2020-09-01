@@ -229,6 +229,9 @@ typedef struct _VideoFrameManager
    long long flipTimeCurrent;
    long long frameTimeCurrent;
    long long adjust;
+   long long displayedFrameTime;
+   int dropFrameCount;
+   int dropFrameCountReported;
    int bufferIdCurrent;
    bool syncInit;
    void *sync;
@@ -365,6 +368,7 @@ static void wstLog( int level, const char *fmt, ... );
 static void wstFrameLog( const char *fmt, ... );
 static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *conn );
 static void wstDestroyVideoFrameManager( VideoFrameManager *vfm );
+static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm );
 static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause );
@@ -372,6 +376,7 @@ static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstDestroyDisplayServerConnection( DisplayServerConnection *conn );
 static void wstFreeVideoFrameResources( VideoFrame *f );
 static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bufferId );
+static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
 static void wstSelectMode( WstGLCtx *ctx, int width, int height );
@@ -796,6 +801,20 @@ static long long wstGetS64( unsigned char *p )
    return u;
 }
 
+static int wstPutS64( unsigned char *p, long long n )
+{
+   p[0]= (n>>56);
+   p[1]= (n>>48);
+   p[2]= (n>>40);
+   p[3]= (n>>32);
+   p[4]= (n>>24);
+   p[5]= (n>>16);
+   p[6]= (n>>8);
+   p[7]= (n&0xFF);
+
+   return 8;
+}
+
 static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t handle1, int line )
 {
    if ( ctx )
@@ -1004,7 +1023,50 @@ static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bu
    if ( sentLen == len )
    {
       FRAME("send release buffer %d to client", bufferId);
-      //fprintf(stderr,"%lld: TRACE: send release buffer %d\n", getCurrentTimeMillis(), buffIndex );
+   }
+
+   pthread_mutex_unlock( &conn->mutex );
+}
+
+static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm )
+{
+   struct msghdr msg;
+   struct iovec iov[1];
+   unsigned char mbody[4+8+4];
+   int len;
+   int sentLen;
+
+   pthread_mutex_lock( &conn->mutex );
+
+   msg.msg_name= NULL;
+   msg.msg_namelen= 0;
+   msg.msg_iov= iov;
+   msg.msg_iovlen= 1;
+   msg.msg_control= 0;
+   msg.msg_controllen= 0;
+   msg.msg_flags= 0;
+
+   len= 0;
+   mbody[len++]= 'V';
+   mbody[len++]= 'S';
+   mbody[len++]= 13;
+   mbody[len++]= 'S';
+   len += wstPutS64( &mbody[len], vfm->displayedFrameTime );
+   len += wstPutU32( &mbody[len], vfm->dropFrameCount );
+
+   iov[0].iov_base= (char*)mbody;
+   iov[0].iov_len= len;
+
+   do
+   {
+      sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+   }
+   while ( (sentLen < 0) && (errno == EINTR));
+
+   if ( sentLen == len )
+   {
+      FRAME("send status: frameTime %lld dropCount %d to client", vfm->displayedFrameTime, vfm->dropFrameCount);
+      vfm->dropFrameCountReported= vfm->dropFrameCount;
    }
 
    pthread_mutex_unlock( &conn->mutex );
@@ -1350,11 +1412,32 @@ static void *wstVideoServerConnectionThread( void *arg )
                            pthread_mutex_lock( &gMutex );
                            if ( conn->videoPlane->vfm )
                            {
-                              wstDestroyVideoFrameManager( conn->videoPlane->vfm );
+                              if (
+                                   (conn->sessionId != sessionId) ||
+                                   (
+                                     (conn->syncType != syncType) &&
+                                     (
+                                       (conn->syncType > 1) || /* current not video, not audio */
+                                       (syncType > 1)  /* new not video, not audio */
+                                     )
+                                   )
+                                 )
+                              {
+                                 wstDestroyVideoFrameManager( conn->videoPlane->vfm );
+                                 conn->videoPlane->vfm= 0;
+                              }
+                              else if ( conn->syncType != syncType )
+                              {
+                                 conn->syncType= syncType;
+                                 wstVideoFrameManagerSetSyncType( conn->videoPlane->vfm, syncType );
+                              }
                            }
-                           conn->syncType= syncType;
-                           conn->sessionId= sessionId;
-                           conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
+                           if ( !conn->videoPlane->vfm )
+                           {
+                              conn->syncType= syncType;
+                              conn->sessionId= sessionId;
+                              conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
+                           }
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
@@ -2476,6 +2559,16 @@ exit:
    return vfm;
 }
 
+static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type )
+{
+   #ifdef WESTEROS_GL_AVSYNC
+   if ( vfm->sync )
+   {
+      wstAVSyncSetSyncType( vfm, type );
+   }
+   #endif
+}
+
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f )
 {
    if ( vfm->queueSize+1 > vfm->queueCapacity )
@@ -2563,6 +2656,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                if ( (i > 0) && (US_TO_MS(fCheck->frameTime) < US_TO_MS(vfm->frameTimeCurrent+vfm->vblankInterval)) )
                {
                   FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
+                  vfm->dropFrameCount += 1;
                   wstFreeVideoFrameResources( fCheck );
                   wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
                   if ( vfm->queueSize > 2 )
@@ -3771,6 +3865,7 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
          VideoFrame *frame= 0;
          if ( iter->vfm )
          {
+            bool sendStatus= false;
             iter->vfm->vblankTime= vblankTime;
             iter->vfm->vblankInterval= vblankInterval;
             frame= wstVideoFrameManagerPopFrame( iter->vfm );
@@ -3782,7 +3877,17 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
                   iter->dirty= true;
                   iter->readyToFlip= true;
                   dirty= true;
+                  iter->vfm->displayedFrameTime= frame->frameTime;
+                  sendStatus= true;
                }
+            }
+            if ( iter->vfm->dropFrameCount != iter->vfm->dropFrameCountReported )
+            {
+               sendStatus= true;
+            }
+            if ( sendStatus )
+            {
+               wstVideoServerSendStatus( iter->conn, iter->vfm );
             }
          }
          iter= iter->next;

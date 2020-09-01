@@ -314,6 +314,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameHeightStream= -1;
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
+   sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
@@ -333,6 +334,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.fmtIn= {0};
    sink->soc.fmtOut= {0};
    sink->soc.formatsSet= FALSE;
+   sink->soc.updateSession= FALSE;
    sink->soc.syncType= -1;
    sink->soc.sessionId= 0;
    sink->soc.bufferCohort= 0;
@@ -664,6 +666,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
    LOCK( sink );
    sink->soc.videoPlaying= TRUE;
    sink->soc.videoPaused= FALSE;
+   sink->soc.updateSession= TRUE;
    UNLOCK( sink );
 
    return TRUE;
@@ -1083,6 +1086,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    LOCK(sink);
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
+   sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    UNLOCK(sink);
 }
@@ -1093,6 +1097,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    int rc;
 
    sink->soc.frameOutCount= 0;
+   sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
 
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
@@ -2733,6 +2738,22 @@ static int putU32( unsigned char *p, unsigned n )
    return 4;
 }
 
+static gint64 getS64( unsigned char *p )
+{
+   gint64 n;
+
+   n= ((((gint64)(p[0]))<<56) |
+       (((gint64)(p[1]))<<48) |
+       (((gint64)(p[2]))<<40) |
+       (((gint64)(p[3]))<<32) |
+       (((gint64)(p[4]))<<24) |
+       (((gint64)(p[5]))<<16) |
+       (((gint64)(p[6]))<<8) |
+       (p[7]) );
+
+   return n;
+}
+
 static int putS64( unsigned char *p,  gint64 n )
 {
    p[0]= (((guint64)n)>>56);
@@ -3039,6 +3060,7 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
                sink->soc.syncType= 1;
                /* TBD: set sessionid */
             }
+            g_free( clockName );
          }
       }
       if ( (syncTypePrev != sink->soc.syncType) || (sessionIdPrev != sink->soc.sessionId) )
@@ -3127,7 +3149,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                                      (sink->soc.enableTextureSignal ||
                                       (sink->soc.captureEnabled && sink->soc.sb)) )
                                 {
-                                   int buffIndex= wstFindVideoBuffer( sink, sink->soc.outBuffers[bi].frameNumber+2 );
+                                   int buffIndex= wstFindVideoBuffer( sink, sink->soc.outBuffers[bi].frameNumber+3 );
                                    if ( buffIndex >= 0 )
                                    {
                                       if ( sink->soc.enableTextureSignal )
@@ -3156,6 +3178,23 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                              GST_DEBUG("release received for stale buffer %d\n", bid );
                              FRAME("out:       note: release received for stale buffer %d", bid);
                           }
+                        }
+                        break;
+                     case 'S':
+                        if ( mlen >= 13)
+                        {
+                           /* set position from frame currently presented by the video server */
+                           guint64 frameTime= getS64( &m[4] );
+                           sink->soc.numDropped= getU32( &m[12] );
+                           FRAME( "out:       status received: frameTime %lld numDropped %d", frameTime, sink->soc.numDropped);
+                           gint64 currentPTS= ((frameTime * 90000000LL + GST_SECOND/2)/GST_SECOND);
+                           sink->position= sink->positionSegmentStart + ((currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+                           if (sink->soc.frameDisplayCount == 0)
+                           {
+                               GST_DEBUG("wstProcessMessagesVideoClientConnection: emit first frame signal");
+                               g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+                           }
+                           ++sink->soc.frameDisplayCount;
                         }
                         break;
                      default:
@@ -3767,7 +3806,6 @@ static gpointer wstVideoOutputThread(gpointer data)
    struct v4l2_selection selection;
    int i, j, buffIndex, rc;
    int32_t bufferType;
-   bool haveBaseTime= false;
    bool wasPaused= false;
 
    GST_DEBUG("wstVideoOutputThread: enter");
@@ -3909,9 +3947,14 @@ capture_start:
 
          if ( wasPaused && !sink->soc.videoPaused )
          {
+            sink->soc.updateSession= TRUE;
             wstSendPauseVideoClientConnection( sink->soc.conn, false);
             wasPaused= false;
-            haveBaseTime= false;
+         }
+         if ( sink->soc.updateSession )
+         {
+            sink->soc.updateSession= FALSE;
+            wstSetSessionInfo( sink );
          }
          UNLOCK(sink);
 
@@ -3968,14 +4011,20 @@ capture_start:
                continue;
             }
 
-            sink->position= sink->positionSegmentStart + ((currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+            if ( !sink->soc.conn )
+            {
+               /* If we are not connected to a video server, set position here */
+               sink->position= sink->positionSegmentStart + ((currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+            }
+
             if ( sink->soc.quitVideoOutputThread )
             {
                UNLOCK(sink);
                break;
             }
-            if (sink->soc.frameOutCount == 0)
+            if ( !sink->soc.conn && (sink->soc.frameOutCount == 0))
             {
+                /* If we are not connected to a video server, issue signal here */
                 GST_DEBUG("wstVideoOutputThread: emit first frame signal");
                 g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
             }
