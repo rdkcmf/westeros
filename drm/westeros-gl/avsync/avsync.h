@@ -24,6 +24,7 @@
 
 static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId );
 static void wstAVSyncTerm( VideoFrameManager *vfm );
+static void wstAVSyncSetSyncType( VideoFrameManager *vfm, int type );
 static void wstAVSyncPush( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm );
 static void wstAVSyncPause( VideoFrameManager *vfm, bool pause );

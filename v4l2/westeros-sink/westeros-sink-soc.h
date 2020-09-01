@@ -101,6 +101,7 @@ struct _GstWesterosSinkSoc
    int frameHeightStream;
    int frameInCount;
    int frameOutCount;
+   int frameDisplayCount;
    uint32_t numDropped;
    uint32_t inputFormat;
    uint32_t outputFormat;
@@ -121,6 +122,7 @@ struct _GstWesterosSinkSoc
    struct v4l2_format fmtIn;
    struct v4l2_format fmtOut;
    gboolean formatsSet;
+   gboolean updateSession;
    int syncType;
    int sessionId;
    int bufferCohort;

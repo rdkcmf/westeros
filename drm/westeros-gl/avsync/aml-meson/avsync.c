@@ -95,6 +95,7 @@ void *sync_free_frame( struct vframe *vf )
       if ( fCheck->vf == vf )
       {
          fCheck->vf= 0;
+         vfm->dropFrameCount += 1;
          wstFreeVideoFrameResources( fCheck );
          wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
          if ( i+1 < vfm->queueSize )
@@ -108,6 +109,19 @@ void *sync_free_frame( struct vframe *vf )
    free( vf );
 }
 
+static void wstAVSyncSetSyncType( VideoFrameManager *vfm, int type )
+{
+   if ( vfm->sync )
+   {
+      DEBUG("calling av_sync_change_mode new mode %d\n", type);
+      int rc= av_sync_change_mode( vfm->sync, type );
+      if ( rc )
+      {
+         ERROR("Failed to change sync mode: %d", rc);
+      }
+   }
+}
+
 static void wstAVSyncPush( VideoFrameManager *vfm, VideoFrame *f )
 {
    if ( vfm->sync )
@@ -117,7 +131,7 @@ static void wstAVSyncPush( VideoFrameManager *vfm, VideoFrame *f )
       {
          int rc;
          nf->private= vfm;
-         nf->pts= ((f->frameTime * 90000LL)/1000000LL);
+         nf->pts= ((f->frameTime / 100) * 9);
          nf->duration= 0;
          nf->free= sync_free_frame;
          FRAME("push frame %p pts %d to sync", nf, nf->pts);
