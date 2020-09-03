@@ -582,6 +582,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.framesBeforeHideVideo= 0;
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
+   sink->soc.numDroppedOutOfSegment= 0;
    sink->soc.noFrameCount= 0;
    sink->soc.ignoreDiscontinuity= FALSE;
    sink->soc.checkForEOS= FALSE;
@@ -1395,6 +1396,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.frameCount= 0;
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
+   sink->soc.numDroppedOutOfSegment= 0;
    sink->soc.ignoreDiscontinuity= TRUE;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
@@ -1585,6 +1587,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.stoppedForPlaySpeedChange= FALSE;
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
+   sink->soc.numDroppedOutOfSegment= 0;
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
@@ -2258,9 +2261,11 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->soc.noFrameCount= 0;
             sink->soc.presentationStarted= TRUE;
 
-            if ( (videoStatus.numDisplayDrops > sink->soc.numDropped) ||
+            if ( ((videoStatus.numDisplayDrops-sink->soc.numDroppedOutOfSegment) > sink->soc.numDropped) ||
                  (((videoStatus.numDecoded % QOS_INTERVAL) == 0) && videoStatus.numDecoded) )
             {
+               sink->soc.numDropped= videoStatus.numDisplayDrops-sink->soc.numDroppedOutOfSegment;
+
                GstMessage *msg= gst_message_new_qos( GST_OBJECT_CAST(sink),
                                                      FALSE, /* live */
                                                      (sink->position-sink->positionSegmentStart), /* running time */
@@ -2272,7 +2277,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
                   gst_message_set_qos_stats( msg,
                                              GST_FORMAT_BUFFERS,
                                              videoStatus.numDecoded,
-                                             videoStatus.numDisplayDrops );
+                                             sink->soc.numDropped );
                   GST_INFO("post QoS: processed %u dropped %u", videoStatus.numDecoded, videoStatus.numDisplayDrops);
                   if ( !gst_element_post_message( GST_ELEMENT(sink), msg ) )
                   {
@@ -2280,8 +2285,6 @@ static void updateVideoStatus( GstWesterosSink *sink )
                      gst_message_unref( msg );
                   }
                }
-
-               sink->soc.numDropped= videoStatus.numDisplayDrops;
             }
          }
 
@@ -2482,7 +2485,7 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
                      g_value_set_uint(&val, videoStatus.numDecoded);
                      gst_structure_set_value(query_structure, "total", &val);
 
-                     g_value_set_uint(&val, videoStatus.numDecodeDrops + videoStatus.numDisplayDrops);
+                     g_value_set_uint(&val, videoStatus.numDecodeDrops + videoStatus.numDisplayDrops - sink->soc.numDroppedOutOfSegment);
                      gst_structure_set_value(query_structure, "dropped", &val);
 
                      g_value_set_uint(&val, videoStatus.numDecodeErrors + videoStatus.numDisplayErrors);
@@ -2535,6 +2538,21 @@ static void firstPtsPassedCallback( void *userData, int n )
 {
    GstWesterosSink *sink= (GstWesterosSink*)userData;
    WESTEROS_UNUSED(n);
+   NEXUS_Error rc;
+   NEXUS_VideoDecoderStatus videoStatus;
+
+   if ( sink->soc.videoDecoder )
+   {
+      rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus );
+      if ( NEXUS_SUCCESS != rc )
+      {
+         GST_WARNING_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+      }
+      else
+      {
+         sink->soc.numDroppedOutOfSegment= videoStatus.numDisplayDrops;
+      }
+   }
 
    if ( sink->videoStarted )
    {
