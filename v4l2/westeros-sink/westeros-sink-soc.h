@@ -168,6 +168,13 @@ struct _GstWesterosSinkSoc
    int videoWidth;
    int videoHeight;
 
+   gboolean haveColorimetry;
+   int hdrColorimetry[4];
+   gboolean haveMasteringDisplay;
+   float hdrMasteringDisplay[10];
+   gboolean haveContentLightLevel;
+   int hdrContentLightLevel[2];
+
    gboolean frameStepOnPreroll;
    gboolean forceAspectRatio;
 
