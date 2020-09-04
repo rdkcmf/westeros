@@ -56,6 +56,7 @@ struct vframe_content_light_level_s
    uint32_t present_flag;
    uint32_t max_content;
    uint32_t max_pic_average;
+   uint32_t low_latency_mode;
 };
 
 /* master_display_colour_info_volume from SEI */
@@ -206,6 +207,138 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    {
       decParm->cfg.ref_buf_margin= 7;
    }
+
+   if ( sink->soc.haveColorimetry ||
+        sink->soc.haveMasteringDisplay ||
+        sink->soc.haveContentLightLevel )
+   {
+      decParm->parms_status |= V4L2_CONFIG_PARM_DECODE_HDRINFO;
+      if ( sink->soc.haveColorimetry )
+      {
+         decParm->hdr.signal_type= (1<<29); /* present flag */
+         /* range */
+         switch( sink->soc.hdrColorimetry[0] )
+         {
+            case 1:
+            case 2:
+               decParm->hdr.signal_type |= ((sink->soc.hdrColorimetry[0] % 2)<<25);
+               break;
+            default:
+               break;
+         }
+         /* matrix coefficient */
+         switch( sink->soc.hdrColorimetry[1] )
+         {
+            case 1: /* RGB */
+               decParm->hdr.signal_type |= 0;
+               break;
+            case 2: /* FCC */
+               decParm->hdr.signal_type |= 4;
+               break;
+            case 3: /* BT709 */
+               decParm->hdr.signal_type |= 1;
+               break;
+            case 4: /* BT601 */
+               decParm->hdr.signal_type |= 3;
+               break;
+            case 5: /* SMPTE240M */
+               decParm->hdr.signal_type |= 7;
+               break;
+            case 6: /* BT2020 */
+               decParm->hdr.signal_type |= 10;
+               break;
+            default: /* unknown */
+               decParm->hdr.signal_type |= 2;
+               break;
+         }
+         /* transfer function */
+         switch( sink->soc.hdrColorimetry[2] )
+         {
+            case 5: /* BT709 */
+               decParm->hdr.signal_type |= (1<<8);
+               break;
+            case 6: /* SMPTE240M */
+               decParm->hdr.signal_type |= (7<<8);
+               break;
+            case 9: /* LOG100 */
+               decParm->hdr.signal_type |= (9<<8);
+               break;
+            case 10: /* LOG316 */
+               decParm->hdr.signal_type |= (10<<8);
+               break;
+            case 11: /* BT2020_12 */
+               decParm->hdr.signal_type |= (15<<8);
+               break;
+            case 13: /* BT2020_10 */
+               decParm->hdr.signal_type |= (14<<8);
+               break;
+            case 14: /* SMPTE2084 */
+               decParm->hdr.signal_type |= (16<<8);
+               break;
+            case 16: /* BT601 */
+               decParm->hdr.signal_type |= (3<<8);
+               break;
+            case 1: /* GAMMA10 */
+            case 2: /* GAMMA18 */
+            case 3: /* GAMMA20 */
+            case 4: /* GAMMA22 */
+            case 7: /* SRGB */
+            case 8: /* GAMMA28 */
+            case 12: /* ADOBERGB */
+            case 15: /* ARIB_STD_B76 */
+            default:
+               break;
+         }
+         /* primaries */
+         switch( sink->soc.hdrColorimetry[3] )
+         {
+            case 1: /* BT709 */
+               decParm->hdr.signal_type |= ((1<<24)|(1<<16));
+               break;
+            case 2: /* BT470M */
+               decParm->hdr.signal_type |= ((1<<24)|(4<<16));
+               break;
+            case 3: /* BT470BG */
+               decParm->hdr.signal_type |= ((1<<24)|(5<<16));
+               break;
+            case 4: /* SMPTE170M */
+               decParm->hdr.signal_type |= ((1<<24)|(6<<16));
+               break;
+            case 5: /* SMPTE240M */
+               decParm->hdr.signal_type |= ((1<<24)|(7<<16));
+               break;
+            case 6: /* FILM */
+               decParm->hdr.signal_type |= ((1<<24)|(8<<16));
+               break;
+            case 7: /* BT2020 */
+               decParm->hdr.signal_type |= ((1<<24)|(9<<16));
+               break;
+            case 8: /* ADOBERGB */
+            default:
+               break;
+         }
+      }
+      if ( sink->soc.haveMasteringDisplay )
+      {
+         decParm->hdr.color_parms.present_flag= 1;
+         decParm->hdr.color_parms.primaries[2][0]= (uint32_t)(sink->soc.hdrMasteringDisplay[0]*50000); /* R.x */
+         decParm->hdr.color_parms.primaries[2][1]= (uint32_t)(sink->soc.hdrMasteringDisplay[1]*50000); /* R.y */
+         decParm->hdr.color_parms.primaries[0][0]= (uint32_t)(sink->soc.hdrMasteringDisplay[2]*50000); /* G.x */
+         decParm->hdr.color_parms.primaries[0][1]= (uint32_t)(sink->soc.hdrMasteringDisplay[3]*50000); /* G.y */
+         decParm->hdr.color_parms.primaries[1][0]= (uint32_t)(sink->soc.hdrMasteringDisplay[4]*50000); /* B.x */
+         decParm->hdr.color_parms.primaries[1][1]= (uint32_t)(sink->soc.hdrMasteringDisplay[5]*50000); /* B.y */
+         decParm->hdr.color_parms.white_point[0]= (uint32_t)(sink->soc.hdrMasteringDisplay[6]*50000);
+         decParm->hdr.color_parms.white_point[1]= (uint32_t)(sink->soc.hdrMasteringDisplay[7]*50000);
+         decParm->hdr.color_parms.luminance[0]= (uint32_t)(sink->soc.hdrMasteringDisplay[8]);
+         decParm->hdr.color_parms.luminance[1]= (uint32_t)(sink->soc.hdrMasteringDisplay[9]);
+      }
+      if ( sink->soc.haveContentLightLevel )
+      {
+         decParm->hdr.color_parms.content_light_level.max_content= sink->soc.hdrContentLightLevel[0];
+         decParm->hdr.color_parms.content_light_level.max_pic_average= sink->soc.hdrContentLightLevel[1];
+      }
+   }
+
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_PARM, &streamparm );
    if ( rc != 0)
    {

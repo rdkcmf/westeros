@@ -381,6 +381,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.useDmabufOutput= FALSE;
    sink->soc.dwMode= -1;
    sink->soc.drmFd= -1;
+   sink->soc.haveColorimetry= FALSE;
+   sink->soc.haveMasteringDisplay= FALSE;
+   sink->soc.haveContentLightLevel= FALSE;
 
    #ifdef USE_GST1
    sink->soc.chainOrg= 0;
@@ -832,6 +835,68 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             }
             sink->soc.frameHeightStream= height;
          }
+         if ( gst_structure_has_field(structure, "colorimetry") )
+         {
+            const char *colorimetry= gst_structure_get_string(structure,"colorimetry");
+            if ( colorimetry &&
+                 sscanf( colorimetry, "%d:%d:%d:%d",
+                         &sink->soc.hdrColorimetry[0],
+                         &sink->soc.hdrColorimetry[1],
+                         &sink->soc.hdrColorimetry[2],
+                         &sink->soc.hdrColorimetry[3] ) == 4 )
+            {
+               sink->soc.haveColorimetry= TRUE;
+               GST_DEBUG("colorimetry: [%d,%d,%d,%d]",
+                        sink->soc.hdrColorimetry[0],
+                        sink->soc.hdrColorimetry[1],
+                        sink->soc.hdrColorimetry[2],
+                        sink->soc.hdrColorimetry[3] );
+            }
+         }
+         if ( gst_structure_has_field(structure, "mastering-display-metadata") )
+         {
+            const char *masteringDisplay= gst_structure_get_string(structure,"mastering-display-metadata");
+            if ( masteringDisplay &&
+                 sscanf( masteringDisplay, "%f:%f:%f:%f:%f:%f:%f:%f:%f:%f",
+                         &sink->soc.hdrMasteringDisplay[0],
+                         &sink->soc.hdrMasteringDisplay[1],
+                         &sink->soc.hdrMasteringDisplay[2],
+                         &sink->soc.hdrMasteringDisplay[3],
+                         &sink->soc.hdrMasteringDisplay[4],
+                         &sink->soc.hdrMasteringDisplay[5],
+                         &sink->soc.hdrMasteringDisplay[6],
+                         &sink->soc.hdrMasteringDisplay[7],
+                         &sink->soc.hdrMasteringDisplay[8],
+                         &sink->soc.hdrMasteringDisplay[9] ) == 10 )
+            {
+               sink->soc.haveMasteringDisplay= TRUE;
+               GST_DEBUG("mastering display [%f,%f,%f,%f,%f,%f,%f,%f,%f,%f]",
+                       sink->soc.hdrMasteringDisplay[0],
+                       sink->soc.hdrMasteringDisplay[1],
+                       sink->soc.hdrMasteringDisplay[2],
+                       sink->soc.hdrMasteringDisplay[3],
+                       sink->soc.hdrMasteringDisplay[4],
+                       sink->soc.hdrMasteringDisplay[5],
+                       sink->soc.hdrMasteringDisplay[6],
+                       sink->soc.hdrMasteringDisplay[7],
+                       sink->soc.hdrMasteringDisplay[8],
+                       sink->soc.hdrMasteringDisplay[9] );
+            }
+         }
+         if ( gst_structure_has_field(structure, "content-light-level") )
+         {
+            const char *contentLightLevel= gst_structure_get_string(structure,"content-light-level");
+            if ( contentLightLevel &&
+                 sscanf( contentLightLevel, "%d:%d",
+                         &sink->soc.hdrContentLightLevel[0],
+                         &sink->soc.hdrContentLightLevel[1] ) == 2 )
+            {
+               GST_DEBUG("content light level: [%d,%d])",
+                        sink->soc.hdrContentLightLevel[0],
+                        sink->soc.hdrContentLightLevel[1] );
+               sink->soc.haveContentLightLevel= TRUE;
+            }
+         }
 
          if ( frameSizeChange && (sink->soc.hasEvents == FALSE) )
          {
@@ -1274,6 +1339,9 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameHeightStream= -1;
    sink->soc.pauseGfxBuffIndex= -1;
    sink->soc.syncType= -1;
+   sink->soc.haveColorimetry= FALSE;
+   sink->soc.haveMasteringDisplay= FALSE;
+   sink->soc.haveContentLightLevel= FALSE;
 
    if ( sink->soc.inputFormats )
    {
