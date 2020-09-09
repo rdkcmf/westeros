@@ -976,7 +976,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          if ( nanoTime >= sink->segment.start )
          {
             prevPTS= sink->currentPTS;
-            sink->currentPTS= ((nanoTime * 90000LL + GST_SECOND/2)/GST_SECOND);
+            sink->currentPTS= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
             if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
                sink->firstPTS= sink->currentPTS;
@@ -3255,8 +3255,9 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            guint64 frameTime= getS64( &m[4] );
                            sink->soc.numDropped= getU32( &m[12] );
                            FRAME( "out:       status received: frameTime %lld numDropped %d", frameTime, sink->soc.numDropped);
-                           gint64 currentPTS= ((frameTime * 90000000LL + GST_SECOND/2)/GST_SECOND);
-                           sink->position= sink->positionSegmentStart + ((currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+                           gint64 currentNano= frameTime*1000LL;
+                           sink->position= sink->positionSegmentStart + currentNano - ((sink->firstPTS * GST_MSECOND)/90LL);
+                           GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
                            if (sink->soc.frameDisplayCount == 0)
                            {
                                GST_DEBUG("wstProcessMessagesVideoClientConnection: emit first frame signal");
@@ -4066,7 +4067,6 @@ capture_start:
 
             gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
-            gint64 currentPTS= ((frameTime * 90000LL + GST_SECOND/2)/GST_SECOND);
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
 
             sink->soc.outBuffers[buffIndex].frameTime= currFramePTS;
@@ -4082,7 +4082,7 @@ capture_start:
             if ( !sink->soc.conn )
             {
                /* If we are not connected to a video server, set position here */
-               sink->position= sink->positionSegmentStart + ((currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
+               sink->position= sink->positionSegmentStart + frameTime - ((sink->firstPTS * GST_MSECOND)/90LL);
             }
 
             if ( sink->soc.quitVideoOutputThread )
