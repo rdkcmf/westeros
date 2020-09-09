@@ -355,6 +355,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoPaused= FALSE;
    sink->soc.hasEvents= FALSE;
    sink->soc.needCaptureRestart= FALSE;
+   sink->soc.emitFirstFrameSignal= FALSE;
    sink->soc.nextFrameFd= -1;
    sink->soc.prevFrame1Fd= -1;
    sink->soc.prevFrame2Fd= -1;
@@ -1153,6 +1154,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.frameOutCount= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
+   sink->soc.frameDisplayCount= FALSE;
    UNLOCK(sink);
 }
 
@@ -1164,6 +1166,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    sink->soc.frameOutCount= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
+   sink->soc.frameDisplayCount= FALSE;
 
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
    if ( rc < 0 )
@@ -1342,6 +1345,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.haveColorimetry= FALSE;
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
+   sink->soc.emitFirstFrameSignal= FALSE;
 
    if ( sink->soc.inputFormats )
    {
@@ -3260,8 +3264,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
                            if (sink->soc.frameDisplayCount == 0)
                            {
-                               GST_DEBUG("wstProcessMessagesVideoClientConnection: emit first frame signal");
-                               g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+                               sink->soc.emitFirstFrameSignal= TRUE;
                            }
                            ++sink->soc.frameDisplayCount;
                         }
@@ -4092,9 +4095,7 @@ capture_start:
             }
             if ( !sink->soc.conn && (sink->soc.frameOutCount == 0))
             {
-                /* If we are not connected to a video server, issue signal here */
-                GST_DEBUG("wstVideoOutputThread: emit first frame signal");
-                g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+                sink->soc.emitFirstFrameSignal= TRUE;
             }
             ++sink->soc.frameOutCount;
             if ( sink->windowChange )
@@ -4183,6 +4184,12 @@ capture_start:
             }
             UNLOCK(sink);
          }
+      }
+      if ( sink->soc.emitFirstFrameSignal )
+      {
+         sink->soc.emitFirstFrameSignal= FALSE;
+         GST_DEBUG("wstVideoOutputThread: emit first frame signal");
+         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
       }
    }
 
