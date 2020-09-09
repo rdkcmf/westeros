@@ -921,7 +921,7 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
-   if ( !sink->flushStarted )
+   if ( (sink->soc.v4l2Fd >= 0) && !sink->flushStarted )
    {
       gint64 nanoTime;
       int rc, buffIndex;
