@@ -143,6 +143,7 @@ struct _GstWesterosSinkSoc
    gboolean videoPaused;
    gboolean hasEvents;
    gboolean needCaptureRestart;
+   gboolean emitFirstFrameSignal;
    gboolean quitVideoOutputThread;
    GThread *videoOutputThread;
    gboolean quitEOSDetectionThread;

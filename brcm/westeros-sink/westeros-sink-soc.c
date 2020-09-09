@@ -2189,6 +2189,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
    gboolean eosDetected= FALSE;
    gboolean videoPlaying= FALSE;
    gboolean flushStarted= FALSE;
+   gboolean emitFirstFrame= FALSE;
    guint64 prevPTS;
 
    LOCK( sink );
@@ -2254,7 +2255,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
 
             if (sink->soc.frameCount == 0)
             {
-                g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+               emitFirstFrame= TRUE;
             }
 
             sink->soc.frameCount++;
@@ -2307,6 +2308,11 @@ static void updateVideoStatus( GstWesterosSink *sink )
          sink->srcHeight= videoStatus.source.height;
          UNLOCK( sink );
       }
+   }
+
+   if ( emitFirstFrame )
+   {
+      g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
    }
 
    if ( videoPlaying && !eosDetected && checkForEOS )
