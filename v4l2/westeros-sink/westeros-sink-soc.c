@@ -3260,7 +3260,8 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            sink->soc.numDropped= getU32( &m[12] );
                            FRAME( "out:       status received: frameTime %lld numDropped %d", frameTime, sink->soc.numDropped);
                            gint64 currentNano= frameTime*1000LL;
-                           sink->position= sink->positionSegmentStart + currentNano - ((sink->firstPTS * GST_MSECOND)/90LL);
+                           gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
+                           sink->position= sink->positionSegmentStart + currentNano - firstNano;
                            GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
                            if (sink->soc.frameDisplayCount == 0)
                            {
@@ -4085,7 +4086,8 @@ capture_start:
             if ( !sink->soc.conn )
             {
                /* If we are not connected to a video server, set position here */
-               sink->position= sink->positionSegmentStart + frameTime - ((sink->firstPTS * GST_MSECOND)/90LL);
+               gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
+               sink->position= sink->positionSegmentStart + frameTime - firstNano;
             }
 
             if ( sink->soc.quitVideoOutputThread )
