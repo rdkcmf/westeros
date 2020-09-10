@@ -4255,6 +4255,8 @@ static gpointer wstEOSDetectionThread(gpointer data)
       }
    }
 
+   sink->soc.eosDetectionThread= NULL;
+
    GST_DEBUG("wstVideoEOSThread: exit");
 
    return NULL;
