@@ -3005,11 +3005,11 @@ static void wstProcessUEvent( WstGLCtx *ctx )
             for( i= 0; i < rc; )
             {
                char *uevent= &buff[i];
-               if ( strcmp( uevent, "DEVTYPE=drm_minor" ) )
+               if ( strstr( uevent, "DEVTYPE=drm_minor" ) )
                {
                   drmEvent= true;
                }
-               else if ( strcmp( uevent, "HOTPLUG=1" ) )
+               else if ( strstr( uevent, "HOTPLUG=1" ) )
                {
                   hotPlugEvent= true;
                }
@@ -4553,7 +4553,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
    #endif
    #endif
 
-   if ( flags & DRM_MODE_ATOMIC_ALLOW_MODESET )
+   if ( (flags & DRM_MODE_ATOMIC_ALLOW_MODESET) && !rc )
    {
       ctx->modeSet= true;
    }
