@@ -651,6 +651,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
    sink->segmentNumber= 0;
    sink->queryPositionFromPeer= FALSE;
+   sink->useSegmentPosition= FALSE;
 
    sink->display= 0;
    sink->currentSegment = NULL;
@@ -1248,6 +1249,14 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             sink->positionSegmentStart= 0;
             sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
 
+            if ( sink->useSegmentPosition &&
+                 (segmentFormat == GST_FORMAT_TIME) )
+            {
+               GST_DEBUG("using segment position: start %lld position %lld", segmentStart, segmentPosition);
+               sink->position= GST_TIME_AS_NSECONDS(segmentPosition);
+               sink->positionSegmentStart= GST_TIME_AS_NSECONDS(segmentPosition);
+            }
+
             if (appliedRate != 1.0)
             {
                 GST_DEBUG_OBJECT(sink, "rate change done upstream");
@@ -1265,6 +1274,13 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                sink->position= GST_TIME_AS_NSECONDS(segmentStart);
                sink->positionSegmentStart= GST_TIME_AS_NSECONDS(segmentStart);
                sink->startPTS= (GST_TIME_AS_MSECONDS(segmentStart)*90LL);
+               if ( sink->useSegmentPosition &&
+                    (segmentStart != segmentPosition) &&
+                    (segmentPosition != -1LL) )
+               {
+                  sink->position= GST_TIME_AS_NSECONDS(segmentPosition);
+                  sink->positionSegmentStart= GST_TIME_AS_NSECONDS(segmentPosition);
+               }
                gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
             }
             UNLOCK( sink );
