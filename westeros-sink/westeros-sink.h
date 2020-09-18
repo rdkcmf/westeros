@@ -119,6 +119,7 @@ struct _GstWesterosSink
    gint64 prevPositionSegmentStart;
    gboolean queryPositionFromPeer;
    const GstSegment* currentSegment;
+   gboolean useSegmentPosition;
    GstSegment segment;
 
    unsigned segmentNumber;
