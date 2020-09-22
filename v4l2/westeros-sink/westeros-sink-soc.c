@@ -386,7 +386,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
 
-   sink->useSegmentPosition= TRUE;
+   sink->useSegmentPosition= FALSE;
 
    #ifdef USE_GST1
    sink->soc.chainOrg= 0;
@@ -1007,9 +1007,14 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          gsize dataOffset, maxSize;
 
          buffIndex= wstGetInputBuffer( sink );
-         if ( buffIndex < 0 )
+         if ( (buffIndex < 0) && !sink->flushStarted )
          {
             GST_ERROR("gst_westeros_sink_soc_render: unable to get input buffer");
+            goto exit;
+         }
+
+         if ( sink->flushStarted )
+         {
             goto exit;
          }
 
@@ -1080,7 +1085,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
                if ( sink->flushStarted )
                {
-                  break;
+                  goto exit;
                }
 
                copylen= sink->soc.inBuffers[buffIndex].capacity;
@@ -1361,8 +1366,9 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    }
    if ( sink->soc.v4l2Fd >= 0 )
    {
-      close( sink->soc.v4l2Fd );
+      int fdToClose= sink->soc.v4l2Fd;
       sink->soc.v4l2Fd= -1;
+      close( fdToClose );
    }
 
    if ( sink->soc.videoOutputThread )
@@ -3519,8 +3525,9 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
    {
       if ( sink->soc.v4l2Fd >= 0 )
       {
-         close( sink->soc.v4l2Fd );
+         int fdToClose= sink->soc.v4l2Fd;
          sink->soc.v4l2Fd= -1;
+         close( fdToClose );
       }
 
       sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
