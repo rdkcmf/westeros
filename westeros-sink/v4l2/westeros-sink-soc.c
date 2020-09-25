@@ -317,6 +317,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
+   sink->soc.currentInputPTS= 0;
    sink->soc.devname= strdup(gDeviceName);
    sink->soc.enableTextureSignal= FALSE;
    sink->soc.v4l2Fd= -1;
@@ -977,22 +978,26 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          LOCK(sink)
          if ( nanoTime >= sink->segment.start )
          {
-            prevPTS= sink->currentPTS;
-            sink->currentPTS= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
+            if ( sink->prevPositionSegmentStart == 0xFFFFFFFFFFFFFFFFLL )
+            {
+               sink->soc.currentInputPTS= 0;
+            }
+            prevPTS= sink->soc.currentInputPTS;
+            sink->soc.currentInputPTS= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
             if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
-               sink->firstPTS= sink->currentPTS;
+               sink->firstPTS= sink->soc.currentInputPTS;
                sink->prevPositionSegmentStart = sink->positionSegmentStart;
                GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
             }
-            if ( sink->currentPTS != 0 || sink->soc.frameInCount == 0 )
+            if ( sink->soc.currentInputPTS != 0 || sink->soc.frameInCount == 0 )
             {
-               if ( (sink->currentPTS < sink->firstPTS) && (sink->currentPTS > 90000) )
+               if ( (sink->soc.currentInputPTS < sink->firstPTS) && (sink->soc.currentInputPTS > 90000) )
                {
                   /* If we have hit a discontinuity that doesn't look like rollover, then
                      treat this as the case of looping a short clip.  Adjust our firstPTS
                      to keep our running time correct. */
-                  sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
+                  sink->firstPTS= sink->firstPTS-(prevPTS-sink->soc.currentInputPTS);
                }
             }
          }
@@ -3269,6 +3274,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            gint64 currentNano= frameTime*1000LL;
                            gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
                            sink->position= sink->positionSegmentStart + currentNano - firstNano;
+                           sink->currentPTS= currentNano / (GST_SECOND/90000LL);
                            GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
                            if (sink->soc.frameDisplayCount == 0)
                            {
@@ -4096,6 +4102,7 @@ capture_start:
                /* If we are not connected to a video server, set position here */
                gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
                sink->position= sink->positionSegmentStart + frameTime - firstNano;
+               sink->currentPTS= frameTime / (GST_SECOND/90000LL);
             }
 
             if ( sink->soc.quitVideoOutputThread )
