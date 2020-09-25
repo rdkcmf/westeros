@@ -104,6 +104,7 @@ struct _GstWesterosSinkSoc
    uint32_t numDropped;
    uint32_t inputFormat;
    uint32_t outputFormat;
+   gint64 currentInputPTS;
 
    char *devname;
    gboolean enableTextureSignal;
