@@ -2444,15 +2444,18 @@ bool WstCompositorComposeEmbedded( WstCompositor *wctx,
          {
             wstUpdateVPCSurfaces( wctx, rects );
          }
-         
-         WstRendererUpdateScene( ctx->renderer );
-         if ( possibleFirstFrame && wctx->clientCommit && !wctx->clientFirstFrame )
+
+         if ( !(hints & WstHints_hidden) )
          {
-            wctx->clientFirstFrame= true;
-            if ( wctx->clientStatusCB )
+            WstRendererUpdateScene( ctx->renderer );
+            if ( possibleFirstFrame && wctx->clientCommit && !wctx->clientFirstFrame )
             {
-               INFO("display %s client pid %d first frame", ctx->displayName, wctx->clientCommitPid );
-               wctx->clientStatusCB( wctx, WstClient_firstFrame, wctx->clientCommitPid, 0, wctx->clientStatusUserData );
+               wctx->clientFirstFrame= true;
+               if ( wctx->clientStatusCB )
+               {
+                  INFO("display %s client pid %d first frame", ctx->displayName, wctx->clientCommitPid );
+                  wctx->clientStatusCB( wctx, WstClient_firstFrame, wctx->clientCommitPid, 0, wctx->clientStatusUserData );
+               }
             }
          }
 
