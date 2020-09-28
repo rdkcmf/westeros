@@ -62,6 +62,7 @@ typedef enum _WstHints
    WstHints_fboTarget= (1<<2),
    WstHints_applyTransform= (1<<3),
    WstHints_animating= (1<<4),
+   WstHints_hidden= (1<<5),
 } WstHints;
 
 typedef struct _WstRenderer WstRenderer;
