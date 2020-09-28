@@ -1188,7 +1188,14 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          gst_westeros_sink_soc_flush( sink );
          passToDefault= TRUE;
          break;
-          
+
+      case GST_EVENT_FLUSH_STOP:
+         LOCK( sink );
+         sink->flushStarted= FALSE;
+         UNLOCK( sink );
+         passToDefault= TRUE;
+         break;
+
       case GST_EVENT_EOS:
          {
             LOCK( sink );
