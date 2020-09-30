@@ -386,7 +386,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
 
-   sink->useSegmentPosition= FALSE;
+   sink->useSegmentPosition= TRUE;
 
    #ifdef USE_GST1
    sink->soc.chainOrg= 0;
@@ -3602,6 +3602,11 @@ static bool wstLocalRateControl( GstWesterosSink *sink, int buffIndex )
    WstVideoClientConnection *conn= sink->soc.conn;
    gint64 framePTS;
    gint64 currFrameTime;
+
+   if ( !sink->soc.outBuffers )
+   {
+      goto exit;
+   }
 
    framePTS= sink->soc.outBuffers[buffIndex].frameTime;
 
