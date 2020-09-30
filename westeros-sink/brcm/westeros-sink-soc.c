@@ -1576,7 +1576,23 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
 
    if ( sink->videoStarted && sink->soc.videoDecoder )
    {
+      #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+      NxClient_DisplaySettings displaySettings;
+      NEXUS_VideoDecoderStreamInformation streamInfo;
+      #endif
       NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
+      #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+      NxClient_GetDisplaySettings(&displaySettings);
+      if (NEXUS_VideoEotf_eHdr10 == streamInfo.eotf || NEXUS_VideoEotf_eAribStdB67 == streamInfo.eotf)
+      {
+         NEXUS_VideoDynamicRangeMode tempMode= displaySettings.hdmiPreferences.dynamicRangeMode;
+         displaySettings.hdmiPreferences.dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eSdr;
+         NxClient_SetDisplaySettings(&displaySettings);
+         GST_WARNING("sinkSocStopVideo: reset to SDR from : %d",tempMode);
+         displaySettings.hdmiPreferences.dynamicRangeMode= tempMode;
+         NxClient_SetDisplaySettings(&displaySettings);
+      }
+      #endif
    }
 
    sink->videoStarted= FALSE;
