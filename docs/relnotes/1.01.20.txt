@@ -1,0 +1,112 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.20 Release Notes
+------------------------------
+
+Date: Oct 1, 2020
+Tag: Westeros-1.01.20
+Changes:
+
+* Support building Essos without Westeros:
+-Add 'EXTRA_OECONF = "--enable-essoswesterosfree" to a westeros.bbappend
+
+* v4l2+drm updates:
+-improve support for av sync of video as texture on platforms that support simultaneous use
+of a v4l2 capture buffer for both texture and display to a drm video plane
+-currently enabled for AmLogic only
+
+* v4l2: fix potential hang with teardown with no media playing
+
+* v4l2: add support for force-aspect-ratio property
+
+* drm uevent hotplug:
+-add support for HDMI hotplug event processing via uevent
+-build time enabled by default, may be disabled with "-DDRM_NO_UEVENT_HOTPLUG"
+-runtime disabled by default, may be enabled with "export WESTEROS_GL_USE_UEVENT_HOTPLUG=1", but
+can be enabled only for AmLogic Meson.
+
+* v4l2: fix vertical positioning with force-aspect-ratio
+
+* v4l2: treat x,y from force-aspect-ratio as offsets for rectangle property
+
+* v4l2: process v4l2 events while paused
+
+* drm: add support for connector color space property
+
+* v4l2: remove flush from resolution change
+
+* v4l2: fix setting of num_planes for capture format
+
+* v4l2: join dispatch thread prior to exit from wstSinkSocStopVideo
+
+* drm: create connection threads as detached
+
+* v4l2: act on every non-initial source change event
+
+* Input keys metadata processing for IR
+
+* Add meta key modifier
+
+* v4l2: use presence of audio sink in sync mode determination
+
+* v4l2+drm updates:
+-add status msg from soc-drm to sink giving position and drop count
+-sink position driven by soc-drm position
+-support dynamically changing sync mode
+-fix overflow error in pts conversion
+
+* brcm: exclude out-of-segment frames from drop count
+
+* drm: revert support for non-standard colorspace mode suffix
+
+* v4l2: support hdr metadata from caps
+
+* Update NOTICE
+
+* v4l2: avoid overflow in timestamp conversions
+
+* v4l2: discard input frames if v4l2 device is closed:
+-the sink can sometimes be passed frames to render after transitining from paused to ready state.  At this point the v4l2 device has been closed so it is not possible to process frames so rather than generating error logs don't attempt any processing
+
+* Don't hold mutex when emit first frame signal
+
+* v4l2: fix overflow in conversion of 90KHz to nanoseconds
+
+* v4l2: fix restart of eos detection
+
+* drm: fix uevent hotplug handling
+
+* v4l2: use use of position field in segement
+
+* v4l2 updates:
+-ensure flush aborts render
+-set v4l2 fd to -1 prior to close
+-temporarily disable use of segment position
+
+* Restructure repo to license westerossink as LGPL
+
+* v4l2: ensure video-pts returns render position
+
+* Add hidden hint for embedded composition
+
+* sink: clear flush started flag on flush stop
+
+* brcm: restore SDR mode after HDR video
+
+* v4l2 updates:
+-fix potential crash on pause to ready
+-restore use of segment position
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
