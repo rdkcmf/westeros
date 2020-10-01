@@ -92,6 +92,30 @@ Changes:
 * v4l2+drm updates
 -add support for audio/video master with amlogic avsync
 
+* v4l2: release preroll lock while waiting to dequeue input buffer
+
+* v4l2: process input buffers while paused
+
+* Update rotation detecton logic
+
+* drm: Restore locking in eglSwapBuffers to prior state
+
+* Release detached buffers on commit of null buffer
+
+* drm: delay sync module creation until first frame push
+
+* drm: delay sync module creation until first frame push
+-add a refresh lock mechanism for use on AmLogic. This is enabled by default at build time.  To disable
+bulid with -DDRM_NO_REFRESH_LOCK.  This mechanism is diabled by default at runtime.  To enable use
+'export WESTEROS_GL_USE_REFRESH_LOCK=1'.  The mechanism forces the eglSwapBuffers of the underlying EGL
+to execute synchronized with the refresh thread.  It also ensures all rendering is complete prior to the swap
+by calling glFlush and glFinish.  Lastly, it causes the output fence to be used at the start of atomic updates
+to ensure the previous update is complete.  This addresses observed drmAtomicCommit and drmWaitVBlank failures
+observed under heavy load.  This mechanism will only allow itself to be enabled on AmLogic
+-remove unconditional sleep for reference compositor app
+
+
+
 
 Depedencies
 ------------
