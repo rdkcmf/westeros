@@ -6266,11 +6266,16 @@ static void wstOutputChangeSize( WstCompositor *wctx )
 
    wl_resource_for_each( resource, &output->resourceList )
    {
-      wl_output_send_mode( resource,
-                           WL_OUTPUT_MODE_CURRENT,
-                           wctx->outputWidth,
-                           wctx->outputHeight,
-                           output->refreshRate );
+      struct wl_client *client= wl_resource_get_client(resource);
+      WstCompositor *wctxResource= wstGetCompositorFromClient( ctx, client );
+      if ( wctxResource == wctx )
+      {
+         wl_output_send_mode( resource,
+                              WL_OUTPUT_MODE_CURRENT,
+                              wctx->outputWidth,
+                              wctx->outputHeight,
+                              output->refreshRate );
+      }
    }
    
    if ( ctx->isEmbedded || ctx->hasEmbeddedMaster )
@@ -6280,7 +6285,11 @@ static void wstOutputChangeSize( WstCompositor *wctx )
             ++it )
       {
          WstSurface *surface= (*it);
-         
+
+         if ( surface->compositor != wctx )
+         {
+            continue;
+         }
          if ( surface->roleName )
          {
             int len= strlen( surface->roleName );
