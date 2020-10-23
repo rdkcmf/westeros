@@ -103,6 +103,23 @@ struct _GstWesterosSinkSoc
    gfloat clientPlaySpeed;
    gboolean stoppedForPlaySpeedChange;
    gboolean secureVideo;
+   gboolean haveHardware;
+   #ifdef ENABLE_SW_DECODE
+   GstPad *dataProbePad;
+   gboolean dataProbeNeedStartCodes;
+   gulong dataProbeId;
+   bool removeDataProbe;
+   int dataProbeCodecDataLen;
+   unsigned char *dataProbeCodecData;
+   bool swPrerolled;
+   NEXUS_SurfaceHandle swWorkSurface;
+   int swNextCaptureSurface;
+   NEXUS_Graphics2DHandle g2d;
+   bool g2dEventCreated;
+   BKNI_EventHandle g2dEvent;
+   int frameWidth;
+   int frameHeight;
+   #endif
 
    #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
    NEXUS_VideoEotf eotf;

@@ -22,16 +22,16 @@ ACLOCAL_AMFLAGS = -I .
 
 lib_LTLIBRARIES = libessos.la
 
-bin_PROGRAMS = essos-sample
+bin_PROGRAMS = essos-sample essos-sample-resmgr
 
 BUILT_SOURCES= libessos.la
 
-libessos_la_SOURCES = essos.cpp
-libessos_la_include_HEADERS = essos.h essos-app.h essos-system.h essos-game.h
+libessos_la_SOURCES = essos.cpp essos-resmgr.cpp
+libessos_la_include_HEADERS = essos.h essos-app.h essos-system.h essos-game.h essos-resmgr.h
 libessos_la_includedir = $(includedir)
 
 libessos_la_CXXFLAGS = $(AM_CXXFLAGS) -I$(top_srcdir)/..
-libessos_la_LDFLAGS = $(AM_LDFLAGS) -lEGL -ldl
+libessos_la_LDFLAGS = $(AM_LDFLAGS) -lEGL -ldl -lpthread
 
 if HAVE_WAYLAND
 if HAVE_WAYLAND_EGL
@@ -59,6 +59,10 @@ if HAVE_EGL
 essos_sample_CXXFLAGS += ${EGL_CFLAGS}
 endif
 essos_sample_LDFLAGS = $(AM_FLAGS) -lessos -lGLESv2
+
+essos_sample_resmgr_SOURCES = essos-sample-resmgr.cpp
+essos_sample_resmgr_CXXFLAGS = ${AM_CXXFLAGS}
+essos_sample_resmgr_LDFLAGS = $(AM_FLAGS) -lessos
 
 ## IPK Generation Support
 IPK_GEN_PATH = $(abs_top_builddir)/ipk

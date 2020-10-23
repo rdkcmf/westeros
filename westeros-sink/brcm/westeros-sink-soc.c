@@ -114,6 +114,15 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
 static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *contentLightLevel );
 #endif
+static bool swIsSWDecode( GstWesterosSink *sink );
+#ifdef ENABLE_SW_DECODE
+static bool swInit( GstWesterosSink *sink );
+static void swTerm( GstWesterosSink *sink );
+void swDisplay( GstWesterosSink *sink, SWFrame *frame );
+static bool establishSource( GstWesterosSink *sink );
+#endif
+static int sinkAcquireVideo( GstWesterosSink *sink );
+static void sinkReleaseVideo( GstWesterosSink *sink );
 static int sinkAcquireResources( GstWesterosSink *sink );
 static void sinkReleaseResources( GstWesterosSink *sink );
 
@@ -307,6 +316,50 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                G_TYPE_UINT, /* plane 2 stride */
                                                G_TYPE_POINTER /* plane 2 data */
                                              );
+
+   klass->canUseResMgr= 0;
+   {
+      const char *env= getenv("WESTEROS_SINK_USE_ESSRMGR");
+      if ( env && (atoi(env) != 0) )
+      {
+         klass->canUseResMgr= 1;
+
+         #ifdef ENABLE_SW_DECODE
+         env= getenv("WESTEROS_SINK_USE_SW_DECODE");
+         if ( env && (atoi(env) != 0) )
+         {
+            GstCaps *caps= 0;
+            caps= gst_caps_new_empty();
+            if ( caps )
+            {
+               GstCaps *capsTemp= 0;
+               GstPadTemplate *padTemplate= 0;
+
+               capsTemp= gst_caps_from_string(
+                                                "video/x-h264, " \
+                                                "parsed=(boolean) true, " \
+                                                "alignment=(string) au, " \
+                                                "stream-format=(string) byte-stream, " \
+                                                "width=(int) [1,MAX], " "height=(int) [1,MAX] ; "
+                                             );
+               gst_caps_append( caps, capsTemp );
+
+               padTemplate= gst_pad_template_new( "sink",
+                                                  GST_PAD_SINK,
+                                                  GST_PAD_ALWAYS,
+                                                  caps );
+               if ( padTemplate )
+               {
+                  gst_element_class_add_pad_template(gstelement_class, padTemplate);
+                  padTemplate= 0;
+               }
+               gst_caps_unref( caps );
+            }
+         }
+         #endif
+      }
+   }
+   printf("westerossink: enabling Essos RMgr: %d\n", klass->canUseResMgr);
 }
 
 #include <dlfcn.h>
@@ -613,10 +666,39 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveResources= FALSE;
    sink->soc.timeResourcesLost= 0;
    sink->soc.positionResourcesLost= 0;
+   sink->soc.haveHardware= FALSE;
+   #ifdef ENABLE_SW_DECODE
+   sink->soc.dataProbeNeedStartCodes= FALSE;
+   sink->soc.dataProbePad= 0;
+   sink->soc.dataProbeId= 0;
+   sink->soc.removeDataProbe= false;
+   sink->soc.dataProbeCodecData= 0;
+   sink->soc.dataProbeCodecDataLen= 0;
+   sink->soc.swPrerolled= false;
+   sink->soc.swWorkSurface= 0;
+   sink->soc.swNextCaptureSurface= 0;
+   sink->soc.g2d= 0;
+   sink->soc.g2dEventCreated= false;
+   sink->soc.frameWidth= -1;
+   sink->soc.frameHeight= -1;
+   sink->swInit= swInit;
+   sink->swTerm= swTerm;
+   sink->swDisplay= swDisplay;
+   {
+      const char *env= getenv("WESTEROS_SINK_USE_SW_DECODE");
+      if ( env && (atoi(env) != 0) )
+      {
+         printf("westerossink: using software decode\n");
+         sink->resUsage= 3;
+      }
+   }
+   #endif
 
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), TRUE);
 
    sink->processPadEvent= processEventSinkSoc;
+   sink->acquireResources= sinkAcquireVideo;
+   sink->releaseResources= sinkReleaseVideo;
 
    rc= NxClient_Join(NULL);
    if ( rc == NEXUS_SUCCESS )
@@ -1385,6 +1467,12 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
    WESTEROS_UNUSED(sink);
    WESTEROS_UNUSED(buffer);
+   #ifdef ENABLE_SW_DECODE
+   if ( swIsSWDecode( sink ) && (sink->soc.dataProbeId == 0) )
+   {
+      wstsw_render( sink, buffer );
+   }
+   #endif
 }
 
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
@@ -1470,9 +1558,12 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    }
    #endif
 
-   sink->soc.presentationStarted= FALSE;
-   sink->soc.frameCount= 0;
-   sink->eosEventSeen= FALSE;
+   if ( sink->soc.haveHardware )
+   {
+      sink->soc.presentationStarted= FALSE;
+      sink->soc.frameCount= 0;
+      sink->eosEventSeen= FALSE;
+   }
    rc= NEXUS_SimpleVideoDecoder_Start(sink->soc.videoDecoder, &startSettings);
    if ( rc != NEXUS_SUCCESS )
    {
@@ -1489,7 +1580,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
       }
    }
 
-   if ( sink->startPTS != 0 )
+   if ( sink->soc.haveHardware && (sink->startPTS != 0) )
    {
       gst_westeros_sink_soc_set_startPTS( sink, sink->startPTS );
    }
@@ -1632,7 +1723,14 @@ static gboolean allocCaptureSurfaces( GstWesterosSink *sink )
       NEXUS_Surface_GetDefaultCreateSettings(&videoSurfaceCreateSettings);
       videoSurfaceCreateSettings.width= sink->soc.captureWidth;
       videoSurfaceCreateSettings.height= sink->soc.captureHeight;
-      videoSurfaceCreateSettings.pixelFormat= NEXUS_PixelFormat_eA8_R8_G8_B8;
+      if ( swIsSWDecode( sink ) )
+      {
+         videoSurfaceCreateSettings.pixelFormat= NEXUS_PixelFormat_eY08_Cr8_Y18_Cb8;
+      }
+      else
+      {
+         videoSurfaceCreateSettings.pixelFormat= NEXUS_PixelFormat_eA8_R8_G8_B8;
+      }
       #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
       if ( sink->soc.secureGraphics )
       {
@@ -1860,6 +1958,11 @@ static gpointer captureThread(gpointer data)
    while( !sink->soc.quitCaptureThread )
    {
       LOCK( sink );
+      if ( !sink->soc.haveHardware )
+      {
+         UNLOCK( sink );
+         goto end_loop;
+      }
       gboolean videoPlaying= sink->soc.videoPlaying;
       gboolean eosDetected= sink->eosDetected;
       if ( sink->windowChange )
@@ -1967,6 +2070,8 @@ static gpointer captureThread(gpointer data)
 
       updateVideoStatus( sink );
 
+   end_loop:
+
       if ( sink->display && wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
       {
          wl_display_flush(sink->display);
@@ -1998,6 +2103,11 @@ static gpointer captureThread(gpointer data)
 
 void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
 {
+   if ( swIsSWDecode( sink ) )
+   {
+      return;
+   }
+
    if ( useGfxPath && !sink->soc.captureEnabled )
    {
       NEXUS_Error rc;
@@ -2066,7 +2176,10 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
    
    GstWesterosSink *sink= binfo->sink;
    captureSurface= (NEXUS_SurfaceHandle)binfo->deviceBuffer;
-   NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);                
+   if ( sink->soc.videoDecoder )
+   {
+      NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);
+   }
    
    --sink->soc.activeBuffers;
    wl_buffer_destroy( buffer );
@@ -2078,6 +2191,66 @@ static struct wl_buffer_listener wl_buffer_listener=
 {
    buffer_release
 };
+
+static void processTextureSignal( GstWesterosSink *sink, NEXUS_SurfaceHandle surface )
+{
+   NEXUS_Error rc;
+   void *mem= 0;
+
+   rc= NEXUS_Surface_Lock( surface, &mem );
+   if ( rc == NEXUS_SUCCESS )
+   {
+      int fd0, l0, s0, fd1, l1, s1, fd2, l2, s2;
+      void *p0, *p1, *p2;
+      fd0= fd1= fd2= -1;
+      p1= p2= 0;
+      l1= l2= s1= s2= 0;
+      p0= mem;
+      s0= sink->soc.captureWidth*4;
+      l0= s0*sink->soc.captureHeight;
+
+      g_signal_emit( G_OBJECT(sink),
+                     g_signals[SIGNAL_NEWTEXTURE],
+                     0,
+                     DRM_FORMAT_RGBA8888,
+                     sink->soc.captureWidth,
+                     sink->soc.captureHeight,
+                     fd0, l0, s0, p0,
+                     fd1, l1, s1, p1,
+                     fd2, l2, s2, p2
+                   );
+
+      NEXUS_Surface_Unlock( surface );
+   }
+   else
+   {
+      GST_ERROR("Error NEXUS_Surface_Lock: %d", (int)rc);
+   }
+}
+
+static void processTextureWayland( GstWesterosSink *sink, NEXUS_SurfaceHandle surface )
+{
+   struct wl_buffer *buff;
+
+   bufferInfo *binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+   if ( binfo )
+   {
+      binfo->sink= sink;
+      binfo->deviceBuffer= surface;
+
+      buff= wl_sb_create_buffer( sink->soc.sb,
+                                 (uint32_t)surface,
+                                 sink->windowWidth,
+                                 sink->windowHeight,
+                                 sink->windowWidth*4,
+                                 WL_SB_FORMAT_ARGB8888 );
+      wl_buffer_add_listener( buff, &wl_buffer_listener, binfo );
+      wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
+      wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+      wl_surface_commit( sink->surface );
+      ++sink->soc.activeBuffers;
+   }
+}
 
 static void processFrame( GstWesterosSink *sink )
 {
@@ -2112,63 +2285,13 @@ static void processFrame( GstWesterosSink *sink )
 
          if ( sink->soc.enableTextureSignal )
          {
-            NEXUS_Error rc;
-            void *mem= 0;
-
-            rc= NEXUS_Surface_Lock( captureSurface, &mem );
-            if ( rc == NEXUS_SUCCESS )
-            {
-               int fd0, l0, s0, fd1, l1, s1, fd2, l2, s2;
-               void *p0, *p1, *p2;
-               fd0= fd1= fd2= -1;
-               p1= p2= 0;
-               l1= l2= s1= s2= 0;
-               p0= mem;
-               s0= sink->soc.captureWidth*4;
-               l0= s0*sink->soc.captureHeight;
-
-               g_signal_emit( G_OBJECT(sink),
-                              g_signals[SIGNAL_NEWTEXTURE],
-                              0,
-                              DRM_FORMAT_RGBA8888,
-                              sink->soc.captureWidth,
-                              sink->soc.captureHeight,
-                              fd0, l0, s0, p0,
-                              fd1, l1, s1, p1,
-                              fd2, l2, s2, p2
-                            );
-
-               NEXUS_Surface_Unlock( captureSurface );
-            }
-            else
-            {
-               GST_ERROR("Error NEXUS_Surface_Lock: %d", (int)rc);
-            }
+            processTextureSignal( sink, captureSurface );
          }
          else
          if ( sink->soc.sb )
          {
-            struct wl_buffer *buff;
-
-            bufferInfo *binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
-            if ( binfo )
-            {
-               binfo->sink= sink;
-               binfo->deviceBuffer= captureSurface;
-
-               buff= wl_sb_create_buffer( sink->soc.sb, 
-                                          (uint32_t)captureSurface, 
-                                          sink->windowWidth, 
-                                          sink->windowHeight, 
-                                          sink->windowWidth*4, 
-                                          WL_SB_FORMAT_ARGB8888 );
-               wl_buffer_add_listener( buff, &wl_buffer_listener, binfo );
-               wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
-               wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-               wl_surface_commit( sink->surface );
-               captureSurface= 0;
-               ++sink->soc.activeBuffers;
-            }
+            processTextureWayland( sink, captureSurface );
+            captureSurface= 0;
          }
          if ( sink->soc.framesBeforeHideVideo )
          {
@@ -2200,6 +2323,7 @@ exit:
 static void updateVideoStatus( GstWesterosSink *sink )
 {
    NEXUS_VideoDecoderStatus videoStatus;
+   gboolean haveHardware= FALSE;
    gboolean checkForEOS= FALSE;
    gboolean eosDetected= FALSE;
    gboolean videoPlaying= FALSE;
@@ -2208,11 +2332,17 @@ static void updateVideoStatus( GstWesterosSink *sink )
    guint64 prevPTS;
 
    LOCK( sink );
+   haveHardware= sink->soc.haveHardware;
    checkForEOS= sink->soc.checkForEOS;
    eosDetected= sink->eosDetected;
    videoPlaying= sink->soc.videoPlaying;
    flushStarted= sink->flushStarted;
    UNLOCK( sink );
+
+   if ( haveHardware == FALSE )
+   {
+      return;
+   }
    
    if ( videoPlaying && !flushStarted )
    {
@@ -2349,6 +2479,11 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
    NEXUS_SurfaceComposition vComposition;
    NxClient_DisplaySettings nxDspSettings;
 
+   if ( swIsSWDecode( sink ) )
+   {
+      return;
+   }
+
    NxClient_GetDisplaySettings( &nxDspSettings );
    if ( nxDspSettings.format != sink->soc.outputFormat )
    {
@@ -2370,11 +2505,14 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       sink->soc.videoHeight= (sink->outputHeight*sink->scaleYNum)/sink->scaleYDenom;
    }
 
-   NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
-   if ( vClientSettings.composition.visible != sink->visible )
+   if ( sink->soc.videoWindow )
    {
-      vClientSettings.composition.visible= sink->visible;
-      NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+      NEXUS_SurfaceClient_GetSettings( sink->soc.videoWindow, &vClientSettings );
+      if ( vClientSettings.composition.visible != sink->visible )
+      {
+         vClientSettings.composition.visible= sink->visible;
+         NEXUS_SurfaceClient_SetSettings( sink->soc.videoWindow, &vClientSettings );
+      }
    }
 
    if ( !sink->soc.captureEnabled )
@@ -2873,6 +3011,14 @@ static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent
             result= true;
          }
          break;
+      case GST_EVENT_STREAM_START:
+         if ( swIsSWDecode( sink ) )
+         {
+            #ifdef ENABLE_SW_DECODE
+            establishSource( sink );
+            #endif
+         }
+         break;
    }
 
    return result;
@@ -2881,6 +3027,14 @@ static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
 {
    GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
+
+   if ( swIsSWDecode( sink ) )
+   {
+      #ifdef ENABLE_SW_DECODE
+      sink->soc.swPrerolled= true;
+      #endif
+      goto done;
+   }
 
    if ( buffer )
    {
@@ -2939,6 +3093,7 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
       }
    }
 
+done:
    if ( !sink->soc.frameStepOnPreroll )
    {
       /* Set need_preroll to FALSE so that base sink will not block in
@@ -3011,12 +3166,910 @@ static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *c
 }
 #endif
 
+static bool swIsSWDecode( GstWesterosSink *sink )
+{
+   bool result= false;
+   #ifdef ENABLE_SW_DECODE
+   if ( sink->rm && sink->resAssignedId >= 0 )
+   {
+      if ( sink->resCurrCaps.capabilities & EssRMgrVidCap_software )
+      {
+         result= true;
+      }
+   }
+   #endif
+   return result;
+}
+
+#ifdef ENABLE_SW_DECODE
+static void swFreeWorkSurface( GstWesterosSink *sink )
+{
+   if ( sink->soc.swWorkSurface != NULL )
+   {
+      NEXUS_Surface_Destroy( sink->soc.swWorkSurface );
+      sink->soc.swWorkSurface= NULL;
+   }
+}
+
+static void swAllocWorkSurface( GstWesterosSink *sink )
+{
+   NEXUS_SurfaceCreateSettings surfaceCreateSettings;
+
+   swFreeWorkSurface( sink );
+
+   /* Create a work surfaces for sw decoded frames */
+   NEXUS_Surface_GetDefaultCreateSettings(&surfaceCreateSettings);
+   surfaceCreateSettings.width= sink->soc.captureWidth;
+   surfaceCreateSettings.height= sink->soc.captureHeight;
+   surfaceCreateSettings.pixelFormat= NEXUS_PixelFormat_eA8_R8_G8_B8;
+
+   sink->soc.swWorkSurface= NEXUS_Surface_Create(&surfaceCreateSettings);
+   GST_LOG("sw work surface %p (%dx%d)", (void*)sink->soc.swWorkSurface, sink->soc.captureWidth, sink->soc.captureHeight);
+   g_print("sw work surface %p (%dx%d)\n", (void*)sink->soc.swWorkSurface, sink->soc.captureWidth, sink->soc.captureHeight);
+   if ( sink->soc.swWorkSurface == NULL )
+   {
+      GST_ERROR("Error unable to create sw work surface (%dx%d)", sink->soc.captureWidth, sink->soc.captureHeight );
+   }
+}
+
+static gpointer swFirstFrameThread(gpointer data)
+{
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+
+   if ( sink )
+   {
+      g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+   }
+
+   return NULL;
+}
+
+static void swGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h )
+{
+   int vx, vy, vw, vh;
+   double arf, ard;
+   vx= sink->windowX;
+   vy= sink->windowY;
+   vw= sink->windowWidth;
+   vh= sink->windowHeight;
+   ard= (double)sink->windowWidth/(double)sink->windowHeight;
+   arf= (double)sink->soc.frameWidth/(double)sink->soc.frameHeight;
+   if ( arf >= ard )
+   {
+      vh= (sink->soc.frameHeight * sink->windowWidth) / sink->soc.frameWidth;
+      vy= vy+(sink->windowHeight-vh)/2;
+   }
+   else
+   {
+      vw= (sink->soc.frameWidth * sink->windowHeight) / sink->soc.frameHeight;
+      vx= vx+(sink->windowWidth-vw)/2;
+   }
+   *x= vx;
+   *y= vy;
+   *w= vw;
+   *h= vh;
+}
+
+static void swG2dCheckPoint( void *data, int unused )
+{
+   BSTD_UNUSED(unused);
+   BKNI_SetEvent((BKNI_EventHandle)data);
+}
+
+static bool swInit( GstWesterosSink *sink )
+{
+   if ( sinkAcquireResources( sink ) )
+   {
+      NEXUS_Graphics2DOpenSettings g2dOpenSettings;
+
+      BKNI_CreateEvent( &sink->soc.g2dEvent );
+      sink->soc.g2dEventCreated= true;
+
+      NEXUS_Graphics2D_GetDefaultOpenSettings(&g2dOpenSettings);
+      #if NEXUS_PLATFORM_VERSION_MAJOR >= 16
+      g2dOpenSettings.secure= sink->soc.secureGraphics;
+      #endif
+
+      sink->soc.g2d= NEXUS_Graphics2D_Open(NEXUS_ANY_ID, &g2dOpenSettings);
+      if ( sink->soc.g2d )
+      {
+         NEXUS_Graphics2DSettings g2dSettings;
+
+         NEXUS_Graphics2D_GetSettings( sink->soc.g2d, &g2dSettings );
+         g2dSettings.checkpointCallback.callback= swG2dCheckPoint;
+         g2dSettings.checkpointCallback.context= sink->soc.g2dEvent;
+         NEXUS_Graphics2D_SetSettings( sink->soc.g2d, &g2dSettings );
+      }
+   }
+   else
+   {
+      GST_ERROR("swInit: sinkAcquireResources failed");
+   }
+
+   return true;
+}
+
+static void swTerm( GstWesterosSink *sink )
+{
+   LOCK(sink);
+   if ( sink->soc.dataProbeId && sink->soc.dataProbePad )
+   {
+      GstStructure *structure= gst_structure_new_empty( "wstsw-remove-probe" );
+      if ( structure )
+      {
+         /* push an event so probe will see remove request */
+         sink->soc.removeDataProbe= true;
+         UNLOCK(sink);
+         GST_DEBUG("swTerm: pad send event");
+         gst_pad_send_event( sink->soc.dataProbePad, gst_event_new_custom( GST_EVENT_CUSTOM_DOWNSTREAM, structure ) );
+         LOCK(sink);
+         GST_DEBUG("swTerm: pad send event done");
+      }
+   }
+   UNLOCK(sink);
+   if ( sink->soc.g2dEventCreated )
+   {
+      if ( sink->soc.g2d )
+      {
+         NEXUS_Graphics2D_Close( sink->soc.g2d );
+         sink->soc.g2d= 0;
+      }
+      sink->soc.g2dEventCreated= false;
+      BKNI_DestroyEvent( sink->soc.g2dEvent );
+   }
+
+   swFreeWorkSurface( sink );
+   freeCaptureSurfaces( sink );
+
+   sinkReleaseResources( sink );
+}
+
+void swDisplay( GstWesterosSink *sink, SWFrame *frame )
+{
+   int ci;
+   NEXUS_SurfaceHandle captureSurface;
+
+   sink->soc.frameWidth= frame->width;
+   sink->soc.frameHeight= frame->height;
+
+   if ( (sink->soc.captureWidth != frame->width) || (sink->soc.captureHeight != frame->height) )
+   {
+      sink->soc.captureWidthNext= frame->width;
+      sink->soc.captureHeightNext= frame->height;
+      allocCaptureSurfaces( sink );
+   }
+
+   ci= sink->soc.swNextCaptureSurface;
+   if ( ++sink->soc.swNextCaptureSurface >= NUM_CAPTURE_SURFACES )
+   {
+      sink->soc.swNextCaptureSurface= 0;
+   }
+   captureSurface= sink->soc.captureSurface[ci];
+
+   if ( captureSurface )
+   {
+      NEXUS_Error rc;
+      NEXUS_SurfaceMemory memSurf;
+      NEXUS_Graphics2DBlitSettings g2dBlitSettings;
+      unsigned char *srcY, *srcYRow;
+      unsigned char *srcU, *srcURow;
+      unsigned char *srcV, *srcVRow;
+      unsigned char *dest, *destRow;
+      int row, i;
+
+      srcYRow= frame->Y;
+      srcURow= frame->U;
+      srcVRow= frame->V;
+      NEXUS_Surface_GetMemory( captureSurface, &memSurf );
+      destRow= memSurf.buffer;
+      for( row= 0; row < frame->height; ++row )
+      {
+         srcY= srcYRow;
+         srcU= srcURow;
+         srcV= srcVRow;
+         dest= destRow;
+         for( i= 0; i < frame->width; ++i )
+         {
+            #ifdef BIG_ENDIAN_CPU
+            *(dest++)= *(srcY++);
+            if ( i & 1 )
+            {
+               *(dest++)= *(srcU++);
+            }
+            else
+            {
+               *(dest++)= *(srcV++);
+            }
+            #else
+            if ( i & 1 )
+            {
+               *(dest++)= *(srcV++);
+               *(dest++)= *(srcY++-1);
+            }
+            else
+            {
+               *(dest++)= *(srcU++);
+               *(dest++)= *(++srcY);
+            }
+            #endif
+         }
+         srcYRow += frame->Ystride;
+         if ( row & 1 )
+         {
+            srcURow += frame->Ustride;
+            srcVRow += frame->Vstride;
+         }
+         destRow += memSurf.pitch;
+      }
+      NEXUS_Surface_Flush( captureSurface );
+
+      if ( frame->frameNumber == 0 )
+      {
+         g_thread_new("westeros_first_frame", swFirstFrameThread, sink);
+      }
+
+      if ( sink->soc.forceAspectRatio && sink->vpcSurface )
+      {
+         int vx, vy, vw, vh;
+         swGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+         wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+      }
+
+      if ( sink->soc.enableTextureSignal )
+      {
+         if ( !sink->soc.swWorkSurface )
+         {
+            swAllocWorkSurface( sink );
+         }
+         if ( sink->soc.swWorkSurface )
+         {
+            NEXUS_Graphics2D_GetDefaultBlitSettings( &g2dBlitSettings );
+            g2dBlitSettings.source.surface= captureSurface;
+            g2dBlitSettings.output.surface= sink->soc.swWorkSurface;
+            rc= NEXUS_Graphics2D_Blit(sink->soc.g2d, &g2dBlitSettings);
+            if ( rc == NEXUS_SUCCESS )
+            {
+               rc= NEXUS_Graphics2D_Checkpoint( sink->soc.g2d, NULL );
+               if ( rc == NEXUS_GRAPHICS2D_QUEUED )
+               {
+                  BKNI_WaitForEvent( sink->soc.g2dEvent, BKNI_INFINITE );
+               }
+            }
+            processTextureSignal( sink, sink->soc.swWorkSurface );
+         }
+      }
+      else if ( sink->soc.sb )
+      {
+         processTextureWayland( sink, captureSurface );
+         if ( sink->display && wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
+         {
+            wl_display_flush(sink->display);
+            if ( !sink->eosDetected )
+            {
+               wl_display_roundtrip_queue(sink->display,sink->queue);
+            }
+         }
+      }
+   }
+}
+
+static unsigned char* convertToBinary( gchar *asciiHexData, int* dataLen )
+{
+   unsigned char *buffer= 0;
+   int bufferSize;
+   int len, i, d, byte;
+
+   len= strlen(asciiHexData);
+   bufferSize= (len/2 );
+   buffer= (unsigned char*)malloc( bufferSize );
+   if ( buffer )
+   {
+      for( i= 0; i < len; ++i )
+      {
+         d= asciiHexData[i];
+         if ( (d >= '0') && (d <= '9') )
+         {
+            d= d-'0';
+         }
+         else if ( (d >= 'A') && (d <= 'F') )
+         {
+            d= (d-'A')+10;
+         }
+         else if ( (d >= 'a') && (d <= 'f') )
+         {
+            d= (d-'a')+10;
+         }
+         else
+         {
+            GST_ERROR("convertToBinary: bad character (%02X) in codec_data", d);
+            d= 0;
+         }
+         if ( i % 2 == 0 )
+         {
+            byte= d;
+         }
+         else
+         {
+            byte= (byte << 4)+d;
+            buffer[i/2]= byte;
+         }
+      }
+      *dataLen= bufferSize;
+   }
+
+   return buffer;
+}
+
+static void dataProbeGenerateH264InitialationData( GstWesterosSink *sink, gchar *codecData )
+{
+   if ( sink && codecData )
+   {
+      unsigned char *binary= 0;
+      int initDataLen;
+      unsigned char *initData= 0;
+      int i, binaryLen= 0;
+      int spsLen, ppsLen;
+
+      binary= convertToBinary( codecData, &binaryLen );
+      if ( binary )
+      {
+         if ( binaryLen > 10 )
+         {
+            i= 6;
+            spsLen= (binary[i] << 8)|binary[i+1];
+            i += (spsLen + 3);
+            ppsLen= (binary[i] << 8)|binary[i+1];
+            initDataLen= 4 + spsLen + 4 + ppsLen;
+            initData= (unsigned char*)malloc( initDataLen );
+            if ( initData )
+            {
+               initData[0]= 0;
+               initData[1]= 0;
+               initData[2]= 0;
+               initData[3]= 1;
+               memcpy( initData+4, binary+8, spsLen );
+               initData[4+spsLen+0]= 0;
+               initData[4+spsLen+1]= 0;
+               initData[4+spsLen+2]= 0;
+               initData[4+spsLen+3]= 1;
+               memcpy( initData+4+spsLen+4, binary+8+spsLen+3, ppsLen );
+
+               if ( sink->soc.dataProbeCodecData )
+               {
+                  free( sink->soc.dataProbeCodecData );
+                  sink->soc.dataProbeCodecData= 0;
+                  sink->soc.dataProbeCodecDataLen= 0;
+               }
+               sink->soc.dataProbeCodecData= initData;
+               sink->soc.dataProbeCodecDataLen= initDataLen;
+            }
+            else
+            {
+               GST_ERROR("dataProbeGenerateCodecInitialationData: unble to allocate memory for sps/pps buffer");
+            }
+         }
+
+         free( binary );
+      }
+      else
+      {
+         GST_ERROR("dataProbeGenerateCodecInitialationData: unble to allocate memory for binary codec_data");
+      }
+   }
+}
+
+static void dataProbeProcessCaps( GstWesterosSink *sink, GstCaps *caps )
+{
+   GstStructure *structure;
+
+   structure= gst_caps_get_structure(caps,0);
+   if ( structure )
+   {
+      const GValue *val= gst_structure_get_value( structure, "codec_data");
+      if ( val )
+      {
+         const gchar *mime;
+         mime= gst_structure_get_name(structure);
+         gchar *codecData= gst_value_serialize(val);
+         if ( codecData )
+         {
+            if ( strstr( mime, "video/x-h264" ) )
+            {
+               sink->soc.dataProbeNeedStartCodes= TRUE;
+               dataProbeGenerateH264InitialationData( sink, codecData );
+            }
+            g_free( codecData );
+         }
+      }
+   }
+   wstsw_process_caps( sink, caps );
+}
+
+static void dataProbeDestroy( gpointer userData )
+{
+   GstWesterosSink *sink= (GstWesterosSink*)userData;
+   if ( sink )
+   {
+      gulong probeId;
+      LOCK(sink);
+      probeId= sink->soc.dataProbeId;
+      if ( probeId )
+      {
+         g_print("dataProbeDestroy: probeId %u\n", probeId );
+         gst_object_unref( sink->soc.dataProbePad );
+         sink->soc.dataProbePad= 0;
+         sink->soc.dataProbeId= 0;
+         g_print("dataProbeDestroy: probeId %u done\n", probeId);
+      }
+      UNLOCK(sink);
+   }
+}
+
+static GstPadProbeReturn dataProbe( GstPad *pad, GstPadProbeInfo *info, gpointer userData )
+{
+   GstPadProbeReturn result= GST_PAD_PROBE_OK;
+   GstWesterosSink *sink= (GstWesterosSink*)userData;
+   if ( sink )
+   {
+      if ( sink->soc.removeDataProbe )
+      {
+         result= GST_PAD_PROBE_REMOVE;
+         goto exit;
+      }
+      if ( info->type & GST_PAD_PROBE_TYPE_BUFFER )
+      {
+         GstBuffer *buffer= (GstBuffer*)info->data;
+         #ifdef USE_GST1
+         GstMapInfo map;
+         #endif
+         int inSize= 0;
+         unsigned char *inData= 0;
+         int i, unitlen;
+
+         #ifdef USE_GST1
+         gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ|GST_MAP_WRITE);
+         inSize= map.size;
+         inData= map.data;
+         #else
+         inSize= (int)GST_BUFFER_SIZE(buffer);
+         inData= GST_BUFFER_DATA(buffer);
+         #endif
+
+         if ( sink->soc.dataProbeNeedStartCodes )
+         {
+            i= 0;
+            while( i < inSize-3 )
+            {
+               unitlen= (inData[i+0] << 24) | (inData[i+1] << 16) | (inData[i+2] << 8) | inData[i+3];
+               if ( (i == 0) && (unitlen == 1) )
+               {
+                  break;
+               }
+               inData[i+0]= 0;
+               inData[i+1]= 0;
+               inData[i+2]= 0;
+               inData[i+3]= 1;
+               i += (unitlen + 4);
+            }
+         }
+
+         #ifdef USE_GST1
+         gst_buffer_unmap( buffer, &map);
+         #endif
+
+         gst_buffer_ref(buffer);
+
+         if ( !wstsw_render( sink, buffer ) )
+         {
+            result= GST_PAD_PROBE_REMOVE;
+         }
+
+         gst_buffer_unref( buffer );
+
+         if ( sink->soc.swPrerolled )
+         {
+            result= GST_PAD_PROBE_DROP;
+         }
+      }
+      else if ( info->type & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM )
+      {
+         GstEvent *event= (GstEvent*)info->data;
+         if ( event )
+         {
+            switch (GST_EVENT_TYPE(event))
+            {
+               case GST_EVENT_CAPS:
+                  {
+                     GstCaps *caps;
+                     gst_event_parse_caps(event, &caps);
+                     dataProbeProcessCaps( sink, caps );
+                  }
+                  break;
+               case GST_EVENT_EOS:
+                  if ( !sink->soc.removeDataProbe )
+                  {
+                     sink->eosEventSeen= TRUE;
+                     gst_westeros_sink_eos_detected( sink );
+                     result= GST_PAD_PROBE_REMOVE;
+                  }
+                  break;
+            }
+         }
+      }
+      if ( sink->soc.removeDataProbe )
+      {
+         result= GST_PAD_PROBE_REMOVE;
+      }
+   }
+exit:
+   if ( result == GST_PAD_PROBE_REMOVE )
+   {
+      GST_DEBUG("remove probe requested");
+   }
+   return result;
+}
+
+static bool establishSource( GstWesterosSink *sink )
+{
+   bool result= false;
+   GstElement *src= 0;
+   GstPad *sinkPad= 0;
+   GstElement *pipeline= 0;
+   GstElement *element, *elementPrev= 0;
+   GstIterator *iterator;
+
+   element= GST_ELEMENT_CAST(sink);
+   do
+   {
+      if ( elementPrev )
+      {
+         gst_object_unref( elementPrev );
+      }
+      element= GST_ELEMENT_CAST(gst_element_get_parent( element ));
+      if ( element )
+      {
+         elementPrev= pipeline;
+         pipeline= element;
+      }
+   }
+   while( element != 0 );
+
+   if ( pipeline )
+   {
+      GstIterator *iterElement= gst_bin_iterate_recurse( GST_BIN(pipeline) );
+      if ( iterElement )
+      {
+         GValue itemElement= G_VALUE_INIT;
+         while( gst_iterator_next( iterElement, &itemElement ) == GST_ITERATOR_OK )
+         {
+            element= (GstElement*)g_value_get_object( &itemElement );
+            if ( element && !GST_IS_BIN(element) )
+            {
+               GstElementClass *ec= GST_ELEMENT_GET_CLASS(element);
+               if ( ec )
+               {
+                  const gchar *meta= gst_element_class_get_metadata( ec, GST_ELEMENT_METADATA_KLASS);
+                  if ( meta && strstr(meta, "Parser") && strstr(meta, "Video") && strstr(meta, "Codec") )
+                  {
+                     GstIterator *iterPad= gst_element_iterate_sink_pads( element );
+                     if ( iterPad )
+                     {
+                        GValue itemPad= G_VALUE_INIT;
+                        while( gst_iterator_next( iterPad, &itemPad ) == GST_ITERATOR_OK )
+                        {
+                           GstPad *pad= (GstPad*)g_value_get_object( &itemPad );
+                           if ( pad )
+                           {
+                              GstCaps *caps= gst_pad_get_current_caps(pad);
+                              if ( caps )
+                              {
+                                 GstStructure *structure;
+                                 const gchar *mime;
+                                 structure= gst_caps_get_structure(caps, 0);
+                                 if(structure )
+                                 {
+                                    mime= gst_structure_get_name(structure);
+                                    if ( strstr( mime, "video" ) )
+                                    {
+                                       sinkPad= pad;
+                                       g_value_reset( &itemPad );
+                                       break;
+                                    }
+                                 }
+                              }
+                           }
+                           g_value_reset( &itemPad );
+                        }
+                     }
+                     src= (GstElement*)gst_object_ref( element );
+                     gchar *name= gst_element_get_name( element );
+                     if ( name )
+                     {
+                        GST_DEBUG( "found video parser: name (%s) sink pad %p", name, sinkPad);
+                        g_free( name );
+                        if ( sinkPad )
+                        {
+                           GstCaps *caps= gst_pad_get_current_caps(sinkPad);
+                           if ( caps )
+                           {
+                              dataProbeProcessCaps( sink, caps );
+                           }
+                           sink->soc.dataProbePad= (GstPad*)gst_object_ref( sinkPad );
+                           sink->soc.dataProbeId= gst_pad_add_probe( sinkPad,
+                                                                     (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER|GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM),
+                                                                     dataProbe,
+                                                                     sink,
+                                                                     dataProbeDestroy );
+                           GST_DEBUG("video data probeId %u", sink->soc.dataProbeId);
+                        }
+                     }
+                     g_value_reset( &itemElement );
+                     break;
+                  }
+               }
+            }
+            g_value_reset( &itemElement );
+         }
+         gst_iterator_free(iterElement);
+      }
+   }
+   if ( src )
+   {
+      gst_object_unref( src );
+      result= true;
+   }
+   return result;
+}
+#endif
+
+static int sinkAcquireVideo( GstWesterosSink *sink )
+{
+   int result= 0;
+   NEXUS_Error rc;
+   NxClient_ConnectSettings connectSettings;
+
+   GST_DEBUG("sinkAcquireVideo: enter");
+   if ( sink->rm && sink->resAssignedId >= 0 )
+   {
+      if ( swIsSWDecode( sink ) )
+      {
+         result= 1;
+         goto done;
+      }
+      #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
+      if ( sink->resCurrCaps.capabilities & EssRMgrVidCap_limitedResolution )
+      {
+         sink->soc.usePip= TRUE;
+      }
+      #endif
+   }
+
+   sink->soc.videoWindow= NEXUS_SurfaceClient_AcquireVideoWindow( sink->soc.surfaceClient, 0);
+   sink->soc.videoDecoderId= sink->soc.allocSurface.simpleVideoDecoder[0].id;
+   sink->soc.videoDecoder= NEXUS_SimpleVideoDecoder_Acquire( sink->soc.videoDecoderId );
+
+   NEXUS_StartCallbacks( sink->soc.videoDecoder );
+
+   NEXUS_SimpleVideoDecoderClientSettings settings;
+   NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &settings);
+   settings.resourceChanged.callback= resourceChangedCallback;
+   settings.resourceChanged.context= sink;
+   settings.resourceChanged.param= 0;;
+   NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &settings);
+
+   /* Connect to the decoder */
+   NxClient_GetDefaultConnectSettings(&connectSettings);
+   connectSettings.simpleVideoDecoder[0].id= sink->soc.videoDecoderId;
+   connectSettings.simpleVideoDecoder[0].surfaceClientId= sink->soc.surfaceClientId;
+   connectSettings.simpleVideoDecoder[0].windowId= 0;
+   connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
+   connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
+   connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
+   #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
+   connectSettings.simpleVideoDecoder[0].decoderCapabilities.secureVideo= (sink->soc.secureVideo ? true : false);
+
+   NEXUS_VideoDecoderCapabilities videoDecoderCaps;
+   NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
+   if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
+   {
+      printf("westerossink: supports 4K\n");
+      if ( !sink->soc.usePip )
+      {
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 3840;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 2160;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.colorDepth= 10;
+         connectSettings.simpleVideoDecoder[0].decoderCapabilities.feeder.colorDepth= 10;
+      }
+   }
+   else
+   {
+   #endif
+      connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 1920;
+      connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 1080;
+   #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
+   }
+   #endif
+   if ( sink->soc.usePip )
+   {
+      // We are using PIP window. Restrict size.
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_ePip;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= MAX_PIP_WIDTH;
+      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= MAX_PIP_HEIGHT;
+   }
+   rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
+   if ( rc == NEXUS_SUCCESS )
+   {
+      sink->soc.presentationStarted= FALSE;
+
+      NEXUS_VideoDecoderSettings settings;
+      NEXUS_VideoDecoderExtendedSettings ext_settings;
+      NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
+      NEXUS_SimpleVideoDecoder_GetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+
+      #if (NEXUS_PLATFORM_VERSION_MAJOR > 16) || ((NEXUS_PLATFORM_VERSION_MAJOR == 16) && (NEXUS_PLATFORM_VERSION_MINOR > 3))
+      settings.scanMode= NEXUS_VideoDecoderScanMode_e1080p;
+      #endif
+      // Don't enable zeroDelayOutputMode since this combined with
+      // NEXUS_VideoDecoderTimestampMode_eDisplay will cause the capture
+      // to omit all out of order frames (ie. all B-Frames)
+      settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
+      settings.ptsOffset= sink->soc.ptsOffset;
+      settings.fifoEmpty.callback= underflowCallback;
+      settings.fifoEmpty.context= sink;
+      settings.firstPtsPassed.callback= firstPtsPassedCallback;
+      settings.firstPtsPassed.context= sink;
+      settings.ptsError.callback= ptsErrorCallback;
+      settings.ptsError.context= sink;
+      #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
+      settings.streamChanged.callback= streamChangedCallback;
+      settings.streamChanged.context= sink;
+      #endif
+      ext_settings.dataReadyCallback.callback= NULL;
+      ext_settings.dataReadyCallback.context= NULL;
+      ext_settings.zeroDelayOutputMode= false;
+      if ( sink->soc.useLowDelay )
+      {
+         ext_settings.lowLatencySettings.mode= NEXUS_VideoDecoderLowLatencyMode_eAverage;
+         ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
+         printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
+      }
+      if ( sink->soc.useImmediateOutput )
+      {
+         ext_settings.zeroDelayOutputMode= true;
+         ext_settings.ignoreDpbOutputDelaySyntax= true;
+         printf("westerossink: using immediate output mode\n");
+      }
+      ext_settings.treatIFrameAsRap= true;
+      ext_settings.ignoreNumReorderFramesEqZero= true;
+
+      rc= NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_WARNING("sinkAcquireVideo: NEXUS_SimpleVideoDecoder_SetSettings failed rc %d", rc);
+      }
+      rc= NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_WARNING("sinkAcquireVideo: NEXUS_SimpleVideoDecoder_SetExtendedSettings failed rc %d", rc);
+      }
+
+      if ( sink->soc.usePip )
+      {
+         gst_westeros_sink_soc_update_video_position( sink );
+      }
+
+      NEXUS_SurfaceComposition composition;
+      NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+      composition.zorder= sink->zorder*MAX_ZORDER;
+      rc= NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_WARNING("sinkAcquireVideo: NxClient_SetSurfaceClientComposition failed rc %d", rc);
+      }
+
+      NEXUS_SurfaceClientSettings clientSettings;
+      NEXUS_SurfaceClient_GetSettings(sink->soc.videoWindow, &clientSettings);
+      clientSettings.composition.contentMode= sink->soc.zoomMode;
+      sink->visible= sink->show;
+      clientSettings.composition.visible= sink->visible;
+      NEXUS_SurfaceClient_SetSettings(sink->soc.videoWindow, &clientSettings);
+
+      LOCK( sink );
+      if ( sink->videoStarted )
+      {
+         GST_DEBUG("sinkAcquireVideo: calling start video");
+         if ( !gst_westeros_sink_soc_start_video( sink ) )
+         {
+            GST_ERROR("sinkAcquireVideo: gst_westeros_sink_soc_start_video failed");
+         }
+      }
+      sink->soc.haveHardware= TRUE;
+      UNLOCK( sink );
+
+      result= 1;
+   }
+   else
+   {
+      GST_ERROR("sinkAcquireVideo: NxClient_Connect failed: %d", rc);
+   }
+
+done:
+   GST_DEBUG("sinkAcquireVideo: exit: %d", result);
+
+   return result;
+}
+
+static void sinkReleaseVideo( GstWesterosSink *sink )
+{
+   GST_DEBUG("sinkReleaseVideo: enter");
+   LOCK( sink );
+   if ( sink->soc.connectId != 0 )
+   {
+      if ( sink->soc.stcChannel )
+      {
+         NEXUS_Error rc;
+         rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, TRUE);
+         GST_DEBUG("NEXUS_SimpleStcChannel_Freeze FALSE ");
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_ERROR("sinkReleaseVideo: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+         }
+      }
+
+      if ( sink->videoStarted )
+      {
+         GST_DEBUG("sinkReleaseVideo: stop decoder");
+         NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
+      }
+
+      sink->soc.haveHardware= FALSE;
+      sink->soc.usePip= FALSE;
+      sink->soc.stcChannel= NULL;
+      sink->soc.videoPidChannel= NULL;
+      sink->soc.codec= bvideo_codec_unknown;
+
+      NEXUS_StopCallbacks( sink->soc.videoDecoder );
+
+      GST_DEBUG("sinkReleaseVideo: disconnect");
+      NxClient_Disconnect(sink->soc.connectId);
+      sink->soc.connectId= 0;
+      if ( sink->soc.videoDecoder )
+      {
+         GST_DEBUG("sinkReleaseVideo: release decoder");
+         NEXUS_SimpleVideoDecoder_Release(sink->soc.videoDecoder);
+         sink->soc.videoDecoder= 0;
+      }
+      if ( sink->soc.videoWindow )
+      {
+         GST_DEBUG("sinkReleaseVideo: release video window");
+         NEXUS_SurfaceClient_ReleaseVideoWindow(sink->soc.videoWindow);
+         sink->soc.videoWindow= 0;
+      }
+   }
+   #ifdef ENABLE_SW_DECODE
+   if ( sink->soc.dataProbeId )
+   {
+      GST_DEBUG("gst_pad_remove_probe dataProbeId %d\n", sink->soc.dataProbeId);
+      gst_pad_remove_probe( sink->soc.dataProbePad, sink->soc.dataProbeId );
+      gst_object_unref( sink->soc.dataProbePad );
+      sink->soc.dataProbePad= 0;
+      sink->soc.dataProbeId= 0;
+   }
+   if ( sink->soc.dataProbeCodecData )
+   {
+      free( sink->soc.dataProbeCodecData );
+      sink->soc.dataProbeCodecData= 0;
+   }
+   #endif
+   UNLOCK( sink );
+   GST_DEBUG("sinkReleaseVideo: exit");
+}
+
 static int sinkAcquireResources( GstWesterosSink *sink )
 {
    int result= 0;
    NEXUS_Error rc;
    NxClient_AllocSettings allocSettings;
-   NxClient_ConnectSettings connectSettings;
 
    NxClient_GetDefaultAllocSettings(&allocSettings);
    allocSettings.surfaceClient= 1;
@@ -3026,142 +4079,8 @@ static int sinkAcquireResources( GstWesterosSink *sink )
    {
       sink->soc.surfaceClientId= sink->soc.allocSurface.surfaceClient[0].id;
       sink->soc.surfaceClient= NEXUS_SurfaceClient_Acquire(sink->soc.surfaceClientId);
-      sink->soc.videoWindow= NEXUS_SurfaceClient_AcquireVideoWindow( sink->soc.surfaceClient, 0);
-      sink->soc.videoDecoderId= sink->soc.allocSurface.simpleVideoDecoder[0].id;
-      sink->soc.videoDecoder= NEXUS_SimpleVideoDecoder_Acquire( sink->soc.videoDecoderId );
 
-      NEXUS_StartCallbacks( sink->soc.videoDecoder );
-
-      NEXUS_SimpleVideoDecoderClientSettings settings;
-      NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &settings);
-      settings.resourceChanged.callback= resourceChangedCallback;
-      settings.resourceChanged.context= sink;
-      settings.resourceChanged.param= 0;;
-      NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &settings);
-
-      /* Connect to the decoder */
-      NxClient_GetDefaultConnectSettings(&connectSettings);
-      connectSettings.simpleVideoDecoder[0].id= sink->soc.videoDecoderId;
-      connectSettings.simpleVideoDecoder[0].surfaceClientId= sink->soc.surfaceClientId;
-      connectSettings.simpleVideoDecoder[0].windowId= 0;
-      connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_eMain;
-      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= 1920;
-      connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= 1080;
-      #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
-      connectSettings.simpleVideoDecoder[0].decoderCapabilities.secureVideo= (sink->soc.secureVideo ? true : false);
-
-      NEXUS_VideoDecoderCapabilities videoDecoderCaps;
-      NEXUS_GetVideoDecoderCapabilities(&videoDecoderCaps);
-      if ( videoDecoderCaps.memory[0].maxFormat >= NEXUS_VideoFormat_e3840x2160p24hz )
-      {
-         printf("westerossink: supports 4K\n");
-         if ( !sink->soc.usePip )
-         {
-            connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 3840;
-            connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 2160;
-            connectSettings.simpleVideoDecoder[0].decoderCapabilities.colorDepth= 10;
-            connectSettings.simpleVideoDecoder[0].decoderCapabilities.feeder.colorDepth= 10;
-         }
-      }
-      else
-      {
-      #endif
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxWidth= 1920;
-         connectSettings.simpleVideoDecoder[0].decoderCapabilities.maxHeight= 1080;
-      #if (NEXUS_PLATFORM_VERSION_MAJOR>=16)
-      }
-      #endif
-      if ( sink->soc.usePip )
-      {
-         // We are using PIP window. Restrict size.
-         connectSettings.simpleVideoDecoder[0].windowCapabilities.type= NxClient_VideoWindowType_ePip;
-         connectSettings.simpleVideoDecoder[0].windowCapabilities.maxWidth= MAX_PIP_WIDTH;
-         connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= MAX_PIP_HEIGHT;
-      }
-      rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
-      if ( rc == NEXUS_SUCCESS )
-      {
-         sink->soc.presentationStarted= FALSE;
-
-         NEXUS_VideoDecoderSettings settings;
-         NEXUS_VideoDecoderExtendedSettings ext_settings;
-         NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
-         NEXUS_SimpleVideoDecoder_GetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
-
-         #if (NEXUS_PLATFORM_VERSION_MAJOR > 16) || ((NEXUS_PLATFORM_VERSION_MAJOR == 16) && (NEXUS_PLATFORM_VERSION_MINOR > 3))
-         settings.scanMode= NEXUS_VideoDecoderScanMode_e1080p;
-         #endif
-         // Don't enable zeroDelayOutputMode since this combined with
-         // NEXUS_VideoDecoderTimestampMode_eDisplay will cause the capture
-         // to omit all out of order frames (ie. all B-Frames)
-         settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
-         settings.ptsOffset= sink->soc.ptsOffset;
-         settings.fifoEmpty.callback= underflowCallback;
-         settings.fifoEmpty.context= sink;
-         settings.firstPtsPassed.callback= firstPtsPassedCallback;
-         settings.firstPtsPassed.context= sink;
-         settings.ptsError.callback= ptsErrorCallback;
-         settings.ptsError.context= sink;
-         #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
-         settings.streamChanged.callback= streamChangedCallback;
-         settings.streamChanged.context= sink;
-         #endif
-         ext_settings.dataReadyCallback.callback= NULL;
-         ext_settings.dataReadyCallback.context= NULL;
-         ext_settings.zeroDelayOutputMode= false;
-         if ( sink->soc.useLowDelay )
-         {
-            ext_settings.lowLatencySettings.mode= NEXUS_VideoDecoderLowLatencyMode_eAverage;
-            ext_settings.lowLatencySettings.latency= sink->soc.latencyTarget;
-            printf("westerossink: using low delay (target %d ms)\n", sink->soc.latencyTarget);
-         }
-         if ( sink->soc.useImmediateOutput )
-         {
-            ext_settings.zeroDelayOutputMode= true;
-            ext_settings.ignoreDpbOutputDelaySyntax= true;
-            printf("westerossink: using immediate output mode\n");
-         }
-         ext_settings.treatIFrameAsRap= true;
-         ext_settings.ignoreNumReorderFramesEqZero= true;
-
-         rc= NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
-         if ( rc != NEXUS_SUCCESS )
-         {
-            GST_WARNING("sinkAcquireResources: NEXUS_SimpleVideoDecoder_SetSettings failed rc %d", rc);
-         }
-         rc= NEXUS_SimpleVideoDecoder_SetExtendedSettings(sink->soc.videoDecoder, &ext_settings);
-         if ( rc != NEXUS_SUCCESS )
-         {
-            GST_WARNING("sinkAcquireResources: NEXUS_SimpleVideoDecoder_SetExtendedSettings failed rc %d", rc);
-         }
-
-         if ( sink->soc.usePip )
-         {
-            gst_westeros_sink_soc_update_video_position( sink );
-         }
-
-         NEXUS_SurfaceComposition composition;
-         NxClient_GetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
-         composition.zorder= sink->zorder*MAX_ZORDER;
-         rc= NxClient_SetSurfaceClientComposition( sink->soc.surfaceClientId, &composition );
-         if ( rc != NEXUS_SUCCESS )
-         {
-            GST_WARNING("sinkAcquireResources: NxClient_SetSurfaceClientComposition failed rc %d", rc);
-         }
-
-         NEXUS_SurfaceClientSettings clientSettings;
-         NEXUS_SurfaceClient_GetSettings(sink->soc.videoWindow, &clientSettings);
-         clientSettings.composition.contentMode= sink->soc.zoomMode;
-         sink->visible= sink->show;
-         clientSettings.composition.visible= sink->visible;
-         NEXUS_SurfaceClient_SetSettings(sink->soc.videoWindow, &clientSettings);
-
-         result= 1;
-      }
-      else
-      {
-         GST_ERROR("sinkAcquireResources: NxClient_Connect failed: %d", rc);
-      }
+      result= sinkAcquireVideo( sink );
    }
    else
    {
@@ -3173,30 +4092,16 @@ static int sinkAcquireResources( GstWesterosSink *sink )
 
 static void sinkReleaseResources( GstWesterosSink *sink )
 {
-   if ( sink->soc.connectId != 0 )
+   if ( sink->soc.surfaceClientId != 0 )
    {
-      sink->soc.stcChannel= NULL;
-      sink->soc.videoPidChannel= NULL;
-      sink->soc.codec= bvideo_codec_unknown;
+      sinkReleaseVideo( sink );
 
-      NEXUS_StopCallbacks( sink->soc.videoDecoder );
-
-      NxClient_Disconnect(sink->soc.connectId);
-      if ( sink->soc.videoDecoder )
-      {
-         NEXUS_SimpleVideoDecoder_Release(sink->soc.videoDecoder);
-         sink->soc.videoDecoder= 0;
-      }
-      if ( sink->soc.videoWindow )
-      {
-         NEXUS_SurfaceClient_ReleaseVideoWindow(sink->soc.videoWindow);
-         sink->soc.videoWindow= 0;
-      }
       if ( sink->soc.surfaceClient )
       {
          NEXUS_SurfaceClient_Release(sink->soc.surfaceClient);
          sink->soc.surfaceClient= 0;
       }
+      sink->soc.surfaceClientId= 0;
       NxClient_Free(&sink->soc.allocSurface);
    }
 }

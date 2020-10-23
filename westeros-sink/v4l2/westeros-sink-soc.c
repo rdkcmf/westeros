@@ -3027,7 +3027,6 @@ static GstElement* wstFindAudioSink( GstWesterosSink *sink )
    GstElement *audioSink= 0;
    GstElement *pipeline= 0;
    GstElement *element, *elementPrev= 0;
-   GstElement *elementDemux= 0;
    GstIterator *iterator;
 
    element= GST_ELEMENT_CAST(sink);
@@ -3087,9 +3086,10 @@ static GstElement* wstFindAudioSink( GstWesterosSink *sink )
                         gchar *name= gst_element_get_name( element );
                         if ( name )
                         {
-                           GST_DEBUG( "detected audio sink: name (%s)\n", name);
+                           GST_DEBUG( "detected audio sink: name (%s)", name);
                            g_free( name );
                         }
+                        g_value_reset( &itemElement );
                         break;
                      }
                   }
