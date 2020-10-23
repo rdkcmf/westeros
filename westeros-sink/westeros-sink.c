@@ -27,6 +27,10 @@
 
 #include "westeros-version.h"
 
+#ifdef ENABLE_SW_DECODE
+#include "../../westeros-sink/westeros-sink-sw.c"
+#endif
+
 #define GST_PACKAGE_ORIGIN "http://gstreamer.net/"
 
 static GstStaticPadTemplate gst_westeros_sink_pad_template =
@@ -46,7 +50,9 @@ enum
   PROP_OPACITY,
   PROP_VIDEO_WIDTH,
   PROP_VIDEO_HEIGHT,
-  PROP_VIDEO_PTS
+  PROP_VIDEO_PTS,
+  PROP_RES_PRIORITY,
+  PROP_RES_USAGE
 };
 
 #ifdef USE_GST1
@@ -56,6 +62,12 @@ G_DEFINE_TYPE (GstWesterosSink, gst_westeros_sink, GST_TYPE_BASE_SINK)
 GST_BOILERPLATE (GstWesterosSink, gst_westeros_sink, GstBaseSink, GST_TYPE_BASE_SINK)
 #endif
 
+static bool resMgrCheckUse( GstWesterosSinkClass *klass );
+static void resMgrInit( GstWesterosSink *sink );
+static void resMgrTerm( GstWesterosSink *sink );
+static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userData );
+static void resMgrRequestDecoder( GstWesterosSink *sink );
+static void resMgrReleaseDecoder( GstWesterosSink *sink );
 static void gst_westeros_sink_term(GstWesterosSink *sink); 
 static void gst_westeros_sink_finalize(GObject *object); 
 static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const GValue *value, GParamSpec *pspec);
@@ -193,6 +205,12 @@ static void vpcVideoPathChange(void *data,
 {
    WESTEROS_UNUSED(wl_vpc_surface);
    GstWesterosSink *sink= (GstWesterosSink*)data;
+   #ifdef ENABLE_SW_DECODE
+   if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      return;
+   }
+   #endif
    printf("westeros-sink: new pathway: %d\n", new_pathway);
    gst_westeros_sink_soc_set_video_path( sink, (new_pathway == WL_VPC_SURFACE_PATHWAY_GRAPHICS) );
 }                               
@@ -225,6 +243,13 @@ static void vpcVideoXformChange(void *data,
    }
    sink->outputWidth= (int)output_width;
    sink->outputHeight= (int)output_height;
+
+   #ifdef ENABLE_SW_DECODE
+   if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      return;
+   }
+   #endif
    
    LOCK( sink );
    gst_westeros_sink_soc_update_video_position( sink );
@@ -369,6 +394,304 @@ static void registryHandleGlobalRemove(void *data,
    GstWesterosSink *sink= (GstWesterosSink*)data;
 
    gst_westeros_sink_soc_registryHandleGlobalRemove( sink, registry, name );
+}
+
+#define DEFAULT_USAGE (EssRMgrVidUse_fullResolution|EssRMgrVidUse_fullQuality|EssRMgrVidUse_fullPerformance)
+
+#define GST_TYPE_USAGE_FLAGS (gst_usage_flags_get_type())
+GType gst_usage_flags_get_type( void )
+{
+   static volatile GType id= 0;
+   static const GFlagsValue flagValues[]=
+   {
+      {(guint)(EssRMgrVidUse_fullResolution), "Play at full output resolution", "fullResolution"},
+      {(guint)(EssRMgrVidUse_fullQuality), "Play at full quality", "fullQuality"},
+      {(guint)(EssRMgrVidUse_fullPerformance), "Play with full performance", "fullPerformance"},
+      {0, NULL,  NULL}
+   };
+   if ( g_once_init_enter( (gsize *)&id) )
+   {
+      GType flagTypeId;
+
+      flagTypeId= g_flags_register_static( "EssRMgrVideoUsage", flagValues );
+
+      g_once_init_leave( (gsize *)&id, flagTypeId);
+   }
+
+   return id;
+}
+
+static bool resMgrCheckUse( GstWesterosSinkClass *klass )
+{
+   bool result= false;
+
+   if ( klass && klass->canUseResMgr )
+   {
+      result= true;
+   }
+
+   return result;
+}
+
+static void resMgrInit( GstWesterosSink *sink )
+{
+   GstWesterosSinkClass *klass= GST_WESTEROS_SINK_GET_CLASS(sink);
+
+   if ( klass && resMgrCheckUse( klass ) )
+   {
+      sink->rm= EssRMgrCreate();
+      if ( !sink->rm )
+      {
+         GST_ERROR("gst_westeros_sink: resMgrInit: failed to create resmgr");
+      }
+
+      sink->resReqPrimary.sink= sink;
+      sink->resReqPrimary.resReq.assignedId= -1;
+      sink->resReqPrimary.resReq.requestId= -1;
+      sink->resReqSecondary.sink= sink;
+      sink->resReqSecondary.resReq.assignedId= -1;
+      sink->resReqSecondary.resReq.requestId= -1;
+      memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
+   }
+}
+
+static void resMgrTerm( GstWesterosSink *sink )
+{
+   if ( sink->rm )
+   {
+      EssRMgrDestroy( sink->rm );
+      sink->rm= 0;
+      sink->resReqPrimary.resReq.assignedId= -1;
+      sink->resReqPrimary.resReq.requestId= -1;
+      sink->resReqSecondary.resReq.assignedId= -1;
+      sink->resReqSecondary.resReq.requestId= -1;
+      memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
+   }
+}
+
+static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userData )
+{
+   WstSinkResReqInfo *info= (WstSinkResReqInfo*)userData;
+   GstWesterosSink *sink= info->sink;
+
+   GST_DEBUG("resMgrNotify: enter");
+   switch( type )
+   {
+      case EssRMgrResType_videoDecoder:
+         switch( event )
+         {
+            case EssRMgrEvent_granted:
+               sink->resAssignedId= id;
+               memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
+               if ( !EssRMgrResourceGetCaps( sink->rm, EssRMgrResType_videoDecoder, sink->resAssignedId, &sink->resCurrCaps ) )
+               {
+                  GST_ERROR("gst_westeros_sink: resMgrNotify: failed to get caps of assigned decoder");
+               }
+               GST_DEBUG("async assigned id %d caps %X (%dx%d)",
+                       sink->resAssignedId,
+                       sink->resCurrCaps.capabilities,
+                       sink->resCurrCaps.info.video.maxWidth,
+                       sink->resCurrCaps.info.video.maxHeight  );
+               break;
+            case EssRMgrEvent_revoked:
+               {
+                  sink->resAssignedId= -1;
+                  memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
+                  GST_DEBUG("releasing video decoder %d", id);
+                  sink->releaseResources( sink );
+                  EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, id );
+                  GST_DEBUG("done releasing video decoder %d", id);
+                  resMgrRequestDecoder(sink);
+                  if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+                  {
+                     sink->acquireResources( sink );
+                  }
+               }
+               break;
+            default:
+               break;
+         }
+         break;
+      default:
+         break;
+   }
+   GST_DEBUG("resMgrNotify: exit");
+}
+
+static void resMgrRequestDecoder( GstWesterosSink *sink )
+{
+   if ( sink->rm )
+   {
+      bool result;
+
+      sink->resReqPrimary.resReq.usage= sink->resUsage;
+      sink->resReqPrimary.resReq.priority= sink->resPriority;
+      sink->resReqPrimary.resReq.info.video.maxWidth= sink->windowWidth;
+      sink->resReqPrimary.resReq.info.video.maxHeight= sink->windowHeight;
+      sink->resReqPrimary.resReq.asyncEnable= true;
+      sink->resReqPrimary.resReq.notifyCB= resMgrNotify;
+      sink->resReqPrimary.resReq.notifyUserData= &sink->resReqPrimary;
+
+      result= EssRMgrRequestResource( sink->rm, EssRMgrResType_videoDecoder, &sink->resReqPrimary.resReq );
+      if ( result )
+      {
+         if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+         {
+            GST_DEBUG("assigned id %d caps %X", sink->resReqPrimary.resReq.assignedId, sink->resReqPrimary.resReq.assignedCaps );
+            sink->resAssignedId= sink->resReqPrimary.resReq.assignedId;
+            memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
+            if ( !EssRMgrResourceGetCaps( sink->rm, EssRMgrResType_videoDecoder, sink->resAssignedId, &sink->resCurrCaps ) )
+            {
+               GST_ERROR("gst_westeros_sink: resMgrRequestDecoder: failed to get caps of assigned decoder");
+            }
+            GST_DEBUG("assigned id %d caps %X (%dx%d)",
+                      sink->resAssignedId,
+                      sink->resCurrCaps.capabilities,
+                      sink->resCurrCaps.info.video.maxWidth,
+                      sink->resCurrCaps.info.video.maxHeight  );
+         }
+         else
+         {
+            GST_DEBUG("async grant pending" );
+         }
+      }
+      else
+      {
+         GST_ERROR("gst_westeros_sink: resMgrRequestDecoder: request failed");
+      }
+   }
+}
+
+static void resMgrReleaseDecoder( GstWesterosSink *sink )
+{
+   if ( sink->rm )
+   {
+      if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+      {
+         EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, sink->resReqPrimary.resReq.assignedId );
+         sink->resReqPrimary.resReq.assignedId= -1;
+      }
+   }
+}
+
+static gboolean gst_westeros_sink_backend_null_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      result= TRUE;
+   }
+   #ifdef ENABLE_SW_DECODE
+   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      result= wstsw_null_to_ready( sink, passToDefault );
+   }
+   #endif
+   else
+   {
+      result= gst_westeros_sink_soc_null_to_ready( sink, passToDefault );
+   }
+   return result;
+}
+
+static gboolean gst_westeros_sink_backend_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      result= TRUE;
+   }
+   #ifdef ENABLE_SW_DECODE
+   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      result= wstsw_ready_to_paused( sink, passToDefault );
+   }
+   #endif
+   else
+   {
+      result= gst_westeros_sink_soc_ready_to_paused( sink, passToDefault );
+   }
+   return result;
+}
+
+static gboolean gst_westeros_sink_backend_paused_to_playing( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      result= TRUE;
+   }
+   #ifdef ENABLE_SW_DECODE
+   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      result= wstsw_paused_to_playing( sink, passToDefault );
+   }
+   #endif
+   else
+   {
+      result= gst_westeros_sink_soc_paused_to_playing( sink, passToDefault );
+   }
+   return result;
+}
+
+static gboolean gst_westeros_sink_backend_playing_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      result= TRUE;
+   }
+   #ifdef ENABLE_SW_DECODE
+   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      result= wstsw_playing_to_paused( sink, passToDefault );
+   }
+   #endif
+   else
+   {
+      result= gst_westeros_sink_soc_playing_to_paused( sink, passToDefault );
+   }
+   return result;
+}
+
+static gboolean gst_westeros_sink_backend_paused_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      result= TRUE;
+   }
+   #ifdef ENABLE_SW_DECODE
+   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      result= wstsw_paused_to_ready( sink, passToDefault );
+   }
+   #endif
+   else
+   {
+      result= gst_westeros_sink_soc_paused_to_ready( sink, passToDefault );
+   }
+   return result;
+}
+
+static gboolean gst_westeros_sink_backend_ready_to_null( GstWesterosSink *sink, gboolean *passToDefault )
+{
+   gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      result= TRUE;
+   }
+   #ifdef ENABLE_SW_DECODE
+   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   {
+      result= wstsw_ready_to_null( sink, passToDefault );
+   }
+   #endif
+   else
+   {
+      result= gst_westeros_sink_soc_ready_to_null( sink, passToDefault );
+   }
+   return result;
 }
 
 #include <dlfcn.h>
@@ -566,7 +889,22 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
       "Comcast");
 #endif
 
+   klass->canUseResMgr= 0;
    gst_westeros_sink_soc_class_init(klass);
+
+   if ( resMgrCheckUse(klass) )
+   {
+      g_object_class_install_property (gobject_class, PROP_RES_PRIORITY,
+        g_param_spec_uint ("res-priority",
+                           "res-priority",
+                           "Priority of resource usage, with 0 the highest priority",
+                           0, G_MAXUINT32, 0, G_PARAM_READWRITE));
+
+      g_object_class_install_property (gobject_class, PROP_RES_USAGE,
+        g_param_spec_flags ("res-usage", "res-usage", "Flags to indicate intended usage",
+          GST_TYPE_USAGE_FLAGS, DEFAULT_USAGE,
+          (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+   }
 }
 
 static void 
@@ -656,6 +994,21 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->currentSegment = NULL;
 
    sink->processPadEvent= 0;
+
+   sink->rm= 0;
+   sink->resPriority= 0;
+   sink->resUsage= DEFAULT_USAGE;
+   sink->resAssignedId= -1;
+   memset( &sink->resReqPrimary, 0, sizeof(WstSinkResReqInfo) );
+   memset( &sink->resReqSecondary, 0, sizeof(WstSinkResReqInfo) );
+   sink->acquireResources= 0;
+   sink->releaseResources= 0;
+   #ifdef ENABLE_SW_DECODE
+   sink->swCtx= 0;
+   sink->swInit= 0;
+   sink->swTerm= 0;
+   sink->swDisplay= 0;
+   #endif
 
    sink->mediaCaptureModule= 0;
    sink->mediaCaptureContext= 0;
@@ -799,6 +1152,48 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
          }
          break;
       }
+
+      case PROP_RES_PRIORITY:
+      {
+         guint priority= g_value_get_uint(value);
+         LOCK(sink);
+         if ( priority != sink->resPriority )
+         {
+            sink->resPriority= g_value_get_uint(value);
+            if ( sink->rm )
+            {
+               EssRMgrRequestSetPriority( sink->rm,
+                                          EssRMgrResType_videoDecoder,
+                                          sink->resReqPrimary.resReq.requestId,
+                                          sink->resPriority );
+            }
+         }
+         UNLOCK(sink);
+         break;
+      }
+
+      case PROP_RES_USAGE:
+      {
+         guint usage= g_value_get_flags(value);
+         LOCK(sink);
+         if ( sink->resUsage != usage )
+         {
+            sink->resUsage= g_value_get_flags(value);
+            if ( sink->rm )
+            {
+               EssRMgrUsage newUsage;
+               newUsage.usage= sink->resUsage;
+               newUsage.info= sink->resReqPrimary.resReq.info;
+
+               EssRMgrRequestSetUsage( sink->rm,
+                                       EssRMgrResType_videoDecoder,
+                                       sink->resReqPrimary.resReq.requestId,
+                                       &newUsage );
+            }
+         }
+         UNLOCK(sink);
+         break;
+      }
       
       default:
          gst_westeros_sink_soc_set_property(object, prop_id, value, pspec);
@@ -838,6 +1233,20 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
             g_value_set_int64(value, currentPTS);
          }
          break;
+      case PROP_RES_PRIORITY:
+         {
+            LOCK(sink);
+            g_value_set_uint(value, sink->resPriority);
+            UNLOCK(sink);
+         }
+         break;
+      case PROP_RES_USAGE:
+         {
+            LOCK(sink);
+            g_value_set_flags(value, sink->resUsage);
+            UNLOCK(sink);
+         }
+         break;
       default:
          gst_westeros_sink_soc_get_property(object, prop_id, value, pspec);
          break;
@@ -867,10 +1276,13 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          printf("westeros (sink) version " WESTEROS_VERSION_FMT "\n", WESTEROS_VERSION );
 
+         resMgrInit(sink);
+         resMgrRequestDecoder(sink);
+
          sink->position= 0;         
          sink->eosDetected= FALSE;
          sink->eosEventSeen= FALSE;
-         if ( !gst_westeros_sink_soc_null_to_ready(sink, &passToDefault) )
+         if ( !gst_westeros_sink_backend_null_to_ready(sink, &passToDefault) )
          {
             result= GST_STATE_CHANGE_FAILURE;
             break;
@@ -883,7 +1295,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
          captureInit(sink);
 
          sink->eosEventSeen= FALSE;
-         if ( gst_westeros_sink_soc_ready_to_paused(sink, &passToDefault) )
+         if ( gst_westeros_sink_backend_ready_to_paused(sink, &passToDefault) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
 
@@ -957,7 +1369,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
       case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       {
-         if ( !gst_westeros_sink_soc_paused_to_playing( sink, &passToDefault) )
+         if ( !gst_westeros_sink_backend_paused_to_playing( sink, &passToDefault) )
          {
             result= GST_STATE_CHANGE_FAILURE;
          }
@@ -990,7 +1402,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
    {
       case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       {
-         if ( gst_westeros_sink_soc_playing_to_paused( sink, &passToDefault ) )
+         if ( gst_westeros_sink_backend_playing_to_paused( sink, &passToDefault ) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
          }
@@ -1001,7 +1413,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          sink->eosEventSeen= FALSE;
          sink->eosDetected= FALSE;
-         if ( gst_westeros_sink_soc_paused_to_ready( sink, &passToDefault ) )
+         if ( gst_westeros_sink_backend_paused_to_ready( sink, &passToDefault ) )
          {
             sink->rejectPrerollBuffers = !gst_base_sink_is_async_enabled(GST_BASE_SINK(sink));
          }
@@ -1016,10 +1428,13 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
       {
          if ( sink->initialized )
          {
-            if ( !gst_westeros_sink_soc_ready_to_null( sink, &passToDefault ) )
+            if ( !gst_westeros_sink_backend_ready_to_null( sink, &passToDefault ) )
             {
                result= GST_STATE_CHANGE_FAILURE;
             }
+
+            resMgrReleaseDecoder(sink);
+            resMgrTerm(sink);
          }
          releaseWaylandResources( sink );
          break;
@@ -1178,6 +1593,12 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             {
                gst_westeros_sink_soc_accept_caps( sink, caps );
             }
+            #ifdef ENABLE_SW_DECODE
+            if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+            {
+               wstsw_process_caps( sink, caps );
+            }
+            #endif
          }
          break;
       case GST_EVENT_FLUSH_START:

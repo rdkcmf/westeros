@@ -8415,7 +8415,10 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
 
          if ( !vpcSurface->videoPathSet || (useHWPathEffective != vpcSurface->useHWPath) )
          {
-            DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPathEffective );
+            if ( !vpcSurface->pathTransitionPending || !useHWPathEffective )
+            {
+               DEBUG("vpcSurface %p useHWPath %d", vpcSurface, useHWPathEffective );
+            }
             vpcSurface->useHWPathNext= useHWPathEffective;
             if ( vpcSurface->videoPathSet && ctx->haveRepeaterSupport )
             {

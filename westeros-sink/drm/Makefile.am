@@ -39,6 +39,7 @@ libgstwesterossink_la_CFLAGS= \
 libgstwesterossink_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(GST_LIBS)  $(GSTBASE_LIBS) $(WAYLANDLIB) -avoid-version \
+   -lessos \
    -lwesteros_compositor \
    -lwesteros_simplebuffer_client \
    -lwesteros_simpleshell_client

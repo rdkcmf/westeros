@@ -21,6 +21,7 @@
 #include "wayland-client.h"
 #include "simpleshell-client-protocol.h"
 #include "vpc-client-protocol.h"
+#include "essos-resmgr.h"
 
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
@@ -51,10 +52,27 @@ typedef struct _GstWesterosSinkClass GstWesterosSinkClass;
 
 typedef gboolean (*ProcessPadEvent)(GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
 
+typedef int (*SinkAcquireResources)( GstWesterosSink *sink );
+typedef void (*SinkReleaseResources)( GstWesterosSink *sink );
+
+#ifdef ENABLE_SW_DECODE
+#include "../../westeros-sink/westeros-sink-sw.h"
+
+typedef bool (*SinkSWInit)( GstWesterosSink *sink );
+typedef void (*SinkSWTerm)( GstWesterosSink *sink );
+typedef void (*SinkSWDisplay)( GstWesterosSink *sink, SWFrame *frame );
+#endif
+
 typedef void* (*MediaCaptureCreateContext)( GstElement *element );
 typedef void (*MediaCaptureDestroyContext)( void *context );
 
 #define PROP_SOC_BASE (100)
+
+typedef struct _WstSinkResReqInfo
+{
+   GstWesterosSink *sink;
+   EssRMgrRequest resReq;
+} WstSinkResReqInfo;
 
 #include "westeros-sink-soc.h"
 
@@ -134,6 +152,22 @@ struct _GstWesterosSink
    struct wl_vpc_surface *vpcSurface;
    struct wl_output *output;
 
+   EssRMgr *rm;
+   guint resPriority;
+   guint resUsage;
+   int resAssignedId;
+   EssRMgrCaps resCurrCaps;
+   WstSinkResReqInfo resReqPrimary;
+   WstSinkResReqInfo resReqSecondary;
+   SinkAcquireResources acquireResources;
+   SinkReleaseResources releaseResources;
+   #ifdef ENABLE_SW_DECODE
+   void *swCtx;
+   SinkSWInit swInit;
+   SinkSWTerm swTerm;
+   SinkSWDisplay swDisplay;
+   #endif
+
    ProcessPadEvent processPadEvent;
 
    void *mediaCaptureModule;
@@ -146,6 +180,7 @@ struct _GstWesterosSink
 struct _GstWesterosSinkClass
 {
    GstBaseSinkClass parent_class;
+   int canUseResMgr;
 
 };
 

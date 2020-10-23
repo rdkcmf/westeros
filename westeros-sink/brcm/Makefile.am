@@ -46,6 +46,7 @@ libgstwesterossink_la_LDFLAGS= \
    -lwesteros_simplebuffer_client \
    -lwesteros_simpleshell_client \
    -lgstvideo-1.0 \
+   -lessos \
    -lwayland-egl \
    -lnxclient \
    -lnexus
