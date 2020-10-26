@@ -1017,8 +1017,10 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             goto exit;
          }
 
-         if ( sink->flushStarted )
+         LOCK(sink);
+         if ( !sink->soc.inBuffers )
          {
+            UNLOCK(sink);
             goto exit;
          }
 
@@ -1026,6 +1028,12 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          {
             gst_buffer_unref( sink->soc.inBuffers[buffIndex].gstbuf );
             sink->soc.inBuffers[buffIndex].gstbuf= 0;
+         }
+
+         if ( sink->flushStarted )
+         {
+            UNLOCK(sink);
+            goto exit;
          }
 
          if (GST_BUFFER_PTS_IS_VALID(buffer) )
@@ -1050,6 +1058,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             sink->soc.inBuffers[buffIndex].buf.length= maxSize;
          }
          rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.inBuffers[buffIndex].buf );
+         UNLOCK(sink);
          if ( rc < 0 )
          {
             GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
@@ -1092,6 +1101,13 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   goto exit;
                }
 
+               LOCK(sink);
+               if ( !sink->soc.inBuffers )
+               {
+                  UNLOCK(sink);
+                  goto exit;
+               }
+
                copylen= sink->soc.inBuffers[buffIndex].capacity;
                if ( copylen > avail )
                {
@@ -1114,6 +1130,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   sink->soc.inBuffers[buffIndex].buf.m.planes[0].bytesused= copylen;
                }
                rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.inBuffers[buffIndex].buf );
+               UNLOCK(sink);
                if ( rc < 0 )
                {
                   GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
@@ -1322,7 +1339,6 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    }
    if ( sink->soc.videoOutputThread || sink->soc.eosDetectionThread || sink->soc.dispatchThread )
    {
-      sink->videoStarted= FALSE;
       sink->soc.quitVideoOutputThread= TRUE;
       sink->soc.quitEOSDetectionThread= TRUE;
       sink->soc.quitDispatchThread= TRUE;
@@ -1340,6 +1356,12 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       wstTearDownInputBuffers( sink );
 
       wstTearDownOutputBuffers( sink );
+   }
+   if ( sink->soc.v4l2Fd >= 0 )
+   {
+      int fdToClose= sink->soc.v4l2Fd;
+      sink->soc.v4l2Fd= -1;
+      close( fdToClose );
    }
    UNLOCK(sink);
 
@@ -1368,12 +1390,10 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       free( sink->soc.outputFormats );
       sink->soc.outputFormats= 0;
    }
-   if ( sink->soc.v4l2Fd >= 0 )
-   {
-      int fdToClose= sink->soc.v4l2Fd;
-      sink->soc.v4l2Fd= -1;
-      close( fdToClose );
-   }
+
+   LOCK(sink);
+   sink->videoStarted= FALSE;
+   UNLOCK(sink);
 
    if ( sink->soc.videoOutputThread )
    {
@@ -2984,7 +3004,7 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
       GstWesterosSink *sink= conn->sink;
       struct msghdr msg;
       struct iovec iov[1];
-      unsigned char mbody[7];
+      unsigned char mbody[9];
       int len;
       int sentLen;
 
@@ -4275,7 +4295,12 @@ static gpointer wstEOSDetectionThread(gpointer data)
       }
    }
 
-   sink->soc.eosDetectionThread= NULL;
+   if ( !sink->soc.quitEOSDetectionThread )
+   {
+      GThread *thread= sink->soc.eosDetectionThread;
+      g_thread_unref( sink->soc.eosDetectionThread );
+      sink->soc.eosDetectionThread= NULL;
+   }
 
    GST_DEBUG("wstVideoEOSThread: exit");
 
