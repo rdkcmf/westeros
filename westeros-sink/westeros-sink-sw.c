@@ -18,8 +18,18 @@
 
 #include "westeros-sink-sw.h"
 
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
+
+#if defined(__cplusplus)
+} // extern "C"
+#endif
+
+#include <unistd.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
@@ -32,6 +42,8 @@ typedef struct _SWCtx
    AVCodecParserContext* parserCtx;
    AVPacket *packet;
    AVFrame *frame;
+   uint8_t *initData;
+   int initDataLen;
    bool needInitData;
    bool active;
    bool paused;
@@ -120,7 +132,6 @@ exit:
       if ( swCtx )
       {
          termSWDecoder( swCtx );
-         free( swCtx );
       }
    }
    return result;
@@ -153,6 +164,7 @@ static void termSWDecoder( SWCtx *swCtx )
       av_packet_free( &swCtx->packet );
       swCtx->packet= 0;
    }
+   free( swCtx );
 }
 
 void wstsw_process_caps( GstWesterosSink *sink, GstCaps *caps )
@@ -184,12 +196,23 @@ void wstsw_process_caps( GstWesterosSink *sink, GstCaps *caps )
    }
 }
 
+void wstsw_set_codec_init_data( GstWesterosSink *sink, int initDataLen, uint8_t *initData )
+{
+   SWCtx *swCtx= (SWCtx*)sink->swCtx;
+   if ( swCtx )
+   {
+      GST_DEBUG("wstsw_set_codec_init_data: data %p len %d", initData, initDataLen);
+      swCtx->initData= initData;
+      swCtx->initDataLen= initDataLen;
+   }
+}
+
 bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
    bool result= true;
    SWCtx *swCtx= (SWCtx*)sink->swCtx;
 
-   GST_LOG("wstsw_render: buffer %p\n", buffer );
+   GST_LOG("wstsw_render: buffer %p", buffer );
 
    while( swCtx->paused )
    {
@@ -232,14 +255,41 @@ bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       while( inSize > 0 )
       {
-         if ( swCtx->needInitData )
+         if ( swCtx->needInitData && swCtx->initDataLen && swCtx->initData )
          {
-            inputData= (uint8_t*)sink->soc.dataProbeCodecData;
-            inputLen= sink->soc.dataProbeCodecDataLen;
+            inputData= swCtx->initData;
+            inputLen= swCtx->initDataLen;
             swCtx->needInitData= false;
          }
          else
          {
+            if ( swCtx->needInitData )
+            {
+               bool foundSPS= false;
+               int i;
+               for ( i= 0; i < inSize-5; ++i )
+               {
+                  if ( (inData[i+0] == 0) &&
+                       (inData[i+1] == 0) &&
+                       (inData[i+2] == 0) &&
+                       (inData[i+3] == 1) &&
+                       (inData[i+4] == 0x67) )
+                  {
+                    GST_DEBUG("wstsw_render: found sps at offset %d", i);
+                    swCtx->needInitData= false;
+                    foundSPS= true;
+                    inData= inData+i;
+                    inSize= inSize-i;
+                    break;
+                  }
+               }
+               if ( !foundSPS )
+               {
+                  GST_DEBUG("wstsw_render: skipping data until sps");
+                  break;
+               }
+            }
+
             inputData= (uint8_t*)inData;
             inputLen= inSize;
             inSize= 0;
@@ -387,6 +437,10 @@ static gboolean wstsw_ready_to_paused( GstWesterosSink *sink, gboolean *passToDe
 {
    SWCtx *swCtx= (SWCtx*)sink->swCtx;
 
+   if ( sink->swLink )
+   {
+      sink->swLink( sink );
+   }
    swCtx->active= true;
 
    return TRUE;
@@ -397,6 +451,10 @@ static gboolean wstsw_paused_to_playing( GstWesterosSink *sink, gboolean *passTo
    SWCtx *swCtx= (SWCtx*)sink->swCtx;
 
    swCtx->paused= false;
+   if ( sink->swEvent )
+   {
+      sink->swEvent( sink, SWEvt_pause, (int)swCtx->paused, 0 );
+   }
 
    return TRUE;
 }
@@ -406,6 +464,10 @@ static gboolean wstsw_playing_to_paused( GstWesterosSink *sink, gboolean *passTo
    SWCtx *swCtx= (SWCtx*)sink->swCtx;
 
    swCtx->paused= true;   
+   if ( sink->swEvent )
+   {
+      sink->swEvent( sink, SWEvt_pause, (int)swCtx->paused, 0 );
+   }
 
    return TRUE;
 }
@@ -415,6 +477,10 @@ static gboolean wstsw_paused_to_ready( GstWesterosSink *sink, gboolean *passToDe
    SWCtx *swCtx= (SWCtx*)sink->swCtx;
 
    swCtx->active= false;
+   if ( sink->swUnLink )
+   {
+      sink->swUnLink( sink );
+   }
 
    return TRUE;
 }

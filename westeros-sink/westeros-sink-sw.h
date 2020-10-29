@@ -18,6 +18,19 @@
 #ifndef __WESTEROS_SINK_SW_H__
 #define __WESTEROS_SINK_SW_H__
 
+/*
+ * Events that may be passed to a swEvent method
+ */
+typedef enum _SWEvt
+{
+   SWEvt_none= 0,
+   SWEvt_pause= 1, /* p1: 0 unpause, 1 pause, p2: unused */
+   SWEvt_max= 2
+} SWEvt;
+
+/*
+ * Decoded frame information
+ */
 typedef struct _SWFrame
 {
    int width;
@@ -33,6 +46,7 @@ typedef struct _SWFrame
 } SWFrame;
 
 void wstsw_process_caps( GstWesterosSink *sink, GstCaps *caps );
+void wstsw_set_codec_init_data( GstWesterosSink *sink, int initDataLen, uint8_t *initData );
 bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer );
 static gboolean wstsw_null_to_ready( GstWesterosSink *sink, gboolean *passToDefault );
 static gboolean wstsw_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault );

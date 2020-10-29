@@ -60,6 +60,9 @@ typedef void (*SinkReleaseResources)( GstWesterosSink *sink );
 
 typedef bool (*SinkSWInit)( GstWesterosSink *sink );
 typedef void (*SinkSWTerm)( GstWesterosSink *sink );
+typedef void (*SinkSWLink)( GstWesterosSink *sink );
+typedef void (*SinkSWUnLink)( GstWesterosSink *sink );
+typedef void (*SinkSWEvent)( GstWesterosSink *sink, int id, int p1, void *p2 );
 typedef void (*SinkSWDisplay)( GstWesterosSink *sink, SWFrame *frame );
 #endif
 
@@ -165,6 +168,9 @@ struct _GstWesterosSink
    void *swCtx;
    SinkSWInit swInit;
    SinkSWTerm swTerm;
+   SinkSWLink swLink;
+   SinkSWLink swUnLink;
+   SinkSWEvent swEvent;
    SinkSWDisplay swDisplay;
    #endif
 

@@ -130,6 +130,17 @@ static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static int ioctl_wrapper( int fd, int request, void* arg );
+static bool swIsSWDecode( GstWesterosSink *sink );
+#ifdef ENABLE_SW_DECODE
+static bool swInit( GstWesterosSink *sink );
+static void swTerm( GstWesterosSink *sink );
+static void swLink( GstWesterosSink *sink );
+static void swUnLink( GstWesterosSink *sink );
+static void swEvent( GstWesterosSink *sink, int id, int p1, void *p2 );
+static void swDisplay( GstWesterosSink *sink, SWFrame *frame );
+#endif
+static int sinkAcquireVideo( GstWesterosSink *sink );
+static void sinkReleaseVideo( GstWesterosSink *sink );
 
 #ifdef USE_AMLOGIC_MESON
 #include "meson_drm.h"
@@ -291,6 +302,14 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                G_TYPE_UINT, /* plane 2 stride */
                                                G_TYPE_POINTER /* plane 2 data */
                                              );
+   klass->canUseResMgr= 0;
+   {
+      const char *env= getenv("WESTEROS_SINK_USE_ESSRMGR");
+      if ( env && (atoi(env) != 0) )
+      {
+         klass->canUseResMgr= 1;
+      }
+   }
 }
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
@@ -385,6 +404,28 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveColorimetry= FALSE;
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
+   #ifdef ENABLE_SW_DECODE
+   sink->soc.firstFrameThread= NULL;
+   sink->soc.nextSWBuffer= 0;
+   sink->swInit= swInit;
+   sink->swTerm= swTerm;
+   sink->swLink= swLink;
+   sink->swUnLink= swUnLink;
+   sink->swEvent= swEvent;
+   sink->swDisplay= swDisplay;
+   {
+      int i;
+      for( i= 0; i < WST_NUM_SW_BUFFERS; ++i )
+      {
+         sink->soc.swBuffer[i].width= -1;
+         sink->soc.swBuffer[i].height= -1;
+         sink->soc.swBuffer[i].fd0= -1;
+         sink->soc.swBuffer[i].fd1= -1;
+         sink->soc.swBuffer[i].handle0= 0;
+         sink->soc.swBuffer[i].handle1= 0;
+      }
+   }
+   #endif
 
    sink->useSegmentPosition= TRUE;
 
@@ -400,6 +441,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       GST_ERROR("unable to access sink pad" );
    }
    #endif
+
+   sink->acquireResources= sinkAcquireVideo;
+   sink->releaseResources= sinkReleaseVideo;
 
    /* Request caps updates */
    sink->passCaps= TRUE;
@@ -924,6 +968,13 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
+   #ifdef ENABLE_SW_DECODE
+   if ( swIsSWDecode( sink ) )
+   {
+      wstsw_render( sink, buffer );
+      return;
+   }
+   #endif
    if ( (sink->soc.v4l2Fd >= 0) && !sink->flushStarted )
    {
       gint64 nanoTime;
@@ -1238,6 +1289,11 @@ exit:
 void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
 {
    WESTEROS_UNUSED(sink);
+   if ( swIsSWDecode( sink ) )
+   {
+      g_print("westeros-sink: EOS detected\n");
+      gst_westeros_sink_eos_detected( sink );
+   }
 }
 
 void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
@@ -4283,7 +4339,15 @@ static gpointer wstEOSDetectionThread(gpointer data)
             if ( eosCountDown == 0 )
             {
                g_print("westeros-sink: EOS detected\n");
-               gst_westeros_sink_eos_detected( sink );
+               if ( swIsSWDecode( sink ) )
+               {
+                  GST_DEBUG_OBJECT(sink, "gst_westeros_sink_eos_detected: posting EOS");
+                  gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
+               }
+               else
+               {
+                  gst_westeros_sink_eos_detected( sink );
+               }
                break;
             }
          }
@@ -4329,6 +4393,11 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
 {
    GstWesterosSink *sink= GST_WESTEROS_SINK(base_sink);
 
+   if ( swIsSWDecode( sink ) )
+   {
+      goto done;
+   }
+
    sink->soc.videoPlaying= TRUE;
 
    if ( sink->soc.frameStepOnPreroll )
@@ -4336,10 +4405,459 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
       gst_westeros_sink_soc_render( sink, buffer );
    }
 
+done:
    GST_INFO("preroll ok");
 
    return GST_FLOW_OK;
 }
+
+static int sinkAcquireVideo( GstWesterosSink *sink )
+{
+   int result= 0;
+
+   GST_DEBUG("sinkAcquireVideo: enter");
+   if ( sink->rm && sink->resAssignedId >= 0 )
+   {
+      if ( swIsSWDecode( sink ) )
+      {
+         result= 1;
+         goto done;
+      }
+   }
+
+
+   result= 1;
+done:
+   GST_DEBUG("sinkAcquireVideo: exit: %d", result);
+
+   return result;
+}
+
+static void sinkReleaseVideo( GstWesterosSink *sink )
+{
+   GST_DEBUG("sinkReleaseVideo: enter");
+
+   GST_DEBUG("sinkReleaseVideo: exit");
+}
+
+static bool swIsSWDecode( GstWesterosSink *sink )
+{
+   bool result= false;
+   #ifdef ENABLE_SW_DECODE
+   if ( sink->rm && sink->resAssignedId >= 0 )
+   {
+      if ( sink->resCurrCaps.capabilities & EssRMgrVidCap_software )
+      {
+         result= true;
+      }
+   }
+   #endif
+   return result;
+}
+
+#ifdef ENABLE_SW_DECODE
+static void swFreeSWBuffer( GstWesterosSink *sink, int buffIndex )
+{
+   int i;
+   for( i= 0; i < 2; ++i )
+   {
+      int *fd, *handle;
+      if ( i == 0 )
+      {
+         fd= &sink->soc.swBuffer[buffIndex].fd0;
+         handle= &sink->soc.swBuffer[buffIndex].handle0;
+      }
+      else
+      {
+         fd= &sink->soc.swBuffer[buffIndex].fd1;
+         handle= &sink->soc.swBuffer[buffIndex].handle1;
+      }
+      if ( *fd >= 0 )
+      {
+         close( *fd );
+         *fd= -1;
+      }
+      if ( *handle )
+      {
+         struct drm_mode_destroy_dumb destroyDumb;
+         destroyDumb.handle= *handle;
+         ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyDumb );
+         *handle= 0;
+      }
+   }
+}
+
+static bool swAllocSWBuffer( GstWesterosSink *sink, int buffIndex, int width, int height )
+{
+   bool result= false;
+   WstSWBuffer *swBuff= 0;
+   if ( buffIndex < WST_NUM_SW_BUFFERS )
+   {
+      struct drm_mode_create_dumb createDumb;
+      struct drm_mode_map_dumb mapDumb;
+      int i, rc;
+
+      swBuff= &sink->soc.swBuffer[buffIndex];
+
+      swBuff->width= width;
+      swBuff->height= height;
+
+      memset( &createDumb, 0, sizeof(createDumb) );
+      createDumb.width= width;
+      createDumb.height= height;
+      createDumb.bpp= 8;
+      rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_CREATE_DUMB, &createDumb );
+      if ( rc )
+      {
+         GST_ERROR("DRM_IOCTL_MODE_CREATE_DUMB failed: rc %d errno %d", rc, errno);
+         goto exit;
+      }
+      memset( &mapDumb, 0, sizeof(mapDumb) );
+      mapDumb.handle= createDumb.handle;
+      rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_MAP_DUMB, &mapDumb );
+      if ( rc )
+      {
+         GST_ERROR("DRM_IOCTL_MODE_MAP_DUMB failed: rc %d errno %d", rc, errno);
+         goto exit;
+      }
+      swBuff->handle0= createDumb.handle;
+      swBuff->pitch0= createDumb.pitch;
+      swBuff->size0= createDumb.size;
+      swBuff->offset0= mapDumb.offset;
+
+      rc= drmPrimeHandleToFD( sink->soc.drmFd, swBuff->handle0, DRM_CLOEXEC | DRM_RDWR, &swBuff->fd0 );
+      if ( rc )
+      {
+         GST_ERROR("drmPrimeHandleToFD failed: rc %d errno %d", rc, errno);
+         goto exit;
+      }
+
+      memset( &createDumb, 0, sizeof(createDumb) );
+      createDumb.width= width;
+      createDumb.height= height/2;
+      createDumb.bpp= 8;
+      rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_CREATE_DUMB, &createDumb );
+      if ( rc )
+      {
+         GST_ERROR("DRM_IOCTL_MODE_CREATE_DUMB failed: rc %d errno %d\n", rc, errno);
+         goto exit;
+      }
+      memset( &mapDumb, 0, sizeof(mapDumb) );
+      mapDumb.handle= createDumb.handle;
+      rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_MAP_DUMB, &mapDumb );
+      if ( rc )
+      {
+         GST_ERROR("DRM_IOCTL_MODE_MAP_DUMB failed: rc %d errno %d", rc, errno);
+         goto exit;
+      }
+      swBuff->handle1= createDumb.handle;
+      swBuff->pitch1= createDumb.pitch;
+      swBuff->size1= createDumb.size;
+      swBuff->offset1= mapDumb.offset;
+
+      rc= drmPrimeHandleToFD( sink->soc.drmFd, swBuff->handle1, DRM_CLOEXEC | DRM_RDWR, &swBuff->fd1 );
+      if ( rc )
+      {
+         GST_ERROR("drmPrimeHandleToFD failed: rc %d errno %d", rc, errno);
+         goto exit;
+      }
+
+      result= true;
+   }
+exit:
+   if ( !result )
+   {
+      swFreeSWBuffer( sink, buffIndex );
+   }
+   return result;
+}
+
+WstSWBuffer *swGetSWBuffer( GstWesterosSink *sink, int buffIndex, int width, int height )
+{
+   WstSWBuffer *swBuff= 0;
+   if ( buffIndex < WST_NUM_SW_BUFFERS )
+   {
+      swBuff= &sink->soc.swBuffer[buffIndex];
+      if ( (swBuff->width != width) || (swBuff->height != height) )
+      {
+         swFreeSWBuffer( sink, buffIndex );
+         if ( !swAllocSWBuffer( sink, buffIndex, width, height ) )
+         {
+            swBuff= 0;
+         }
+      }
+   }
+
+   return swBuff;
+}
+
+static gpointer swFirstFrameThread(gpointer data)
+{
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+
+   if ( sink )
+   {
+      GST_DEBUG("swFirstFrameThread: emit first frame signal");
+      g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+      g_thread_unref( sink->soc.firstFrameThread );
+      sink->soc.firstFrameThread= NULL;
+   }
+
+   return NULL;
+}
+
+static bool swInit( GstWesterosSink *sink )
+{
+   GST_DEBUG("swInit");
+   sink->soc.drmFd= open( "/dev/dri/card0", O_RDWR);
+   if ( sink->soc.drmFd < 0 )
+   {
+      GST_ERROR("Failed to open drm render node: %d", errno);
+      goto exit;
+   }
+
+exit:
+   return true;
+}
+
+static void swTerm( GstWesterosSink *sink )
+{
+   int i;
+   GST_DEBUG("swTerm");
+   if ( sink->soc.eosDetectionThread )
+   {
+      sink->soc.quitEOSDetectionThread= TRUE;
+      g_thread_join( sink->soc.eosDetectionThread );
+      sink->soc.eosDetectionThread= NULL;
+   }
+   if ( sink->soc.dispatchThread )
+   {
+      sink->soc.quitDispatchThread= TRUE;
+      g_thread_join( sink->soc.dispatchThread );
+      sink->soc.dispatchThread= NULL;
+   }
+   for( i= 0; i < WST_NUM_SW_BUFFERS; ++i )
+   {
+      swFreeSWBuffer( sink, i );
+   }
+   if ( sink->soc.drmFd >= 0 )
+   {
+      close( sink->soc.drmFd );
+      sink->soc.drmFd= 1;
+   }
+}
+
+static void swLink( GstWesterosSink *sink )
+{
+   WESTEROS_UNUSED(sink);
+   GST_DEBUG("swLink");
+}
+
+static void swUnLink( GstWesterosSink *sink )
+{
+   GST_DEBUG("swUnLink");
+   if ( sink->display )
+   {
+      int fd= wl_display_get_fd( sink->display );
+      if ( fd >= 0 )
+      {
+         shutdown( fd, SHUT_RDWR );
+      }
+   }
+}
+
+static void swEvent( GstWesterosSink *sink, int id, int p1, void *p2 )
+{
+   WESTEROS_UNUSED(p2);
+   GST_DEBUG("swEvent: id %d p1 %d p2 %p", id, p1, p2 );
+   switch( id )
+   {
+      case SWEvt_pause:
+         LOCK(sink);
+         sink->soc.videoPlaying= !(bool)p1;
+         UNLOCK(sink);
+         break;
+      default:
+         break;
+   }
+}
+
+void swDisplay( GstWesterosSink *sink, SWFrame *frame )
+{
+   WstSWBuffer *swBuff= 0;
+   int bi;
+
+   GST_LOG("swDisplay: enter");
+
+   if ( sink->display )
+   {
+      if ( sink->soc.dispatchThread == NULL )
+      {
+         sink->soc.quitDispatchThread= FALSE;
+         GST_DEBUG_OBJECT(sink, "swDisplay: starting westeros_sink_dispatch thread");
+         sink->soc.dispatchThread= g_thread_new("westeros_sink_dispatch", wstDispatchThread, sink);
+      }
+   }
+   if ( sink->soc.eosDetectionThread == NULL )
+   {
+      sink->soc.videoPlaying= TRUE;;
+      sink->eosEventSeen= TRUE;
+      sink->soc.quitEOSDetectionThread= FALSE;
+      GST_DEBUG_OBJECT(sink, "swDisplay: starting westeros_sink_eos thread");
+      sink->soc.eosDetectionThread= g_thread_new("westeros_sink_eos", wstEOSDetectionThread, sink);
+   }
+
+   bi= sink->soc.nextSWBuffer;
+   if ( ++sink->soc.nextSWBuffer >= WST_NUM_SW_BUFFERS )
+   {
+      sink->soc.nextSWBuffer= 0;
+   }
+
+   swBuff= swGetSWBuffer( sink, bi, frame->width, frame->height );
+   if ( swBuff )
+   {
+      unsigned char *data;
+
+      data= (unsigned char*)mmap( NULL, swBuff->size0, PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, swBuff->offset0 );
+      if ( data )
+      {
+         int row;
+         unsigned char *destRow= data;
+         unsigned char *srcYRow= frame->Y;
+         for( row= 0; row < frame->height; ++row )
+         {
+            memcpy( destRow, srcYRow, frame->Ystride );
+            destRow += swBuff->pitch0;
+            srcYRow += frame->Ystride;
+         }
+         munmap( data, swBuff->size0 );
+      }
+      data= (unsigned char*)mmap( NULL, swBuff->size1, PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, swBuff->offset1 );
+      if ( data )
+      {
+         int row, col;
+         unsigned char *dest, *destRow= data;
+         unsigned char *srcU, *srcURow= frame->U;
+         unsigned char *srcV, *srcVRow= frame->V;
+         for( row= 0; row < frame->height; row += 2 )
+         {
+            dest= destRow;
+            srcU= srcURow;
+            srcV= srcVRow;
+            for( col= 0; col < frame->width; col += 2 )
+            {
+               *dest++= *srcU++;
+               *dest++= *srcV++;
+            }
+            destRow += swBuff->pitch1;
+            srcURow += frame->Ustride;
+            srcVRow += frame->Vstride;
+         }
+         munmap( data, swBuff->size1 );
+      }
+
+      if ( frame->frameNumber == 0 )
+      {
+         sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", swFirstFrameThread, sink);
+      }
+
+      if ( sink->soc.forceAspectRatio && sink->vpcSurface )
+      {
+         int vx, vy, vw, vh;
+         sink->soc.videoX= sink->windowX;
+         sink->soc.videoY= sink->windowY;
+         sink->soc.videoWidth= sink->windowWidth;
+         sink->soc.videoHeight= sink->windowHeight;
+         sink->soc.frameWidth= frame->width;
+         sink->soc.frameHeight= frame->height;
+         wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+         wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+      }
+
+      if ( sink->soc.enableTextureSignal )
+      {
+         int fd0, l0, s0, fd1, l1, fd2, s1, l2, s2;
+         void *p0, *p1, *p2;
+
+         fd0= swBuff->fd0;
+         fd1= swBuff->fd1;
+         fd2= -1;
+         s0= swBuff->pitch0;
+         s1= swBuff->pitch1;
+         s2= 0;
+         l0= swBuff->size0;
+         l1= swBuff->size1;
+         l2= 0;
+         p0= 0;
+         p1= 0;
+         p2= 0;
+
+         g_signal_emit( G_OBJECT(sink),
+                        g_signals[SIGNAL_NEWTEXTURE],
+                        0,
+                        sink->soc.outputFormat,
+                        sink->soc.frameWidth,
+                        sink->soc.frameHeight,
+                        fd0, l0, s0, p0,
+                        fd1, l1, s1, p1,
+                        fd2, l2, s2, p2
+                      );
+      }
+      else if ( sink->soc.sb )
+      {
+         bufferInfo *binfo;
+         binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+         if ( binfo )
+         {
+            struct wl_buffer *wlbuff;
+            int fd0, fd1, fd2;
+            int stride0, stride1;
+            int offset1= 0;
+            fd0= swBuff->fd0;
+            fd1= swBuff->fd1;
+            fd2= fd0;
+            stride0= swBuff->pitch0;
+            stride1= swBuff->pitch1;
+
+            binfo->sink= sink;
+            binfo->buffIndex= bi;
+
+            wlbuff= wl_sb_create_planar_buffer_fd2( sink->soc.sb,
+                                                    fd0,
+                                                    fd1,
+                                                    fd2,
+                                                    swBuff->width,
+                                                    swBuff->height,
+                                                    WL_SB_FORMAT_NV12,
+                                                    0, /* offset0 */
+                                                    offset1, /* offset1 */
+                                                    0, /* offset2 */
+                                                    stride0, /* stride0 */
+                                                    stride1, /* stride1 */
+                                                    0  /* stride2 */
+                                                  );
+            if ( wlbuff )
+            {
+               wl_buffer_add_listener( wlbuff, &wl_buffer_listener, binfo );
+               wl_surface_attach( sink->surface, wlbuff, sink->windowX, sink->windowY );
+               wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+               wl_surface_commit( sink->surface );
+               wl_display_flush(sink->display);
+            }
+            else
+            {
+               free( binfo );
+            }
+         }
+      }
+   }
+   LOCK(sink);
+   ++sink->soc.frameOutCount;
+   UNLOCK(sink);
+
+   GST_LOG("swDisplay: exit");
+}
+#endif
 
 static int ioctl_wrapper( int fd, int request, void* arg )
 {
