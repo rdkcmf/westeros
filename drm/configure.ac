@@ -24,7 +24,7 @@ dnl AC_PREREQ([2.65])
 AC_INIT(westeros-soc, version-1.0, jeff_wannamaker@cable.comcast.com,westeros-soc)
 AC_CONFIG_SRCDIR([])
 AC_CONFIG_HEADERS([cfg/config.h])
-AC_CONFIG_MACRO_DIR([cfg])
+AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([cfg])
 AM_INIT_AUTOMAKE([foreign no-dist-gzip dist-bzip2 1.9])
 LT_INIT
