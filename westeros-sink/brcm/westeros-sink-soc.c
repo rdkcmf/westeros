@@ -118,7 +118,10 @@ static bool swIsSWDecode( GstWesterosSink *sink );
 #ifdef ENABLE_SW_DECODE
 static bool swInit( GstWesterosSink *sink );
 static void swTerm( GstWesterosSink *sink );
-void swDisplay( GstWesterosSink *sink, SWFrame *frame );
+static void swLink( GstWesterosSink *sink );
+static void swUnLink( GstWesterosSink *sink );
+static void swEvent( GstWesterosSink *sink, int id, int p1, void *p2 );
+static void swDisplay( GstWesterosSink *sink, SWFrame *frame );
 static bool establishSource( GstWesterosSink *sink );
 #endif
 static int sinkAcquireVideo( GstWesterosSink *sink );
@@ -677,12 +680,16 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.swPrerolled= false;
    sink->soc.swWorkSurface= 0;
    sink->soc.swNextCaptureSurface= 0;
+   sink->soc.firstFrameThread= NULL;
    sink->soc.g2d= 0;
    sink->soc.g2dEventCreated= false;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->swInit= swInit;
    sink->swTerm= swTerm;
+   sink->swLink= swLink;
+   sink->swUnLink= swUnLink;
+   sink->swEvent= swEvent;
    sink->swDisplay= swDisplay;
    {
       const char *env= getenv("WESTEROS_SINK_USE_SW_DECODE");
@@ -690,6 +697,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       {
          printf("westerossink: using software decode\n");
          sink->resUsage= 3;
+         sink->swLink= 0;
       }
    }
    #endif
@@ -3015,7 +3023,11 @@ static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent
          if ( swIsSWDecode( sink ) )
          {
             #ifdef ENABLE_SW_DECODE
-            establishSource( sink );
+            if ( !sink->soc.dataProbeId && sink->swLink )
+            {
+               GST_DEBUG("call establishSource from stream start");
+               establishSource( sink );
+            }
             #endif
          }
          break;
@@ -3219,6 +3231,8 @@ static gpointer swFirstFrameThread(gpointer data)
    if ( sink )
    {
       g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+      g_thread_unref( sink->soc.firstFrameThread );
+      sink->soc.firstFrameThread= NULL;
    }
 
    return NULL;
@@ -3258,6 +3272,7 @@ static void swG2dCheckPoint( void *data, int unused )
 
 static bool swInit( GstWesterosSink *sink )
 {
+   GST_DEBUG("swInit");
    if ( sinkAcquireResources( sink ) )
    {
       NEXUS_Graphics2DOpenSettings g2dOpenSettings;
@@ -3291,6 +3306,7 @@ static bool swInit( GstWesterosSink *sink )
 
 static void swTerm( GstWesterosSink *sink )
 {
+   GST_DEBUG("swTerm");
    LOCK(sink);
    if ( sink->soc.dataProbeId && sink->soc.dataProbePad )
    {
@@ -3322,6 +3338,38 @@ static void swTerm( GstWesterosSink *sink )
    freeCaptureSurfaces( sink );
 
    sinkReleaseResources( sink );
+}
+
+static void swLink( GstWesterosSink *sink )
+{
+   GST_DEBUG("swLink");
+   if ( !sink->soc.dataProbeId )
+   {
+      GST_DEBUG("call establishSource from swLink");
+      establishSource( sink );
+   }
+}
+
+static void swUnLink( GstWesterosSink *sink )
+{
+   GST_DEBUG("swUnLink");
+   WESTEROS_UNUSED(sink);
+}
+
+static void swEvent( GstWesterosSink *sink, int id, int p1, void *p2 )
+{
+   WESTEROS_UNUSED(sink);
+   WESTEROS_UNUSED(p1);
+   WESTEROS_UNUSED(p2);
+
+   GST_DEBUG("swEvent: id %d p1 %d p2 %p", id, p1, p2 );
+   switch( id )
+   {
+      case SWEvt_pause:
+         break;
+      default:
+         break;
+   }
 }
 
 void swDisplay( GstWesterosSink *sink, SWFrame *frame )
@@ -3405,7 +3453,7 @@ void swDisplay( GstWesterosSink *sink, SWFrame *frame )
 
       if ( frame->frameNumber == 0 )
       {
-         g_thread_new("westeros_first_frame", swFirstFrameThread, sink);
+         sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", swFirstFrameThread, sink);
       }
 
       if ( sink->soc.forceAspectRatio && sink->vpcSurface )
@@ -3542,6 +3590,8 @@ static void dataProbeGenerateH264InitialationData( GstWesterosSink *sink, gchar 
                }
                sink->soc.dataProbeCodecData= initData;
                sink->soc.dataProbeCodecDataLen= initDataLen;
+
+               wstsw_set_codec_init_data( sink, initDataLen, initData );
             }
             else
             {
@@ -3565,21 +3615,25 @@ static void dataProbeProcessCaps( GstWesterosSink *sink, GstCaps *caps )
    structure= gst_caps_get_structure(caps,0);
    if ( structure )
    {
-      const GValue *val= gst_structure_get_value( structure, "codec_data");
-      if ( val )
+      const gchar *mime= gst_structure_get_name(structure);
+      if ( strstr( mime, "video/x-h264" ) )
       {
-         const gchar *mime;
-         mime= gst_structure_get_name(structure);
-         gchar *codecData= gst_value_serialize(val);
-         if ( codecData )
+         gchar *str= gst_caps_to_string(caps);
+         if ( !strstr( str, "stream-format=(string)byte-stream" ) )
          {
-            if ( strstr( mime, "video/x-h264" ) )
+            const GValue *val= gst_structure_get_value( structure, "codec_data");
+            if ( val )
             {
-               sink->soc.dataProbeNeedStartCodes= TRUE;
-               dataProbeGenerateH264InitialationData( sink, codecData );
+               gchar *codecData= gst_value_serialize(val);
+               if ( codecData )
+               {
+                  sink->soc.dataProbeNeedStartCodes= TRUE;
+                  dataProbeGenerateH264InitialationData( sink, codecData );
+                  g_free( codecData );
+               }
             }
-            g_free( codecData );
          }
+         g_free( str );
       }
    }
    wstsw_process_caps( sink, caps );
@@ -3627,7 +3681,10 @@ static GstPadProbeReturn dataProbe( GstPad *pad, GstPadProbeInfo *info, gpointer
          int i, unitlen;
 
          #ifdef USE_GST1
-         gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ|GST_MAP_WRITE);
+         gst_buffer_map(buffer, &map,
+                        (sink->soc.dataProbeNeedStartCodes ?
+                        (GstMapFlags)GST_MAP_READ|GST_MAP_WRITE :
+                        (GstMapFlags)GST_MAP_READ) );
          inSize= map.size;
          inData= map.data;
          #else
@@ -3734,6 +3791,7 @@ static bool establishSource( GstWesterosSink *sink )
    }
    while( element != 0 );
 
+   GST_DEBUG("establishSource: pipeline %p", pipeline);
    if ( pipeline )
    {
       GstIterator *iterElement= gst_bin_iterate_recurse( GST_BIN(pipeline) );
@@ -3751,6 +3809,7 @@ static bool establishSource( GstWesterosSink *sink )
                   const gchar *meta= gst_element_class_get_metadata( ec, GST_ELEMENT_METADATA_KLASS);
                   if ( meta && strstr(meta, "Parser") && strstr(meta, "Video") && strstr(meta, "Codec") )
                   {
+                     GST_DEBUG("establishSource: filter element %p", element);
                      GstIterator *iterPad= gst_element_iterate_sink_pads( element );
                      if ( iterPad )
                      {
@@ -3760,6 +3819,7 @@ static bool establishSource( GstWesterosSink *sink )
                            GstPad *pad= (GstPad*)g_value_get_object( &itemPad );
                            if ( pad )
                            {
+                              GST_DEBUG("establishSource: filter element pad %p", pad);
                               GstCaps *caps= gst_pad_get_current_caps(pad);
                               if ( caps )
                               {

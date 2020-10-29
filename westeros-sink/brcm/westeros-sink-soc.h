@@ -112,6 +112,7 @@ struct _GstWesterosSinkSoc
    int dataProbeCodecDataLen;
    unsigned char *dataProbeCodecData;
    bool swPrerolled;
+   GThread *firstFrameThread;
    NEXUS_SurfaceHandle swWorkSurface;
    int swNextCaptureSurface;
    NEXUS_Graphics2DHandle g2d;

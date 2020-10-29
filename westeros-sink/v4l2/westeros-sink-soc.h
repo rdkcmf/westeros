@@ -89,6 +89,25 @@ typedef struct _WstBufferInfo
    bool queued;
 } WstBufferInfo;
 
+#ifdef ENABLE_SW_DECODE
+#define WST_NUM_SW_BUFFERS (4)
+typedef struct _WstSWBuffer
+{
+   int width;
+   int height;
+   int fd0;
+   int fd1;
+   int handle0;
+   int handle1;
+   int size0;
+   int size1;
+   int offset0;
+   int offset1;
+   int pitch0;
+   int pitch1;
+} WstSWBuffer;
+#endif
+
 struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
@@ -186,6 +205,12 @@ struct _GstWesterosSinkSoc
 
    #ifdef USE_GST1
    GstPadChainFunction chainOrg;
+   #endif
+
+   #ifdef ENABLE_SW_DECODE
+   GThread *firstFrameThread;
+   int nextSWBuffer;
+   WstSWBuffer swBuffer[WST_NUM_SW_BUFFERS];
    #endif
 
    #ifdef GLIB_VERSION_2_32 

@@ -1007,6 +1007,9 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->swCtx= 0;
    sink->swInit= 0;
    sink->swTerm= 0;
+   sink->swLink= 0;
+   sink->swUnLink= 0;
+   sink->swEvent= 0;
    sink->swDisplay= 0;
    #endif
 
@@ -1589,16 +1592,17 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                   }
                }
             }
-            if ( sink->passCaps || (!sink->videoStarted && sink->startAfterCaps) )
-            {
-               gst_westeros_sink_soc_accept_caps( sink, caps );
-            }
             #ifdef ENABLE_SW_DECODE
             if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
             {
                wstsw_process_caps( sink, caps );
             }
+            else
             #endif
+            if ( sink->passCaps || (!sink->videoStarted && sink->startAfterCaps) )
+            {
+               gst_westeros_sink_soc_accept_caps( sink, caps );
+            }
          }
          break;
       case GST_EVENT_FLUSH_START:
@@ -1812,7 +1816,7 @@ static GstPadLinkReturn gst_westeros_sink_link(GstPad *pad, GstPad *peer)
 #endif
 
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_link: enter");
-   
+
    if (gst_westeros_sink_check_caps(sink, peer) != TRUE)
    {
       GST_ERROR("Peer Caps is not supported");
