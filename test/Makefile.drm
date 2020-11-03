@@ -248,6 +248,7 @@ westeros-soc-sink:
 	cp westeros-sink/westeros-sink.c v4l2/westeros-sink/westeros-sink.c && \
 	cp westeros-sink/westeros-sink.h v4l2/westeros-sink/westeros-sink.h && \
 	cd v4l2/westeros-sink && \
+	mkdir -p m4 && \
 	aclocal -I cfg && \
 	libtoolize --automake && \
 	autoheader && \
