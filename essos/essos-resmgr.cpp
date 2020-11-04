@@ -67,13 +67,14 @@
 
 #define ESSRMGR_MAX_DECODERS (16)
 #define ESSRMGR_MAX_PENDING (ESSRMGR_MAX_DECODERS*3)
-#define ESSRMGR_FILE_SIZE (ESSRMGR_MAX_DECODERS*1024)
+#define ESSRMGR_FILE_SIZE (ESSRMGR_MAX_DECODERS*2048)
 
 typedef struct _EssRMgrUserNotify
 {
    EssRMgr *rm;
    sem_t *semNotify;
    sem_t *semConfirm;
+   sem_t *semComplete;
    int event;
    int type;
    int priority;
@@ -102,6 +103,7 @@ typedef struct _EssRMgrVideoDecoderNotify
    int prev;
    sem_t semNotify;
    sem_t semConfirm;
+   sem_t semComplete;
    int pidUser;
    int priorityUser;
    EssRMgrUserNotify notify;
@@ -186,30 +188,30 @@ static unsigned long gCrc32Constants[256];
 
 static void initCRC32()
 {
-	unsigned int k, i, j;
-	if ( gCrc32Ready ) return;
-	for(i = 0; i < 256; i++)
-	{
-		k = 0;
-		for(j = (i << 24) | 0x800000; j != 0x80000000; j <<= 1)
-		{
-			k = (k << 1) ^ (((k ^ j) & 0x80000000) ? 0x04c11db7 : 0);
-		}
-		gCrc32Constants[i] = k;
-	}
-	gCrc32Ready= true;
+   unsigned int k, i, j;
+   if ( gCrc32Ready ) return;
+   for(i = 0; i < 256; i++)
+   {
+      k = 0;
+      for(j = (i << 24) | 0x800000; j != 0x80000000; j <<= 1)
+      {
+         k = (k << 1) ^ (((k ^ j) & 0x80000000) ? 0x04c11db7 : 0);
+      }
+      gCrc32Constants[i] = k;
+   }
+   gCrc32Ready= true;
 }
 
 static unsigned long getCRC32(unsigned char *data, int size, int initial= 0xffffffff )
 {
-	int i;
-	unsigned long int crc= initial;
-	initCRC32();
-	for(i= 0; i < size; i++)
-	{
-		crc= (crc << 8) ^ gCrc32Constants[(crc >> 24) ^ data[i]];
-	}
-	return crc;
+   int i;
+   unsigned long int crc= initial;
+   initCRC32();
+   for(i= 0; i < size; i++)
+   {
+      crc= (crc << 8) ^ gCrc32Constants[((crc >> 24) ^ data[i])&0xFF];
+   }
+   return crc;
 }
 
 static void essrm_printf( int level, const char *fmt, ... )
@@ -583,7 +585,6 @@ void EssRMgrDumpState( EssRMgr *rm )
                 rm->state->base.videoDecoder[i].capabilities,
                 rm->state->base.videoDecoder[i].pidOwner,
                 rm->state->base.videoDecoder[i].priorityOwner );
-                
       }
       essRMUnlockCtrlFile( rm );
    }
@@ -633,6 +634,11 @@ static void essRMInitDefaultState( EssRMgr *rm )
       {
          ERROR("Error creating semaphore semConfirm for decoder %d: errno %d", i, errno );
       }
+      rc= sem_init( &rm->state->vidCtrl.revoke[i].semComplete, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semComplete for decoder %d: errno %d", i, errno );
+      }
       rm->state->base.videoDecoder[i].pendingNtfyIdx= -1;
    }
 
@@ -650,6 +656,11 @@ static void essRMInitDefaultState( EssRMgr *rm )
       if ( rc != 0 )
       {
          ERROR("Error creating semaphore semConfirm for vid pending pool entry %d: errno %d", i, errno );
+      }
+      rc= sem_init( &pending->semComplete, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semComplete for vid pending pool entry %d: errno %d", i, errno );
       }
       pending->self= i;
       pending->next= ((i+1 < maxPending) ? i+1 : -1);
@@ -979,6 +990,7 @@ static bool essRMAssignVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrRequest
    rm->state->vidCtrl.revoke[decoderIdx].notify.notifyUserData= req->notifyUserData;
    rm->state->vidCtrl.revoke[decoderIdx].notify.semNotify= &rm->state->vidCtrl.revoke[decoderIdx].semNotify;
    rm->state->vidCtrl.revoke[decoderIdx].notify.semConfirm= &rm->state->vidCtrl.revoke[decoderIdx].semConfirm;
+   rm->state->vidCtrl.revoke[decoderIdx].notify.semComplete= 0;
    rm->state->vidCtrl.revoke[decoderIdx].notify.event= EssRMgrEvent_revoked;
    rm->state->vidCtrl.revoke[decoderIdx].notify.type= EssRMgrResType_videoDecoder;
    rm->state->vidCtrl.revoke[decoderIdx].notify.priority= req->priority;
@@ -1186,6 +1198,7 @@ static bool essRMRequestVideoDecoder( EssRMgr *rm, EssRMgrRequest *req )
             pending->notify.notifyUserData= req->notifyUserData;
             pending->notify.semNotify= &pending->semNotify;
             pending->notify.semConfirm= &pending->semConfirm;
+            pending->notify.semComplete= 0;
             pending->notify.event= EssRMgrEvent_granted;
             pending->notify.type= EssRMgrResType_videoDecoder;
             pending->notify.priority= req->priority;
@@ -1254,7 +1267,10 @@ static void essRMReleaseVideoDecoder( EssRMgr *rm, int id )
             if ( rm->state->vidCtrl.revoke[id].notify.needNotification )
             {
                rm->state->vidCtrl.revoke[id].notify.needNotification= false;
+               rm->state->vidCtrl.revoke[id].notify.semComplete= &rm->state->vidCtrl.revoke[id].semComplete;
                sem_post( &rm->state->vidCtrl.revoke[id].semNotify );
+               essRMSemWaitChecked( &rm->state->vidCtrl.revoke[id].semComplete );
+               rm->state->vidCtrl.revoke[id].notify.semComplete= 0;
             }
 
             if ( rm->state->vidCtrl.revoke[id].notify.needConfirmation )
@@ -1933,6 +1949,11 @@ static void* essRMNotifyThread( void *userData )
             DEBUG("done calling notify callback");
          }
       }
+   }
+   if ( notify->semComplete )
+   {
+      DEBUG("notify thread post complete");
+      sem_post( notify->semComplete );
    }
    DEBUG("notify thread exit");
    return NULL;
