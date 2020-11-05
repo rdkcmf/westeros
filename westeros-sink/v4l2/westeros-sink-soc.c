@@ -3592,9 +3592,11 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
    delay= ((sink->soc.frameRate > 0) ? 1000000/sink->soc.frameRate : 1000000/60);
    usleep( delay );
 
+   LOCK(sink);
    wstTearDownInputBuffers( sink );
 
    wstTearDownOutputBuffers( sink );
+   UNLOCK(sink);
 
    if ( sink->soc.videoOutputThread )
    {
@@ -3620,7 +3622,9 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
       wstStartEvents( sink );
    }
 
+   LOCK(sink);
    sink->videoStarted= FALSE;
+   UNLOCK(sink);
    sink->startAfterCaps= TRUE;
    sink->soc.prevFrameTimeGfx= 0;
    sink->soc.prevFramePTSGfx= 0;
