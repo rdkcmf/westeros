@@ -20,6 +20,7 @@
 AUTOMAKE_OPTIONS = subdir-objects
 
 SUBDIRS =
+BUILT_SOURCES =
 AM_CXXFLAGS= \
 	-I$(top_srcdir)/include \
    -I${PKG_CONFIG_SYSROOT_DIR}/$(includedir)/wayland \
@@ -56,6 +57,10 @@ if ENABLE_WESTEROS_SBPROTOCOL
 AM_CXXFLAGS += -DENABLE_SBPROTOCOL
 endif
 
+if ENABLE_WESTEROS_LDBPROTOCOL
+AM_CXXFLAGS += -DENABLE_LDBPROTOCOL
+endif
+
 if ENABLE_XDG_V4
 AM_CXXFLAGS += -DUSE_XDG_VERSION4 -I$(srcdir)/protocol/version4
 endif
@@ -66,8 +71,12 @@ endif
 
 AM_CFLAGS = $(AM_CXXFLAGS) -Wno-deprecated-declarations
 
-BUILT_SOURCES= libwesteros_compositor.la \
-               libwesteros_render_embedded.la
+if ENABLE_WESTEROS_LDBPROTOCOL
+BUILT_SOURCES += libwesteros_linux_dmabuf_server.la
+endif
+
+BUILT_SOURCES += libwesteros_compositor.la \
+                 libwesteros_render_embedded.la
                
 if ENABLE_WESTEROS_RENDERERGL
 BUILT_SOURCES += libwesteros_render_gl.la
@@ -136,6 +145,10 @@ if ENABLE_WESTEROS_RENDERERGL
 lib_LTLIBRARIES += libwesteros_render_gl.la
 endif
 
+if ENABLE_WESTEROS_LDBPROTOCOL
+lib_LTLIBRARIES += libwesteros_linux_dmabuf_server.la
+endif
+
 libwesteros_compositor_la_SOURCES = \
    westeros-compositor.cpp \
    westeros-nested.cpp \
@@ -172,6 +185,10 @@ if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_compositor_la_LDFLAGS += -lwesteros_simplebuffer_server
 endif
 
+if ENABLE_WESTEROS_LDBPROTOCOL
+libwesteros_compositor_la_LDFLAGS += -lwesteros_linux_dmabuf_server
+endif
+
 ## --- Renderer: OpenGL -------
 libwesteros_render_gl_la_SOURCES = westeros-render-gl.cpp
 libwesteros_render_gl_la_includedir = $(includedir)
@@ -182,6 +199,9 @@ libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lwesteros_gl $(WESTEROS_
 endif
 if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_gl_la_LDFLAGS += -lwesteros_simplebuffer_server
+endif
+if ENABLE_WESTEROS_LDBPROTOCOL
+libwesteros_render_gl_la_LDFLAGS += -lwesteros_linux_dmabuf_server
 endif
 
 ## --- Renderer: Embedded -------
@@ -194,6 +214,22 @@ libwesteros_render_embedded_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lwesteros_gl $(WES
 endif
 if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_embedded_la_LDFLAGS += -lwesteros_simplebuffer_server
+endif
+if ENABLE_WESTEROS_LDBPROTOCOL
+libwesteros_render_embedded_la_LDFLAGS += -lwesteros_linux_dmabuf_server
+endif
+
+if ENABLE_WESTEROS_LDBPROTOCOL
+## --- Linux dmabuf -------
+libwesteros_linux_dmabuf_server_la_SOURCES = linux-dmabuf/westeros-linux-dmabuf.cpp linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c
+libwesteros_linux_dmabuf_server_la_include_HEADERS = linux-dmabuf/westeros-linux-dmabuf.h linux-dmabuf/protocol/linux-dmabuf-unstable-v1-server-protocol.h
+libwesteros_linux_dmabuf_server_la_includedir = $(includedir)
+libwesteros_linux_dmabuf_server_la_CXXFLAGS = $(AM_CXXFLAGS) \
+                                             -I${srcdir}/linux-dmabuf/protocol \
+                                             -I${PKG_CONFIG_SYSROOT_DIR}/$(includedir)/libdrm
+libwesteros_linux_dmabuf_server_la_LDFLAGS= \
+   $(AM_LDFLAGS) \
+   $(WAYLAND_SERVER_LIBS)
 endif
 
 pkgconfigdir = $(libdir)/pkgconfig

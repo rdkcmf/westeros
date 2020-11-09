@@ -27,6 +27,7 @@ AC_CONFIG_HEADERS([cfg/config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([cfg])
 AC_CONFIG_SUBDIRS([essos])
+#AC_CONFIG_SUBDIRS([linux-dmabuf])
 AM_INIT_AUTOMAKE([foreign no-dist-gzip dist-bzip2 1.9])
 LT_INIT
 
@@ -136,6 +137,18 @@ AC_ARG_ENABLE([sbprotocol],
               ],
               [echo "westeros wl_sb protocol is disabled"])
 AM_CONDITIONAL([ENABLE_WESTEROS_SBPROTOCOL], [test x$ENABLE_WESTEROS_SBPROTOCOL = xtrue])              
+
+AC_ARG_ENABLE([ldbprotocol],
+              AS_HELP_STRING([--enable-ldbprotocol],[enable zwp_linux_dmabuf_v1 protocol (default is no)]),
+              [
+                case "${enableval}" in
+                 yes) ENABLE_WESTEROS_LDBPROTOCOL=true ;;
+                  no) ENABLE_WESTEROS_LDBPROTOCOL=false ;;
+                   *) AC_MSG_ERROR([bad value ${enableval} for --enable-ldbprotocol]) ;;
+                esac
+              ],
+              [echo "zwp_linux_dmabuf_v1 protocol is disabled"])
+AM_CONDITIONAL([ENABLE_WESTEROS_LDBPROTOCOL], [test x$ENABLE_WESTEROS_LDBPROTOCOL = xtrue])
 
 AC_ARG_ENABLE([embedded],
               AS_HELP_STRING([--enable-embedded],[enable westeros platform embedded (default is yes)]),

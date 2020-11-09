@@ -58,6 +58,9 @@
 #ifdef ENABLE_SBPROTOCOL
 #include "westeros-simplebuffer.h"
 #endif
+#ifdef ENABLE_LDBPROTOCOL
+#include "linux-dmabuf/westeros-linux-dmabuf.h"
+#endif
 #include "westeros-simpleshell.h"
 #include "xdg-shell-server-protocol.h"
 #include "vpc-client-protocol.h"
@@ -429,6 +432,9 @@ typedef struct _WstContext
    struct wl_display *display;
    #ifdef ENABLE_SBPROTOCOL
    struct wl_sb *sb;
+   #endif
+   #ifdef ENABLE_LDBPROTOCOL
+   struct wl_ldb *ldb;
    #endif
    struct wl_simple_shell *simpleShell;
    struct wl_event_source *displayTimer;
@@ -3319,6 +3325,19 @@ static struct wayland_sb_callbacks sbCallbacks= {
 };
 #endif
 
+#ifdef ENABLE_LDBPROTOCOL
+static void ldbBind( void *user_data, struct wl_client *client, struct wl_resource *resource)
+{
+   WstContext *ctx= (WstContext*)user_data;
+
+   wstUpdateClientInfo( ctx, client, resource );
+}
+
+static struct wayland_ldb_callbacks ldbCallbacks= {
+   ldbBind
+};
+#endif
+
 static void simpleShellSetName( void* userData, uint32_t surfaceId, const char *name )
 {
    WstContext *ctx= (WstContext*)userData;
@@ -3743,7 +3762,16 @@ static void* wstCompositorThread( void *arg )
       goto exit;
    }
    #endif
-   
+
+   #ifdef ENABLE_LDBPROTOCOL
+   ctx->ldb= WstLDBInit( ctx->display, &ldbCallbacks, ctx );
+   if ( !ctx->ldb )
+   {
+      ERROR("unable to create wl_ldb interface");
+      goto exit;
+   }
+   #endif
+
    ctx->simpleShell= WstSimpleShellInit( ctx->display, &simpleShellCallbacks, ctx );
    if ( !ctx->simpleShell )
    {
@@ -3927,6 +3955,14 @@ static void wstCompositorReleaseResources( WstContext *ctx )
    {
       WstSBUninit( ctx->sb );
       ctx->sb= 0;
+   }
+   #endif
+
+   #ifdef ENABLE_LDBPROTOCOL
+   if ( ctx->ldb )
+   {
+      WstLDBUninit( ctx->ldb );
+      ctx->ldb= 0;
    }
    #endif
 

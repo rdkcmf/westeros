@@ -58,6 +58,8 @@ init:
 	cd simplebuffer && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
 	cd simpleshell/protocol && rm -f *.h && rm -f *.c && rm -f *.gcno
 	cd simpleshell && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
+	cd linux-dmabuf/protocol && rm -f *.h && rm -f *.c && rm -f *.gcno
+	cd linux-dmabuf && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -rf .libs/*
 	cd essos && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
 	cd brcm && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
 	cd brcm/westeros-render-nexus && rm -f *.o && rm -f *.lo && rm -f *.gcno && rm -f && rm -f *.gcov
@@ -234,7 +236,7 @@ site:
 	mkdir -p $(WID)/share && \
 	cp ../brcm-em/config.site $(WID)/share
 
-westeros-protocols: xdg-shell-v4 xdg-shell-v5 simpleshell simplebuffer
+westeros-protocols: xdg-shell-v4 xdg-shell-v5 simpleshell simplebuffer zwpdmabuf
 
 xdg-shell-v4: protocol/version4/xdg-shell-server-protocol.h \
               protocol/version4/xdg-shell-protocol.c
@@ -324,6 +326,23 @@ westeros-simplebuffer: .simplebuffer
 	cd .. && \
 	touch .simplebuffer
 
+zwpdmabuf: linux-dmabuf/protocol/linux-dmabuf-unstable-v1-client-protocol.h \
+           linux-dmabuf/protocol/linux-dmabuf-unstable-v1-server-protocol.h \
+           linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c
+
+linux-dmabuf/protocol/linux-dmabuf-unstable-v1-client-protocol.h:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C linux-dmabuf/protocol
+
+linux-dmabuf/protocol/linux-dmabuf-unstable-v1-server-protocol.h:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C linux-dmabuf/protocol
+
+linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c:
+	export SCANNER_TOOL=${CID}/bin/wayland-scanner && \
+	make -C linux-dmabuf/protocol
+
+
 .brcm-em:
 	mkdir -p $(WID)/usr/include && \
 	cp ../brcm-em/wayland-egl.pc $(CID)/share/pkgconfig && \
@@ -376,7 +395,7 @@ westeros-core:
 	automake --foreign --add-missing && \
 	rm -f configure && \
 	autoconf && \
-	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test --enable-embedded=yes --enable-sbprotocol=yes --enable-essos=no && \
+	./configure --prefix $(WID) --enable-${XDGOPT} --enable-rendergl --enable-app --enable-test --enable-embedded=yes --enable-sbprotocol=yes --enable-ldbprotocol=no --enable-essos=no && \
 	make && make install
 
 westeros-essos:
