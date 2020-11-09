@@ -53,6 +53,10 @@
 #include "westeros-simplebuffer.h"
 #endif
 
+#ifdef ENABLE_LDBPROTOCOL
+#include "linux-dmabuf/westeros-linux-dmabuf.h"
+#endif
+
 #include <vector>
 
 //#define WST_DEBUG
@@ -278,6 +282,7 @@ typedef struct _WstRendererGL
    #endif
 
    bool haveDmaBufImport;
+   bool haveDmaBufImportModifiers;
    bool haveExternalImage;
 
    #if defined (WESTEROS_HAVE_WAYLAND_EGL)
@@ -303,6 +308,9 @@ static void wstRendererGLCommitWaylandEGL( WstRendererGL *rendererGL, WstRenderS
 #endif
 #ifdef ENABLE_SBPROTOCOL
 static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *surface, struct wl_resource *resource );
+#endif
+#ifdef ENABLE_LDBPROTOCOL
+static void wstRendererGLCommitLDB( WstRendererGL *rendererGL, WstRenderSurface *surface, struct wl_resource *resource );
 #endif
 #if defined (WESTEROS_PLATFORM_RPI)
 static void wstRendererGLCommitDispmanx( WstRendererGL *rendererGL, WstRenderSurface *surface, 
@@ -399,6 +407,10 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
          {
             rendererGL->haveDmaBufImport= true;
          }
+         if ( strstr( extensions, "EGL_EXT_image_dma_buf_import_modifiers" ) )
+         {
+            rendererGL->haveDmaBufImportModifiers= true;
+         }
       }
       extensions= (const char *)glGetString(GL_EXTENSIONS);
       if ( extensions )
@@ -412,6 +424,7 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
       }
       printf("have wayland-egl: %d\n", rendererGL->haveWaylandEGL );
       printf("have dmabuf import: %d\n", rendererGL->haveDmaBufImport );
+      printf("have dmabuf import modifiers: %d\n", rendererGL->haveDmaBufImportModifiers );
       printf("have external image: %d\n", rendererGL->haveExternalImage );
       #endif
    }
@@ -1199,7 +1212,6 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
          int fd= WstSBBufferGetFd( sbBuffer );
          if ( fd >= 0 )
          {
-            //surface->resource= resource;
             wstRendererGLPrepareResource( rendererGL, surface, resource );
          }
       }
@@ -1211,6 +1223,201 @@ static void wstRendererGLCommitSB( WstRendererGL *rendererGL, WstRenderSurface *
    #endif
 }
 #endif
+
+#ifdef ENABLE_LDBPROTOCOL
+static void wstRendererGLPrepareResourceLDB( WstRendererGL *renderer, WstRenderSurface *surface, struct wl_resource *resource )
+{
+   if ( surface && resource )
+   {
+      EGLImageKHR eglImage= 0;
+
+      struct wl_ldb_buffer *ldbBuffer;
+      ldbBuffer= WstLDBBufferGet( resource );
+      if ( ldbBuffer )
+      {
+         #ifdef EGL_LINUX_DMA_BUF_EXT
+         if ( renderer->haveDmaBufImport )
+         {
+            if ( WstLDBBufferGetFd( ldbBuffer ) >= 0 )
+            {
+               int i;
+               uint32_t frameFormat, frameWidth, frameHeight;
+               int fd[MAX_TEXTURES];
+               int32_t offset[MAX_TEXTURES], stride[MAX_TEXTURES];
+               uint64_t modifier[MAX_TEXTURES];
+               bool useModifiers= false;
+               EGLint attr[64];
+
+               frameFormat= WstLDBBufferGetFormat( ldbBuffer );
+               frameWidth= WstLDBBufferGetWidth( ldbBuffer );
+               frameHeight= WstLDBBufferGetHeight( ldbBuffer );
+
+               modifier[0]= DRM_FORMAT_MOD_INVALID;
+
+               for( i= 0; i < MAX_TEXTURES; ++i )
+               {
+                  fd[i]= WstLDBBufferGetPlaneFd( ldbBuffer, i );
+                  WstLDBBufferGetPlaneOffsetAndStride( ldbBuffer, i, &offset[i], &stride[i] );
+                  if ( renderer->haveDmaBufImportModifiers )
+                  {
+                     modifier[i]= WstLDBBufferGetPlaneModifier( ldbBuffer, i);
+                  }
+               }
+
+               useModifiers= renderer->haveDmaBufImportModifiers && (modifier[0] != DRM_FORMAT_MOD_INVALID);
+
+               if ( (surface->bufferWidth != frameWidth) || (surface->bufferHeight != frameHeight) )
+               {
+                  surface->bufferWidth= frameWidth;
+                  surface->bufferHeight= frameHeight;
+               }
+
+               for( i= 0; i < MAX_TEXTURES; ++i )
+               {
+                  if ( surface->eglImage[i] )
+                  {
+                     renderer->eglDestroyImageKHR( renderer->eglDisplay,
+                                                   surface->eglImage[i] );
+                     surface->eglImage[i]= 0;
+                  }
+               }
+
+               i= 0;
+               attr[i++]= EGL_WIDTH;
+               attr[i++]= frameWidth;
+               attr[i++]= EGL_HEIGHT;
+               attr[i++]= frameHeight;
+               attr[i++]= EGL_LINUX_DRM_FOURCC_EXT;
+               attr[i++]= frameFormat;
+
+               if ( ldbBuffer->info.planeCount > 0 )
+               {
+                  attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
+                  attr[i++]= fd[0];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+                  attr[i++]= offset[0];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
+                  attr[i++]= stride[0];
+                  if ( useModifiers )
+                  {
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+                     attr[i++]= (modifier[0] & 0xFFFFFFFFUL);
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+                     attr[i++]= ((modifier[0] >> 32) & 0xFFFFFFFFUL);
+                  }
+               }
+
+               if ( ldbBuffer->info.planeCount > 1 )
+               {
+                  attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
+                  attr[i++]= fd[1];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+                  attr[i++]= offset[1];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
+                  attr[i++]= stride[1];
+                  if ( useModifiers )
+                  {
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+                     attr[i++]= (modifier[1] & 0xFFFFFFFFUL);
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+                     attr[i++]= ((modifier[1] >> 32) & 0xFFFFFFFFUL);
+                  }
+               }
+
+               if ( ldbBuffer->info.planeCount > 2 )
+               {
+                  attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
+                  attr[i++]= fd[2];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+                  attr[i++]= offset[2];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
+                  attr[i++]= stride[2];
+                  if ( useModifiers )
+                  {
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+                     attr[i++]= (modifier[2] & 0xFFFFFFFFUL);
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+                     attr[i++]= ((modifier[2] >> 32) & 0xFFFFFFFFUL);
+                  }
+               }
+
+               if ( ldbBuffer->info.planeCount > 3 )
+               {
+                  attr[i++]= EGL_DMA_BUF_PLANE0_FD_EXT;
+                  attr[i++]= fd[3];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+                  attr[i++]= offset[3];
+                  attr[i++]= EGL_DMA_BUF_PLANE0_PITCH_EXT;
+                  attr[i++]= stride[3];
+                  if ( useModifiers )
+                  {
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+                     attr[i++]= (modifier[3] & 0xFFFFFFFFUL);
+                     attr[i++]= EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+                     attr[i++]= ((modifier[3] >> 32) & 0xFFFFFFFFUL);
+                  }
+               }
+
+               attr[i++]= EGL_NONE;
+
+               eglImage= renderer->eglCreateImageKHR( renderer->eglDisplay,
+                                                               EGL_NO_CONTEXT,
+                                                               EGL_LINUX_DMA_BUF_EXT,
+                                                               (EGLClientBuffer)NULL,
+                                                               attr );
+               if ( eglImage )
+               {
+                  surface->eglImage[0]= eglImage;
+                  if ( surface->textureId[0] != GL_NONE )
+                  {
+                     glDeleteTextures( 1, &surface->textureId[0] );
+                  }
+                  surface->textureId[0]= GL_NONE;
+               }
+               else
+               {
+                  printf("wstRendererGLPrepareResourceLDB: eglCreateImageKHR failed for fd %d, format %X: errno %X\n", fd[0], frameFormat, eglGetError());
+               }
+
+               surface->textureCount= 1;
+            }
+         }
+         #endif
+      }
+   }
+}
+
+static void wstRendererGLCommitLDB( WstRendererGL *rendererGL, WstRenderSurface *surface, struct wl_resource *resource )
+{
+   struct wl_ldb_buffer *ldbBuffer;
+   void *deviceBuffer;
+   int bufferWidth, bufferHeight;
+
+   EGLNativePixmapType eglPixmap= 0;
+   EGLImageKHR eglImage= 0;
+   bool resize= false;
+
+   ldbBuffer= WstLDBBufferGet( resource );
+   if ( ldbBuffer )
+   {
+      #ifdef EGL_LINUX_DMA_BUF_EXT
+      if ( rendererGL->haveDmaBufImport )
+      {
+         int fd= WstLDBBufferGetFd( ldbBuffer );
+         if ( fd >= 0 )
+         {
+            wstRendererGLPrepareResourceLDB( rendererGL, surface, resource );
+         }
+      }
+      #endif
+   }
+
+   #if WESTEROS_INVERTED_Y
+   surface->invertedY= true;
+   #endif
+}
+#endif
+
 
 #if defined (WESTEROS_PLATFORM_RPI)
 static void wstRendererGLCommitDispmanx( WstRendererGL *rendererGL, WstRenderSurface *surface, 
@@ -2001,6 +2208,12 @@ static void wstRendererSurfaceCommit( WstRenderer *renderer, WstRenderSurface *s
       else if ( WstSBBufferGet( resource ) )
       {
          wstRendererGLCommitSB( rendererGL, surface, resource );
+      }
+      #endif
+      #ifdef ENABLE_LDBPROTOCOL
+      else if ( WstLDBBufferGet( resource ) )
+      {
+         wstRendererGLCommitLDB( rendererGL, surface, resource );
       }
       #endif
       else
