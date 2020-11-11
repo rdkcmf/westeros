@@ -1,0 +1,60 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.21 Release Notes
+------------------------------
+
+Date: Nov 11, 2020
+Tag: Westeros-1.01.21
+Changes:
+
+* Limit audience for mode msgs with virtutual embedded compositor
+
+* Video updates
+-add Essos resource manager for the coordinated use of video resources
+-integrate use of resource manager into westeros-sink
+-add software video decode capability to westeros-sink
+
+Use of the resource manager is runtime disabled by default.  Enable with
+'export WESTEROS_SINK_USE_ESSRMGR=1'.  At present it can be enabled only for the brcm platform.
+
+Software decode support is disabled at build time by default.  It may be enabled by defining
+-DENABLE_SW_DECODE in the build.  At present it can be enabled only for the brcm platform.
+
+* v4l2 updates
+-adjust stop sequence to stop unwanted logs
+-fix buffer leak on flush with dma-buf input
+-fix possible crash on pause to ready transition
+-fix memory leak on eos thread exit
+-fix size of msg buffer for session info
+
+* drm: change to m4 configure macro dir
+
+* Video updates
+-separate Essos resource manager into libessosrmgr.so
+-sinks link with libessosrmgr.so rather than libessos.so
+
+* v4l2 westeros-sink: change to m4 configure macro dir
+
+* Fix race condition on decoder release by owner
+
+* v4l2: fix potential crash during flush
+
+* Add support for zwp_linux_dmabuf_v1:
+-diabled by default, enable with --enable-ldbprotocol during configure
+
+* Update license
+
+* v4l2: fix potential crash on tear down
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
