@@ -3983,6 +3983,12 @@ static gpointer wstVideoOutputThread(gpointer data)
    GST_DEBUG("wstVideoOutputThread: enter");
 
 capture_start:
+   LOCK(sink);
+   if ( (sink->soc.v4l2Fd == -1) || (sink->soc.outBuffers == 0) || sink->soc.quitVideoOutputThread )
+   {
+      UNLOCK(sink);
+      goto exit;
+   }
    for( i= 0; i < sink->soc.numBuffersOut; ++i )
    {
       if ( sink->soc.isMultiPlane )
@@ -3996,6 +4002,7 @@ capture_start:
       if ( rc < 0 )
       {
          GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
+         UNLOCK(sink);
          goto exit;
       }
       sink->soc.outBuffers[i].queued= true;
@@ -4005,6 +4012,7 @@ capture_start:
    if ( rc < 0 )
    {
       GST_ERROR("wstVideoOutputThread: streamon failed for output: rc %d errno %d", rc, errno );
+      UNLOCK(sink);
       goto exit;
    }
 
@@ -4041,6 +4049,7 @@ capture_start:
       sink->soc.frameWidth= selection.r.width;
       sink->soc.frameHeight= selection.r.height;
    }
+   UNLOCK(sink);
 
    g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
 
