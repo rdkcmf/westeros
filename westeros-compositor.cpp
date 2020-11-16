@@ -4555,10 +4555,13 @@ static void wstCompositorScheduleRepaint( WstContext *ctx )
    if ( !ctx->needRepaint )
    {
       ctx->needRepaint= true;
+      #if ((WAYLAND_VERSION_MAJOR == 1) && \
+           ((WAYLAND_VERSION_MINOR < 17) || ((WAYLAND_VERSION_MINOR == 17) && (WAYLAND_VERSION_MICRO < 91))) )
       if ( ctx->allowImmediateRepaint && ctx->displayTimer )
       {
          wl_event_source_timer_update( ctx->displayTimer, 1 );
       }
+      #endif
    }
 }
 
