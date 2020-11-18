@@ -87,6 +87,7 @@ static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
 static bool testCaseSocSinkVisibility( EMCTX *emctx );
 static bool testCaseSocSinkVideoPosition( EMCTX *emctx );
 static bool testCaseSocSinkEOSTest1( EMCTX *emctx );
+static bool testCaseSocSinkPauseResumeTrickState( EMCTX *ctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx );
 static bool testCaseSocEssosDualMediaPlayback( EMCTX *emctx );
@@ -228,6 +229,10 @@ TESTCASE socTests[]=
    { "testSocSinkEOSTest1",
      "Test sink EOS signalling",
      testCaseSocSinkEOSTest1
+   },
+   { "testSocSinkPauseResumeTrickState",
+     "Test pause and resume trick state",
+     testCaseSocSinkPauseResumeTrickState
    },
    { "testSocRenderBasicCompositionEmbeddedFast",
      "Test embedded compositor basic composition with fast render delegation",
@@ -1462,8 +1467,6 @@ static bool testCaseSocSinkServerPlaySpeedDecodeRate( EMCTX *emctx )
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
 
    usleep( 200000 );
-
-   EMSimpleVideoDecoderSetTrickStateRate( videoDecoder, 2*NEXUS_NORMAL_DECODE_RATE );
 
    g_object_set( G_OBJECT(sink), "server-play-speed", 2.0, NULL );
 
@@ -5430,6 +5433,129 @@ exit:
       gst_object_unref( bus );
    }
 
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+
+   return testResult;
+}
+
+static bool testCaseSocSinkPauseResumeTrickState( EMCTX *emctx )
+{
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   float frameRate;
+   int frameNumber;
+   gint64 pos, posExpected= 0;
+   bool isPaused;
+   int decodeRate;
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   isPaused= false;
+   for( int i= 0; i < 10; ++i )
+   {
+      if ( i == 4 )
+      {
+         gst_element_set_state( pipeline, GST_STATE_PAUSED );
+         isPaused= true;
+      }
+      if ( i == 7 )
+      {
+         gst_element_set_state( pipeline, GST_STATE_PLAYING );
+         isPaused= false;
+      }
+
+      usleep( INTERVAL_200_MS );
+
+      decodeRate= EMSimpleVideoDecoderGetTrickStateRate( videoDecoder );
+      if ( decodeRate != NEXUS_NORMAL_DECODE_RATE )
+      {
+         EMERROR("Unexpected decode rate: expected(%d) actual(%d)", NEXUS_NORMAL_DECODE_RATE, decodeRate);
+         goto exit;
+      }
+
+      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+      frameNumber= videoSrcGetFrameNumber( src );
+
+      if ( !isPaused )
+      {
+         posExpected= (frameNumber/frameRate)*GST_SECOND;
+      }
+
+      if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
+      {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
+         EMERROR("Failed to query position");
+         goto exit;
+      }
+
+      g_print("%d paused %d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, isPaused, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+
+      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      {
+         gst_element_set_state( pipeline, GST_STATE_NULL );
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         goto exit;
+      }
+   }
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   testResult= true;
+
+exit:
    if ( pipeline )
    {
       gst_object_unref( pipeline );

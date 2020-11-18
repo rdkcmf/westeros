@@ -1300,8 +1300,6 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
 
 gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
 {
-   updateClientPlaySpeed(sink, 0);
-
    LOCK(sink);
    sink->soc.videoPlaying = FALSE;
    UNLOCK(sink);
@@ -1315,6 +1313,8 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
          GST_ERROR("gst_westeros_sink_soc_playing_to_paused: NEXUS_SimpleStcChannel_Freeze TRUE failed: %d", (int)rc);
       }
    }
+
+   updateClientPlaySpeed(sink, 0);
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
    {
@@ -1520,6 +1520,17 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
                NEXUS_SimpleVideoDecoder_RecycleCapturedSurfaces(sink->soc.videoDecoder, &captureSurface, 1);
            }
        } while ( numReturned > 0 );
+   }
+
+   if ( sink->soc.stcChannel )
+   {
+      NEXUS_Error rc;
+      GST_DEBUG("soc-flush calling NEXUS_SimpleStcChannel_Invalidate");
+      rc= NEXUS_SimpleStcChannel_Invalidate( sink->soc.stcChannel );
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_ERROR("NEXUS_SimpleStcChannel_Invalidate failed: rc %d",rc);
+      }
    }
 }
 
@@ -2903,62 +2914,67 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
    sink->soc.clientPlaySpeed= clientPlaySpeed;
 
    NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
-   trickState.rate= NEXUS_NORMAL_DECODE_RATE * clientPlaySpeed;
-   trickState.stcTrickEnabled= TRUE;
 
-   if ( clientPlaySpeed <= 1.0 )
+   if ( ((clientPlaySpeed != 1.0) && (clientPlaySpeed != 0.0)) ||
+        ((trickState.rate != NEXUS_NORMAL_DECODE_RATE) && (trickState.rate != 0)) )
    {
-      trickState.topFieldOnly= false;
-      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
-   }
-   else
-   if ( (clientPlaySpeed > 1.0) && (clientPlaySpeed <= 2.0) )
-   {
-      trickState.topFieldOnly= true;
-      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
-   }
-   else
-   if ( (clientPlaySpeed > 2.0) && (clientPlaySpeed <= 4.0) )
-   {
-      trickState.topFieldOnly= true;
-      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eIP;
-   }
-   else
-   {
-      trickState.topFieldOnly= true;
-      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
-   }
+      trickState.rate= NEXUS_NORMAL_DECODE_RATE * clientPlaySpeed;
+      trickState.stcTrickEnabled= TRUE;
 
-   if ( clientPlaySpeed == 1.0 )
-   {
-      trickState.tsmEnabled= checkIndependentVideoClock( sink ) ? NEXUS_TsmMode_eDisabled : NEXUS_TsmMode_eEnabled;
-   }
-   else
-   {
-      trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
-   }
+      if ( clientPlaySpeed <= 1.0 )
+      {
+         trickState.topFieldOnly= false;
+         trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+      }
+      else
+      if ( (clientPlaySpeed > 1.0) && (clientPlaySpeed <= 2.0) )
+      {
+         trickState.topFieldOnly= true;
+         trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+      }
+      else
+      if ( (clientPlaySpeed > 2.0) && (clientPlaySpeed <= 4.0) )
+      {
+         trickState.topFieldOnly= true;
+         trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eIP;
+      }
+      else
+      {
+         trickState.topFieldOnly= true;
+         trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
+      }
 
-   NEXUS_Error rc = NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
-   if ( NEXUS_SUCCESS != rc )
-   {
-      GST_ERROR_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_SetTrickState: %d", (int)rc);
-   }
-   else
-   {
-      GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
-   }
+      if ( clientPlaySpeed == 1.0 )
+      {
+         trickState.tsmEnabled= checkIndependentVideoClock( sink ) ? NEXUS_TsmMode_eDisabled : NEXUS_TsmMode_eEnabled;
+      }
+      else
+      {
+         trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
+      }
 
-   rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, clientPlaySpeed == 0.0 ? TRUE : FALSE);
-   if ( rc != NEXUS_SUCCESS )
-   {
-      GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
-   }
-   if ( clientPlaySpeed == 0.0 )
-   {
-      rc= NEXUS_SimpleStcChannel_Invalidate(sink->soc.stcChannel);
+      NEXUS_Error rc = NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+      if ( NEXUS_SUCCESS != rc )
+      {
+         GST_ERROR_OBJECT(sink, "Error NEXUS_SimpleVideoDecoder_SetTrickState: %d", (int)rc);
+      }
+      else
+      {
+         GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
+      }
+
+      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, clientPlaySpeed == 0.0 ? TRUE : FALSE);
       if ( rc != NEXUS_SUCCESS )
       {
-         GST_ERROR("prerollSinkSoc: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
+         GST_ERROR("updateClientPlaySpeed: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+      }
+      if ( clientPlaySpeed == 0.0 )
+      {
+         rc= NEXUS_SimpleStcChannel_Invalidate(sink->soc.stcChannel);
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_ERROR("updateClientPlaySpeed: NEXUS_SimpleStcChannel_Invalidate failed: %d", (int)rc);
+         }
       }
    }
 }
