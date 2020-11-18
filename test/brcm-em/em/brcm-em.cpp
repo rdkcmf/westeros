@@ -3023,6 +3023,8 @@ void NEXUS_SimpleVideoDecoder_GetTrickState(
       goto exit;
    }
 
+   usleep( 1000 );
+
    *pSettings= dec->trickState;
 
 exit:
