@@ -31,6 +31,10 @@
 #include <fcntl.h>
 #include <poll.h>
 
+#ifdef USE_GST_VIDEO
+#include <gst/video/video-color.h>
+#endif
+
 #ifdef USE_GST_ALLOCATORS
 #include <gst/allocators/gstdmabuf.h>
 #endif
@@ -885,19 +889,36 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
          if ( gst_structure_has_field(structure, "colorimetry") )
          {
             const char *colorimetry= gst_structure_get_string(structure,"colorimetry");
-            if ( colorimetry &&
-                 sscanf( colorimetry, "%d:%d:%d:%d",
-                         &sink->soc.hdrColorimetry[0],
-                         &sink->soc.hdrColorimetry[1],
-                         &sink->soc.hdrColorimetry[2],
-                         &sink->soc.hdrColorimetry[3] ) == 4 )
+            if ( colorimetry )
             {
-               sink->soc.haveColorimetry= TRUE;
-               GST_DEBUG("colorimetry: [%d,%d,%d,%d]",
-                        sink->soc.hdrColorimetry[0],
-                        sink->soc.hdrColorimetry[1],
-                        sink->soc.hdrColorimetry[2],
-                        sink->soc.hdrColorimetry[3] );
+               #ifdef USE_GST_VIDEO
+               GstVideoColorimetry vci;
+               if ( gst_video_colorimetry_from_string( &vci, colorimetry ) )
+               {
+                  sink->soc.haveColorimetry= TRUE;
+                  sink->soc.hdrColorimetry[0]= (int)vci.range;
+                  sink->soc.hdrColorimetry[1]= (int)vci.matrix;
+                  sink->soc.hdrColorimetry[2]= (int)vci.transfer;
+                  sink->soc.hdrColorimetry[3]= (int)vci.primaries;
+               }
+               #else
+               if ( sscanf( colorimetry, "%d:%d:%d:%d",
+                            &sink->soc.hdrColorimetry[0],
+                            &sink->soc.hdrColorimetry[1],
+                            &sink->soc.hdrColorimetry[2],
+                            &sink->soc.hdrColorimetry[3] ) == 4 )
+               {
+                  sink->soc.haveColorimetry= TRUE;
+               }
+               #endif
+               if ( sink->soc.haveColorimetry )
+               {
+                  GST_DEBUG("colorimetry: [%d,%d,%d,%d]",
+                           sink->soc.hdrColorimetry[0],
+                           sink->soc.hdrColorimetry[1],
+                           sink->soc.hdrColorimetry[2],
+                           sink->soc.hdrColorimetry[3] );
+               }
             }
          }
          if ( gst_structure_has_field(structure, "mastering-display-metadata") )
