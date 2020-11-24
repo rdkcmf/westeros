@@ -66,6 +66,8 @@ typedef void (*SinkSWEvent)( GstWesterosSink *sink, int id, int p1, void *p2 );
 typedef void (*SinkSWDisplay)( GstWesterosSink *sink, SWFrame *frame );
 #endif
 
+typedef void (*SinkTimeCodePresent)( GstWesterosSink *sink, guint64 pts, guint signnal );
+
 typedef void* (*MediaCaptureCreateContext)( GstElement *element );
 typedef void (*MediaCaptureDestroyContext)( void *context );
 
@@ -76,6 +78,14 @@ typedef struct _WstSinkResReqInfo
    GstWesterosSink *sink;
    EssRMgrRequest resReq;
 } WstSinkResReqInfo;
+
+typedef struct _WstSinkTimeCode
+{
+   guint64 position;
+   guint hours;
+   guint minutes;
+   guint seconds;
+} WstSinkTimeCode;
 
 #include "westeros-sink-soc.h"
 
@@ -179,6 +189,13 @@ struct _GstWesterosSink
    void *mediaCaptureModule;
    MediaCaptureDestroyContext mediaCaptureDestroyContext;
    void *mediaCaptureContext;
+
+   gboolean enableTimeCodeSignal;
+   int timeCodeCapacity;
+   int timeCodeCount;
+   WstSinkTimeCode timeCodeActive;
+   WstSinkTimeCode *timeCodes;
+   SinkTimeCodePresent timeCodePresent;
 
    struct _GstWesterosSinkSoc soc;
 };

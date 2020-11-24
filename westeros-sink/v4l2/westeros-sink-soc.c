@@ -81,6 +81,7 @@ enum
 {
    SIGNAL_FIRSTFRAME,
    SIGNAL_NEWTEXTURE,
+   SIGNAL_TIMECODE,
    MAX_SIGNAL
 };
 
@@ -306,6 +307,23 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                G_TYPE_UINT, /* plane 2 stride */
                                                G_TYPE_POINTER /* plane 2 data */
                                              );
+
+   #ifdef USE_GST_VIDEO
+   g_signals[SIGNAL_TIMECODE]= g_signal_new( "timecode-callback",
+                                              G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                              (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                              0,    /* class offset */
+                                              NULL, /* accumulator */
+                                              NULL, /* accu data */
+                                              NULL,
+                                              G_TYPE_NONE,
+                                              3,
+                                              G_TYPE_UINT, /* hours */
+                                              G_TYPE_UINT, /* minutes */
+                                              G_TYPE_UINT  /* seconds */
+                                             );
+   #endif
+
    klass->canUseResMgr= 0;
    {
       const char *env= getenv("WESTEROS_SINK_USE_ESSRMGR");
@@ -3378,6 +3396,10 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                                sink->soc.emitFirstFrameSignal= TRUE;
                            }
                            ++sink->soc.frameDisplayCount;
+                           if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+                           {
+                              sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                           }
                         }
                         break;
                      default:
@@ -4218,6 +4240,10 @@ capture_start:
                gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
                sink->position= sink->positionSegmentStart + frameTime - firstNano;
                sink->currentPTS= frameTime / (GST_SECOND/90000LL);
+               if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+               {
+                  sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+               }
             }
 
             if ( sink->soc.quitVideoOutputThread )

@@ -29,7 +29,11 @@ LIB_SUB_DIR= gstreamer-0.10
 
 AM_CFLAGS = $(NEXUS_CFLAGS) $(NXCLIENT_CFLAGS) $(GST_CFLAGS)
 
-AM_LDFLAGS = $(GST_LIBS)  $(GSTBASE_LIBS) $(WAYLANDLIB) -avoid-version
+AM_LDFLAGS = $(GST_LIBS)  $(GSTBASE_LIBS) $(GSTVIDEO_LIBS) $(WAYLANDLIB) -avoid-version
+
+if HAVE_GST_VIDEO
+AM_CFLAGS += -DUSE_GST_VIDEO
+endif
 
 plugin_LTLIBRARIES = libgstwesterossink.la
 
@@ -45,7 +49,6 @@ libgstwesterossink_la_LDFLAGS= \
    -lwesteros_compositor \   
    -lwesteros_simplebuffer_client \
    -lwesteros_simpleshell_client \
-   -lgstvideo-1.0 \
    -lessosrmgr \
    -lwayland-egl \
    -lnxclient \
