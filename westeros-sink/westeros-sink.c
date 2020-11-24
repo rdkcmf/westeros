@@ -31,6 +31,10 @@
 #include "../../westeros-sink/westeros-sink-sw.c"
 #endif
 
+#ifdef USE_GST_VIDEO
+#include <gst/video/gstvideometa.h>
+#endif
+
 #define GST_PACKAGE_ORIGIN "http://gstreamer.net/"
 
 static GstStaticPadTemplate gst_westeros_sink_pad_template =
@@ -50,6 +54,7 @@ enum
   PROP_OPACITY,
   PROP_VIDEO_WIDTH,
   PROP_VIDEO_HEIGHT,
+  PROP_ENABLE_TIMECODE,
   PROP_VIDEO_PTS,
   PROP_RES_PRIORITY,
   PROP_RES_USAGE
@@ -750,6 +755,132 @@ static void captureTerm( GstWesterosSink *sink )
    }
 }
 
+static void timeCodeAdd( GstWesterosSink *sink, guint64 pts, guint hours, guint minutes, guint seconds )
+{
+   #ifdef USE_GST_VIDEO
+   int i;
+   guint64 firstNano, position;
+   LOCK(sink);
+   if (
+        (hours < sink->timeCodeActive.hours) ||
+        ((hours == sink->timeCodeActive.hours) && (minutes < sink->timeCodeActive.minutes)) ||
+        ((hours == sink->timeCodeActive.hours) && (minutes == sink->timeCodeActive.minutes) && (seconds < sink->timeCodeActive.seconds))
+      )
+   {
+      goto exit;
+   }
+   firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
+   position= sink->positionSegmentStart + pts - firstNano;
+   if ( sink->timeCodeCount )
+   {
+      for( i= 0; i < sink->timeCodeCount; ++i )
+      {
+         if ( (sink->timeCodes[i].hours == hours) &&
+              (sink->timeCodes[i].minutes == minutes) &&
+              (sink->timeCodes[i].seconds == seconds) )
+         {
+            if ( position < sink->timeCodes[i].position )
+            {
+               sink->timeCodes[i].position= position;
+            }
+            goto exit;
+         }
+      }
+   }
+   if ( sink->timeCodeCount+1 >= sink->timeCodeCapacity )
+   {
+      WstSinkTimeCode *newTC= 0;
+      int newCapacity= (sink->timeCodeCapacity ? sink->timeCodeCapacity*2 : 30);
+      newTC= (WstSinkTimeCode*)calloc( newCapacity, sizeof(WstSinkTimeCode) );
+      if ( !newTC )
+      {
+         GST_ERROR("No memory to grow time code capacity");
+         goto exit;
+      }
+      GST_DEBUG("grow time code set from %d to %d", sink->timeCodeCapacity, newCapacity);
+      if ( sink->timeCodes )
+      {
+         memcpy( newTC, sink->timeCodes, sink->timeCodeCapacity*sizeof(WstSinkTimeCode) );
+         free( sink->timeCodes );
+         sink->timeCodes= 0;
+      }
+      sink->timeCodes= newTC;
+      sink->timeCodeCapacity= newCapacity;
+   }
+
+   i= sink->timeCodeCount++;
+   GST_DEBUG("add time code: position %lld : %d:%d:%d : count %d capacity %d", position, hours, minutes, seconds, sink->timeCodeCount, sink->timeCodeCapacity);
+   sink->timeCodes[i].hours= hours;
+   sink->timeCodes[i].minutes= minutes;
+   sink->timeCodes[i].seconds= seconds;
+   sink->timeCodes[i].position= position;
+
+exit:
+   UNLOCK(sink);
+   #endif
+   return;
+}
+
+static void timeCodeFlush( GstWesterosSink *sink )
+{
+   #ifdef USE_GST_VIDEO
+   GST_DEBUG("flush time codes");
+   LOCK(sink);
+   if ( sink->timeCodes )
+   {
+      free( sink->timeCodes );
+      sink->timeCodes= 0;
+      sink->timeCodeCapacity= 0;
+   }
+   sink->timeCodeCount= 0;
+   memset( &sink->timeCodeActive, 0, sizeof(WstSinkTimeCode));
+   UNLOCK(sink);
+   #endif
+}
+
+static void timeCodePresent( GstWesterosSink *sink, guint64 position, guint signal )
+{
+   /* Must be called with sink lock */
+   #ifdef USE_GST_VIDEO
+   int i;
+   bool found= false;
+   guint hours, minutes, seconds;
+   for( i= 0; i < sink->timeCodeCount; ++i )
+   {
+      if ( sink->timeCodes[i].position == position )
+      {
+         found= true;
+         hours= sink->timeCodes[i].hours;
+         minutes= sink->timeCodes[i].minutes;
+         seconds= sink->timeCodes[i].seconds;
+         if ( i < sink->timeCodeCount-1 )
+         {
+            memmove( &sink->timeCodes[0], &sink->timeCodes[i+1], (sink->timeCodeCount-i-1)*sizeof(WstSinkTimeCode) );
+         }
+         sink->timeCodeCount= (sink->timeCodeCount-i-1);
+         break;
+      }
+   }
+   if ( found )
+   {
+      sink->timeCodeActive.hours= hours;
+      sink->timeCodeActive.minutes= minutes;
+      sink->timeCodeActive.seconds= seconds;
+      UNLOCK(sink);
+
+      g_signal_emit( G_OBJECT(sink),
+                     signal,
+                     0,
+                     hours,
+                     minutes,
+                     seconds
+                   );
+
+      LOCK(sink);
+   }
+   #endif
+}
+
 static void releaseWaylandResources( GstWesterosSink *sink )
 {
    if ( sink->display )
@@ -872,6 +1003,13 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
        g_param_spec_int ("video_height", "video_height",
            "current video frame height",
            0, G_MAXINT32, 0, G_PARAM_READABLE));
+
+   #ifdef USE_GST_VIDEO
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_ENABLE_TIMECODE,
+       g_param_spec_boolean ("enable-timecode",
+           "enable timecode signal",
+           "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+   #endif
 
    g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_VIDEO_PTS,
        g_param_spec_int64 ("video_pts", "video PTS",
@@ -1012,6 +1150,12 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->swEvent= 0;
    sink->swDisplay= 0;
    #endif
+   sink->enableTimeCodeSignal= FALSE;
+   sink->timeCodeCapacity= 0;
+   sink->timeCodeCount= 0;
+   memset( &sink->timeCodeActive, 0, sizeof(WstSinkTimeCode));
+   sink->timeCodes= 0;
+   sink->timeCodePresent= timeCodePresent;
 
    sink->mediaCaptureModule= 0;
    sink->mediaCaptureContext= 0;
@@ -1156,6 +1300,16 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
          break;
       }
 
+      case PROP_ENABLE_TIMECODE:
+      {
+         sink->enableTimeCodeSignal= g_value_get_boolean(value);
+         if ( !sink->enableTimeCodeSignal )
+         {
+            timeCodeFlush( sink );
+         }
+         break;
+      }
+
       case PROP_RES_PRIORITY:
       {
          guint priority= g_value_get_uint(value);
@@ -1226,6 +1380,11 @@ static void gst_westeros_sink_get_property(GObject *object, guint prop_id, GValu
             LOCK(sink);
             g_value_set_int(value, sink->srcHeight);
             UNLOCK(sink);
+         }
+         break;
+      case PROP_ENABLE_TIMECODE:
+         {
+            g_value_set_boolean(value, sink->enableTimeCodeSignal);
          }
          break;
       case PROP_VIDEO_PTS:
@@ -1423,6 +1582,8 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
          releaseWaylandResources( sink );
 
+         timeCodeFlush( sink );
+
          captureTerm(sink);
          break;
       }
@@ -1610,6 +1771,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          sink->eosEventSeen= FALSE;
          sink->flushStarted= TRUE;
          UNLOCK( sink );
+         timeCodeFlush( sink );
          gst_westeros_sink_soc_flush( sink );
          passToDefault= TRUE;
          break;
@@ -1861,6 +2023,21 @@ static GstFlowReturn gst_westeros_sink_render(GstBaseSink *base_sink, GstBuffer 
    LOCK( sink );
    sink->eosDetected= FALSE;
    UNLOCK( sink );
+
+   #ifdef USE_GST_VIDEO
+   if ( GST_BUFFER_PTS_IS_VALID(buffer) && sink->enableTimeCodeSignal )
+   {
+      guint64 pts= GST_BUFFER_PTS(buffer);
+      GstVideoTimeCodeMeta *tcm= gst_buffer_get_video_time_code_meta(buffer);
+      if ( tcm )
+      {
+         guint hours= tcm->tc.hours;
+         guint minutes= tcm->tc.minutes;
+         guint seconds= tcm->tc.seconds;
+         timeCodeAdd( sink, pts, hours, minutes, seconds );
+      }
+   }
+   #endif
 
    gst_westeros_sink_soc_render( sink, buffer );
 
