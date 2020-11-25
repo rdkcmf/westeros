@@ -291,7 +291,11 @@ typedef struct _WstRendererGL
    PFNEGLUNBINDWAYLANDDISPLAYWL eglUnbindWaylandDisplayWL;
    PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL;
    #endif
-   
+   #ifdef ENABLE_LDBPROTOCOL
+   PFNEGLQUERYDMABUFFORMATSEXTPROC eglQueryDmaBufFormatsEXT;
+   PFNEGLQUERYDMABUFMODIFIERSEXTPROC eglQueryDmaBufModifiersEXT;
+   #endif
+
    std::vector<WstRenderSurface*> surfaces;
 } WstRendererGL;
 
@@ -410,6 +414,12 @@ static WstRendererGL* wstRendererGLCreate( WstRenderer *renderer )
          if ( strstr( extensions, "EGL_EXT_image_dma_buf_import_modifiers" ) )
          {
             rendererGL->haveDmaBufImportModifiers= true;
+            #ifdef ENABLE_LDBPROTOCOL
+            rendererGL->eglQueryDmaBufFormatsEXT = (PFNEGLQUERYDMABUFFORMATSEXTPROC)eglGetProcAddress("eglQueryDmaBufFormatsEXT");
+            printf( "eglQueryDmaBufFormatsEXT %p\n", rendererGL->eglQueryDmaBufFormatsEXT );
+            rendererGL->eglQueryDmaBufModifiersEXT = (PFNEGLQUERYDMABUFMODIFIERSEXTPROC)eglGetProcAddress("eglQueryDmaBufModifiersEXT");
+            printf( "eglQueryDmaBufModifiersEXT %p\n", rendererGL->eglQueryDmaBufModifiersEXT );
+            #endif
          }
       }
       extensions= (const char *)glGetString(GL_EXTENSIONS);
@@ -2356,6 +2366,79 @@ static float wstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurfac
    return zLevel;
 }
 
+#ifdef ENABLE_LDBPROTOCOL
+static void wstRendererQueryDmabufFormats( WstRenderer *renderer, int **formats, int *num_formats)
+{
+   WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
+   EGLBoolean b;
+   EGLint numFormats;
+
+   *num_formats= 0;
+   *formats= 0;
+
+   b= rendererGL->eglQueryDmaBufFormatsEXT( rendererGL->eglDisplay, 0, NULL, &numFormats );
+   if ( b )
+   {
+      EGLint *theFormats= 0;
+
+      theFormats= (EGLint*)calloc( numFormats, sizeof(EGLint) );
+      if ( theFormats == 0 )
+      {
+         printf("wstRendererQueryDmabufFormats: eglQueryDmaBufFormatsEXT: failed to get num formats\n" );
+         goto exit;
+      }
+      b= rendererGL->eglQueryDmaBufFormatsEXT( rendererGL->eglDisplay, numFormats, theFormats, &numFormats );
+      if ( !b )
+      {
+         printf("wstRendererQueryDmabufFormats: eglQueryDmaBufFormatsEXT: failed to get formats\n" );
+         free( theFormats );
+         goto exit;
+      }
+      *num_formats= numFormats;
+      *formats= theFormats;
+   }
+
+exit:
+   return;
+}
+
+static void wstRendererQueryDmabufModifiers( WstRenderer *renderer, int format, uint64_t **modifiers, int *num_modifiers)
+{
+   WstRendererGL *rendererGL= (WstRendererGL*)renderer->renderer;
+   EGLBoolean b;
+   EGLint numModifiers;
+
+   *num_modifiers= 0;
+   *modifiers= 0;
+
+   b= rendererGL->eglQueryDmaBufModifiersEXT( rendererGL->eglDisplay, format, 0, NULL, NULL, &numModifiers );
+   if ( b )
+   {
+      uint64_t *theModifiers= 0;
+
+      theModifiers= (uint64_t*)calloc( numModifiers, sizeof(uint64_t) );
+      if ( theModifiers == 0 )
+      {
+         printf("wstRendererQueryDmabufModifiers: eglQueryDmaBufModifiersEXT: failed to get num modifiers\n" );
+         goto exit;
+      }
+      b= rendererGL->eglQueryDmaBufModifiersEXT( rendererGL->eglDisplay, format, numModifiers, theModifiers, NULL, &numModifiers );
+      if ( !b )
+      {
+         printf("wstRendererQueryDmabufModifiers: eglQueryDmaBufModifiersEXT: failed to get modifiers\n" );
+         free( theModifiers );
+         goto exit;
+      }
+      *num_modifiers= numModifiers;
+      *modifiers= theModifiers;
+   }
+
+exit:
+   return;
+}
+#endif
+
+
 #ifndef WESTEROS_PLATFORM_QEMUX86
 static void wstRendererResolutionChangeBegin( WstRenderer *renderer )
 {
@@ -2435,6 +2518,10 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceGetOpacity= wstRendererSurfaceGetOpacity;
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
+      #ifdef ENABLE_LDBPROTOCOL
+      renderer->queryDmabufFormats= wstRendererQueryDmabufFormats;
+      renderer->queryDmabufModifiers= wstRendererQueryDmabufModifiers;
+      #endif
       #ifndef WESTEROS_PLATFORM_QEMUX86
       renderer->resolutionChangeBegin= wstRendererResolutionChangeBegin;
       renderer->resolutionChangeEnd= wstRendererResolutionChangeEnd;

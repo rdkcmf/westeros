@@ -20,7 +20,9 @@
 #ifndef _WESTEROS_LINUX_DMABUF_H
 #define _WESTEROS_LINUX_DMABUF_H
 
+#include <drm_fourcc.h>
 #include "wayland-server.h"
+#include "westeros-render.h"
 
 #define WST_LDB_MAX_PLANES 4
 
@@ -61,6 +63,7 @@ struct wayland_ldb_callbacks {
 
 wl_ldb* WstLDBInit( struct wl_display *display, struct wayland_ldb_callbacks *callbacks, void *userData );
 void WstLDBUninit( struct wl_ldb *ldb );
+void WstLDBSetRenderer( struct wl_ldb *ldb, WstRenderer *renderer );
 struct wl_ldb_buffer *WstLDBBufferGet( struct wl_resource *resource );
 uint32_t WstLDBBufferGetFormat(struct wl_ldb_buffer *buffer);
 int32_t WstLDBBufferGetWidth(struct wl_ldb_buffer *buffer);

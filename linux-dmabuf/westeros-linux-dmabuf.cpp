@@ -21,7 +21,6 @@
 #include <memory.h>
 #include <unistd.h>
 #include <assert.h>
-#include <drm_fourcc.h>
 
 #include "westeros-linux-dmabuf.h"
 
@@ -50,6 +49,7 @@ struct wl_ldb
 
    void *userData;
    struct wayland_ldb_callbacks *callbacks;
+   WstRenderer *renderer;
 };
 
 static void wstLDBBufferDestroy(struct wl_ldb_buffer *buffer)
@@ -357,6 +357,7 @@ static void wstLDBBind(struct wl_client *client, void *data, uint32_t version, u
    struct wl_ldb *ldb= (struct wl_ldb*)data;
    struct wl_resource *resource;
    int i;
+   bool formatsSent= false;
 
    printf("westeros-ldb: wstLDBind: enter: client %p data %p version %d id %d\n", client, data, version, id);
 
@@ -371,11 +372,61 @@ static void wstLDBBind(struct wl_client *client, void *data, uint32_t version, u
 
    wl_resource_set_implementation(resource, &linux_dmabuf_interface, data, NULL);
 
-   i= 0;
-   while( gLDBFormats[i] != 0 )
+   if ( ldb->renderer )
    {
-      zwp_linux_dmabuf_v1_send_format(resource, gLDBFormats[i]);
-      ++i;
+      int *formats= 0;
+      int numFormats= 0;
+      uint64_t *modifiers= 0;
+      int numModifiers= 0;
+      uint64_t modifierInvalid= DRM_FORMAT_MOD_INVALID;
+      int i, j;
+      WstRendererQueryDmabufFormats( ldb->renderer, &formats, &numFormats );
+      printf("westeros-ldb: found %d dmabuf formats\n", numFormats);
+      for( i= 0; i < numFormats; ++i )
+      {
+         WstRendererQueryDmabufModifiers( ldb->renderer, formats[i], &modifiers, &numModifiers);
+         if (numModifiers == 0)
+         {
+            numModifiers= 1;
+            modifiers= &modifierInvalid;
+         }
+         for( j= 0; j < numModifiers; ++j )
+         {
+            if ( version >= ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION )
+            {
+               uint32_t modifier_lo= modifiers[j] & 0xFFFFFFFF;
+               uint32_t modifier_hi= modifiers[j] >> 32;
+               zwp_linux_dmabuf_v1_send_modifier(resource, formats[i], modifier_hi, modifier_lo);
+            }
+            else if ( (modifiers[j] == DRM_FORMAT_MOD_LINEAR) || (modifiers == &modifierInvalid) )
+            {
+               zwp_linux_dmabuf_v1_send_format(resource, formats[i]);
+            }
+         }
+         if ( modifiers && (modifiers != &modifierInvalid) )
+         {
+            free(modifiers);
+            modifiers= 0;
+         }
+      }
+      if ( formats )
+      {
+         free( formats );
+      }
+      if ( numFormats )
+      {
+         formatsSent= true;
+      }
+   }
+
+   if ( !formatsSent )
+   {
+      i= 0;
+      while( gLDBFormats[i] != 0 )
+      {
+         zwp_linux_dmabuf_v1_send_format(resource, gLDBFormats[i]);
+         ++i;
+      }
    }
 
    printf("westeros-ldb: wstLDBBind: exit: client %p id %d\n", client, id);
@@ -409,6 +460,15 @@ void WstLDBUninit( struct wl_ldb *ldb )
    if ( ldb )
    {
       free( ldb );
+   }
+}
+
+void WstLDBSetRenderer( struct wl_ldb *ldb, WstRenderer *renderer )
+{
+   if ( ldb )
+   {
+      printf("westeros-ldb: set renderer %p\n", renderer);
+      ldb->renderer= renderer;
    }
 }
 

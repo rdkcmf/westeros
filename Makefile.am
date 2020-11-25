@@ -59,6 +59,7 @@ endif
 
 if ENABLE_WESTEROS_LDBPROTOCOL
 AM_CXXFLAGS += -DENABLE_LDBPROTOCOL
+AM_CXXFLAGS += -I${PKG_CONFIG_SYSROOT_DIR}/$(includedir)/libdrm
 endif
 
 if ENABLE_XDG_V4
@@ -225,8 +226,7 @@ libwesteros_linux_dmabuf_server_la_SOURCES = linux-dmabuf/westeros-linux-dmabuf.
 libwesteros_linux_dmabuf_server_la_include_HEADERS = linux-dmabuf/westeros-linux-dmabuf.h linux-dmabuf/protocol/linux-dmabuf-unstable-v1-server-protocol.h
 libwesteros_linux_dmabuf_server_la_includedir = $(includedir)
 libwesteros_linux_dmabuf_server_la_CXXFLAGS = $(AM_CXXFLAGS) \
-                                             -I${srcdir}/linux-dmabuf/protocol \
-                                             -I${PKG_CONFIG_SYSROOT_DIR}/$(includedir)/libdrm
+                                             -I${srcdir}/linux-dmabuf/protocol
 libwesteros_linux_dmabuf_server_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(WAYLAND_SERVER_LIBS)

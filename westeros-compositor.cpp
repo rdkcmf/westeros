@@ -3331,6 +3331,10 @@ static void ldbBind( void *user_data, struct wl_client *client, struct wl_resour
    WstContext *ctx= (WstContext*)user_data;
 
    wstUpdateClientInfo( ctx, client, resource );
+   if ( ctx->ldb )
+   {
+      WstLDBSetRenderer( ctx->ldb, ctx->renderer );
+   }
 }
 
 static struct wayland_ldb_callbacks ldbCallbacks= {
