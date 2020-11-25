@@ -292,6 +292,10 @@ typedef struct _WstRendererEMB
    PFNEGLUNBINDWAYLANDDISPLAYWL eglUnbindWaylandDisplayWL;
    PFNEGLQUERYWAYLANDBUFFERWL eglQueryWaylandBufferWL;
    #endif
+   #ifdef ENABLE_LDBPROTOCOL
+   PFNEGLQUERYDMABUFFORMATSEXTPROC eglQueryDmaBufFormatsEXT;
+   PFNEGLQUERYDMABUFMODIFIERSEXTPROC eglQueryDmaBufModifiersEXT;
+   #endif
 
    WstShader *textureShader;
    WstShader *textureShaderYUV;
@@ -321,7 +325,7 @@ static void wstRendererEMBCommitWaylandEGL( WstRendererEMB *renderer, WstRenderS
 static void wstRendererEMBCommitSB( WstRendererEMB *renderer, WstRenderSurface *surface, struct wl_resource *resource );
 #endif
 #ifdef ENABLE_LDBPROTOCOL
-static void wstRendererEMBCommitLDB( WstRendererEMB *rendererGL, WstRenderSurface *surface, struct wl_resource *resource );
+static void wstRendererEMBCommitLDB( WstRendererEMB *renderer, WstRenderSurface *surface, struct wl_resource *resource );
 #endif
 #if defined (WESTEROS_PLATFORM_RPI)
 static void wstRendererEMBCommitDispmanx( WstRendererEMB *renderer, WstRenderSurface *surface, 
@@ -438,6 +442,12 @@ static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer )
          if ( strstr( extensions, "EGL_EXT_image_dma_buf_import_modifiers" ) )
          {
             rendererEMB->haveDmaBufImportModifiers= true;
+            #ifdef ENABLE_LDBPROTOCOL
+            rendererEMB->eglQueryDmaBufFormatsEXT = (PFNEGLQUERYDMABUFFORMATSEXTPROC)eglGetProcAddress("eglQueryDmaBufFormatsEXT");
+            printf( "eglQueryDmaBufFormatsEXT %p\n", rendererEMB->eglQueryDmaBufFormatsEXT );
+            rendererEMB->eglQueryDmaBufModifiersEXT = (PFNEGLQUERYDMABUFMODIFIERSEXTPROC)eglGetProcAddress("eglQueryDmaBufModifiersEXT");
+            printf( "eglQueryDmaBufModifiersEXT %p\n", rendererEMB->eglQueryDmaBufModifiersEXT );
+            #endif
          }
       }
       extensions= (const char *)glGetString(GL_EXTENSIONS);
@@ -1410,7 +1420,7 @@ static void wstRendererEMBPrepareResourceLDB( WstRendererEMB *renderer, WstRende
                }
                else
                {
-                  printf("wstRendererGLPrepareResourceLDB: eglCreateImageKHR failed for fd %d, format %X: errno %X\n", fd[0], frameFormat, eglGetError());
+                  printf("wstRendererEMBPrepareResourceLDB: eglCreateImageKHR failed for fd %d, format %X: errno %X\n", fd[0], frameFormat, eglGetError());
                }
 
                surface->textureCount= 1;
@@ -2330,6 +2340,77 @@ static float wstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurfac
    
    return zLevel;
 }
+#ifdef ENABLE_LDBPROTOCOL
+static void wstRendererQueryDmabufFormats( WstRenderer *renderer, int **formats, int *num_formats)
+{
+   WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
+   EGLBoolean b;
+   EGLint numFormats;
+
+   *num_formats= 0;
+   *formats= 0;
+
+   b= rendererEMB->eglQueryDmaBufFormatsEXT( rendererEMB->eglDisplay, 0, NULL, &numFormats );
+   if ( b )
+   {
+      EGLint *theFormats= 0;
+
+      theFormats= (EGLint*)calloc( numFormats, sizeof(EGLint) );
+      if ( theFormats == 0 )
+      {
+         printf("wstRendererQueryDmabufFormats: eglQueryDmaBufFormatsEXT: failed to get num formats\n" );
+         goto exit;
+      }
+      b= rendererEMB->eglQueryDmaBufFormatsEXT( rendererEMB->eglDisplay, numFormats, theFormats, &numFormats );
+      if ( !b )
+      {
+         printf("wstRendererQueryDmabufFormats: eglQueryDmaBufFormatsEXT: failed to get formats\n" );
+         free( theFormats );
+         goto exit;
+      }
+      *num_formats= numFormats;
+      *formats= theFormats;
+   }
+
+exit:
+   return;
+}
+
+static void wstRendererQueryDmabufModifiers( WstRenderer *renderer, int format, uint64_t **modifiers, int *num_modifiers)
+{
+   WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
+   EGLBoolean b;
+   EGLint numModifiers;
+
+   *num_modifiers= 0;
+   *modifiers= 0;
+
+   b= rendererEMB->eglQueryDmaBufModifiersEXT( rendererEMB->eglDisplay, format, 0, NULL, NULL, &numModifiers );
+   if ( b )
+   {
+      uint64_t *theModifiers= 0;
+
+      theModifiers= (uint64_t*)calloc( numModifiers, sizeof(uint64_t) );
+      if ( theModifiers == 0 )
+      {
+         printf("wstRendererQueryDmabufModifiers: eglQueryDmaBufModifiersEXT: failed to get num modifiers\n" );
+         goto exit;
+      }
+      b= rendererEMB->eglQueryDmaBufModifiersEXT( rendererEMB->eglDisplay, format, numModifiers, theModifiers, NULL, &numModifiers );
+      if ( !b )
+      {
+         printf("wstRendererQueryDmabufModifiers: eglQueryDmaBufModifiersEXT: failed to get modifiers\n" );
+         free( theModifiers );
+         goto exit;
+      }
+      *num_modifiers= numModifiers;
+      *modifiers= theModifiers;
+   }
+
+exit:
+   return;
+}
+#endif
 
 static void wstRendererHolePunch( WstRenderer *renderer, int x, int y, int width, int height )
 {
@@ -2560,6 +2641,10 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceGetOpacity= wstRendererSurfaceGetOpacity;
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
+      #ifdef ENABLE_LDBPROTOCOL
+      renderer->queryDmabufFormats= wstRendererQueryDmabufFormats;
+      renderer->queryDmabufModifiers= wstRendererQueryDmabufModifiers;
+      #endif
       renderer->holePunch= wstRendererHolePunch;
       
       wstRendererInitFastPath( rendererEMB );

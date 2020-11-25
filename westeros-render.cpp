@@ -224,6 +224,30 @@ float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surf
    return renderer->surfaceGetZOrder( renderer, surface, z );
 }
 
+void WstRendererQueryDmabufFormats( WstRenderer *renderer, int **formats, int *num_formats )
+{
+   if ( renderer->queryDmabufFormats )
+   {
+      renderer->queryDmabufFormats( renderer, formats, num_formats);
+   }
+   else
+   {
+      *num_formats= 0;
+   }
+}
+
+void WstRendererQueryDmabufModifiers( WstRenderer *renderer, int format, uint64_t **modifiers, int *num_modifiers )
+{
+   if ( renderer->queryDmabufModifiers )
+   {
+      renderer->queryDmabufModifiers( renderer, format, modifiers, num_modifiers );
+   }
+   else
+   {
+      *num_modifiers= 0;
+   }
+}
+
 void WstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<WstRect> &rects )
 {
    if ( renderer->delegateUpdateScene )
