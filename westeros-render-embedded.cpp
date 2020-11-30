@@ -392,7 +392,12 @@ static WstRendererEMB* wstRendererEMBCreate( WstRenderer *renderer )
       WST_TRACE( "glEGLImageTargetTexture2DOES %p\n", rendererEMB->glEGLImageTargetTexture2DOES);
       #endif
 
-      rendererEMB->eglDisplay= eglGetDisplay(EGL_DEFAULT_DISPLAY);
+      rendererEMB->eglDisplay= eglGetCurrentDisplay();
+      if ( rendererEMB->eglDisplay == EGL_NO_DISPLAY )
+      {
+         rendererEMB->eglDisplay= eglGetDisplay(EGL_DEFAULT_DISPLAY);
+         fprintf(stderr,"no current eglDisplay, get eglDisplay %p\n", rendererEMB->eglDisplay);
+      }
 
       #if defined (WESTEROS_HAVE_WAYLAND_EGL)
       const char *extensions= eglQueryString( rendererEMB->eglDisplay, EGL_EXTENSIONS );
