@@ -383,6 +383,7 @@ typedef struct _EMCTX
    int displayHeight;
    EGLContext eglContext;
    EGLDisplay eglDisplayDefault;
+   EGLDisplay eglDisplayCurrent;
    GLuint nextProgramId;
    GLuint nextShaderId;
    GLuint nextTextureId;
@@ -920,6 +921,7 @@ static EMCTX* emCreate( void )
       ctx->displayHeight= DEFAULT_DISPLAY_HEIGHT;
 
       ctx->eglDisplayDefault= EGL_NO_DISPLAY;
+      ctx->eglDisplayCurrent= EGL_NO_DISPLAY;
       ctx->eglContext= EGL_NO_CONTEXT;
       
       ctx->wlBindings= std::map<struct wl_display*,EMWLBinding>();
@@ -3543,6 +3545,28 @@ exit:
    return eglDisplay;
 }
 
+EGLAPI EGLDisplay EGLAPIENTRY eglGetCurrentDisplay(void)
+{
+   EGLDisplay eglDisplay= EGL_NO_DISPLAY;
+   EMCTX *ctx= 0;
+
+   TRACE1("eglGetCurrentDisplay");
+
+   ctx= emGetContext();
+   if ( !ctx )
+   {
+      ERROR("eglGetDisplay: emGetContext failed");
+      gEGLError= EGL_BAD_ACCESS;
+      goto exit;
+   }
+
+   eglDisplay= ctx->eglDisplayCurrent;
+
+exit:
+
+   return eglDisplay;
+}
+
 EGLAPI EGLBoolean EGLAPIENTRY eglInitialize( EGLDisplay display,
                                   EGLint *major,
                                   EGLint *minor )
@@ -3605,6 +3629,11 @@ EGLAPI EGLBoolean EGLAPIENTRY eglTerminate( EGLDisplay display )
    if ( display == ctx->eglDisplayDefault )
    {
       ctx->eglDisplayDefault= EGL_NO_DISPLAY;
+   }
+
+   if ( display == ctx->eglDisplayCurrent )
+   {
+      ctx->eglDisplayCurrent= EGL_NO_DISPLAY;
    }
 
    dsp->initialized= false;
@@ -4121,6 +4150,7 @@ EGLAPI EGLBoolean EGLAPIENTRY eglMakeCurrent( EGLDisplay display,
    }
 
    ctx->eglContext= context;
+   ctx->eglDisplayCurrent= display;
    TRACE1("eglMakeCurrent: draw %p read %p context %p", surfDraw, surfRead, context);
 
    result= EGL_TRUE;
