@@ -1373,9 +1373,28 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
    }
    if ( sink->soc.forceAspectRatio && sink->vpcSurface )
    {
+      /* Use nominal display size provided to us by
+       * the compositor to calculate the video bounds
+       * we should use when we transition to graphics path.
+       * Save and restore current HW video rectangle. */
       int vx, vy, vw, vh;
+      int tx, ty, tw, th;
+      tx= sink->soc.videoX;
+      ty= sink->soc.videoY;
+      tw= sink->soc.videoWidth;
+      th= sink->soc.videoHeight;
+      sink->soc.videoX= sink->windowX;
+      sink->soc.videoY= sink->windowY;
+      sink->soc.videoWidth= sink->windowWidth;
+      sink->soc.videoHeight= sink->windowHeight;
+
       wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
       wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+
+      sink->soc.videoX= tx;
+      sink->soc.videoY= ty;
+      sink->soc.videoWidth= tw;
+      sink->soc.videoHeight= th;
    }
 }
 
