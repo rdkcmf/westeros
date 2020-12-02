@@ -71,10 +71,12 @@ static bool testCaseAPISetClientStatusCallback( EMCTX *emctx );
 static bool testCaseAPISetHidePointerCallback( EMCTX *emctx );
 static bool testCaseAPISetKeyboardNestedListener( EMCTX *emctx );
 static bool testCaseAPISetPointerNestedListener( EMCTX *emctx );
+static bool testCaseAPISetVirtualEmbeddedUnBoundClientListener( EMCTX *emctx );
 static bool testCaseAPILaunchClient( EMCTX *emctx );
 static bool testCaseAPIAddModule( EMCTX *emctx );
 static bool testCaseAPIGetMasterEmbedded( EMCTX *emctx );
 static bool testCaseAPICreateVirtualEmbedded( EMCTX *emctx );
+static bool testCaseAPIVirtualEmbeddedBindClient( EMCTX *emctx );
 
 TESTCASE genericTests[]=
 {
@@ -174,6 +176,10 @@ TESTCASE genericTests[]=
      "Test compositor set pointer nested listener API paths",
      testCaseAPISetPointerNestedListener
    },
+   { "testAPISetVirtualEmbeddedUnBoundClientListener",
+     "Test compositor set pointer nested listener API paths",
+     testCaseAPISetVirtualEmbeddedUnBoundClientListener
+   },
    { "testAPILaunchClient",
      "Test compositor launch client API paths",
      testCaseAPILaunchClient
@@ -189,6 +195,10 @@ TESTCASE genericTests[]=
    { "testAPICreateVirtualEmbedded",
      "Test compositor create virtual embedded API paths",
      testCaseAPICreateVirtualEmbedded
+   },
+   { "testAPIVirtualEmbeddedBindClient",
+     "Test compositor virtual embedded bind client API paths",
+     testCaseAPIVirtualEmbeddedBindClient
    },
    { "testEssosAPIUseWayland",
      "Test Essos use wayland API paths",
@@ -2927,6 +2937,69 @@ exit:
    return testResult;
 }
 
+void virtEmbUnBoundClientCallback( WstCompositor *wctx, int clientPID, void *userData )
+{
+   int *pid= (int *)userData;
+   if ( pid )
+   {
+      *pid= clientPID;
+   }
+}
+
+static bool testCaseAPISetVirtualEmbeddedUnBoundClientListener( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   WstCompositor *wctx= 0;
+   int pid= -1;
+
+   result= WstCompositorSetVirtualEmbeddedUnBoundClientListener( (WstCompositor*)0, virtEmbUnBoundClientCallback, (void*)&pid );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetVirtualEmbeddedUnBoundClientListener did not fail for null handle" );
+      goto exit;
+   }
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetVirtualEmbeddedUnBoundClientListener( wctx, virtEmbUnBoundClientCallback, (void*)&pid );
+   if ( result )
+   {
+      EMERROR( "WstCompositorSetVirtualEmbeddedUnBoundClientListener did not fail for non-ebedded compositor" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( wctx, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetVirtualEmbeddedUnBoundClientListener( wctx, virtEmbUnBoundClientCallback, (void*)&pid );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetVirtualEmbeddedUnBoundClientListener failed" );
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( wctx )
+   {
+      WstCompositorDestroy( wctx );
+   }
+
+   return testResult;
+}
+
 typedef struct _ClientStatusCtx
 {
    int clientStatus;
@@ -3657,6 +3730,73 @@ static bool testCaseAPICreateVirtualEmbedded( EMCTX *emctx )
    testResult= true;
 
 exit:
+
+   return testResult;
+}
+
+static bool testCaseAPIVirtualEmbeddedBindClient( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   WstCompositor *master= 0;
+   WstCompositor *virt1= 0;
+   int pid= 100;
+
+   result= WstCompositorVirtualEmbeddedBindClient( (WstCompositor*)0, pid );
+   if ( result )
+   {
+      EMERROR( "WstCompositorVirtualEmbeddedBindClient did not fail with null handle" );
+      goto exit;
+   }
+
+   master= WstCompositorCreate();
+   if ( !master )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetIsEmbedded( master, true );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorSetIsEmbedded failed" );
+      goto exit;
+   }
+
+   virt1= WstCompositorCreateVirtualEmbedded( master );
+   if ( !virt1 )
+   {
+      EMERROR( "WstCompositorCreateVirtualEmbedded failed" );
+      goto exit;
+   }
+
+   result= WstCompositorVirtualEmbeddedBindClient( master, pid );
+   if ( result )
+   {
+      EMERROR( "WstCompositorVirtualEmbeddedBindClient did not fail with non virtual compositor" );
+      goto exit;
+   }
+
+   result= WstCompositorVirtualEmbeddedBindClient( virt1, pid );
+   if ( !result )
+   {
+      EMERROR( "WstCompositorVirtualEmbeddedBindClient failed" );
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( virt1 )
+   {
+      WstCompositorDestroy( virt1 );
+   }
+
+   if ( master )
+   {
+      WstCompositorDestroy( master );
+   }
 
    return testResult;
 }

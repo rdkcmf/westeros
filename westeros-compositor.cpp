@@ -428,6 +428,8 @@ typedef struct _WstContext
    WstPointerNestedListener *pointerNestedListener;
    void *touchNestedListenerUserData;
    WstTouchNestedListener *touchNestedListener;
+   void *unboundClientUserData;
+   WstVirtEmbUnBoundClient unboundClientCB;
 
    struct wl_display *display;
    #ifdef ENABLE_SBPROTOCOL
@@ -2383,6 +2385,64 @@ bool WstCompositorSetPointerNestedListener( WstCompositor *wctx, WstPointerNeste
 exit:
 
    return result;   
+}
+
+bool WstCompositorSetVirtualEmbeddedUnBoundClientListener( WstCompositor *wctx, WstVirtEmbUnBoundClient listener, void *userData )
+{
+   bool result= false;
+
+   if ( wctx && wctx->ctx )
+   {
+      WstContext *ctx= wctx->ctx;
+
+      if ( !ctx->isEmbedded )
+      {
+         sprintf( wctx->lastErrorDetail,
+                  "Invalid argument.  Cannot set unbound callback for a non-embedded compositor" );
+         goto exit;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      ctx->unboundClientUserData= userData;
+      ctx->unboundClientCB= listener;
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
+   }
+
+exit:
+
+   return result;
+}
+
+bool WstCompositorVirtualEmbeddedBindClient( WstCompositor *wctx, int clientPid )
+{
+   bool result= false;
+
+   if ( wctx && wctx->ctx )
+   {
+      WstContext *ctx= wctx->ctx;
+
+      if ( !wctx->isVirtual )
+      {
+         sprintf( wctx->lastErrorDetail,
+                  "Invalid argument.  Cannot bind client to a non-virtual embedded compositor" );
+         goto exit;
+      }
+
+      pthread_mutex_lock( &ctx->mutex );
+
+      wctx->clientPid= clientPid;
+
+      pthread_mutex_unlock( &ctx->mutex );
+
+      result= true;
+   }
+
+exit:
+   return result;
 }
 
 bool WstCompositorComposeEmbedded( WstCompositor *wctx,
@@ -5104,6 +5164,23 @@ static void wstCompositorBind( struct wl_client *client, void *data, uint32_t ve
    WstCompositor *wctx= wstGetCompositorFromClient( ctx, client );
    if ( wctx )
    {
+      if ( (wctx->clientPid != pid) && ctx->unboundClientCB )
+      {
+         WstClientInfo *clientInfo= 0;
+
+         ctx->unboundClientCB( ctx->wctx, pid, ctx->unboundClientUserData );
+
+         wctx= wstGetCompositorFromPid( ctx, client, pid );
+         std::map<struct wl_client*,WstClientInfo*>::iterator it= ctx->clientInfoMap.find( client );
+         if ( it != ctx->clientInfoMap.end() )
+         {
+            clientInfo= it->second;
+            if ( clientInfo )
+            {
+               clientInfo->wctx= wctx;
+            }
+         }
+      }
       wctx->clientCommit= false;
       if ( wctx->clientStatusCB )
       {

@@ -77,6 +77,7 @@ typedef void (*WstDispatchCallback)( WstCompositor *wctx, void *userData );
 typedef void (*WstInvalidateSceneCallback)( WstCompositor *wctx, void *userData );
 typedef void (*WstHidePointerCallback)( WstCompositor *wctx, bool hidePointer, void *userData );
 typedef void (*WstClientStatus)( WstCompositor *wctx, int status, int clientPID, int detail, void *userData );
+typedef void (*WstVirtEmbUnBoundClient)( WstCompositor *wctx, int clientPID, void *userData );
 
 typedef void (*WstOutputHandleGeometryCallback)( void *userData, int32_t x, int32_t y, int32_t mmWidth, int32_t mmHeight,
                                                  int32_t subPixel, const char *make, const char *model, int32_t transform );
@@ -523,6 +524,29 @@ bool WstCompositorSetKeyboardNestedListener( WstCompositor *wctx, WstKeyboardNes
  * of Wayland.  This must be called prior to WstCompositorStart.
  */
 bool WstCompositorSetPointerNestedListener( WstCompositor *wctx, WstPointerNestedListener *listener, void *userData );
+
+/**
+ * WstCompositorSetVirtualEmbeddedUnBoundClientListener
+ *
+ * Specifies a callback for a virtual embedded master compositor to invoke to signal
+ * that a new client process has connected to the display name shared by the virtual embedded
+ * compositor instances created from this master and this client is not currently bound to
+ * any virtual embedded compositor instance.  If a client process is started using WstCompositorLaunchClient
+ * it will be automatically bound to the specified virtual embedded compositor instance.  This
+ * listener provides a means for an externally launched client to be bound using
+ * the WstCompositorVirtualEmbeddedBindClient API.
+ */
+bool WstCompositorSetVirtualEmbeddedUnBoundClientListener( WstCompositor *wctx, WstVirtEmbUnBoundClient listener, void *userData );
+
+/**
+ * WstCompositorVirtualEmbeddedBindClient
+ *
+ * Associate a client process specified by the supplied pid to a virtual embedded compositor instance.  If a
+ * client process is started using WstCompositorLaunchClient it will be automatically bound to the specified
+ * virtual embedded compositor instance.  This API allows binding an externally launched client detected
+ * using a listener registered with WstCompositorSetVirtualEmbeddedUnBoundClientListener.
+ */
+bool WstCompositorVirtualEmbeddedBindClient( WstCompositor *wctx, int clientPid );
 
 /**
  * WstCompositorComposeEmbedded
