@@ -1678,12 +1678,6 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
 static void sinkSocStopVideo( GstWesterosSink *sink )
 {
    LOCK( sink );
-   if ( sink->soc.sb )
-   {
-      wl_sb_destroy( sink->soc.sb );
-      sink->soc.sb= 0;
-   }
-
    if ( sink->soc.captureThread )
    {
       sink->soc.quitCaptureThread= TRUE;
@@ -1699,6 +1693,12 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
       g_thread_join( sink->soc.captureThread );
       LOCK( sink );
       sink->soc.captureThread= NULL;
+   }
+
+   if ( sink->soc.sb )
+   {
+      wl_sb_destroy( sink->soc.sb );
+      sink->soc.sb= 0;
    }
 
    if ( sink->videoStarted && sink->soc.videoDecoder )
