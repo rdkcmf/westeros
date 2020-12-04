@@ -403,6 +403,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.resubFd= -1;
    sink->soc.captureEnabled= FALSE;
    sink->soc.useCaptureOnly= FALSE;
+   sink->soc.frameAdvance= FALSE;
    sink->soc.pauseException= FALSE;
    sink->soc.pauseGetGfxFrame= FALSE;
    sink->soc.useGfxSync= FALSE;
@@ -3155,6 +3156,47 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
    }
 }
 
+static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[4];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 1;
+      mbody[len++]= 'A';
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent frame adavnce to video server");
+         FRAME("sent frame advance to video server");
+      }
+   }
+}
+
 #ifdef USE_AMLOGIC_MESON
 static GstElement* wstFindAudioSink( GstWesterosSink *sink )
 {
@@ -4123,7 +4165,7 @@ capture_start:
       {
          break;
       }
-      else if ( sink->soc.videoPaused )
+      else if ( sink->soc.videoPaused && !sink->soc.frameAdvance )
       {
          if ( !wasPaused )
          {
@@ -4359,6 +4401,11 @@ capture_start:
                   }
                }
             }
+            if ( sink->soc.frameAdvance )
+            {
+               sink->soc.frameAdvance= FALSE;
+               wstSendFrameAdvanceVideoClientConnection( sink->soc.conn );
+            }
             UNLOCK(sink);
          }
       }
@@ -4481,7 +4528,11 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
 
    if ( sink->soc.frameStepOnPreroll )
    {
-      gst_westeros_sink_soc_render( sink, buffer );
+      LOCK(sink);
+      sink->soc.frameAdvance= TRUE;
+      UNLOCK(sink);
+      GST_BASE_SINK(sink)->need_preroll= FALSE;
+      GST_BASE_SINK(sink)->have_preroll= TRUE;
    }
 
 done:

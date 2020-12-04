@@ -1243,12 +1243,12 @@ static bool testCaseSocSinkFrameAdvance( EMCTX *emctx )
 
    gst_element_set_state( pipeline, GST_STATE_PAUSED );
 
+   frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+   frameNumber= videoSrcGetFrameNumber( src );
+
    for( int i= 0; i < 10; ++i )
    {
       usleep( INTERVAL_200_MS );
-
-      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
-      frameNumber= videoSrcGetFrameNumber( src );
 
       posExpected= (frameNumber/frameRate)*GST_SECOND;
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
@@ -1258,15 +1258,18 @@ static bool testCaseSocSinkFrameAdvance( EMCTX *emctx )
          goto exit;
       }
       g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
-      if ( (pos < 0.9*posExpected) || (pos > 1.1*posExpected) )
+      if ( (pos < 0.8*posExpected) || (pos > 1.2*posExpected) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
          goto exit;
       }
 
+      frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
+      frameNumber= videoSrcGetFrameNumber( src );
+
       gst_element_send_event( sink,
-                              gst_event_new_step( GST_FORMAT_BUFFERS, 1, 1.0, TRUE, FALSE) );
+                              gst_event_new_step( GST_FORMAT_BUFFERS, 0, 1.0, TRUE, FALSE) );
       videoSrcDoStep( src );
 
       usleep( INTERVAL_200_MS );
