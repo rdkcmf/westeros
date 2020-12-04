@@ -172,6 +172,7 @@ struct _GstWesterosSinkSoc
 
    gboolean useCaptureOnly;
    gboolean captureEnabled;
+   gboolean frameAdvance;
    gboolean pauseException;
    gboolean pauseGetGfxFrame;
    gboolean useGfxSync;

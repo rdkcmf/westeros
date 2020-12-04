@@ -203,6 +203,7 @@ typedef struct _VideoFrameManager
    int queueCapacity;
    VideoFrame *queue;
    bool paused;
+   bool frameAdvance;
    long long vblankTime;
    long long vblankInterval;
    long long vblankIntervalPrev;
@@ -353,6 +354,7 @@ static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm );
 static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause );
+static void wstVideoFrameManagerFrameAdvance( VideoFrameManager *vfm );
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstDestroyDisplayServerConnection( DisplayServerConnection *conn );
 static void wstFreeVideoFrameResources( VideoFrame *f );
@@ -1419,6 +1421,14 @@ static void *wstVideoServerConnectionThread( void *arg )
                               conn->sessionId= sessionId;
                               conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
                            }
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                     case 'A':
+                        {
+                           DEBUG("got frame advance video plane %d", conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           wstVideoFrameManagerFrameAdvance( conn->videoPlane->vfm );
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
@@ -2608,10 +2618,10 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
       goto done;
    }
    #endif
-   if ( !vfm->paused )
+   if ( !vfm->paused || vfm->frameAdvance )
    {
       int i;
-      if ( (vfm->queueSize && vfm->flipTimeBase) || (vfm->queueSize > 2) )
+      if ( (vfm->queueSize && vfm->flipTimeBase) || (vfm->queueSize > 2) || vfm->frameAdvance )
       {
          long long flipTime;
          if ( vfm->flipTimeBase == 0)
@@ -2625,14 +2635,14 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
          {
             VideoFrame *fCheck= &vfm->queue[i];
             flipTime= (fCheck->frameTime - vfm->frameTimeBase) + vfm->flipTimeBase;
-            FRAME("i %d flipTime %lld flipTimeCurrent %lld frameTimeCurrent %lld frameTime %lld frameTimeBase %lld flipTimeBase %lld",
-                  i, flipTime, vfm->flipTimeCurrent, vfm->frameTimeCurrent, fCheck->frameTime, vfm->frameTimeBase, vfm->flipTimeBase);
+            FRAME("i %d flipTime %lld flipTimeCurrent %lld frameTimeCurrent %lld frameTime %lld frameTimeBase %lld flipTimeBase %lld frameAdvance %d",
+                  i, flipTime, vfm->flipTimeCurrent, vfm->frameTimeCurrent, fCheck->frameTime, vfm->frameTimeBase, vfm->flipTimeBase, vfm->frameAdvance);
             if ( flipTime == vfm->flipTimeCurrent )
             {
                f= fCheck;
             }
             FRAME("  flipTime %lld vblankTime+vblankInterval %lld", flipTime, vfm->vblankTime+vfm->vblankInterval);
-            if ( US_TO_MS(vfm->vblankTime+vfm->vblankInterval) >= US_TO_MS(flipTime) )
+            if ( US_TO_MS(vfm->vblankTime+vfm->vblankInterval) >= US_TO_MS(flipTime) || vfm->frameAdvance )
             {
                if ( (i > 0) && (US_TO_MS(fCheck->frameTime) < US_TO_MS(vfm->frameTimeCurrent+vfm->vblankInterval)) )
                {
@@ -2664,6 +2674,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                   vfm->adjust= ((vfm->flipTimeCurrent != 0) ? (vfm->vblankInterval-(f->frameTime-vfm->frameTimeCurrent)) : 0);
                   vfm->flipTimeCurrent= flipTime;
                   vfm->frameTimeCurrent= f->frameTime + vfm->adjust;
+                  vfm->frameAdvance= false;
                   break;
                }
             }
@@ -2693,6 +2704,12 @@ static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause )
       wstAVSyncPause( vfm, pause );
    }
    #endif
+}
+
+static void wstVideoFrameManagerFrameAdvance( VideoFrameManager *vfm )
+{
+   FRAME("frame advance");
+   vfm->frameAdvance= true;
 }
 
 static void wstGLNotifySizeListeners( void )
