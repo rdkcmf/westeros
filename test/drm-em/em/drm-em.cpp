@@ -196,6 +196,19 @@ typedef struct _EMNativePixmap
    EMSurface *s;
 } EMNativePixmap;
 
+typedef struct _EMSurfaceClient
+{
+   bool positionIsPending;
+   int vxPending;
+   int vyPending;
+   int vwPending;
+   int vhPending;
+   int vx;
+   int vy;
+   int vw;
+   int vh;
+} EMSurfaceClient;
+
 typedef struct _EMSimpleVideoDecoder
 {
    uint32_t magic;
@@ -214,7 +227,6 @@ typedef struct _EMSimpleVideoDecoder
    uint32_t currentPTS;
    unsigned long long int basePTS;
 } EMSimpleVideoDecoder;
-
 
 #define EM_DEVICE_FD_BASE (1000000)
 #define EM_DEVICE_MAGIC (0x55112631)
@@ -284,6 +296,7 @@ typedef struct _EMDevice
          struct drm_mode_property_enum planeTypeEnum[3];
          int32_t countPlanes;
          drmModePlane planes[3];
+         EMSurfaceClient videoPlane[1];
          EMDrmHandle handles[EM_DRM_HANDLE_MAX];
       } drm;
       struct _v4l2
@@ -491,6 +504,7 @@ static int gActiveLevel= 2;
 static int gDrmOpenCount= 0;
 static bool gDrmHaveMaster= false;
 static int gDrmLockFd= -1;
+static EMDevice *gDrmMasterDev= 0;
 static std::vector<struct wl_egl_window*> gNativeWindows= std::vector<struct wl_egl_window*>();
 
 static long long getCurrentTimeMillis(void)
@@ -661,6 +675,31 @@ void EMSetVideoCodec( EMCTX *ctx, int codec )
 int EMGetVideoCodec( EMCTX *ctx )
 {
    return ctx->videoCodec;
+}
+
+EMSurfaceClient* EMGetVideoWindow( EMCTX *ctx, int id )
+{
+   EMSurfaceClient *surfaceClient= 0;
+
+   // ignore id for now
+
+   if ( gDrmMasterDev )
+   {
+      surfaceClient= &gDrmMasterDev->dev.drm.videoPlane[0];
+   }
+
+   return surfaceClient;
+}
+
+void EMSurfaceClientGetPosition( EMSurfaceClient *emsc, int *x, int *y, int *width, int *height )
+{
+   TRACE1("EMSurfaceClientGetPosition: (%d, %d, %d, %d) pending(%d, %d, %d, %d)",
+          emsc->vx, emsc->vy, emsc->vw, emsc->vh,
+          emsc->vxPending, emsc->vyPending, emsc->vwPending, emsc->vhPending );
+   if ( x ) *x= emsc->vx;
+   if ( y ) *y= emsc->vy;
+   if ( width ) *width= emsc->vw;
+   if ( height ) *height= emsc->vh;
 }
 
 EMSimpleVideoDecoder* EMGetSimpleVideoDecoder( EMCTX *ctx, int id )
@@ -1086,11 +1125,13 @@ static void EMDrmDeviceInit( EMDevice *d )
    strcpy(d->dev.drm.planeTypeEnum[2].name, "Cursor" );
    d->dev.drm.planeTypeEnum[2].value= DRM_PLANE_TYPE_CURSOR;
 
+   d->dev.drm.videoPlane[0].positionIsPending= false;
+
    d->dev.drm.countPlanes= 3;
    i= 0;
    d->dev.drm.planes[i].plane_id= ++d->dev.drm.nextId;
-   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats;
-   d->dev.drm.planes[i].formats= d->dev.drm.planeFormats;
+   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats-1;
+   d->dev.drm.planes[i].formats= &d->dev.drm.planeFormats[0];
    d->dev.drm.planes[i].crtc_id= 0;
    d->dev.drm.planes[i].fb_id= 0;
    d->dev.drm.planes[i].crtc_x= 0;
@@ -1101,8 +1142,8 @@ static void EMDrmDeviceInit( EMDevice *d )
    d->dev.drm.planes[i].gamma_size= 0;
    ++i;   
    d->dev.drm.planes[i].plane_id= ++d->dev.drm.nextId;
-   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats;
-   d->dev.drm.planes[i].formats= d->dev.drm.planeFormats;
+   d->dev.drm.planes[i].count_formats= d->dev.drm.countPlaneFormats-1;
+   d->dev.drm.planes[i].formats= &d->dev.drm.planeFormats[1];
    d->dev.drm.planes[i].crtc_id= 0;
    d->dev.drm.planes[i].fb_id= 0;
    d->dev.drm.planes[i].crtc_x= 0;
@@ -1222,6 +1263,11 @@ static void EMDrmDeviceTerm( EMDevice *d )
             gDrmLockFd= -1;
          }
          gDrmHaveMaster= false;
+         if ( gDrmMasterDev )
+         {
+            gDrmMasterDev->dev.drm.videoPlane[0].positionIsPending= false;
+         }
+         gDrmMasterDev= 0;
       }
    }
 }
@@ -1666,6 +1712,7 @@ static int EMDeviceClose( int fd )
    int rc= -1;
    EMCTX *ctx= 0;
 
+   TRACE1("EMDeviceClose: fd %d", fd);
    ctx= emGetContext();
    if ( !ctx )
    {
@@ -1706,6 +1753,7 @@ static int EMDeviceClose( int fd )
          ctx->devices[i].fd= -1;
          ctx->devices[i].type= EM_DEVICE_TYPE_NONE;
          ctx->devices[i].magic= 0;
+         --ctx->deviceCount;
          rc= 0;
          break;
       }
@@ -3179,6 +3227,7 @@ int drmSetMaster( int fd )
       }
       else
       {
+         gDrmMasterDev= dev;
          gDrmHaveMaster= true;
          rc= 0;
       }
@@ -3894,6 +3943,34 @@ int drmModeAtomicAddProperty( drmModeAtomicReqPtr req,
    TRACE1("drmModeAtomicAddProperty: req %p objectId %u propertyId %u value %llu", req, objectId, propertyId, value);
    if ( req )
    {
+      EMDevice *dev= gDrmMasterDev;
+      if ( dev )
+      {
+         if ( objectId == dev->dev.drm.planes[1].plane_id )
+         {
+            if ( propertyId == dev->dev.drm.properties[EM_DRM_PROP_CRTC_X].prop_id )
+            {
+               dev->dev.drm.videoPlane[0].positionIsPending= true;
+               dev->dev.drm.videoPlane[0].vxPending= (int)value;
+            }
+            else if ( propertyId == dev->dev.drm.properties[EM_DRM_PROP_CRTC_Y].prop_id )
+            {
+               dev->dev.drm.videoPlane[0].positionIsPending= true;
+               dev->dev.drm.videoPlane[0].vyPending= (int)value;
+            }
+            else if ( propertyId == dev->dev.drm.properties[EM_DRM_PROP_CRTC_W].prop_id )
+            {
+               dev->dev.drm.videoPlane[0].positionIsPending= true;
+               dev->dev.drm.videoPlane[0].vwPending= (int)value;
+            }
+            else if ( propertyId == dev->dev.drm.properties[EM_DRM_PROP_CRTC_H].prop_id )
+            {
+               dev->dev.drm.videoPlane[0].positionIsPending= true;
+               dev->dev.drm.videoPlane[0].vhPending= (int)value;
+            }
+         }
+      }
+
       rc= 0;
    }
    return rc;
@@ -3926,6 +4003,14 @@ int drmModeAtomicCommit( int fd, drmModeAtomicReqPtr req, uint32_t flags, void *
    {
       if ( req && (req->magic == EM_DRM_ATOMIC_MAGIC) )
       {
+         if ( dev->dev.drm.videoPlane[0].positionIsPending )
+         {
+            dev->dev.drm.videoPlane[0].positionIsPending= false;
+            dev->dev.drm.videoPlane[0].vx= dev->dev.drm.videoPlane[0].vxPending;
+            dev->dev.drm.videoPlane[0].vy= dev->dev.drm.videoPlane[0].vyPending;
+            dev->dev.drm.videoPlane[0].vw= dev->dev.drm.videoPlane[0].vwPending;
+            dev->dev.drm.videoPlane[0].vh= dev->dev.drm.videoPlane[0].vhPending;
+         }
          rc= 0;
       }
    }
