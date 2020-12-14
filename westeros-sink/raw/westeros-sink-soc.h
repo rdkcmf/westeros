@@ -70,8 +70,6 @@ struct _GstWesterosSinkSoc
    double frameRate;
    int frameWidth;
    int frameHeight;
-   int frameWidthStream;
-   int frameHeightStream;
    uint32_t frameFormatStream;
    int frameInCount;
    int frameOutCount;
@@ -115,7 +113,6 @@ struct _GstWesterosSinkSoc
 
    int drmFd;
    int nextDrmBuffer;
-   int bufferIdOutBase;
    bool haveDrmBuffSem;
    sem_t drmBuffSem;
    GThread *firstFrameThread;
