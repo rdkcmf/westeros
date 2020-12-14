@@ -267,8 +267,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameRate= 0.0;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
-   sink->soc.frameWidthStream= -1;
-   sink->soc.frameHeightStream= -1;
    sink->soc.frameFormatStream= 0;
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
@@ -305,7 +303,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.forceAspectRatio= FALSE;
    sink->soc.drmFd= -1;
    sink->soc.nextDrmBuffer= 0;
-   sink->soc.bufferIdOutBase= 0;
    sink->soc.firstFrameThread= NULL;
    {
       int i;
@@ -609,19 +606,11 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
          }
          if ( gst_structure_get_int( structure, "width", &width ) )
          {
-            if ( sink->soc.frameWidth == -1 )
-            {
-               sink->soc.frameWidth= width;
-            }
-            sink->soc.frameWidthStream= width;
+            sink->soc.frameWidth= width;
          }
          if ( gst_structure_get_int( structure, "height", &height ) )
          {
-            if ( sink->soc.frameHeight == -1 )
-            {
-               sink->soc.frameHeight= height;
-            }
-            sink->soc.frameHeightStream= height;
+            sink->soc.frameHeight= height;
          }
          format= gst_structure_get_string( structure, "format" );
          if ( format )
@@ -782,19 +771,19 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             {
                case DRM_FORMAT_NV12:
                   Y= inData;
-                  Ystride= sink->soc.frameWidth;
+                  Ystride= ((sink->soc.frameWidth + 3) & ~3);
                   U= Y + Ystride*sink->soc.frameHeight;
-                  Ustride= sink->soc.frameWidth;
+                  Ustride= Ystride;
                   V= 0;
                   Vstride= 0;
                   break;
                case DRM_FORMAT_YUV420:
                   Y= inData;
-                  Ystride= sink->soc.frameWidth;
+                  Ystride= ((sink->soc.frameWidth + 3) & ~3);
                   U= Y + Ystride*sink->soc.frameHeight;
-                  Ustride= sink->soc.frameWidth/2;
+                  Ustride= Ystride/2;
                   V= U + Ustride*sink->soc.frameHeight/2;
-                  Vstride= sink->soc.frameWidth/2;
+                  Vstride= Ystride/2;
                   break;
                default:
                   Y= U= V= 0;
@@ -853,7 +842,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                            *dest++= *srcU++;
                            *dest++= *srcV++;
                         }
-                        destRow += Ystride;
+                        destRow += drmBuff->pitch1;
                         srcURow += Ustride;
                         srcVRow += Vstride;
                      }
@@ -864,17 +853,6 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                if ( sink->soc.frameOutCount == 0 )
                {
                   sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
-               }
-
-               if ( sink->soc.forceAspectRatio && sink->vpcSurface )
-               {
-                  int vx, vy, vw, vh;
-                  sink->soc.videoX= sink->windowX;
-                  sink->soc.videoY= sink->windowY;
-                  sink->soc.videoWidth= sink->windowWidth;
-                  sink->soc.videoHeight= sink->windowHeight;
-                  wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
-                  wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
                }
 
                drmBuff->frameTime= ((GST_BUFFER_PTS(buffer) + 500LL) / 1000LL);
@@ -975,7 +953,6 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                            if ( --sink->soc.framesBeforeHideVideo == 0 )
                            {
                               wstSendHideVideoClientConnection( sink->soc.conn, true );
-                              wstSendFlushVideoClientConnection( sink->soc.conn );
                            }
                         }
                      }
@@ -985,7 +962,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                      }
                   }
                }
-               else if ( sink->soc.conn )
+               if ( sink->soc.conn )
                {
                   sink->soc.resubFd= sink->soc.prevFrame2Fd;
                   sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
@@ -1170,8 +1147,6 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.nextFrameFd= -1;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
-   sink->soc.frameWidthStream= -1;
-   sink->soc.frameHeightStream= -1;
    sink->soc.syncType= -1;
    sink->soc.emitFirstFrameSignal= FALSE;
 
@@ -1960,7 +1935,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
             if ( eosCountDown == 0 )
             {
                g_print("westeros-sink: EOS detected\n");
-               gst_westeros_sink_eos_detected( sink );
+               gst_element_post_message (GST_ELEMENT_CAST(sink), gst_message_new_eos(GST_OBJECT_CAST(sink)));
                break;
             }
          }
@@ -2064,6 +2039,9 @@ static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int
 
       drmBuff->width= width;
       drmBuff->height= height;
+      GST_LOG("drmAllocBuffer: (%dx%d)", width, height);
+
+      width= ((width+63)&~63);
 
       memset( &createDumb, 0, sizeof(createDumb) );
       createDumb.width= width;
@@ -2125,7 +2103,7 @@ static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int
          goto exit;
       }
 
-      drmBuff->bufferId= sink->soc.bufferIdOutBase++;
+      drmBuff->bufferId= buffIndex;
 
       result= true;
    }
@@ -2140,6 +2118,14 @@ exit:
 static void drmFreeBuffer( GstWesterosSink *sink, int buffIndex )
 {
    int i;
+   if (
+        (buffIndex < WST_NUM_DRM_BUFFERS) &&
+        (sink->soc.drmBuffer[buffIndex].width != -1) &&
+        (sink->soc.drmBuffer[buffIndex].height != -1)
+      )
+   {
+      GST_LOG("drmFreeBuffer: (%dx%d)", sink->soc.drmBuffer[buffIndex].width, sink->soc.drmBuffer[buffIndex].height);
+   }
    for( i= 0; i < 2; ++i )
    {
       int *fd, *handle;
