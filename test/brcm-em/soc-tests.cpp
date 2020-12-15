@@ -87,6 +87,7 @@ static bool testCaseSocSinkGfxTransition( EMCTX *emctx );
 static bool testCaseSocSinkVisibility( EMCTX *emctx );
 static bool testCaseSocSinkVideoPosition( EMCTX *emctx );
 static bool testCaseSocSinkEOSTest1( EMCTX *emctx );
+static bool testCaseSocSinkDecodeError1( EMCTX *emctx );
 static bool testCaseSocSinkPauseResumeTrickState( EMCTX *ctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx );
 static bool testCaseSocRenderBasicCompositionEmbeddedFastRepeater( EMCTX *emctx );
@@ -229,6 +230,10 @@ TESTCASE socTests[]=
    { "testSocSinkEOSTest1",
      "Test sink EOS signalling",
      testCaseSocSinkEOSTest1
+   },
+   { "testSocSinkDecodeError1",
+      "Test sink decode error message",
+      testCaseSocSinkDecodeError1
    },
    { "testSocSinkPauseResumeTrickState",
      "Test pause and resume trick state",
@@ -5411,6 +5416,182 @@ static bool testCaseSocSinkEOSTest1( EMCTX *emctx )
    if ( !testCtx.gotEOS )
    {
       EMERROR("Failed to receive EOS");
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+
+   if ( pipeline )
+   {
+      gst_element_set_state( pipeline, GST_STATE_NULL );
+   }
+
+   if ( loop )
+   {
+      g_main_loop_unref( loop );
+   }
+
+   if ( bus )
+   {
+      gst_object_unref( bus );
+   }
+
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+
+   return testResult;
+}
+
+namespace DecodeErrorTests
+{
+typedef struct _TestCtx
+{
+   bool gotDecodeError;
+} TestCtx;
+
+static gboolean busCallback(GstBus *bus, GstMessage *message, gpointer data)
+{
+   TestCtx *ctx= (TestCtx*)data;
+
+   switch ( GST_MESSAGE_TYPE(message) )
+   {
+      case GST_MESSAGE_ERROR:
+         {
+            GError *error;
+            gchar *debug;
+
+            gst_message_parse_error(message, &error, &debug);
+            g_print("Error: %s\n", error->message);
+            if ( debug )
+            {
+               g_print("Debug info: %s\n", debug);
+               if ( strcmp( debug, "video decode error" ) == 0 )
+               {
+                  ctx->gotDecodeError= true;
+               }
+            }
+            g_error_free(error);
+            g_free(debug);
+         }
+         break;
+     case GST_MESSAGE_EOS:
+         g_print( "EOS ctx %p\n", ctx );
+         break;
+     default:
+         break;
+    }
+    return TRUE;
+}
+
+} // namespace EOSTests
+
+static bool testCaseSocSinkDecodeError1( EMCTX *emctx )
+{
+   using namespace DecodeErrorTests;
+
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   GstElement *pipeline= 0;
+   GstBus *bus= 0;
+   GMainLoop *loop= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   int stcChannelProxy;
+   int videoPidChannelProxy;
+   TestCtx testCtx;
+   int loopCount;
+
+   memset( &testCtx, 0, sizeof(testCtx) );
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSetStcChannel( emctx, (void*)&stcChannelProxy );
+   EMSetVideoCodec( emctx, bvideo_codec_h264 );
+   EMSetVideoPidChannel( emctx, (void*)&videoPidChannelProxy );
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   bus= gst_pipeline_get_bus( GST_PIPELINE(pipeline) );
+   if ( !bus )
+   {
+      EMERROR("Failed to get pipeline bus\n");
+      goto exit;
+   }
+   gst_bus_add_watch( bus, busCallback, &testCtx );
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   loop= g_main_loop_new(NULL,FALSE);
+
+   testCtx.gotDecodeError= false;
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   // Allow pipeline to run briefly
+   usleep( 200000 );
+
+   if ( testCtx.gotDecodeError )
+   {
+      EMERROR("Got unexpected decode error");
+      goto exit;
+   }
+
+   EMSimpleVideoDecoderSetDecodeErrorCount( videoDecoder, 5 );
+
+   // Allow pipeline to run briefly
+   loopCount= 400;
+   while( loopCount-- > 0 )
+   {
+      usleep( 10000 );
+      g_main_context_iteration( NULL, FALSE);
+      if ( testCtx.gotDecodeError )
+      {
+         break;
+      }
+   }
+
+   if ( !testCtx.gotDecodeError )
+   {
+      EMERROR("Failed to receive decode error message");
       goto exit;
    }
 
