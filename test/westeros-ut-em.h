@@ -76,6 +76,7 @@ void EMSimpleVideoDecoderSetFrameRate( EMSimpleVideoDecoder *dec, float fps );
 float EMSimpleVideoDecoderGetFrameRate( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSetBitRate( EMSimpleVideoDecoder *dec, float MBps );
 float EMSimpleVideoDecoderGetBitRate( EMSimpleVideoDecoder *dec );
+void EMSimpleVideoDecoderSetDecodeErrorCount( EMSimpleVideoDecoder *dec, int count );
 void EMSimpleVideoDecoderSetColorimetry( EMSimpleVideoDecoder *dec, const char *colorimetry );
 const char* EMSimpleVideoDecoderGetColorimetry( EMSimpleVideoDecoder *dec );
 void EMSimpleVideoDecoderSetMasteringMeta( EMSimpleVideoDecoder *dec, const char *masteringMeta );

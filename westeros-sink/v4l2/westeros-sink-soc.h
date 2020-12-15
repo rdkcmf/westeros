@@ -124,6 +124,7 @@ struct _GstWesterosSinkSoc
    uint32_t inputFormat;
    uint32_t outputFormat;
    gint64 currentInputPTS;
+   gint64 videoStartTime;
 
    char *devname;
    gboolean enableTextureSignal;
@@ -163,6 +164,7 @@ struct _GstWesterosSinkSoc
    gboolean hasEvents;
    gboolean needCaptureRestart;
    gboolean emitFirstFrameSignal;
+   gboolean decodeError;
    gboolean quitVideoOutputThread;
    GThread *videoOutputThread;
    gboolean quitEOSDetectionThread;

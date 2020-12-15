@@ -234,6 +234,7 @@ typedef struct _EMSimpleVideoDecoder
    char contentLight[CONTENTLIGHT_MAX_LEN+1];
    float videoFrameRate;  //FPS
    float videoBitRate;  // Mbps
+   int numDecodeErrors;
    bool segmentsStartAtZero;
    bool firstPtsPassed;
    unsigned frameNumber;
@@ -676,6 +677,11 @@ void EMSimpleVideoDecoderSetBitRate( EMSimpleVideoDecoder *dec, float MBps )
 float EMSimpleVideoDecoderGetBitRate( EMSimpleVideoDecoder *dec )
 {
    return dec->videoBitRate;
+}
+
+void EMSimpleVideoDecoderSetDecodeErrorCount( EMSimpleVideoDecoder *dec, int count )
+{
+   dec->numDecodeErrors= count;
 }
 
 void EMSimpleVideoDecoderSetColorimetry( EMSimpleVideoDecoder *dec, const char *colorimetry )
@@ -2910,6 +2916,8 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_GetStatus(
    pStatus->numDisplayed= dec->frameNumber;
    pStatus->firstPtsPassed= dec->firstPtsPassed;
    pStatus->numBytesDecoded= dec->frameNumber*1000;
+   pStatus->numDecodeErrors= dec->numDecodeErrors;
+   pStatus->numDisplayDrops= 0;
 
 exit:
    return rc;

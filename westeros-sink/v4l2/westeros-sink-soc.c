@@ -70,6 +70,8 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define INT_FRAME(FORMAT, ...)      frameLog( "FRAME: " FORMAT "\n", __VA_ARGS__)
 #define FRAME(...)                  INT_FRAME(__VA_ARGS__, "")
 
+#define postDecodeError( sink ) postErrorMessage( (sink), -16, "video decode error" )
+
 enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
@@ -133,6 +135,7 @@ static int wstFindCurrentVideoBuffer( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText );
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static int ioctl_wrapper( int fd, int request, void* arg );
 static bool swIsSWDecode( GstWesterosSink *sink );
@@ -354,6 +357,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameHeightStream= -1;
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
+   sink->soc.videoStartTime= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
@@ -397,6 +401,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.hasEvents= FALSE;
    sink->soc.needCaptureRestart= FALSE;
    sink->soc.emitFirstFrameSignal= FALSE;
+   sink->soc.decodeError= FALSE;
    sink->soc.nextFrameFd= -1;
    sink->soc.prevFrame1Fd= -1;
    sink->soc.prevFrame2Fd= -1;
@@ -1274,6 +1279,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.frameDisplayCount= FALSE;
+   sink->soc.videoStartTime= 0;
    UNLOCK(sink);
 }
 
@@ -1281,6 +1287,8 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
 {
    gboolean result= FALSE;
    int rc;
+
+   sink->soc.videoStartTime= g_get_monotonic_time();
 
    sink->soc.frameOutCount= 0;
    sink->soc.frameDisplayCount= 0;
@@ -1494,6 +1502,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
    sink->soc.emitFirstFrameSignal= FALSE;
+   sink->soc.decodeError= FALSE;
 
    if ( sink->soc.inputFormats )
    {
@@ -4268,6 +4277,17 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
+               if ( (sink->soc.frameOutCount == 0) && (sink->soc.frameInCount > 0) && !sink->soc.decodeError )
+               {
+                  gint64 now= g_get_monotonic_time();
+                  float frameRate= (sink->soc.frameRate != 0.0 ? sink->soc.frameRate : 30.0);
+                  float frameDelay= sink->soc.frameInCount / sink->soc.frameRate;
+                  if ( (frameDelay > 1.0) && (now-sink->soc.videoStartTime > 2000000LL) )
+                  {
+                     sink->soc.decodeError= TRUE;
+                     postDecodeError( sink );
+                  }
+               }
                usleep( 1000 );
                continue;
             }
@@ -4513,6 +4533,31 @@ static gpointer wstDispatchThread(gpointer data)
       GST_DEBUG("dispatchThread: exit");
    }
    return NULL;
+}
+
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText )
+{
+   GError *error= g_error_new(GST_CORE_ERROR, errorCode, errorText);
+   if ( error )
+   {
+      GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));
+      GstMessage *msg= gst_message_new_error( GST_OBJECT(parent), error, errorText );
+      if ( msg )
+      {
+         if ( !gst_element_post_message( GST_ELEMENT(sink), msg ) )
+         {
+            GST_ERROR( "Error: gst_element_post_message failed for errorCode %d errorText (%s)", errorCode, errorText);
+         }
+      }
+      else
+      {
+         GST_ERROR( "Error: gst_message_new_error failed for errorCode %d errorText (%s)", errorCode, errorText);
+      }
+   }
+   else
+   {
+      GST_ERROR("Error: g_error_new failed for errorCode %d errorText (%s)", errorCode, errorText );
+   }
 }
 
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)

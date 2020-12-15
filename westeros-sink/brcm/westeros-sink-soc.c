@@ -46,6 +46,8 @@
 #define DEFAULT_LATENCY_TARGET (100)
 #define MAX_ZORDER (100)
 #define QOS_INTERVAL (1000)
+#define DECODE_VERIFY_DELAY (5000000)
+#define DECODE_VERIFY_MAX_BYTES (4*1024*1024)
 
 #ifndef DRM_FORMAT_RGBA8888
 #define DRM_FORMAT_RGBA8888 (0x34324152)
@@ -53,6 +55,8 @@
 
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
+
+#define postDecodeError( sink ) postErrorMessage( (sink), -16, "video decode error" )
 
 enum
 {
@@ -100,6 +104,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink );
 static void freeCaptureSurfaces( GstWesterosSink *sink );
 static gboolean allocCaptureSurfaces( GstWesterosSink *sink );
 static gboolean queryPeerHandles(GstWesterosSink *sink);
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText );
 static gpointer captureThread(gpointer data);
 static void processFrame( GstWesterosSink *sink );
 static void updateVideoStatus( GstWesterosSink *sink );
@@ -662,9 +667,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.emitUnderflow= FALSE;
    sink->soc.emitPTSError= FALSE;
    sink->soc.emitResourceChange= FALSE;
+   sink->soc.emitDecodeError= FALSE;
+   sink->soc.decodeError= FALSE;
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
+   sink->soc.prevNumDecodeErrors= 0;
    sink->soc.sb= 0;
    sink->soc.activeBuffers= 0;
    sink->soc.captureEnabled= FALSE;
@@ -1515,10 +1523,13 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.emitUnderflow= FALSE;
    sink->soc.emitPTSError= FALSE;
    sink->soc.emitResourceChange= FALSE;
+   sink->soc.emitDecodeError= FALSE;
+   sink->soc.decodeError= FALSE;
    sink->soc.noFrameCount= 0;
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
+   sink->soc.prevNumDecodeErrors= 0;
    sink->soc.presentationStarted= FALSE;
    UNLOCK(sink);
 
@@ -1582,6 +1593,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    if ( rc != NEXUS_SUCCESS )
    {
       GST_ERROR("gst_westeros_sink_soc_start_video: NEXUS_SimpleVideoDecoder_SetStcChannel failed: %d", (int)rc);
+      postDecodeError( sink );
       goto exit;
    }
 
@@ -1604,6 +1616,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    if ( rc != NEXUS_SUCCESS )
    {
       GST_ERROR("gst_westeros_sink_soc_start_video: NEXUS_SimpleVideoDecoder_Start failed: %d", (int)rc);
+      postDecodeError( sink );
       goto exit;
    }
 
@@ -1733,11 +1746,14 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
+   sink->soc.prevNumDecodeErrors= 0;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
    sink->soc.emitUnderflow= FALSE;
    sink->soc.emitPTSError= FALSE;
    sink->soc.emitResourceChange= FALSE;
+   sink->soc.emitDecodeError= FALSE;
+   sink->soc.decodeError= FALSE;
    UNLOCK( sink );
 }
 
@@ -1969,6 +1985,31 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    return TRUE;
 }
 
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText )
+{
+   GError *error= g_error_new(GST_CORE_ERROR, errorCode, errorText);
+   if ( error )
+   {
+      GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));
+      GstMessage *msg= gst_message_new_error( GST_OBJECT(parent), error, errorText );
+      if ( msg )
+      {
+         if ( !gst_element_post_message( GST_ELEMENT(sink), msg ) )
+         {
+            GST_ERROR( "Error: gst_element_post_message failed for errorCode %d errorText (%s)", errorCode, errorText);
+         }
+      }
+      else
+      {
+         GST_ERROR( "Error: gst_message_new_error failed for errorCode %d errorText (%s)", errorCode, errorText);
+      }
+   }
+   else
+   {
+      GST_ERROR("Error: g_error_new failed for errorCode %d errorText (%s)", errorCode, errorText );
+   }
+}
+
 static gpointer captureThread(gpointer data) 
 {
    GstWesterosSink *sink= (GstWesterosSink*)data;
@@ -2015,6 +2056,9 @@ static gpointer captureThread(gpointer data)
       gboolean emitResourceChange= sink->soc.emitResourceChange;
       sink->soc.emitResourceChange= FALSE;
       gboolean haveResources= sink->soc.haveResources;
+      gboolean emitDecodeError= sink->soc.emitDecodeError;
+      sink->soc.emitDecodeError= FALSE;
+      sink->soc.decodeError= TRUE;
       UNLOCK( sink );
 
       if ( emitEOS )
@@ -2094,6 +2138,23 @@ static gpointer captureThread(gpointer data)
             }
             gst_object_unref( pad );
          }
+      }
+
+      if ( emitDecodeError )
+      {
+         NEXUS_Error rc;
+         NEXUS_VideoDecoderStatus videoStatus;
+
+         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_PTSERROR], 0, (unsigned int)(sink->currentPTS/2), NULL);
+
+         rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
+         if ( NEXUS_SUCCESS != rc )
+         {
+            GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
+         }
+
+         GST_INFO("post video decode error msg: errcnt %d", videoStatus.numDecodeErrors);
+         postDecodeError( sink );
       }
 
       if ( sink->soc.captureEnabled )
@@ -2392,7 +2453,26 @@ static void updateVideoStatus( GstWesterosSink *sink )
          else
          if ( !sink->soc.presentationStarted && videoStatus.numDisplayed == 0 )
          {
-             // no-op
+             if ( !sink->soc.decodeError )
+             {
+                int limit= sink->soc.noFrameCount*FRAME_POLL_TIME;
+                if ( videoStatus.started && (videoStatus.numDecoded > sink->soc.prevNumDecoded) )
+                {
+                   ++sink->soc.noFrameCount;
+                   limit += FRAME_POLL_TIME;
+                   if ( limit >= DECODE_VERIFY_DELAY )
+                   {
+                      sink->soc.emitDecodeError= TRUE;
+                   }
+                }
+                if ( (videoStatus.numDecoded > DECODE_VERIFY_MAX_BYTES) &&
+                     (videoStatus.numPicturesReceived == 0) &&
+                     (limit > 2*DECODE_VERIFY_DELAY/3) )
+                {
+                   sink->soc.emitDecodeError= TRUE;
+                }
+                sink->soc.prevNumDecoded= videoStatus.numDecoded;
+             }
          }
          else
          if ( !sink->soc.haveResources )
@@ -2442,6 +2522,12 @@ static void updateVideoStatus( GstWesterosSink *sink )
             {
                emitFirstFrame= TRUE;
             }
+
+            if ( videoStatus.numDecodeErrors != sink->soc.prevNumDecodeErrors )
+            {
+               sink->soc.emitDecodeError= TRUE;
+            }
+            sink->soc.prevNumDecodeErrors= videoStatus.numDecodeErrors;
 
             sink->soc.frameCount++;
             sink->soc.noFrameCount= 0;
