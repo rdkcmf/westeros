@@ -164,6 +164,9 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          break;
       case V4L2_PIX_FMT_HEVC:
       case V4L2_PIX_FMT_VP9:
+      #ifdef V4L2_PIX_FMT_AV1
+      case V4L2_PIX_FMT_AV1:
+      #endif
          frameWidth= sink->soc.frameWidthStream;
          frameHeight= sink->soc.frameHeightStream;
          if ( (frameWidth > 1920) || (frameHeight > 1080) )
