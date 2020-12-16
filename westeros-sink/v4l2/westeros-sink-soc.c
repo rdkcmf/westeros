@@ -867,6 +867,13 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             result= TRUE;
          }
          #endif
+         #ifdef V4L2_PIX_FMT_AV1
+         else if ( (len == 11) && !strncmp("video/x-av1", mime, len) )
+         {
+            sink->soc.inputFormat= V4L2_PIX_FMT_AV1;
+            result= TRUE;
+         }
+         #endif
          else
          {
             GST_ERROR("gst_westeros_sink_soc_accept_caps: not accepting caps (%s)", mime );
@@ -1608,6 +1615,16 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                                 "width=(int) [1,MAX], " \
                                                 "height=(int) [1,MAX] ; " \
                                                 "video/x-vp9(memory:DMABuf) ; "
+                                             );
+               break;
+            #endif
+            #ifdef V4L2_PIX_FMT_AV1
+            case V4L2_PIX_FMT_AV1:
+               capsTemp= gst_caps_from_string(
+                                                "video/x-av1, " \
+                                                "width=(int) [1,MAX], " \
+                                                "height=(int) [1,MAX] ; " \
+                                                "video/x-av1(memory:DMABuf) ; "
                                              );
                break;
             #endif
