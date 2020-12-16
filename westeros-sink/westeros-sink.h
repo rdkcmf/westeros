@@ -33,6 +33,17 @@
 
 #define WESTEROS_UNUSED(x) ((void)(x))
 
+#ifdef USE_RAW_SINK
+typedef struct _GstWesterosRawSink GstWesterosRawSink;
+typedef struct _GstWesterosRawSinkClass GstWesterosRawSinkClass;
+#define _GstWesterosSink _GstWesterosRawSink
+#define GstWesterosSink GstWesterosRawSink
+#define _GstWesterosSinkSoc _GstWesterosRawSinkSoc
+#define GstWesterosSinkSoc GstWesterosRawSinkSoc
+#define _GstWesterosSinkClass _GstWesterosRawSinkClass
+#endif
+
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_WESTEROS_SINK \

@@ -24,7 +24,7 @@ GST_BASE_CFLAGS ?=
 GST_BASE_LIBS ?=
 LIB_SUB_DIR= gstreamer-0.10
 
-AM_CFLAGS = $(GST_CFLAGS)
+AM_CFLAGS = $(GST_CFLAGS) -DUSE_RAW_SINK
 
 AM_LDFLAGS = $(GST_LIBS) $(GSTBASE_LIBS) $(GSTVIDEO_LIBS) $(GSTALLOCATORS_LIBS) $(WAYLANDLIB) -avoid-version
 
@@ -36,16 +36,16 @@ if HAVE_GST_ALLOCATORS
 AM_CFLAGS += -DUSE_GST_ALLOCATORS
 endif
 
-plugin_LTLIBRARIES = libgstwesterossink.la
+plugin_LTLIBRARIES = libgstwesterosrawsink.la
 
-libgstwesterossink_la_SOURCES = westeros-sink.c westeros-sink-soc.c
+libgstwesterosrawsink_la_SOURCES = westeros-sink.c westeros-sink-soc.c
 
-libgstwesterossink_la_CFLAGS= \
+libgstwesterosrawsink_la_CFLAGS= \
    $(AM_CFLAGS) \
    $(GST_CFLAGS) \
    -I${STAGING_INCDIR}/libdrm
    
-libgstwesterossink_la_LDFLAGS= \
+libgstwesterosrawsink_la_LDFLAGS= \
    $(AM_LDFLAGS) \
    $(GST_LIBS)  $(GSTBASE_LIBS) $(WAYLANDLIB) -avoid-version \
    -ldrm -lgbm \
@@ -57,20 +57,20 @@ libgstwesterossink_la_LDFLAGS= \
 distcleancheck_listfiles = *-libtool
 
 ## IPK Generation Support
-libgstwesterossink_IPK_OUTDIR = $(abs_top_builddir)/ipk
-libgstwesterossink_IPK_STAGING_DIR=$(abs_top_builddir)/staging_dir
-libgstwesterossink_IPK_TMP_DIR=$(libgstwesterossink_IPK_STAGING_DIR)/ipk
+libgstwesterosrawsink_IPK_OUTDIR = $(abs_top_builddir)/ipk
+libgstwesterosrawsink_IPK_STAGING_DIR=$(abs_top_builddir)/staging_dir
+libgstwesterosrawsink_IPK_TMP_DIR=$(libgstwesterosrawsink_IPK_STAGING_DIR)/ipk
 
-libgstwesterossink_CONTROL_FILES = control
-libgstwesterossink_IPK_FILES  = debian-binary control.tar.gz data.tar.gz
-libgstwesterossink_IPK_OUTPUT = libgstwesterossink.ipk
+libgstwesterosrawsink_CONTROL_FILES = control
+libgstwesterosrawsink_IPK_FILES  = debian-binary control.tar.gz data.tar.gz
+libgstwesterosrawsink_IPK_OUTPUT = libgstwesterosrawsink.ipk
 
 package_ipk:
 	@echo "Generating IPK Package"
-	$(MAKE) prefix=$(libgstwesterossink_IPK_STAGING_DIR) install
-	$(mkdir_p) $(libgstwesterossink_IPK_TMP_DIR)/usr/lib/$(LIB_SUB_DIR)
-	cp -aRf $(libgstwesterossink_IPK_STAGING_DIR)/lib/$(LIB_SUB_DIR)/*.so $(libgstwesterossink_IPK_TMP_DIR)/usr/lib/$(LIB_SUB_DIR)
-	tar -czvf $(libgstwesterossink_IPK_OUTDIR)/data.tar.gz -C $(libgstwesterossink_IPK_TMP_DIR) usr
-	tar -czvf $(libgstwesterossink_IPK_OUTDIR)/control.tar.gz -C $(libgstwesterossink_IPK_OUTDIR) $(libgstwesterossink_CONTROL_FILES)
-	cd $(libgstwesterossink_IPK_OUTDIR) && ar cr $(libgstwesterossink_IPK_OUTPUT) $(libgstwesterossink_IPK_FILES) && cd -
+	$(MAKE) prefix=$(libgstwesterosrawsink_IPK_STAGING_DIR) install
+	$(mkdir_p) $(libgstwesterosrawsink_IPK_TMP_DIR)/usr/lib/$(LIB_SUB_DIR)
+	cp -aRf $(libgstwesterosrawsink_IPK_STAGING_DIR)/lib/$(LIB_SUB_DIR)/*.so $(libgstwesterosrawsink_IPK_TMP_DIR)/usr/lib/$(LIB_SUB_DIR)
+	tar -czvf $(libgstwesterosrawsink_IPK_OUTDIR)/data.tar.gz -C $(libgstwesterosrawsink_IPK_TMP_DIR) usr
+	tar -czvf $(libgstwesterosrawsink_IPK_OUTDIR)/control.tar.gz -C $(libgstwesterosrawsink_IPK_OUTDIR) $(libgstwesterosrawsink_CONTROL_FILES)
+	cd $(libgstwesterosrawsink_IPK_OUTDIR) && ar cr $(libgstwesterosrawsink_IPK_OUTPUT) $(libgstwesterosrawsink_IPK_FILES) && cd -
 

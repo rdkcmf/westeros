@@ -944,12 +944,26 @@ static void gst_westeros_sink_base_init(gpointer g_class)
 {
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (g_class);
 
-  GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug, "westerossink", 0, "westerossink element");
+  GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug,
+                           #ifdef USE_RAW_SINK
+                           "westerosrawsink",
+                           0,
+                           "westerosrawsink element"
+                           #else
+                           "westerossink",
+                           0,
+                           "westerossink element"
+                           #endif
+                          );
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_westeros_sink_pad_template));
   gst_element_class_set_details_simple (gstelement_class, "Westeros Sink",
+      #ifdef USE_RAW_SINK
+      "Sink/Video",
+      #else
       "Codec/Decoder/Video/Sink/Video",
+      #endif
       "Writes buffers to the westeros wayland compositor",
       "Comcast");
 }
@@ -1017,12 +1031,26 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
            G_MININT64, G_MAXINT64, 0, G_PARAM_READABLE));
 
 #ifdef USE_GST1
-  GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug, "westerossink", 0, "westerossink element");
+  GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug,
+                           #ifdef USE_RAW_SINK
+                           "westerosrawsink",
+                           0,
+                           "westerosrawsink element"
+                           #else
+                           "westerossink",
+                           0,
+                           "westerossink element"
+                           #endif
+                          );
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_westeros_sink_pad_template));
   gst_element_class_set_details_simple (gstelement_class, "Westeros Sink",
+      #ifdef USE_RAW_SINK
+      "Sink/Video",
+      #else
       "Codec/Decoder/Video/Sink/Video",
+      #endif
       "Writes buffers to the westeros wayland compositor",
       "Comcast");
 #endif
@@ -2093,7 +2121,14 @@ void gst_westeros_sink_eos_detected( GstWesterosSink *sink )
 
 static gboolean westeros_sink_init (GstPlugin * plugin)
 {
-   return gst_element_register (plugin, "westerossink", GST_RANK_PRIMARY, gst_westeros_sink_get_type ());
+   return gst_element_register (plugin,
+                                #ifdef USE_RAW_SINK
+                                "westerosrawsink",
+                                #else
+                                "westerossink",
+                                #endif
+                                GST_RANK_PRIMARY,
+                                gst_westeros_sink_get_type ());
 }
 
 #ifndef PACKAGE
@@ -2104,7 +2139,11 @@ static gboolean westeros_sink_init (GstPlugin * plugin)
 GST_PLUGIN_DEFINE (
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
+    #ifdef USE_RAW_SINK
+    westerosrawsink,
+    #else
     westerossink,
+    #endif
     "Writes buffers to the westeros wayland compositor",
     westeros_sink_init, 
     VERSION, 
@@ -2115,7 +2154,11 @@ GST_PLUGIN_DEFINE (
 GST_PLUGIN_DEFINE (
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-   "westerossink",
+    #ifdef USE_RAW_SINK
+    "westerosrawsink",
+    #else
+    "westerossink",
+    #endif
     "Writes buffers to the westeros wayland compositor",
     westeros_sink_init, 
     VERSION, 
