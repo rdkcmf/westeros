@@ -56,7 +56,7 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define GST_CAT_DEFAULT gst_westeros_sink_debug
 
-#define postDecodeError( sink ) postErrorMessage( (sink), -16, "video decode error" )
+#define postDecodeError( sink ) postErrorMessage( (sink), GST_STREAM_ERROR_DECODE, "video decode error" )
 
 enum
 {
@@ -77,7 +77,8 @@ enum
   PROP_IMMEDIATE_OUTPUT,
   PROP_FRAME_STEP_ON_PREROLL,
   PROP_ENABLE_TEXTURE,
-  PROP_QUEUED_FRAMES
+  PROP_QUEUED_FRAMES,
+  PROP_REPORT_DECODE_ERRORS
   #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
   ,
   PROP_PIP
@@ -93,6 +94,7 @@ enum
    SIGNAL_FIRSTFRAME,
    SIGNAL_UNDERFLOW,
    SIGNAL_PTSERROR,
+   SIGNAL_DECODEERROR,
    SIGNAL_NEWTEXTURE,
    SIGNAL_TIMECODE,
    MAX_SIGNAL
@@ -250,6 +252,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                        "Get number for frames that are decoded and queued for rendering",
                        0, G_MAXUINT32, 0, G_PARAM_READABLE ));
 
+   g_object_class_install_property (gobject_class, PROP_REPORT_DECODE_ERRORS,
+     g_param_spec_boolean ("report-decode-errors",
+                           "enable decodoe error signal",
+                           "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+
 
    #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
    g_object_class_install_property (gobject_class, PROP_PIP,
@@ -288,6 +295,17 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                               2,
                                               G_TYPE_UINT,
                                               G_TYPE_POINTER );
+   g_signals[SIGNAL_DECODEERROR]= g_signal_new( "decode-error-callback",
+                                                G_TYPE_FROM_CLASS(gstelement_class),
+                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                                0,    // class offset
+                                                NULL, // accumulator
+                                                NULL, // accu data
+                                                g_cclosure_marshal_VOID__UINT_POINTER,
+                                                G_TYPE_NONE,
+                                                2,
+                                                G_TYPE_UINT,
+                                                G_TYPE_POINTER );
    g_signals[SIGNAL_UNDERFLOW]= g_signal_new( "buffer-underflow-callback",
                                               G_TYPE_FROM_CLASS(gstelement_class),
                                               (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -650,6 +668,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.useLowDelay= FALSE;
    sink->soc.frameStepOnPreroll= FALSE;
    sink->soc.enableTextureSignal= FALSE;
+   sink->soc.enableDecodeErrorSignal= FALSE;
    sink->soc.latencyTarget= DEFAULT_LATENCY_TARGET;
    sink->soc.connectId= 0;
    sink->soc.quitCaptureThread= TRUE;
@@ -1026,6 +1045,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
             break;
          }
+      case PROP_REPORT_DECODE_ERRORS:
+         {
+            sink->soc.enableDecodeErrorSignal= g_value_get_boolean(value);
+            break;
+         }
       #if (NEXUS_NUM_VIDEO_WINDOWS > 1)
       case PROP_PIP:
          {
@@ -1121,6 +1145,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
+         break;
+      case PROP_REPORT_DECODE_ERRORS:
+         g_value_set_boolean(value, sink->soc.enableDecodeErrorSignal);
          break;
       case PROP_QUEUED_FRAMES:
          {
@@ -1987,7 +2014,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
 
 static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText )
 {
-   GError *error= g_error_new(GST_CORE_ERROR, errorCode, errorText);
+   GError *error= g_error_new(GST_STREAM_ERROR, errorCode, errorText);
    if ( error )
    {
       GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));
@@ -2145,16 +2172,25 @@ static gpointer captureThread(gpointer data)
          NEXUS_Error rc;
          NEXUS_VideoDecoderStatus videoStatus;
 
-         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_PTSERROR], 0, (unsigned int)(sink->currentPTS/2), NULL);
-
          rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
          if ( NEXUS_SUCCESS != rc )
          {
             GST_ERROR("Error NEXUS_SimpleVideoDecoder_GetStatus: %d", (int)rc);
          }
 
-         GST_INFO("post video decode error msg: errcnt %d", videoStatus.numDecodeErrors);
-         postDecodeError( sink );
+         if ( videoStatus.numDecodeErrors != sink->soc.prevNumDecodeErrors )
+         {
+            sink->soc.prevNumDecodeErrors= videoStatus.numDecodeErrors;
+            if ( sink->soc.enableDecodeErrorSignal )
+            {
+               GST_INFO("fire decode-error-callback: errcnt %d", videoStatus.numDecodeErrors);
+               g_signal_emit(G_OBJECT(sink), g_signals[SIGNAL_DECODEERROR], 0, (unsigned int)(sink->currentPTS/2), NULL);
+            }
+         }
+         else
+         {
+            postDecodeError( sink );
+         }
       }
 
       if ( sink->soc.captureEnabled )
@@ -2523,11 +2559,10 @@ static void updateVideoStatus( GstWesterosSink *sink )
                emitFirstFrame= TRUE;
             }
 
-            if ( videoStatus.numDecodeErrors != sink->soc.prevNumDecodeErrors )
+            if ( sink->soc.enableDecodeErrorSignal && (videoStatus.numDecodeErrors != sink->soc.prevNumDecodeErrors) )
             {
                sink->soc.emitDecodeError= TRUE;
             }
-            sink->soc.prevNumDecodeErrors= videoStatus.numDecodeErrors;
 
             sink->soc.frameCount++;
             sink->soc.noFrameCount= 0;

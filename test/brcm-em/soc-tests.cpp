@@ -5487,6 +5487,14 @@ static gboolean busCallback(GstBus *bus, GstMessage *message, gpointer data)
     return TRUE;
 }
 
+static void decodeErrorCallback(GstElement *sink, guint size, void *context, gpointer data)
+{
+   bool *gotSignal= (bool*)data;
+
+   g_print("received decode error signal\n");
+   *gotSignal= true;
+}
+
 } // namespace EOSTests
 
 static bool testCaseSocSinkDecodeError1( EMCTX *emctx )
@@ -5506,6 +5514,7 @@ static bool testCaseSocSinkDecodeError1( EMCTX *emctx )
    int videoPidChannelProxy;
    TestCtx testCtx;
    int loopCount;
+   bool receivedSignal= false;
 
    memset( &testCtx, 0, sizeof(testCtx) );
 
@@ -5552,6 +5561,8 @@ static bool testCaseSocSinkDecodeError1( EMCTX *emctx )
       goto exit;
    }
 
+   g_signal_connect( sink, "decode-error-callback", G_CALLBACK(decodeErrorCallback), &receivedSignal);
+
    gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
 
    if ( gst_element_link( src, sink ) != TRUE )
@@ -5571,7 +5582,12 @@ static bool testCaseSocSinkDecodeError1( EMCTX *emctx )
 
    if ( testCtx.gotDecodeError )
    {
-      EMERROR("Got unexpected decode error");
+      EMERROR("Got unexpected decode error message");
+      goto exit;
+   }
+   if ( receivedSignal )
+   {
+      EMERROR("Got unexpected decode error signal");
       goto exit;
    }
 
@@ -5589,9 +5605,41 @@ static bool testCaseSocSinkDecodeError1( EMCTX *emctx )
       }
    }
 
-   if ( !testCtx.gotDecodeError )
+   if ( testCtx.gotDecodeError )
    {
-      EMERROR("Failed to receive decode error message");
+      EMERROR("Got unexpected decode error message");
+      goto exit;
+   }
+   if ( receivedSignal )
+   {
+      EMERROR("Got unexpected decode error signal");
+      goto exit;
+   }
+
+   receivedSignal= false;
+   g_object_set( G_OBJECT(sink), "report-decode-errors", TRUE, NULL );
+   EMSimpleVideoDecoderSetDecodeErrorCount( videoDecoder, 10 );
+
+   // Allow pipeline to run briefly
+   loopCount= 400;
+   while( loopCount-- > 0 )
+   {
+      usleep( 10000 );
+      g_main_context_iteration( NULL, FALSE);
+      if ( testCtx.gotDecodeError )
+      {
+         break;
+      }
+   }
+
+   if ( testCtx.gotDecodeError )
+   {
+      EMERROR("Got unexpected decode error message");
+      goto exit;
+   }
+   if ( !receivedSignal )
+   {
+      EMERROR("Failed to receive decode error signal");
       goto exit;
    }
 

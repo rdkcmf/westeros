@@ -128,6 +128,7 @@ struct _GstWesterosSinkSoc
 
    char *devname;
    gboolean enableTextureSignal;
+   gboolean enableDecodeErrorSignal;
    int v4l2Fd;
    struct v4l2_capability caps;
    uint32_t deviceCaps;

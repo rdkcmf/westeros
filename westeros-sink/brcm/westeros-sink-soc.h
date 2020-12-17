@@ -56,6 +56,7 @@ struct _GstWesterosSinkSoc
    gboolean useLowDelay;
    gboolean frameStepOnPreroll;
    gboolean enableTextureSignal;
+   gboolean enableDecodeErrorSignal;
    gint latencyTarget;
    
    unsigned int connectId;
