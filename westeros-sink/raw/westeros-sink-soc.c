@@ -32,6 +32,10 @@
 #include <drm/drm_fourcc.h>
 #include <xf86drm.h>
 
+#ifdef USE_GST_VIDEO
+#include <gst/video/gstvideometa.h>
+#endif
+
 #ifdef USE_GST_ALLOCATORS
 #include <gst/allocators/gstdmabuf.h>
 #endif
@@ -91,6 +95,9 @@ static void drmFreeBuffer( GstWesterosSink *sink, int buffIndex );
 static void drmLockBuffer( GstWesterosSink *sink, int buffIndex );
 static bool drmUnlockBuffer( GstWesterosSink *sink, int buffIndex );
 static bool drmUnlockAllBuffers( GstWesterosSink *sink );
+#ifdef USE_GST_ALLOCATORS
+static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer );
+#endif
 static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height );
 static void drmReleaseBuffer( GstWesterosSink *sink, int buffIndex );
 
@@ -313,10 +320,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
          sink->soc.drmBuffer[i].lockCount= 0;
          sink->soc.drmBuffer[i].width= -1;
          sink->soc.drmBuffer[i].height= -1;
-         sink->soc.drmBuffer[i].fd0= -1;
-         sink->soc.drmBuffer[i].fd1= -1;
-         sink->soc.drmBuffer[i].handle0= 0;
-         sink->soc.drmBuffer[i].handle1= 0;
+         sink->soc.drmBuffer[i].fd[0]= -1;
+         sink->soc.drmBuffer[i].fd[1]= -1;
+         sink->soc.drmBuffer[i].handle[0]= 0;
+         sink->soc.drmBuffer[i].handle[1]= 0;
+         sink->soc.drmBuffer[i].gstbuf= 0;
+         sink->soc.drmBuffer[i].localAlloc= false;
       }
    }
    rc= sem_init( &sink->soc.drmBuffSem, 0, WST_NUM_DRM_BUFFERS );
@@ -664,32 +673,47 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
    {
       gint64 nanoTime;
       int rc, buffIndex;
-      int inSize, offset, avail, copylen;
-      unsigned char *inData;
+      int inSize= 0, offset, avail, copylen;
+      unsigned char *inData= 0;
       WstDrmBuffer *drmBuff= 0;
+      bool importedBuffer= false;
       #ifdef USE_GST1
       GstMapInfo map;
-      gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ);
-      inSize= map.size;
-      inData= map.data;
-      #else
-      inSize= (int)GST_BUFFER_SIZE(buffer);
-      inData= GST_BUFFER_DATA(buffer);
       #endif
       #ifdef USE_GST_ALLOCATORS
       GstMemory *mem;
 
-      ++sink->soc.frameInCount;
-
       mem= gst_buffer_peek_memory( buffer, 0 );
       if ( gst_is_dmabuf_memory(mem) )
       {
-         /* TBD: support gstreamer buffers backed by dma-buf */
-         g_print("Warning: using dma-buf for input: not supported yet");
+         GST_DEBUG("using dma-buf for input");
+         drmBuff= drmImportBuffer( sink, buffer );
+         if ( drmBuff )
+         {
+            inSize= drmBuff->size[0] + drmBuff->size[1];
+            GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
+            importedBuffer= true;
+         }
       }
       #endif
 
-      GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
+      if ( !importedBuffer )
+      {
+         #ifdef USE_GST1
+         gst_buffer_map(buffer, &map, (GstMapFlags)GST_MAP_READ);
+         inSize= map.size;
+         inData= map.data;
+         #else
+         inSize= (int)GST_BUFFER_SIZE(buffer);
+         inData= GST_BUFFER_DATA(buffer);
+         #endif
+
+         GST_LOG("gst_westeros_sink_soc_render: buffer %p, len %d timestamp: %lld", buffer, inSize, GST_BUFFER_PTS(buffer) );
+
+         drmBuff= drmGetBuffer( sink, sink->soc.frameWidth, sink->soc.frameHeight );
+      }
+
+      ++sink->soc.frameInCount;
 
       if ( GST_BUFFER_PTS_IS_VALID(buffer) )
       {
@@ -752,13 +776,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       if ( inSize )
       {
-         drmBuff= drmGetBuffer( sink, sink->soc.frameWidth, sink->soc.frameHeight );
          if ( drmBuff )
          {
-            unsigned char *data;
-            unsigned char *Y, *U, *V;
-            int Ystride, Ustride, Vstride;
-
             if ( !sink->videoStarted )
             {
                sink->videoStarted= TRUE;
@@ -767,236 +786,250 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
             buffIndex= drmBuff->buffIndex;
 
-            switch( sink->soc.frameFormatStream )
+            if ( !importedBuffer )
             {
-               case DRM_FORMAT_NV12:
-                  Y= inData;
-                  Ystride= ((sink->soc.frameWidth + 3) & ~3);
-                  U= Y + Ystride*sink->soc.frameHeight;
-                  Ustride= Ystride;
-                  V= 0;
-                  Vstride= 0;
-                  break;
-               case DRM_FORMAT_YUV420:
-                  Y= inData;
-                  Ystride= ((sink->soc.frameWidth + 3) & ~3);
-                  U= Y + Ystride*sink->soc.frameHeight;
-                  Ustride= Ystride/2;
-                  V= U + Ustride*sink->soc.frameHeight/2;
-                  Vstride= Ystride/2;
-                  break;
-               default:
-                  Y= U= V= 0;
-                  break;
-            }
+               unsigned char *data;
+               unsigned char *Y, *U, *V;
+               int Ystride, Ustride, Vstride;
 
-            if ( Y )
-            {
-               data= (unsigned char*)mmap( NULL, drmBuff->size0, PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset0 );
-               if ( data )
+               switch( sink->soc.frameFormatStream )
                {
-                  int row;
-                  unsigned char *destRow= data;
-                  unsigned char *srcYRow= Y;
-                  for( row= 0; row < sink->soc.frameHeight; ++row )
-                  {
-                     memcpy( destRow, srcYRow, Ystride );
-                     destRow += drmBuff->pitch0;
-                     srcYRow += Ystride;
-                  }
-                  munmap( data, drmBuff->size0 );
+                  case DRM_FORMAT_NV12:
+                     Y= inData;
+                     Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                     U= Y + Ystride*sink->soc.frameHeight;
+                     Ustride= Ystride;
+                     V= 0;
+                     Vstride= 0;
+                     break;
+                  case DRM_FORMAT_YUV420:
+                     Y= inData;
+                     Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                     U= Y + Ystride*sink->soc.frameHeight;
+                     Ustride= Ystride/2;
+                     V= U + Ustride*sink->soc.frameHeight/2;
+                     Vstride= Ystride/2;
+                     break;
+                  default:
+                     Y= U= V= 0;
+                     break;
                }
-               if ( U && !V )
+
+               if ( Y )
                {
-                  data= (unsigned char*)mmap( NULL, drmBuff->size1, PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset1 );
+                  data= (unsigned char*)mmap( NULL, drmBuff->size[0], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[0] );
                   if ( data )
                   {
                      int row;
                      unsigned char *destRow= data;
-                     unsigned char *srcURow= U;
+                     unsigned char *srcYRow= Y;
                      for( row= 0; row < sink->soc.frameHeight; ++row )
                      {
-                        memcpy( destRow, srcURow, Ustride );
-                        destRow += drmBuff->pitch1;
-                        srcURow += Ustride;
+                        memcpy( destRow, srcYRow, Ystride );
+                        destRow += drmBuff->pitch[0];
+                        srcYRow += Ystride;
                      }
-                     munmap( data, drmBuff->size1 );
+                     munmap( data, drmBuff->size[0] );
                   }
-               }
-               if ( U && V )
-               {
-                  data= (unsigned char*)mmap( NULL, drmBuff->size1, PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset1 );
-                  if ( data )
+                  if ( U && !V )
                   {
-                     int row, col;
-                     unsigned char *dest, *destRow= data;
-                     unsigned char *srcU, *srcURow= U;
-                     unsigned char *srcV, *srcVRow= V;
-                     for( row= 0; row < sink->soc.frameHeight; row += 2 )
+                     data= (unsigned char*)mmap( NULL, drmBuff->size[1], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[1] );
+                     if ( data )
                      {
-                        dest= destRow;
-                        srcU= srcURow;
-                        srcV= srcVRow;
-                        for( col= 0; col < sink->soc.frameWidth; col += 2 )
+                        int row;
+                        unsigned char *destRow= data;
+                        unsigned char *srcURow= U;
+                        for( row= 0; row < sink->soc.frameHeight; ++row )
                         {
-                           *dest++= *srcU++;
-                           *dest++= *srcV++;
+                           memcpy( destRow, srcURow, Ustride );
+                           destRow += drmBuff->pitch[1];
+                           srcURow += Ustride;
                         }
-                        destRow += drmBuff->pitch1;
-                        srcURow += Ustride;
-                        srcVRow += Vstride;
+                        munmap( data, drmBuff->size[1] );
                      }
-                     munmap( data, drmBuff->size1 );
                   }
-               }
-
-               if ( sink->soc.frameOutCount == 0 )
-               {
-                  sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
-               }
-
-               drmBuff->frameTime= ((GST_BUFFER_PTS(buffer) + 500LL) / 1000LL);
-
-               if ( !sink->soc.conn )
-               {
-                  /* If we are not connected to a video server, set position here */
-                  gint64 frameTime= GST_BUFFER_PTS(buffer);
-                  gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
-                  sink->position= sink->positionSegmentStart + frameTime - firstNano;
-                  sink->currentPTS= frameTime / (GST_SECOND/90000LL);
-                  if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+                  if ( U && V )
                   {
-                     sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
-                  }
-               }
-
-               if ( sink->soc.enableTextureSignal )
-               {
-                  int fd0, l0, s0, fd1, l1, fd2, s1, l2, s2;
-                  void *p0, *p1, *p2;
-
-                  fd0= drmBuff->fd0;
-                  fd1= drmBuff->fd1;
-                  fd2= -1;
-                  s0= drmBuff->pitch0;
-                  s1= drmBuff->pitch1;
-                  s2= 0;
-                  l0= drmBuff->size0;
-                  l1= drmBuff->size1;
-                  l2= 0;
-                  p0= 0;
-                  p1= 0;
-                  p2= 0;
-
-                  g_signal_emit( G_OBJECT(sink),
-                                 g_signals[SIGNAL_NEWTEXTURE],
-                                 0,
-                                 DRM_FORMAT_NV12,
-                                 sink->soc.frameWidth,
-                                 sink->soc.frameHeight,
-                                 fd0, l0, s0, p0,
-                                 fd1, l1, s1, p1,
-                                 fd2, l2, s2, p2
-                               );
-               }
-               else if ( sink->soc.captureEnabled && sink->soc.sb )
-               {
-                  bufferInfo *binfo;
-                  binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
-                  if ( binfo )
-                  {
-                     struct wl_buffer *wlbuff;
-                     int fd0, fd1, fd2;
-                     int stride0, stride1;
-                     int offset1= 0;
-                     fd0= drmBuff->fd0;
-                     fd1= drmBuff->fd1;
-                     fd2= fd0;
-                     stride0= drmBuff->pitch0;
-                     stride1= drmBuff->pitch1;
-
-                     binfo->sink= sink;
-                     binfo->buffIndex= buffIndex;
-
-                     wlbuff= wl_sb_create_planar_buffer_fd2( sink->soc.sb,
-                                                             fd0,
-                                                             fd1,
-                                                             fd2,
-                                                             drmBuff->width,
-                                                             drmBuff->height,
-                                                             WL_SB_FORMAT_NV12,
-                                                             0, /* offset0 */
-                                                             offset1, /* offset1 */
-                                                             0, /* offset2 */
-                                                             stride0, /* stride0 */
-                                                             stride1, /* stride1 */
-                                                             0  /* stride2 */
-                                                           );
-                     if ( wlbuff )
+                     data= (unsigned char*)mmap( NULL, drmBuff->size[1], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[1] );
+                     if ( data )
                      {
-                        wl_buffer_add_listener( wlbuff, &wl_buffer_listener, binfo );
-                        wl_surface_attach( sink->surface, wlbuff, sink->windowX, sink->windowY );
-                        wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-                        wl_surface_commit( sink->surface );
-                        wl_display_flush(sink->display);
-
-                        drmLockBuffer( sink, buffIndex );
-
-                        /* Advance any frames sent to video server towards requeueing to decoder */
-                        sink->soc.resubFd= sink->soc.prevFrame2Fd;
-                        sink->soc.prevFrame2Fd=sink->soc.prevFrame1Fd;
-                        sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
-                        sink->soc.nextFrameFd= -1;
-
-                        if ( sink->soc.framesBeforeHideVideo )
+                        int row, col;
+                        unsigned char *dest, *destRow= data;
+                        unsigned char *srcU, *srcURow= U;
+                        unsigned char *srcV, *srcVRow= V;
+                        for( row= 0; row < sink->soc.frameHeight; row += 2 )
                         {
-                           if ( --sink->soc.framesBeforeHideVideo == 0 )
+                           dest= destRow;
+                           srcU= srcURow;
+                           srcV= srcVRow;
+                           for( col= 0; col < sink->soc.frameWidth; col += 2 )
                            {
-                              wstSendHideVideoClientConnection( sink->soc.conn, true );
+                              *dest++= *srcU++;
+                              *dest++= *srcV++;
                            }
+                           destRow += drmBuff->pitch[1];
+                           srcURow += Ustride;
+                           srcVRow += Vstride;
                         }
-                     }
-                     else
-                     {
-                        free( binfo );
-                     }
-                  }
-               }
-               if ( sink->soc.conn )
-               {
-                  sink->soc.resubFd= sink->soc.prevFrame2Fd;
-                  sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
-                  sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
-                  sink->soc.nextFrameFd= sink->soc.drmBuffer[buffIndex].fd0;
-
-                  if ( wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex ) )
-                  {
-                     buffIndex= -1;
-                  }
-
-                  if ( sink->soc.framesBeforeHideGfx )
-                  {
-                     if ( --sink->soc.framesBeforeHideGfx == 0 )
-                     {
-                        wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
-                        wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-                        wl_surface_commit( sink->surface );
-                        wl_display_flush(sink->display);
-                        wl_display_dispatch_queue_pending(sink->display, sink->queue);
-                        wstSendHideVideoClientConnection( sink->soc.conn, false );
+                        munmap( data, drmBuff->size[1] );
                      }
                   }
                }
             }
-         }
-         LOCK(sink);
-         ++sink->soc.frameOutCount;
-         UNLOCK(sink);
-      }
 
-      #ifdef USE_GST1
-      gst_buffer_unmap( buffer, &map);
-      #endif
+            if ( sink->soc.frameOutCount == 0 )
+            {
+               sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
+            }
+
+            drmBuff->frameTime= ((GST_BUFFER_PTS(buffer) + 500LL) / 1000LL);
+
+            if ( !sink->soc.conn )
+            {
+               /* If we are not connected to a video server, set position here */
+               gint64 frameTime= GST_BUFFER_PTS(buffer);
+               gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
+               sink->position= sink->positionSegmentStart + frameTime - firstNano;
+               sink->currentPTS= frameTime / (GST_SECOND/90000LL);
+               if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+               {
+                  sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+               }
+            }
+
+            if ( sink->soc.enableTextureSignal )
+            {
+               int fd0, l0, s0, fd1, l1, fd2, s1, l2, s2;
+               void *p0, *p1, *p2;
+
+               fd0= drmBuff->fd[0];
+               fd1= drmBuff->fd[1];
+               fd2= -1;
+               s0= drmBuff->pitch[0];
+               s1= drmBuff->pitch[1];
+               s2= 0;
+               l0= drmBuff->size[0];
+               l1= drmBuff->size[1];
+               l2= 0;
+               p0= 0;
+               p1= 0;
+               p2= 0;
+
+               g_signal_emit( G_OBJECT(sink),
+                              g_signals[SIGNAL_NEWTEXTURE],
+                              0,
+                              DRM_FORMAT_NV12,
+                              sink->soc.frameWidth,
+                              sink->soc.frameHeight,
+                              fd0, l0, s0, p0,
+                              fd1, l1, s1, p1,
+                              fd2, l2, s2, p2
+                            );
+            }
+            else if ( sink->soc.captureEnabled && sink->soc.sb )
+            {
+               bufferInfo *binfo;
+               binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+               if ( binfo )
+               {
+                  struct wl_buffer *wlbuff;
+                  int fd0, fd1, fd2;
+                  int stride0, stride1;
+                  int offset1= 0;
+                  fd0= drmBuff->fd[0];
+                  fd1= drmBuff->fd[1];
+                  fd2= fd0;
+                  stride0= drmBuff->pitch[0];
+                  stride1= drmBuff->pitch[1];
+
+                  binfo->sink= sink;
+                  binfo->buffIndex= buffIndex;
+
+                  wlbuff= wl_sb_create_planar_buffer_fd2( sink->soc.sb,
+                                                          fd0,
+                                                          fd1,
+                                                          fd2,
+                                                          drmBuff->width,
+                                                          drmBuff->height,
+                                                          WL_SB_FORMAT_NV12,
+                                                          0, /* offset0 */
+                                                          offset1, /* offset1 */
+                                                          0, /* offset2 */
+                                                          stride0, /* stride0 */
+                                                          stride1, /* stride1 */
+                                                          0  /* stride2 */
+                                                        );
+                  if ( wlbuff )
+                  {
+                     wl_buffer_add_listener( wlbuff, &wl_buffer_listener, binfo );
+                     wl_surface_attach( sink->surface, wlbuff, sink->windowX, sink->windowY );
+                     wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+                     wl_surface_commit( sink->surface );
+                     wl_display_flush(sink->display);
+
+                     drmLockBuffer( sink, buffIndex );
+
+                     /* Advance any frames sent to video server towards requeueing to decoder */
+                     sink->soc.resubFd= sink->soc.prevFrame2Fd;
+                     sink->soc.prevFrame2Fd=sink->soc.prevFrame1Fd;
+                     sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
+                     sink->soc.nextFrameFd= -1;
+
+                     if ( sink->soc.framesBeforeHideVideo )
+                     {
+                        if ( --sink->soc.framesBeforeHideVideo == 0 )
+                        {
+                           wstSendHideVideoClientConnection( sink->soc.conn, true );
+                        }
+                     }
+                  }
+                  else
+                  {
+                     free( binfo );
+                  }
+               }
+            }
+            if ( sink->soc.conn )
+            {
+               sink->soc.resubFd= sink->soc.prevFrame2Fd;
+               sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
+               sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
+               sink->soc.nextFrameFd= sink->soc.drmBuffer[buffIndex].fd[0];
+
+               if ( wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex ) )
+               {
+                  buffIndex= -1;
+               }
+
+               if ( sink->soc.framesBeforeHideGfx )
+               {
+                  if ( --sink->soc.framesBeforeHideGfx == 0 )
+                  {
+                     wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
+                     wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+                     wl_surface_commit( sink->surface );
+                     wl_display_flush(sink->display);
+                     wl_display_dispatch_queue_pending(sink->display, sink->queue);
+                     wstSendHideVideoClientConnection( sink->soc.conn, false );
+                  }
+               }
+            }
+         }
+         if ( buffIndex != -1 )
+         {
+            drmReleaseBuffer( sink, buffIndex );
+         }
+      }
+      LOCK(sink);
+      ++sink->soc.frameOutCount;
+      UNLOCK(sink);
+
+      if ( !importedBuffer )
+      {
+         #ifdef USE_GST1
+         gst_buffer_unmap( buffer, &map);
+         #endif
+      }
    }
 }
 
@@ -1751,10 +1784,10 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          numFdToSend= 1;
          offset0= offset1= offset2= 0;
          stride0= stride1= stride2= sink->soc.frameWidth;
-         frameFd0= sink->soc.drmBuffer[buffIndex].fd0;
-         stride0= sink->soc.drmBuffer[buffIndex].pitch0;
-         frameFd1= sink->soc.drmBuffer[buffIndex].fd1;
-         stride1= sink->soc.drmBuffer[buffIndex].pitch1;
+         frameFd0= sink->soc.drmBuffer[buffIndex].fd[0];
+         stride0= sink->soc.drmBuffer[buffIndex].pitch[0];
+         frameFd1= sink->soc.drmBuffer[buffIndex].fd[1];
+         stride1= sink->soc.drmBuffer[buffIndex].pitch[1];
 
          pixelFormat= DRM_FORMAT_NV12;
 
@@ -2061,12 +2094,12 @@ static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int
          GST_ERROR("DRM_IOCTL_MODE_MAP_DUMB failed: rc %d errno %d", rc, errno);
          goto exit;
       }
-      drmBuff->handle0= createDumb.handle;
-      drmBuff->pitch0= createDumb.pitch;
-      drmBuff->size0= createDumb.size;
-      drmBuff->offset0= mapDumb.offset;
+      drmBuff->handle[0]= createDumb.handle;
+      drmBuff->pitch[0]= createDumb.pitch;
+      drmBuff->size[0]= createDumb.size;
+      drmBuff->offset[0]= mapDumb.offset;
 
-      rc= drmPrimeHandleToFD( sink->soc.drmFd, drmBuff->handle0, DRM_CLOEXEC | DRM_RDWR, &drmBuff->fd0 );
+      rc= drmPrimeHandleToFD( sink->soc.drmFd, drmBuff->handle[0], DRM_CLOEXEC | DRM_RDWR, &drmBuff->fd[0] );
       if ( rc )
       {
          GST_ERROR("drmPrimeHandleToFD failed: rc %d errno %d", rc, errno);
@@ -2091,12 +2124,12 @@ static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int
          GST_ERROR("DRM_IOCTL_MODE_MAP_DUMB failed: rc %d errno %d", rc, errno);
          goto exit;
       }
-      drmBuff->handle1= createDumb.handle;
-      drmBuff->pitch1= createDumb.pitch;
-      drmBuff->size1= createDumb.size;
-      drmBuff->offset1= mapDumb.offset;
+      drmBuff->handle[1]= createDumb.handle;
+      drmBuff->pitch[1]= createDumb.pitch;
+      drmBuff->size[1]= createDumb.size;
+      drmBuff->offset[1]= mapDumb.offset;
 
-      rc= drmPrimeHandleToFD( sink->soc.drmFd, drmBuff->handle1, DRM_CLOEXEC | DRM_RDWR, &drmBuff->fd1 );
+      rc= drmPrimeHandleToFD( sink->soc.drmFd, drmBuff->handle[1], DRM_CLOEXEC | DRM_RDWR, &drmBuff->fd[1] );
       if ( rc )
       {
          GST_ERROR("drmPrimeHandleToFD failed: rc %d errno %d", rc, errno);
@@ -2104,6 +2137,7 @@ static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int
       }
 
       drmBuff->bufferId= buffIndex;
+      drmBuff->localAlloc= true;
 
       result= true;
    }
@@ -2118,6 +2152,7 @@ exit:
 static void drmFreeBuffer( GstWesterosSink *sink, int buffIndex )
 {
    int i;
+   WstDrmBuffer *drmBuff= 0;
    if (
         (buffIndex < WST_NUM_DRM_BUFFERS) &&
         (sink->soc.drmBuffer[buffIndex].width != -1) &&
@@ -2126,31 +2161,34 @@ static void drmFreeBuffer( GstWesterosSink *sink, int buffIndex )
    {
       GST_LOG("drmFreeBuffer: (%dx%d)", sink->soc.drmBuffer[buffIndex].width, sink->soc.drmBuffer[buffIndex].height);
    }
-   for( i= 0; i < 2; ++i )
+   drmBuff= &sink->soc.drmBuffer[buffIndex];
+   if ( drmBuff->localAlloc )
    {
-      int *fd, *handle;
-      if ( i == 0 )
+      for( i= 0; i < WST_MAX_PLANE; ++i )
       {
-         fd= &sink->soc.drmBuffer[buffIndex].fd0;
-         handle= &sink->soc.drmBuffer[buffIndex].handle0;
+         int *fd, *handle;
+         fd= &drmBuff->fd[i];
+         handle= &drmBuff->handle[i];
+         if ( *fd >= 0 )
+         {
+            close( *fd );
+            *fd= -1;
+         }
+         if ( *handle )
+         {
+            struct drm_mode_destroy_dumb destroyDumb;
+            destroyDumb.handle= *handle;
+            ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyDumb );
+            *handle= 0;
+         }
       }
-      else
-      {
-         fd= &sink->soc.drmBuffer[buffIndex].fd1;
-         handle= &sink->soc.drmBuffer[buffIndex].handle1;
-      }
-      if ( *fd >= 0 )
-      {
-         close( *fd );
-         *fd= -1;
-      }
-      if ( *handle )
-      {
-         struct drm_mode_destroy_dumb destroyDumb;
-         destroyDumb.handle= *handle;
-         ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyDumb );
-         *handle= 0;
-      }
+   }
+   else if ( drmBuff->gstbuf )
+   {
+      gst_buffer_unref( drmBuff->gstbuf );
+      drmBuff->gstbuf= 0;
+      drmBuff->fd[0]= -1;
+      drmBuff->fd[1]= -1;
    }
 }
 
@@ -2193,6 +2231,87 @@ static bool drmUnlockAllBuffers( GstWesterosSink *sink )
    }
    sem_post( &sink->soc.drmBuffSem );
 }
+
+#ifdef USE_GST_ALLOCATORS
+static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
+{
+   WstDrmBuffer *drmBuff= 0;
+   int buffIndex;
+   int rc;
+
+   for ( ; ; )
+   {
+      rc= sem_trywait( &sink->soc.drmBuffSem );
+      if ( rc )
+      {
+         if ( errno == EAGAIN )
+         {
+            usleep( 1000 );
+            wstProcessMessagesVideoClientConnection( sink->soc.conn );
+            continue;
+         }
+      }
+      break;
+   }
+
+   for( buffIndex= 0; buffIndex < WST_NUM_DRM_BUFFERS; ++buffIndex )
+   {
+      drmBuff= &sink->soc.drmBuffer[buffIndex];
+      if ( !drmBuff->locked )
+      {
+         int i;
+         GstMemory *mem;
+         #ifdef USE_GST_VIDEO
+         GstVideoMeta *meta= gst_buffer_get_video_meta(buffer);
+         #endif
+         drmBuff->width= sink->soc.frameWidth;
+         drmBuff->height= sink->soc.frameHeight;
+         for( i= 0; i < WST_MAX_PLANE; ++i )
+         {
+            mem= gst_buffer_peek_memory( buffer, i );
+            if ( mem )
+            {
+               drmBuff->fd[i]= gst_dmabuf_memory_get_fd( mem );
+               drmBuff->size[i]= gst_memory_get_sizes( mem, &drmBuff->offset[i], NULL );
+               switch( sink->soc.frameFormatStream )
+               {
+                  case DRM_FORMAT_NV12:
+                     #ifdef USE_GST_VIDEO
+                     if ( meta )
+                     {
+                        drmBuff->pitch[i]= meta->stride[i];
+                     }
+                     else
+                     #endif
+                     {
+                        drmBuff->pitch[i]= ((sink->soc.frameWidth+63) & ~63);
+                     }
+                     break;
+                  default:
+                     GST_ERROR("Unsupported format (0x%x) for dma-buf import", sink->soc.frameFormatStream );
+                     break;
+               }
+            }
+            else
+            {
+               drmBuff->fd[i]= -1;
+               drmBuff->size[i]= 0;
+               drmBuff->offset[i]= 0;
+               drmBuff->pitch[i]= 0;
+            }
+            drmBuff->localAlloc= false;
+            drmBuff->gstbuf= gst_buffer_ref(buffer);
+         }
+         break;
+      }
+      else
+      {
+         drmBuff= 0;
+      }
+   }
+   return drmBuff;
+}
+#endif
 
 static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height )
 {
@@ -2246,6 +2365,10 @@ static void drmReleaseBuffer( GstWesterosSink *sink, int buffIndex )
       sink->soc.drmBuffer[buffIndex].frameNumber= -1;
       FRAME("out:       release buffer %d (%d)", sink->soc.drmBuffer[buffIndex].bufferId, buffIndex);
       GST_LOG( "%lld: release: buffer %d (%d)", getCurrentTimeMillis(), sink->soc.drmBuffer[buffIndex].bufferId, buffIndex);
+      if ( !sink->soc.drmBuffer[buffIndex].localAlloc )
+      {
+         drmFreeBuffer( sink, buffIndex );
+      }
       sem_post( &sink->soc.drmBuffSem );
    }
 }

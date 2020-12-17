@@ -42,26 +42,24 @@ typedef struct _WstVideoClientConnection
 } WstVideoClientConnection;
 
 #define WST_NUM_DRM_BUFFERS (20)
+#define WST_MAX_PLANE (2)
 typedef struct _WstDrmBuffer
 {
    int width;
    int height;
-   int fd0;
-   int fd1;
-   int handle0;
-   int handle1;
-   int size0;
-   int size1;
-   int offset0;
-   int offset1;
-   int pitch0;
-   int pitch1;
+   int fd[WST_MAX_PLANE];
+   int handle[WST_MAX_PLANE];
+   gsize size[WST_MAX_PLANE];
+   gsize offset[WST_MAX_PLANE];
+   gsize pitch[WST_MAX_PLANE];
    gint64 frameTime; /* in microseconds */
    int buffIndex;
    int frameNumber;
    int bufferId;
    bool locked;
    int lockCount;
+   bool localAlloc;
+   GstBuffer *gstbuf;
 } WstDrmBuffer;
 
 struct _GstWesterosSinkSoc
