@@ -70,19 +70,21 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define INT_FRAME(FORMAT, ...)      frameLog( "FRAME: " FORMAT "\n", __VA_ARGS__)
 #define FRAME(...)                  INT_FRAME(__VA_ARGS__, "")
 
-#define postDecodeError( sink ) postErrorMessage( (sink), -16, "video decode error" )
+#define postDecodeError( sink ) postErrorMessage( (sink), GST_STREAM_ERROR_DECODE, "video decode error" )
 
 enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
   PROP_FRAME_STEP_ON_PREROLL,
   PROP_FORCE_ASPECT_RATIO,
-  PROP_ENABLE_TEXTURE
+  PROP_ENABLE_TEXTURE,
+  PROP_REPORT_DECODE_ERRORS
 };
 enum
 {
    SIGNAL_FIRSTFRAME,
    SIGNAL_NEWTEXTURE,
+   SIGNAL_DECODEERROR,
    SIGNAL_TIMECODE,
    MAX_SIGNAL
 };
@@ -273,6 +275,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "force aspect ratio",
                            "When enabled scaling respects source aspect ratio", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_REPORT_DECODE_ERRORS,
+     g_param_spec_boolean ("report-decode-errors",
+                           "enable decodoe error signal",
+                           "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -310,6 +317,18 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                G_TYPE_UINT, /* plane 2 stride */
                                                G_TYPE_POINTER /* plane 2 data */
                                              );
+
+   g_signals[SIGNAL_DECODEERROR]= g_signal_new( "decode-error-callback",
+                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                                0,    // class offset
+                                                NULL, // accumulator
+                                                NULL, // accu data
+                                                g_cclosure_marshal_VOID__UINT_POINTER,
+                                                G_TYPE_NONE,
+                                                2,
+                                                G_TYPE_UINT,
+                                                G_TYPE_POINTER );
 
    #ifdef USE_GST_VIDEO
    g_signals[SIGNAL_TIMECODE]= g_signal_new( "timecode-callback",
@@ -558,6 +577,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
          }
          break;
+      case PROP_REPORT_DECODE_ERRORS:
+         {
+            sink->soc.enableDecodeErrorSignal= g_value_get_boolean(value);
+            break;
+         }
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -583,6 +607,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
+         break;
+      case PROP_REPORT_DECODE_ERRORS:
+         g_value_set_boolean(value, sink->soc.enableDecodeErrorSignal);
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -4117,6 +4144,7 @@ capture_start:
    if ( (sink->soc.v4l2Fd == -1) || (sink->soc.outBuffers == 0) || sink->soc.quitVideoOutputThread )
    {
       UNLOCK(sink);
+      postDecodeError( sink );
       goto exit;
    }
    for( i= 0; i < sink->soc.numBuffersOut; ++i )
@@ -4133,6 +4161,7 @@ capture_start:
       {
          GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
          UNLOCK(sink);
+         postDecodeError( sink );
          goto exit;
       }
       sink->soc.outBuffers[i].queued= true;
@@ -4143,6 +4172,7 @@ capture_start:
    {
       GST_ERROR("wstVideoOutputThread: streamon failed for output: rc %d errno %d", rc, errno );
       UNLOCK(sink);
+      postDecodeError( sink );
       goto exit;
    }
 
@@ -4554,7 +4584,7 @@ static gpointer wstDispatchThread(gpointer data)
 
 static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText )
 {
-   GError *error= g_error_new(GST_CORE_ERROR, errorCode, errorText);
+   GError *error= g_error_new(GST_STREAM_ERROR, errorCode, errorText);
    if ( error )
    {
       GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));
