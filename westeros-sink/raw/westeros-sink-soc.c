@@ -275,6 +275,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->soc.frameFormatStream= 0;
+   sink->soc.frameFormatOut= 0;
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
    sink->soc.frameDisplayCount= 0;
@@ -629,6 +630,10 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                sink->soc.frameFormatStream= DRM_FORMAT_NV12;
             }
+            else if ( (len == 4) && !strncmp( format, "NV21", len) )
+            {
+               sink->soc.frameFormatStream= DRM_FORMAT_NV21;
+            }
             else if ( (len == 4) && !strncmp( format, "I420", len) )
             {
                sink->soc.frameFormatStream= DRM_FORMAT_YUV420;
@@ -791,24 +796,51 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                unsigned char *data;
                unsigned char *Y, *U, *V;
                int Ystride, Ustride, Vstride;
+               #ifdef USE_GST_VIDEO
+               GstVideoMeta *meta= gst_buffer_get_video_meta(buffer);
+               #endif
 
                switch( sink->soc.frameFormatStream )
                {
                   case DRM_FORMAT_NV12:
+                  case DRM_FORMAT_NV21:
+                     sink->soc.frameFormatOut= sink->soc.frameFormatStream;
                      Y= inData;
-                     Ystride= ((sink->soc.frameWidth + 3) & ~3);
-                     U= Y + Ystride*sink->soc.frameHeight;
-                     Ustride= Ystride;
-                     V= 0;
+                     #ifdef USE_GST_VIDEO
+                     if ( meta )
+                     {
+                        Ystride= meta->stride[0];
+                        Ustride= meta->stride[1];
+                     }
+                     else
+                     #endif
+                     {
+                        Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                        Ustride= Ystride;
+                     }
                      Vstride= 0;
+                     U= Y + Ystride*sink->soc.frameHeight;
+                     V= 0;
                      break;
                   case DRM_FORMAT_YUV420:
+                     sink->soc.frameFormatOut= DRM_FORMAT_NV12;
                      Y= inData;
-                     Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                     #ifdef USE_GST_VIDEO
+                     if ( meta )
+                     {
+                        Ystride= meta->stride[0];
+                        Ustride= meta->stride[1];
+                        Vstride= meta->stride[2];
+                     }
+                     else
+                     #endif
+                     {
+                        Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                        Ustride= Ystride/2;
+                        Vstride= Ystride/2;
+                     }
                      U= Y + Ystride*sink->soc.frameHeight;
-                     Ustride= Ystride/2;
                      V= U + Ustride*sink->soc.frameHeight/2;
-                     Vstride= Ystride/2;
                      break;
                   default:
                      Y= U= V= 0;
@@ -839,7 +871,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                         int row;
                         unsigned char *destRow= data;
                         unsigned char *srcURow= U;
-                        for( row= 0; row < sink->soc.frameHeight; ++row )
+                        for( row= 0; row < sink->soc.frameHeight; row += 2 )
                         {
                            memcpy( destRow, srcURow, Ustride );
                            destRow += drmBuff->pitch[1];
@@ -918,7 +950,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                g_signal_emit( G_OBJECT(sink),
                               g_signals[SIGNAL_NEWTEXTURE],
                               0,
-                              DRM_FORMAT_NV12,
+                              sink->soc.frameFormatOut,
                               sink->soc.frameWidth,
                               sink->soc.frameHeight,
                               fd0, l0, s0, p0,
@@ -936,11 +968,13 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   int fd0, fd1, fd2;
                   int stride0, stride1;
                   int offset1= 0;
+                  int pixelFormat;
                   fd0= drmBuff->fd[0];
                   fd1= drmBuff->fd[1];
                   fd2= fd0;
                   stride0= drmBuff->pitch[0];
                   stride1= drmBuff->pitch[1];
+                  pixelFormat= (sink->soc.frameFormatOut == DRM_FORMAT_NV12) ? WL_SB_FORMAT_NV12 : WL_SB_FORMAT_NV21;
 
                   binfo->sink= sink;
                   binfo->buffIndex= buffIndex;
@@ -951,7 +985,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                                                           fd2,
                                                           drmBuff->width,
                                                           drmBuff->height,
-                                                          WL_SB_FORMAT_NV12,
+                                                          pixelFormat,
                                                           0, /* offset0 */
                                                           offset1, /* offset1 */
                                                           0, /* offset2 */
@@ -1789,7 +1823,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          frameFd1= sink->soc.drmBuffer[buffIndex].fd[1];
          stride1= sink->soc.drmBuffer[buffIndex].pitch[1];
 
-         pixelFormat= DRM_FORMAT_NV12;
+         pixelFormat= sink->soc.frameFormatOut;
 
          fdToSend0= fcntl( frameFd0, F_DUPFD_CLOEXEC, 0 );
          if ( fdToSend0 < 0 )
@@ -2276,6 +2310,7 @@ static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
                switch( sink->soc.frameFormatStream )
                {
                   case DRM_FORMAT_NV12:
+                  case DRM_FORMAT_NV21:
                      #ifdef USE_GST_VIDEO
                      if ( meta )
                      {
