@@ -773,7 +773,6 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       if ( sink->soc.eosDetectionThread == NULL )
       {
          sink->soc.videoPlaying= TRUE;;
-         sink->eosEventSeen= TRUE;
          sink->soc.quitEOSDetectionThread= FALSE;
          GST_DEBUG_OBJECT(sink, "starting westeros_sink_eos thread");
          sink->soc.eosDetectionThread= g_thread_new("westeros_sink_eos", wstEOSDetectionThread, sink);
@@ -1822,6 +1821,11 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          stride0= sink->soc.drmBuffer[buffIndex].pitch[0];
          frameFd1= sink->soc.drmBuffer[buffIndex].fd[1];
          stride1= sink->soc.drmBuffer[buffIndex].pitch[1];
+         if ( frameFd1 < 0 )
+         {
+            offset1= sink->soc.frameWidth*sink->soc.frameHeight;
+            stride1= stride0;
+         }
 
          pixelFormat= sink->soc.frameFormatOut;
 
@@ -2293,14 +2297,16 @@ static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
       drmBuff= &sink->soc.drmBuffer[buffIndex];
       if ( !drmBuff->locked )
       {
-         int i;
+         int i, imax;
          GstMemory *mem;
          #ifdef USE_GST_VIDEO
          GstVideoMeta *meta= gst_buffer_get_video_meta(buffer);
          #endif
          drmBuff->width= sink->soc.frameWidth;
          drmBuff->height= sink->soc.frameHeight;
-         for( i= 0; i < WST_MAX_PLANE; ++i )
+         imax= gst_buffer_n_memory( buffer );
+         if ( imax > WST_MAX_PLANE ) imax= WST_MAX_PLANE;
+         for( i= 0; i < imax; ++i )
          {
             mem= gst_buffer_peek_memory( buffer, i );
             if ( mem )
@@ -2311,6 +2317,7 @@ static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
                {
                   case DRM_FORMAT_NV12:
                   case DRM_FORMAT_NV21:
+                     sink->soc.frameFormatOut= sink->soc.frameFormatStream;
                      #ifdef USE_GST_VIDEO
                      if ( meta )
                      {
@@ -2334,9 +2341,10 @@ static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
                drmBuff->offset[i]= 0;
                drmBuff->pitch[i]= 0;
             }
-            drmBuff->localAlloc= false;
-            drmBuff->gstbuf= gst_buffer_ref(buffer);
          }
+         drmBuff->bufferId= buffIndex;
+         drmBuff->localAlloc= false;
+         drmBuff->gstbuf= gst_buffer_ref(buffer);
          break;
       }
       else
