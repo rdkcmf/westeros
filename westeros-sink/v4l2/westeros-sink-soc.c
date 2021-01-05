@@ -227,7 +227,7 @@ static GstFlowReturn wstChain(GstPad *pad, GstObject *parent, GstBuffer *buf)
             GST_LOG("wstChain: buffer duration not available");
          }
       }
-      if ( GST_CLOCK_TIME_IS_VALID(duration) && (pts+duration < sink->segment.start) )
+      if ( GST_CLOCK_TIME_IS_VALID(duration) && (pts+duration <= sink->segment.start) )
       {
          GST_LOG("wstChain: accept buf %p pts %lld segment start %lld", buf, pts, sink->segment.start);
          GST_BASE_SINK_PREROLL_LOCK(GST_BASE_SINK(sink));
