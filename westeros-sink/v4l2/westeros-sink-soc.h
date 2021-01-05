@@ -202,6 +202,7 @@ struct _GstWesterosSinkSoc
    gboolean frameStepOnPreroll;
    gboolean forceAspectRatio;
 
+   gboolean lowMemoryMode;
    gboolean secureVideo;
    gboolean useDmabufOutput;
    int dwMode;
