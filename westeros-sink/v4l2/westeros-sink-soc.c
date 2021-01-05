@@ -76,6 +76,7 @@ enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
   PROP_FRAME_STEP_ON_PREROLL,
+  PROP_LOW_MEMORY_MODE,
   PROP_FORCE_ASPECT_RATIO,
   PROP_ENABLE_TEXTURE,
   PROP_REPORT_DECODE_ERRORS
@@ -264,6 +265,10 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "frame step on preroll",
                            "allow frame stepping on preroll into pause", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_LOW_MEMORY_MODE,
+       g_param_spec_boolean ("low-memory", "low memory mode",
+           "Reduce memory usage if possible",
+           FALSE, G_PARAM_WRITABLE));
 
    g_object_class_install_property (gobject_class, PROP_ENABLE_TEXTURE,
      g_param_spec_boolean ("enable-texture",
@@ -443,6 +448,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoWidth= sink->windowWidth;
    sink->soc.videoHeight= sink->windowHeight;
    sink->soc.frameStepOnPreroll= FALSE;
+   sink->soc.lowMemoryMode= FALSE;
    sink->soc.forceAspectRatio= FALSE;
    sink->soc.secureVideo= FALSE;
    sink->soc.useDmabufOutput= FALSE;
@@ -519,6 +525,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       printf("westeros-sink: capture only\n");
    }
 
+   if ( getenv("WESTEROS_SINK_LOW_MEM_MODE") )
+   {
+      sink->soc.lowMemoryMode= TRUE;
+      printf("westeros-sink: low memory mode\n");
+   }
+
    env= getenv( "WESTEROS_SINK_DEBUG_FRAME" );
    if ( env )
    {
@@ -567,6 +579,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
             break;
          }
+      case PROP_LOW_MEMORY_MODE:
+         {
+            sink->soc.lowMemoryMode= g_value_get_boolean(value);
+            break;
+         }
       case PROP_FORCE_ASPECT_RATIO:
          {
             sink->soc.forceAspectRatio= g_value_get_boolean(value);
@@ -575,6 +592,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
       case PROP_ENABLE_TEXTURE:
          {
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
+            if ( sink->soc.enableTextureSignal && sink->soc.lowMemoryMode )
+            {
+               sink->soc.enableTextureSignal= FALSE;
+               g_print("NOTE: attempt to enable texture signal in low memory mode ignored\n");
+            }
          }
          break;
       case PROP_REPORT_DECODE_ERRORS:
@@ -601,6 +623,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_FRAME_STEP_ON_PREROLL:
          g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
+         break;
+      case PROP_LOW_MEMORY_MODE:
+         g_value_set_boolean(value, sink->soc.lowMemoryMode);
          break;
       case PROP_FORCE_ASPECT_RATIO:
          g_value_set_boolean(value, sink->soc.forceAspectRatio);
@@ -1380,6 +1405,11 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
 
 void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPath )
 {
+   if ( useGfxPath && sink->soc.lowMemoryMode )
+   {
+      g_print("NOTE: Attempt to use video textures in low memory mode ignored\n");
+      useGfxPath= false;
+   }
    if ( useGfxPath && !sink->soc.captureEnabled )
    {
       sink->soc.captureEnabled= TRUE;

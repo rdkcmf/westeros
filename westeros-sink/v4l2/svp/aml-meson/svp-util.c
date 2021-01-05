@@ -123,32 +123,11 @@ struct aml_dec_params
    struct aml_vdec_cnt_infos cnt;
 };
 
-static int wstSVPConfigSysNode(const char* path, const char* value)
-{
-    int fd;
-    fd = open(path, O_RDWR);
-    if (fd < 0)
-    {
-        GST_ERROR("fail to open %s\n", path);
-        return -1;
-    }
-    if ( write(fd, value, strlen(value)) != strlen(value) )
-    {
-        GST_ERROR("fail to write %s to %s\n", value, path);
-        close(fd);
-        return -1;
-    }
-    close(fd);
-    g_print("set sysnode %s to %s\n", path, value);
-
-    return 0;
-}
-
 static void wstSVPDecoderConfig( GstWesterosSink *sink )
 {
    int rc;
    int frameWidth, frameHeight;
-   const char *env;
+   const char *env, *fmt;
    struct v4l2_streamparm streamparm;
    struct aml_dec_params *decParm= (struct aml_dec_params*)streamparm.parm.raw_data;
    memset( &streamparm, 0, sizeof(streamparm) );
@@ -167,6 +146,30 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       #ifdef V4L2_PIX_FMT_AV1
       case V4L2_PIX_FMT_AV1:
       #endif
+         switch ( sink->soc.inputFormat )
+         {
+            case V4L2_PIX_FMT_HEVC:
+               fmt= "HEVC";
+               break;
+            case V4L2_PIX_FMT_VP9:
+               fmt= "VP9";
+               break;
+            #ifdef V4L2_PIX_FMT_AV1
+            case V4L2_PIX_FMT_AV1:
+               fmt= "AV1";
+               break;
+            #endif
+            default:
+               fmt= "?";
+               break;
+         }
+         if ( sink->soc.lowMemoryMode )
+         {
+            decParm->cfg.double_write_mode=VDEC_DW_AFBC_ONLY;
+            GST_DEBUG("format %s dw mode afbc only", fmt);
+            GST_WARNING("NOTE: afbc only is incompatible with video textures");
+            break;
+         }
          frameWidth= sink->soc.frameWidthStream;
          frameHeight= sink->soc.frameHeightStream;
          if ( (frameWidth > 1920) || (frameHeight > 1080) )
@@ -178,8 +181,7 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
             decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_1_DW;
          }
          GST_DEBUG("format %s size %dx%d dw mode %d",
-                    (sink->soc.inputFormat == V4L2_PIX_FMT_HEVC ? "HEVC" : "VP9"),
-                    frameWidth, frameHeight, decParm->cfg.double_write_mode);
+                    fmt, frameWidth, frameHeight, decParm->cfg.double_write_mode);
          break;
    }
 
@@ -375,33 +377,6 @@ static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
             {
                sink->soc.useDmabufOutput= TRUE;
                wstSVPDecoderConfig( sink );
-            }
-
-            #define CODEC_MM_TVP "/sys/class/codec_mm/tvp_enable"
-            if ( sink->soc.secureVideo )
-            {
-               int frameWidth, frameHeight;
-               frameWidth= sink->soc.frameWidth;
-               frameHeight= sink->soc.frameHeight;
-
-               g_print("secure video %dx%d\n", frameWidth, frameHeight);
-               if ( (frameWidth > 1920) || (frameHeight > 1080) )
-               {
-                  wstSVPConfigSysNode(CODEC_MM_TVP, "2");
-               }
-               else if (frameWidth == 0 || frameHeight == 0)
-               {
-                  wstSVPConfigSysNode(CODEC_MM_TVP, "2");
-               }
-               else
-               {
-                  wstSVPConfigSysNode(CODEC_MM_TVP, "1");
-               }
-            }
-            else
-            {
-               g_print("non-secure video\n");
-               wstSVPConfigSysNode(CODEC_MM_TVP, "0");
             }
 
             memset (&control, 0, sizeof (control) );
