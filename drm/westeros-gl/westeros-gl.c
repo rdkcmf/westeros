@@ -95,6 +95,10 @@
 
 typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
 typedef EGLBoolean (*PREALEGLSWAPBUFFERS)(EGLDisplay, EGLSurface surface );
+typedef EGLContext (*PREALEGLCREATECONTEXT)(EGLDisplay dpy,
+                                            EGLConfig config,
+                                            EGLContext share_context,
+                                            const EGLint *attrib_list);
 typedef EGLSurface (*PREALEGLCREATEWINDOWSURFACE)(EGLDisplay,
                                                   EGLConfig,
                                                   EGLNativeWindowType,
@@ -311,6 +315,7 @@ typedef struct _WstGLCtx
    bool haveAtomic;
    bool haveNativeFence;
    bool graphicsPreferPrimary;
+   bool secureGraphics;
    drmModeObjectProperties *connectorProps;
    drmModePropertyRes **connectorPropRes;
    drmModeObjectProperties *crtcProps;
@@ -370,6 +375,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx );
 static PFNEGLGETPLATFORMDISPLAYEXTPROC gRealEGLGetPlatformDisplay= 0;
 static PREALEGLGETDISPLAY gRealEGLGetDisplay= 0;
 static PREALEGLSWAPBUFFERS gRealEGLSwapBuffers= 0;
+static PREALEGLCREATECONTEXT gRealEGLCreateContext= 0;
 static PREALEGLCREATEWINDOWSURFACE gRealEGLCreateWindowSurface= 0;
 #ifdef DRM_USE_NATIVE_FENCE
 static PREALEGLCREATESYNCKHR gRealEGLCreateSyncKHR= 0;
@@ -3136,6 +3142,12 @@ static WstGLCtx *wstInitCtx( void )
          INFO("westeros-gl: no vblank");
          ctx->useVBlank= false;
       }
+      env= getenv("WESTEROS_SECURE_GRAPHICS");
+      if ( env && atoi(env) )
+      {
+         ctx->secureGraphics= true;
+      }
+      INFO("westeros-gl: secure graphics: %d", ctx->secureGraphics);
       #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
       ctx->nativeOutputFenceFd= -1;
       #endif
@@ -5039,6 +5051,78 @@ exit:
    return eglDisplay;
 }
 
+EGLAPI EGLContext EGLAPIENTRY eglCreateContext(EGLDisplay dpy, EGLConfig config,
+                            EGLContext share_context,
+                            const EGLint *attrib_list)
+{
+   EGLContext eglContext= EGL_NO_CONTEXT;
+
+   if ( gRealEGLCreateContext )
+   {
+      #ifdef EGL_PROTECTED_CONTENT_EXT
+      if ( gCtx && gCtx->secureGraphics )
+      {
+         EGLint *attr= 0;
+         bool substitute= true;
+         int attribCount= 0;
+         if ( attrib_list )
+         {
+            int i= 0;
+            while ( attrib_list[i] != EGL_NONE )
+            {
+               if ( attrib_list[i] == EGL_PROTECTED_CONTENT_EXT )
+               {
+                  DEBUG("westeros-gl: eglCreateContext: EGL_PROTECTED_CONTENT_EXT set to %d by caller", attrib_list[i+1] );
+                  substitute= false;
+                  break;
+               }
+               i += 2;
+            }
+            attribCount= i;
+         }
+         if ( substitute )
+         {
+            attribCount += 3;
+            attr= (EGLint*)malloc( attribCount*sizeof(EGLint) );
+            if ( attr )
+            {
+               if ( attribCount > 3 )
+               {
+                  memcpy( attr, attrib_list, (attribCount-3)*sizeof(EGLint) );
+               }
+               DEBUG("westeros-gl: eglCreateContext: adding EGL_PROTECTED_CONTENT_EXT.EGL_TRUE");
+               attr[attribCount-3]= EGL_PROTECTED_CONTENT_EXT;
+               attr[attribCount-2]= EGL_TRUE;
+               attr[attribCount-1]= EGL_NONE;
+            }
+            else
+            {
+               DEBUG("westeros-gl: eglCreateContext: no memory for substitute attribs: using callers attribs");
+               attr= (EGLint*)attrib_list;
+            }
+         }
+         else
+         {
+            attr= (EGLint*)attrib_list;
+         }
+
+         eglContext= gRealEGLCreateContext( dpy, config, share_context, attr );
+
+         if ( attr && (attr != attrib_list) )
+         {
+            free( attr );
+         }
+      }
+      else
+      #endif
+      {
+         eglContext= gRealEGLCreateContext( dpy, config, share_context, attrib_list );
+      }
+   }
+
+   return eglContext;
+}
+
 EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig config,
                                                       EGLNativeWindowType win,
                                                       const EGLint *attrib_list )
@@ -5047,7 +5131,65 @@ EGLAPI EGLSurface EGLAPIENTRY eglCreateWindowSurface( EGLDisplay dpy, EGLConfig 
 
    if ( gRealEGLCreateWindowSurface )
    {
-      eglSurface= gRealEGLCreateWindowSurface( dpy, config, win, attrib_list );
+      #ifdef EGL_PROTECTED_CONTENT_EXT
+      if ( gCtx && gCtx->secureGraphics )
+      {
+         EGLint *attr= 0;
+         bool substitute= true;
+         int attribCount= 0;
+         if ( attrib_list )
+         {
+            int i= 0;
+            while ( attrib_list[i] != EGL_NONE )
+            {
+               if ( attrib_list[i] == EGL_PROTECTED_CONTENT_EXT )
+               {
+                  DEBUG("westeros-gl: eglCreateWindowSurface: EGL_PROTECTED_CONTENT_EXT set to %d by caller", attrib_list[i+1] );
+                  substitute= false;
+                  break;
+               }
+               i += 2;
+            }
+            attribCount= i;
+         }
+         if ( substitute )
+         {
+            attribCount += 3;
+            attr= (EGLint*)malloc( attribCount*sizeof(EGLint) );
+            if ( attr )
+            {
+               if ( attribCount > 3 )
+               {
+                  memcpy( attr, attrib_list, (attribCount-3)*sizeof(EGLint) );
+               }
+               DEBUG("westeros-gl: eglCreateCreateWindowSurface: adding EGL_PROTECTED_CONTENT_EXT.EGL_TRUE");
+               attr[attribCount-3]= EGL_PROTECTED_CONTENT_EXT;
+               attr[attribCount-2]= EGL_TRUE;
+               attr[attribCount-1]= EGL_NONE;
+            }
+            else
+            {
+               DEBUG("westeros-gl: eglCreateWindowSurface: no memory for substitute attribs: using callers attribs");
+               attr= (EGLint*)attrib_list;
+            }
+         }
+         else
+         {
+            attr= (EGLint*)attrib_list;
+         }
+
+         eglSurface= gRealEGLCreateWindowSurface( dpy, config, win, attr );
+
+         if ( attr && (attr != attrib_list) )
+         {
+            free( attr );
+         }
+      }
+      else
+      #endif
+      {
+         eglSurface= gRealEGLCreateWindowSurface( dpy, config, win, attrib_list );
+      }
       if ( eglSurface != EGL_NO_SURFACE )
       {
          pthread_mutex_lock( &gMutex );
@@ -5223,6 +5365,17 @@ WstGLCtx* WstGLInit()
       if ( !gRealEGLGetDisplay )
       {
          ERROR("westeros-gl: wstGLInit: unable to resolve eglGetDisplay");
+         goto exit;
+      }
+   }
+
+   if ( !gRealEGLCreateContext )
+   {
+      gRealEGLCreateContext= (PREALEGLCREATECONTEXT)dlsym( RTLD_NEXT, "eglCreateContext" );
+      DEBUG("westeros-gl: wstGLInit: realEGLCreateContext=%p\n", (void*)gRealEGLCreateContext );
+      if ( !gRealEGLCreateContext )
+      {
+         ERROR("westeros-gl: eglCreateContext: unable to resolve eglCreateContext");
          goto exit;
       }
    }
