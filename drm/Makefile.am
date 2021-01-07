@@ -30,6 +30,10 @@ AM_CFLAGS += ${EGL_CFLAGS}
 AM_LDFLAGS += -lEGL
 endif 
 
+if ENABLE_GBM_MODIFIERS
+AM_CFLAGS += -DUSE_GBM_MODIFIERS
+endif
+
 lib_LTLIBRARIES = libwesteros_gl.la
 
 bin_PROGRAMS = westeros-gl-console

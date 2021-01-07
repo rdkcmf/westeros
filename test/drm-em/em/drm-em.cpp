@@ -3868,6 +3868,26 @@ int drmModeAddFB2( int fd, uint32_t width, uint32_t height,
    return rc;
 }
 
+int drmModeAddFB2WithModifiers(int fd, uint32_t width, uint32_t height,
+                               uint32_t pixel_format, const uint32_t bo_handles[4],
+                               const uint32_t pitches[4], const uint32_t offsets[4],
+                               const uint64_t modifier[4], uint32_t *buf_id,
+                               uint32_t flags)
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+   uint32_t fbId= 0;
+
+   TRACE1("drmModeAddFB2WithModifiers: fd %d %dx%d handles (%u, %u, %u, %u)",
+          fd, width, height, bo_handles[0], bo_handles[1], bo_handles[2], bo_handles[3] );
+
+   rc= drmModeAddFB2( fd, width, height, pixel_format,
+                      bo_handles, pitches, offsets,
+                      buf_id, flags );
+
+   return rc;
+}
+
 int drmModeRmFB( int fd, uint32_t bufferId )
 {
    int rc= -1;
@@ -4129,6 +4149,30 @@ struct gbm_surface *gbm_surface_create( struct gbm_device *gbm,
    return surface;
 }
 
+struct gbm_surface *gbm_surface_create_with_modifiers(struct gbm_device *gbm,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t format,
+                                  const uint64_t *modifiers,
+                                  const unsigned int count)
+{
+   struct gbm_surface *surface= 0;
+
+   TRACE1("gbm_surface_create_with_modifiers: gbm %p modifiers %p count %d", gbm, modifiers, count);
+
+   if ( gbm )
+   {
+      surface= gbm_surface_create( gbm,
+                                   width,
+                                   height,
+                                   format,
+                                   GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING );
+   }
+
+   TRACE1("gbm_surface_create_with_modifiers: gbm %p surface %p", gbm, surface);
+
+   return surface;
+}
+
 void gbm_surface_destroy( struct gbm_surface *surface )
 {
    TRACE1("gbm_surface_destroy: gbm_surface %p", surface);
@@ -4245,6 +4289,44 @@ uint32_t gbm_bo_get_stride( struct gbm_bo *bo )
    }
 
    return stride;
+}
+
+uint32_t gbm_bo_get_offset(struct gbm_bo *bo, int plane)
+{
+   uint32_t offset= 0;
+
+   if ( bo->surface->nw.magic == EM_WINDOW_MAGIC )
+   {
+      if ( plane != 0 )
+      {
+         ERROR("gbm_bo_get_offset: bad plane %p", plane);
+      }
+      else
+      {
+         offset= 0;
+      }
+   }
+   else
+   {
+      ERROR("gbm_bo_get_offset: bad gbm_bo %p", bo);
+   }
+
+   return offset;
+}
+
+uint64_t gbm_bo_get_modifier(struct gbm_bo *bo)
+{
+   uint64_t modifier= 0;
+   if ( bo->surface->nw.magic == EM_WINDOW_MAGIC )
+   {
+      modifier= 0;
+   }
+   else
+   {
+      ERROR("gbm_bo_get_modifier: bad gbm_bo %p", bo);
+   }
+
+   return modifier;
 }
 
 } //extern "C"

@@ -231,6 +231,14 @@ typedef struct _VideoFrameManager
 #define FRAME_PREV (2)
 #define FRAME_FREE (3)
 
+typedef struct _WstFormatInfo
+{
+   uint32_t format;
+   bool hasNonZeroModifiers;
+   uint32_t modifierCount;
+   uint64_t *modifiers;
+} WstFormatInfo;
+
 typedef struct _WstOverlayPlane
 {
    struct _WstOverlayPlane *next;
@@ -255,6 +263,8 @@ typedef struct _WstOverlayPlane
    long long flipTimeCurrent;
    long long frameTimeCurrent;
    VideoServerConnection *conn;
+   int formatCount;
+   WstFormatInfo *formats;
 } WstOverlayPlane;
 
 typedef struct _WstOverlayPlanes
@@ -312,6 +322,7 @@ typedef struct _WstGLCtx
    bool notifySizeChange;
    bool useVideoServer;
    bool usePlanes;
+   bool useGBMModifiers;
    bool haveAtomic;
    bool haveNativeFence;
    bool graphicsPreferPrimary;
@@ -2949,6 +2960,83 @@ static bool wstAcquirePlaneProperties( WstGLCtx *ctx, WstOverlayPlane *plane )
                {
                   DEBUG("  enum name (%s) value %llu", plane->planePropRes[i]->enums[j].name, plane->planePropRes[i]->enums[j].value );
                }
+               #ifdef USE_GBM_MODIFIERS
+               if( !strncmp(plane->planePropRes[i]->name, "IN_FORMATS", strlen(plane->planePropRes[i]->name)))
+               {
+                  drmModePropertyBlobRes *blob;
+                  uint32_t blobId= plane->planeProps->prop_values[i];
+                  TRACE3("IN_FORMATS blobId %d", blobId);
+
+                  blob= drmModeGetPropertyBlob(ctx->drmFd, blobId);
+                  TRACE3("blob %p");
+                  if ( blob )
+                  {
+                     struct drm_format_modifier_blob *fmtModBlob;
+                     struct drm_format_modifier *modifiers;
+                     struct drm_format_modifier *mod;
+                     uint32_t *modifierFormats;
+                     int f, m;
+                     fmtModBlob= blob->data;
+                     if ( fmtModBlob )
+                     {
+                        uint32_t *applicableModifierIndices= 0;
+                        modifierFormats= (uint32_t *)(((char *)fmtModBlob) + fmtModBlob->formats_offset);
+                        modifiers= (struct drm_format_modifier *)(((char *)fmtModBlob) + fmtModBlob->modifiers_offset);
+                        DEBUG("modifierFormats %p modifiers %p count_formats %d count_modifiers %d",
+                              modifierFormats, modifiers, fmtModBlob->count_formats, fmtModBlob->count_modifiers);
+                        applicableModifierIndices= (uint32_t*)malloc( fmtModBlob->count_modifiers*sizeof(uint32_t) );
+                        if ( applicableModifierIndices )
+                        {
+                           for( f= 0; f < fmtModBlob->count_formats; ++f )
+                           {
+                              int applicableModifierCount= 0;
+                              memset( applicableModifierIndices, 0, fmtModBlob->count_modifiers*sizeof(uint32_t) );
+                              for( m= 0; m < fmtModBlob->count_modifiers; ++m )
+                              {
+                                 mod= &modifiers[m];
+                                 TRACE1("  f %d m %d formats %llx offset %d pad %d modifier %llx", f, m, mod->formats, mod->offset, mod->pad, mod->modifier);
+                                 if ( (f >= mod->offset) &&
+                                      (f <= mod->offset+63) &&
+                                      (mod->formats & (1 << (f-mod->offset))) )
+                                 {
+                                    applicableModifierIndices[applicableModifierCount++]= m;
+                                 }
+                              }
+                              if ( applicableModifierCount > 0 )
+                              {
+                                 int ami;
+                                 plane->formats[f].modifiers= (uint64_t*)malloc( applicableModifierCount*sizeof(uint64_t) );
+                                 if ( plane->formats[f].modifiers )
+                                 {
+                                    plane->formats[f].modifierCount= applicableModifierCount;
+                                    for( ami= 0; ami < applicableModifierCount; ++ami )
+                                    {
+                                       mod= &modifiers[ applicableModifierIndices[ami] ];
+                                       plane->formats[f].modifiers[ami]= mod->modifier;
+                                       DEBUG("    format %x (%.*s) accepts modifier %llx", plane->formats[f].format, 4, &plane->formats[f].format, mod->modifier);
+                                       if ( mod->modifier )
+                                       {
+                                          plane->formats[f].hasNonZeroModifiers= true;
+                                       }
+                                    }
+                                 }
+                                 else
+                                 {
+                                    ERROR("No memory for plane format modifiers");
+                                 }
+                              }
+                           }
+                           free( applicableModifierIndices );
+                        }
+                        else
+                        {
+                           ERROR("No memory for temp modifier indices");
+                        }
+                     }
+                     drmModeFreePropertyBlob(blob);
+                  }
+               }
+               #endif
             }
             else
             {
@@ -3130,6 +3218,13 @@ static WstGLCtx *wstInitCtx( void )
          INFO("westeros-gl: no planes");
          ctx->usePlanes= false;
       }
+      #ifdef USE_GBM_MODIFIERS
+      if ( getenv("WESTEROS_GL_USE_GBM_MODIFIERS") )
+      {
+         ctx->useGBMModifiers= true;
+      }
+      #endif
+      INFO("westeros-gl: use gbm modifiers: %d", ctx->useGBMModifiers);
       ctx->useVideoServer= true;
       if ( getenv("WESTEROS_GL_NO_VIDEOSERVER") )
       {
@@ -3408,9 +3503,22 @@ static WstGLCtx *wstInitCtx( void )
                         int pfi;
 
                         DEBUG("plane %d count_formats %d", plane->plane_id, plane->count_formats);
+                        newPlane->formats= (WstFormatInfo*)calloc( plane->count_formats, sizeof(WstFormatInfo));
+                        if ( newPlane->formats )
+                        {
+                           newPlane->formatCount= plane->count_formats;
+                        }
+                        else
+                        {
+                           ERROR("No memory for plane formats");
+                        }
                         for( pfi= 0; pfi < plane->count_formats; ++pfi )
                         {
                            DEBUG("plane %d format %d: %x (%.*s)", plane->plane_id, pfi, plane->formats[pfi], 4, &plane->formats[pfi]);
+                           if ( newPlane->formats )
+                           {
+                              newPlane->formats[pfi].format= plane->formats[pfi];
+                           }
                            switch( plane->formats[pfi] )
                            {
                               case DRM_FORMAT_NV12:
@@ -3597,6 +3705,22 @@ static void wstTermCtx( WstGLCtx *ctx )
          WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
          while( iter )
          {
+            if ( iter->formats )
+            {
+               int i, j;
+               for( i= 0; i < iter->formatCount; ++i )
+               {
+                  for( j= 0; j < iter->formats[i].modifierCount; ++j )
+                  {
+                     if ( iter->formats[i].modifiers )
+                     {
+                        free( iter->formats[i].modifiers );
+                        iter->formats[i].modifiers= 0;
+                     }
+                  }
+               }
+               free( iter->formats );
+            }
             wstReleasePlaneProperties( ctx, iter );
             drmModeFreePlane( iter->plane );
             toFree= iter;
@@ -4299,20 +4423,59 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                   handle= gbm_bo_get_handle(bo).u32;
                   stride= gbm_bo_get_stride(bo);
 
-                  rc= drmModeAddFB( ctx->drmFd,
-                                    nw->width,
-                                    nw->height,
-                                    32,
-                                    32,
-                                    stride,
-                                    handle,
-                                    &fbId );
-                  if ( rc )
+                  #ifdef USE_GBM_MODIFIERS
+                  if ( gCtx->useGBMModifiers )
                   {
-                     ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
-                     gbm_surface_release_buffer(gs, bo);
+                     uint32_t handles[4]= { handle,
+                                            0,
+                                            0,
+                                            0 };
+                     uint32_t strides[4]= { stride,
+                                            0,
+                                            0,
+                                            0 };
+                     uint32_t offsets[4]= { gbm_bo_get_offset(bo, 0),
+                                            0,
+                                            0,
+                                            0};
+                     uint64_t modifiers[4]= { gbm_bo_get_modifier(bo),
+                                              0,
+                                              0,
+                                              0 };
+                     rc= drmModeAddFB2WithModifiers( ctx->drmFd,
+                                                     nw->width,
+                                                     nw->height,
+                                                     gbm_bo_get_format(bo),
+                                                     handles,
+                                                     strides,
+                                                     offsets,
+                                                     modifiers,
+                                                     &fbId,
+                                                     DRM_MODE_FB_MODIFIERS );
+                     if ( rc )
+                     {
+                        ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB2WithModifiers rc %d errno %d", rc, errno);
+                        gbm_surface_release_buffer(gs, bo);
+                     }
                   }
                   else
+                  #endif
+                  {
+                     rc= drmModeAddFB( ctx->drmFd,
+                                       nw->width,
+                                       nw->height,
+                                       32,
+                                       32,
+                                       stride,
+                                       handle,
+                                       &fbId );
+                     if ( rc )
+                     {
+                        ERROR("wstSwapDRMBuffersAtomic: drmModeAddFB rc %d errno %d", rc, errno);
+                        gbm_surface_release_buffer(gs, bo);
+                     }
+                  }
+                  if ( !rc )
                   {
                      nw->prevBo= nw->bo;
                      nw->prevFbId= nw->fbId;
@@ -5872,26 +6035,73 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
          pthread_mutex_init( &nwItem->mutexRefresh, 0 );
          pthread_cond_init( &nwItem->condRefresh, 0);
          #endif
-         nativeWindow= gbm_surface_create(ctx->gbm,
-                                          width, height,
-                                          GBM_FORMAT_ARGB8888,
-                                          GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING );
+
+         if ( ctx->usePlanes && !ctx->graphicsPreferPrimary )
+         {
+            nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
+            INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
+         }
+         else if ( ctx->haveAtomic )
+         {
+            nwItem->windowPlane= wstOverlayAllocPrimary( &ctx->overlayPlanes );
+            INFO("plane %p : primary: zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
+         }
+
+         #ifdef USE_GBM_MODIFIERS
+         if ( nwItem->windowPlane && ctx->useGBMModifiers )
+         {
+            int i;
+            uint32_t screenFormat= GBM_FORMAT_ARGB8888;
+            #ifdef USE_AMLOGIC_MESON
+            screenFormat= GBM_FORMAT_ABGR8888;
+            #endif
+            for( i= 0; i < nwItem->windowPlane->formatCount; ++i )
+            {
+               if ( nwItem->windowPlane->formats[i].hasNonZeroModifiers )
+               {
+                  if ( nwItem->windowPlane->formats[i].format == screenFormat )
+                  {
+                     DEBUG("native window: fmt %X (%.*s) modifiers %p modifierCount %d", screenFormat, 4, &screenFormat,
+                            nwItem->windowPlane->formats[i].modifiers,nwItem->windowPlane->formats[i].modifierCount );
+                     if ( nwItem->windowPlane->formats[i].modifierCount )
+                     {
+                       int ii;
+                       for( ii= 0; ii < nwItem->windowPlane->formats[i].modifierCount; ++ii )
+                       {
+                          DEBUG("  %d: %llx", ii, nwItem->windowPlane->formats[i].modifiers[ii]);
+                       }
+                     }
+                     nativeWindow= gbm_surface_create_with_modifiers(ctx->gbm,
+                                                                     width, height,
+                                                                     screenFormat,
+                                                                     nwItem->windowPlane->formats[i].modifiers,
+                                                                     nwItem->windowPlane->formats[i].modifierCount );
+                     DEBUG("native window with gbm modifiers: %p", nativeWindow);
+                     if ( !nativeWindow )
+                     {
+                        ctx->useGBMModifiers= false;
+                     }
+                     break;
+                  }
+               }
+            }
+         }
+         #endif
+
+         if ( !nativeWindow )
+         {
+            nativeWindow= gbm_surface_create(ctx->gbm,
+                                             width, height,
+                                             GBM_FORMAT_ARGB8888,
+                                             GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING );
+            DEBUG("native window: %p", nativeWindow);
+         }
+
          if ( nativeWindow )
          {
             nwItem->nativeWindow= nativeWindow;
             nwItem->width= width;
             nwItem->height= height;
-
-            if ( ctx->usePlanes && !ctx->graphicsPreferPrimary )
-            {
-               nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
-               INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
-            }
-            else if ( ctx->haveAtomic )
-            {
-               nwItem->windowPlane= wstOverlayAllocPrimary( &ctx->overlayPlanes );
-               INFO("plane %p : primary: zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
-            }
 
             if ( !nwItem->windowPlane )
             {
