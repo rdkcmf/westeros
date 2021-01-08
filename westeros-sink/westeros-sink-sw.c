@@ -71,6 +71,7 @@ static bool initSWDecoder( GstWesterosSink *sink )
    swCtx->prevFrameTime= -1LL;
    swCtx->frameRate= 60.0;
 
+
    avcodec_register_all();
    swCtx->codec= avcodec_find_decoder(AV_CODEC_ID_H264);
    if ( !swCtx->codec )
@@ -191,6 +192,15 @@ void wstsw_process_caps( GstWesterosSink *sink, GstCaps *caps )
                g_print("westeros-sink: caps have framerate of 0 - assume 60\n");
                swCtx->frameRate= 60.0;
             }
+         }
+         sink->soc.pixelAspectRatio= 1.0;
+         if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
+         {
+            if ( (num <= 0) || (denom <= 0))
+            {
+               num= denom= 1;
+            }
+            sink->soc.pixelAspectRatio= (double)num/(double)denom;
          }
       }
    }

@@ -704,6 +704,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.ptsOffset= 0;
    sink->soc.zoomSet= FALSE;
    sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
+   sink->soc.pixelAspectRatio= 1.0;
    sink->soc.forceAspectRatio= FALSE;
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
    sink->soc.serverPlaySpeed= 1.0;
@@ -3399,21 +3400,32 @@ static gpointer swFirstFrameThread(gpointer data)
 static void swGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h )
 {
    int vx, vy, vw, vh;
+   int contentWidth, contentHeight;
    double arf, ard;
    vx= sink->windowX;
    vy= sink->windowY;
    vw= sink->windowWidth;
    vh= sink->windowHeight;
+   if ( sink->soc.pixelAspectRatio >= 1 )
+   {
+      contentWidth= sink->soc.frameWidth*sink->soc.pixelAspectRatio;
+      contentHeight= sink->soc.frameHeight;
+   }
+   else
+   {
+      contentWidth= sink->soc.frameWidth;
+      contentHeight= sink->soc.frameHeight/sink->soc.pixelAspectRatio;
+   }
    ard= (double)sink->windowWidth/(double)sink->windowHeight;
-   arf= (double)sink->soc.frameWidth/(double)sink->soc.frameHeight;
+   arf= (double)contentWidth/(double)contentHeight;
    if ( arf >= ard )
    {
-      vh= (sink->soc.frameHeight * sink->windowWidth) / sink->soc.frameWidth;
+      vh= (contentHeight * sink->windowWidth) / contentWidth;
       vy= vy+(sink->windowHeight-vh)/2;
    }
    else
    {
-      vw= (sink->soc.frameWidth * sink->windowHeight) / sink->soc.frameHeight;
+      vw= (contentWidth * sink->windowHeight) / contentHeight;
       vx= vx+(sink->windowWidth-vw)/2;
    }
    *x= vx;

@@ -113,6 +113,7 @@ struct _GstWesterosSinkSoc
    struct wl_sb *sb;
    int activeBuffers;
    double frameRate;
+   double pixelAspectRatio;
    int frameWidth;
    int frameHeight;
    int frameWidthStream;
