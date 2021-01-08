@@ -101,6 +101,7 @@ struct _GstWesterosSinkSoc
    unsigned int ptsOffset;
    gboolean zoomSet;
    NEXUS_VideoWindowContentMode zoomMode;
+   double pixelAspectRatio;
    gboolean enableCCPassthru;
    NEXUS_VideoFormat outputFormat;
    gfloat serverPlaySpeed;

@@ -375,6 +375,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.sb= 0;
    sink->soc.activeBuffers= 0;
    sink->soc.frameRate= 0.0;
+   sink->soc.pixelAspectRatio= 1.0;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
@@ -944,6 +945,15 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                g_print("westeros-sink: caps have framerate of 0 - assume 60\n");
                sink->soc.frameRate= 60.0;
             }
+         }
+         sink->soc.pixelAspectRatio= 1.0;
+         if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
+         {
+            if ( (num <= 0) || (denom <= 0))
+            {
+               num= denom= 1;
+            }
+            sink->soc.pixelAspectRatio= (double)num/(double)denom;
          }
          if ( gst_structure_get_int( structure, "width", &width ) )
          {
@@ -3932,21 +3942,32 @@ exit:
 static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h )
 {
    int vx, vy, vw, vh;
+   int contentWidth, contentHeight;
    double arf, ard;
    vx= sink->soc.videoX;
    vy= sink->soc.videoY;
    vw= sink->soc.videoWidth;
    vh= sink->soc.videoHeight;
+   if ( sink->soc.pixelAspectRatio >= 1 )
+   {
+      contentWidth= sink->soc.frameWidth*sink->soc.pixelAspectRatio;
+      contentHeight= sink->soc.frameHeight;
+   }
+   else
+   {
+      contentWidth= sink->soc.frameWidth;
+      contentHeight= sink->soc.frameHeight/sink->soc.pixelAspectRatio;
+   }
    ard= (double)sink->soc.videoWidth/(double)sink->soc.videoHeight;
-   arf= (double)sink->soc.frameWidth/(double)sink->soc.frameHeight;
+   arf= (double)contentWidth/(double)contentHeight;
    if ( arf >= ard )
    {
-      vh= (sink->soc.frameHeight * sink->soc.videoWidth) / sink->soc.frameWidth;
+      vh= (contentHeight * sink->soc.videoWidth) / contentWidth;
       vy= vy+(sink->soc.videoHeight-vh)/2;
    }
    else
    {
-      vw= (sink->soc.frameWidth * sink->soc.videoHeight) / sink->soc.frameHeight;
+      vw= (contentWidth * sink->soc.videoHeight) / contentHeight;
       vx= vx+(sink->soc.videoWidth-vw)/2;
    }
    *x= vx;
