@@ -216,6 +216,8 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
         sink->soc.haveMasteringDisplay ||
         sink->soc.haveContentLightLevel )
    {
+      GST_DEBUG("Adding HDR info to VIDIOC_S_PARM: have: colorimetry %d mastering %d contentLightLevel %d",
+                 sink->soc.haveColorimetry, sink->soc.haveMasteringDisplay, sink->soc.haveContentLightLevel );
       decParm->parms_status |= V4L2_CONFIG_PARM_DECODE_HDRINFO;
       if ( sink->soc.haveColorimetry )
       {
@@ -321,6 +323,7 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
             default:
                break;
          }
+         GST_DEBUG("HDR signal_type %X", decParm->hdr.signal_type);
       }
       if ( sink->soc.haveMasteringDisplay )
       {
@@ -335,11 +338,27 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          decParm->hdr.color_parms.white_point[1]= (uint32_t)(sink->soc.hdrMasteringDisplay[7]*50000);
          decParm->hdr.color_parms.luminance[0]= (uint32_t)(sink->soc.hdrMasteringDisplay[8]);
          decParm->hdr.color_parms.luminance[1]= (uint32_t)(sink->soc.hdrMasteringDisplay[9]);
+         GST_DEBUG("HDR mastering: primaries %X %X %X %X %X %X",
+             decParm->hdr.color_parms.primaries[2][0],
+             decParm->hdr.color_parms.primaries[2][1],
+             decParm->hdr.color_parms.primaries[0][0],
+             decParm->hdr.color_parms.primaries[0][1],
+             decParm->hdr.color_parms.primaries[1][0],
+             decParm->hdr.color_parms.primaries[1][1] );
+         GST_DEBUG("HDR mastering: white point: %X %X",
+             decParm->hdr.color_parms.white_point[0],
+             decParm->hdr.color_parms.white_point[1] );
+         GST_DEBUG("HDR mastering: luminance: %X %X",
+             decParm->hdr.color_parms.luminance[0],
+             decParm->hdr.color_parms.luminance[1] );
       }
       if ( sink->soc.haveContentLightLevel )
       {
          decParm->hdr.color_parms.content_light_level.max_content= sink->soc.hdrContentLightLevel[0];
          decParm->hdr.color_parms.content_light_level.max_pic_average= sink->soc.hdrContentLightLevel[1];
+         GST_DEBUG("HDR contentLightLevel: %X %X",
+             decParm->hdr.color_parms.content_light_level.max_content,
+             decParm->hdr.color_parms.content_light_level.max_pic_average );
       }
    }
 
