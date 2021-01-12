@@ -78,6 +78,7 @@ enum
   PROP_FRAME_STEP_ON_PREROLL,
   PROP_LOW_MEMORY_MODE,
   PROP_FORCE_ASPECT_RATIO,
+  PROP_WINDOW_SHOW,
   PROP_ENABLE_TEXTURE,
   PROP_REPORT_DECODE_ERRORS
 };
@@ -280,6 +281,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "force aspect ratio",
                            "When enabled scaling respects source aspect ratio", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_WINDOW_SHOW,
+     g_param_spec_boolean ("show-video-window",
+                           "make video window visible",
+                           "true: visible, false: hidden", TRUE, G_PARAM_WRITABLE));
+
    g_object_class_install_property (gobject_class, PROP_REPORT_DECODE_ERRORS,
      g_param_spec_boolean ("report-decode-errors",
                            "enable decodoe error signal",
@@ -376,6 +382,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.activeBuffers= 0;
    sink->soc.frameRate= 0.0;
    sink->soc.pixelAspectRatio= 1.0;
+   sink->soc.showChanged= FALSE;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
@@ -590,6 +597,19 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.forceAspectRatio= g_value_get_boolean(value);
             break;
          }
+      case PROP_WINDOW_SHOW:
+         {
+            gboolean show= g_value_get_boolean(value);
+            if ( sink->show != show )
+            {
+               GST_DEBUG("set show-video-window to %d", show);
+               sink->soc.showChanged= TRUE;
+               sink->show= show;
+
+               sink->visible= sink->show;
+            }
+         }
+         break;
       case PROP_ENABLE_TEXTURE:
          {
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
@@ -630,6 +650,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_FORCE_ASPECT_RATIO:
          g_value_set_boolean(value, sink->soc.forceAspectRatio);
+         break;
+      case PROP_WINDOW_SHOW:
+         g_value_set_boolean(value, sink->show);
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
@@ -4087,6 +4110,8 @@ static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex )
    bool result= false;
    bufferInfo *binfo;
 
+   if ( !sink->show ) return result;
+
    GST_LOG("Video out: fd %d", sink->soc.outBuffers[buffIndex].fd );
 
    binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
@@ -4402,6 +4427,14 @@ capture_start:
                wstSendRectVideoClientConnection(sink->soc.conn);
             }
          }
+         if ( sink->soc.showChanged )
+         {
+            sink->soc.showChanged= FALSE;
+            if ( !sink->soc.captureEnabled )
+            {
+               wstSendHideVideoClientConnection( sink->soc.conn, !sink->show );
+            }
+         }
          if ( wasPaused && !sink->soc.videoPaused )
          {
             sink->soc.updateSession= TRUE;
@@ -4540,7 +4573,10 @@ capture_start:
                      UNLOCK(sink);
                      wl_display_dispatch_queue_pending(sink->display, sink->queue);
                      LOCK(sink);
-                     wstSendHideVideoClientConnection( sink->soc.conn, false );
+                     if ( sink->show )
+                     {
+                        wstSendHideVideoClientConnection( sink->soc.conn, false );
+                     }
                   }
                }
             }

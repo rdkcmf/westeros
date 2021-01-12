@@ -114,6 +114,7 @@ struct _GstWesterosSinkSoc
    int activeBuffers;
    double frameRate;
    double pixelAspectRatio;
+   gboolean showChanged;
    int frameWidth;
    int frameHeight;
    int frameWidthStream;
