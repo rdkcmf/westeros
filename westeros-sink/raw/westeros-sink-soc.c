@@ -83,6 +83,7 @@ static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bo
 static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSetSessionInfo( GstWesterosSink *sink );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn );
 static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static gpointer wstDispatchThread(gpointer data);
@@ -1034,6 +1035,15 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             }
             if ( sink->soc.conn )
             {
+               if ( sink->windowChange )
+               {
+                  sink->windowChange= false;
+                  gst_westeros_sink_soc_update_video_position( sink );
+                  if ( !sink->soc.captureEnabled )
+                  {
+                     wstSendRectVideoClientConnection(sink->soc.conn);
+                  }
+               }
                sink->soc.resubFd= sink->soc.prevFrame2Fd;
                sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
                sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
@@ -1675,6 +1685,62 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
       {
          GST_LOG("sent flush to video server");
          FRAME("sent flush to video server");
+      }
+   }
+}
+
+static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[20];
+      int len;
+      int sentLen;
+      int vx, vy, vw, vh;
+      GstWesterosSink *sink= conn->sink;
+
+      vx= sink->soc.videoX;
+      vy= sink->soc.videoY;
+      vw= sink->soc.videoWidth;
+      vh= sink->soc.videoHeight;
+      if ( sink->soc.forceAspectRatio )
+      {
+         wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+      }
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 17;
+      mbody[len++]= 'W';
+      len += putU32( &mbody[len], vx );
+      len += putU32( &mbody[len], vy );
+      len += putU32( &mbody[len], vw );
+      len += putU32( &mbody[len], vh );
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent position to video server");
+         FRAME("sent position to video server");
       }
    }
 }
