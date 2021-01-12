@@ -62,6 +62,7 @@ enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
   PROP_FORCE_ASPECT_RATIO,
+  PROP_WINDOW_SHOW,
   PROP_ENABLE_TEXTURE
 };
 enum
@@ -204,6 +205,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "force aspect ratio",
                            "When enabled scaling respects source aspect ratio", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_WINDOW_SHOW,
+     g_param_spec_boolean ("show-video-window",
+                           "make video window visible",
+                           "true: visible, false: hidden", TRUE, G_PARAM_WRITABLE));
+
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -274,6 +280,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.sb= 0;
    sink->soc.frameRate= 0.0;
    sink->soc.pixelAspectRatio= 1.0;
+   sink->soc.showChanged= FALSE;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->soc.frameFormatStream= 0;
@@ -398,6 +405,19 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.forceAspectRatio= g_value_get_boolean(value);
             break;
          }
+      case PROP_WINDOW_SHOW:
+         {
+            gboolean show= g_value_get_boolean(value);
+            if ( sink->show != show )
+            {
+               GST_DEBUG("set show-video-window to %d", show);
+               sink->soc.showChanged= TRUE;
+               sink->show= show;
+
+               sink->visible= sink->show;
+            }
+         }
+         break;
       case PROP_ENABLE_TEXTURE:
          {
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
@@ -419,6 +439,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
    {
       case PROP_FORCE_ASPECT_RATIO:
          g_value_set_boolean(value, sink->soc.forceAspectRatio);
+         break;
+      case PROP_WINDOW_SHOW:
+         g_value_set_boolean(value, sink->show);
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
@@ -968,7 +991,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                               fd2, l2, s2, p2
                             );
             }
-            else if ( sink->soc.captureEnabled && sink->soc.sb )
+            else if ( sink->soc.captureEnabled && sink->soc.sb && sink->show )
             {
                bufferInfo *binfo;
                binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
@@ -1044,6 +1067,14 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                      wstSendRectVideoClientConnection(sink->soc.conn);
                   }
                }
+               if ( sink->soc.showChanged )
+               {
+                  sink->soc.showChanged= FALSE;
+                  if ( !sink->soc.captureEnabled )
+                  {
+                     wstSendHideVideoClientConnection( sink->soc.conn, !sink->show );
+                  }
+               }
                sink->soc.resubFd= sink->soc.prevFrame2Fd;
                sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
                sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
@@ -1063,7 +1094,10 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                      wl_surface_commit( sink->surface );
                      wl_display_flush(sink->display);
                      wl_display_dispatch_queue_pending(sink->display, sink->queue);
-                     wstSendHideVideoClientConnection( sink->soc.conn, false );
+                     if ( sink->show )
+                     {
+                        wstSendHideVideoClientConnection( sink->soc.conn, false );
+                     }
                   }
                }
             }
