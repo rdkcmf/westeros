@@ -189,6 +189,8 @@ typedef struct _VideoFrame
    uint32_t frameWidth;
    uint32_t frameHeight;
    uint32_t frameFormat;
+   uint32_t frameWidthVisible;
+   uint32_t frameHeightVisible;
    int rectX;
    int rectY;
    int rectW;
@@ -367,12 +369,14 @@ static void wstFrameLog( const char *fmt, ... );
 static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *conn );
 static void wstDestroyVideoFrameManager( VideoFrameManager *vfm );
 static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
+static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH );
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm );
 static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause );
 static void wstVideoFrameManagerFrameAdvance( VideoFrameManager *vfm );
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstDestroyDisplayServerConnection( DisplayServerConnection *conn );
+static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rectW, int rectH, uint32_t *skipX, uint32_t *skipY );
 static void wstFreeVideoFrameResources( VideoFrame *f );
 static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bufferId );
 static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
@@ -846,6 +850,48 @@ static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t ha
    }
 }
 
+static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rectW, int rectH, uint32_t *skipX, uint32_t *skipY )
+{
+   uint32_t frameWidth, frameHeight;
+   uint32_t frameSkipX, frameSkipY, rectSkipX, rectSkipY;
+
+   frameWidth= vf->frameWidth;
+   frameHeight= vf->frameHeight;
+
+   rectSkipX= 0;
+   frameSkipX= 0;
+   #ifdef DRM_NO_SRC_CROP
+   /* If drmModeSetPlane won't perform src cropping we will
+      crop here in the creation of the fb.  This would be the case
+      where the target video frame rect has negative x or y
+      coordinates */
+   if ( rectX < 0 )
+   {
+      rectX &= ~1;
+      frameSkipX= -rectX*frameWidth/rectW;
+      frameSkipX &= ~1;
+      rectSkipX= -rectX;
+   }
+   frameSkipY= 0;
+   rectSkipY= 0;
+   if ( rectY < 0 )
+   {
+      rectY &= ~1;
+      frameSkipY= -rectY*frameHeight/rectH;
+      frameSkipY &= ~1;
+      rectSkipY= -rectY;
+   }
+   #endif
+   vf->frameWidthVisible= frameWidth-frameSkipX;
+   vf->frameHeightVisible= frameHeight-frameSkipY;
+   vf->rectX= rectX+rectSkipX;
+   vf->rectY= rectY+rectSkipY;
+   vf->rectW= rectW-rectSkipX;
+   vf->rectH= rectH-rectSkipY;
+   if ( skipX ) *skipX= frameSkipX;
+   if ( skipY ) *skipY= frameSkipY;
+}
+
 static void wstFreeVideoFrameResources( VideoFrame *f )
 {
    if ( f )
@@ -1084,7 +1130,7 @@ static void *wstVideoServerConnectionThread( void *arg )
    uint32_t fbId= 0;
    uint32_t frameWidth, frameHeight;
    uint32_t frameFormat;
-   uint32_t frameSkipX, frameSkipY, rectSkipX, rectSkipY;
+   uint32_t frameSkipX, frameSkipY;
    int rectX, rectY, rectW, rectH;
    int fd0, fd1, fd2;
    int offset0, offset1, offset2;
@@ -1252,29 +1298,10 @@ static void *wstVideoServerConnectionThread( void *arg )
                                   fd0, fd1, fd2, frameWidth, frameHeight, frameFormat, rectX, rectY, rectW, rectH,
                                   offset0, offset1, offset2, stride0, stride1, stride2 );
 
-                           rectSkipX= 0;
-                           frameSkipX= 0;
-                           #ifdef DRM_NO_SRC_CROP
-                           /* If drmModeSetPlane won't perform src cropping we will
-                              crop here in the creation of the fb.  This would be the case
-                              where the target video frame rect has negative x or y
-                              coordinates */
-                           if ( rectX < 0 )
-                           {
-                              rectX &= ~1;
-                              frameSkipX= -rectX*frameWidth/rectW;
-                              rectSkipX= -rectX;
-                           }
-                           frameSkipY= 0;
-                           rectSkipY= 0;
-                           if ( rectY < 0 )
-                           {
-                              rectY &= ~1;
-                              frameSkipY= -rectY*frameHeight/rectH;
-                              frameSkipY &= ~1;
-                              rectSkipY= -rectY;
-                           }
-                           #endif
+
+                           videoFrame.frameWidth= frameWidth;
+                           videoFrame.frameHeight= frameHeight;
+                           wstSetVideoFrameRect( &videoFrame, rectX, rectY, rectW, rectH, &frameSkipX, &frameSkipY );
 
                            rc= drmPrimeFDToHandle( gCtx->drmFd, fd0, &handle0 );
                            if ( !rc )
@@ -1326,13 +1353,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                                  videoFrame.fd0= fd0;
                                  videoFrame.fd1= fd1;
                                  videoFrame.fd2= fd2;
-                                 videoFrame.frameWidth= frameWidth-frameSkipX;
-                                 videoFrame.frameHeight= frameHeight-frameSkipY;
                                  videoFrame.frameFormat= frameFormat;
-                                 videoFrame.rectX= rectX+rectSkipX;
-                                 videoFrame.rectY= rectY+rectSkipY;
-                                 videoFrame.rectW= rectW-rectSkipX;
-                                 videoFrame.rectH= rectH-rectSkipY;
                                  videoFrame.bufferId= bufferId;
                                  videoFrame.frameTime= frameTime;
                                  videoFrame.frameNumber= conn->videoPlane->frameCount++;
@@ -1446,6 +1467,18 @@ static void *wstVideoServerConnectionThread( void *arg )
                            DEBUG("got frame advance video plane %d", conn->videoPlane->plane->plane_id);
                            pthread_mutex_lock( &gMutex );
                            wstVideoFrameManagerFrameAdvance( conn->videoPlane->vfm );
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                    case 'W':
+                        {
+                           DEBUG("got position video plane %d", conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           rectX= (int)wstGetU32( m+1 );
+                           rectY= (int)wstGetU32( m+5 );
+                           rectW= (int)wstGetU32( m+9 );
+                           rectH= (int)wstGetU32( m+13 );
+                           wstVideoFrameManagerUpdateRect( conn->videoPlane->vfm, rectX, rectY, rectW, rectH );
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
@@ -2575,6 +2608,16 @@ static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type )
       wstAVSyncSetSyncType( vfm, type );
    }
    #endif
+}
+
+static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH )
+{
+   int i;
+   for( i= 0; i < vfm->queueSize; ++i )
+   {
+      VideoFrame *vf= &vfm->queue[i];
+      wstSetVideoFrameRect( vf, rectX, rectY, rectW, rectH, NULL, NULL );
+   }
 }
 
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f )
@@ -4584,8 +4627,8 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                int fd0= iter->videoFrame[FRAME_NEXT].fd0;
                int fd1= iter->videoFrame[FRAME_NEXT].fd1;
                int fd2= iter->videoFrame[FRAME_NEXT].fd2;
-               uint32_t frameWidth= iter->videoFrame[FRAME_NEXT].frameWidth;
-               uint32_t frameHeight= iter->videoFrame[FRAME_NEXT].frameHeight;
+               uint32_t frameWidth= iter->videoFrame[FRAME_NEXT].frameWidthVisible;
+               uint32_t frameHeight= iter->videoFrame[FRAME_NEXT].frameHeightVisible;
                int rectX= iter->videoFrame[FRAME_NEXT].rectX;
                int rectY= iter->videoFrame[FRAME_NEXT].rectY;
                int rectW= iter->videoFrame[FRAME_NEXT].rectW;
@@ -4925,8 +4968,8 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx )
                   int fd0= iter->videoFrame[FRAME_NEXT].fd0;
                   int fd1= iter->videoFrame[FRAME_NEXT].fd1;
                   int fd2= iter->videoFrame[FRAME_NEXT].fd2;
-                  uint32_t frameWidth= iter->videoFrame[FRAME_NEXT].frameWidth;
-                  uint32_t frameHeight= iter->videoFrame[FRAME_NEXT].frameHeight;
+                  uint32_t frameWidth= iter->videoFrame[FRAME_NEXT].frameWidthVisible;
+                  uint32_t frameHeight= iter->videoFrame[FRAME_NEXT].frameHeightVisible;
                   int rectX= iter->videoFrame[FRAME_NEXT].rectX;
                   int rectY= iter->videoFrame[FRAME_NEXT].rectY;
                   int rectW= iter->videoFrame[FRAME_NEXT].rectW;

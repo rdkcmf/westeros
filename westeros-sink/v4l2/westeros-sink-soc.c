@@ -3290,6 +3290,62 @@ static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *
    }
 }
 
+static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[20];
+      int len;
+      int sentLen;
+      int vx, vy, vw, vh;
+      GstWesterosSink *sink= conn->sink;
+
+      vx= sink->soc.videoX;
+      vy= sink->soc.videoY;
+      vw= sink->soc.videoWidth;
+      vh= sink->soc.videoHeight;
+      if ( sink->soc.forceAspectRatio )
+      {
+         wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+      }
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 17;
+      mbody[len++]= 'W';
+      len += putU32( &mbody[len], vx );
+      len += putU32( &mbody[len], vy );
+      len += putU32( &mbody[len], vw );
+      len += putU32( &mbody[len], vh );
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent position to video server");
+         FRAME("sent position to video server");
+      }
+   }
+}
+
 #ifdef USE_AMLOGIC_MESON
 static GstElement* wstFindAudioSink( GstWesterosSink *sink )
 {
@@ -4337,6 +4393,15 @@ capture_start:
          LOCK(sink);
          wstProcessMessagesVideoClientConnection( sink->soc.conn );
 
+         if ( sink->windowChange )
+         {
+            sink->windowChange= false;
+            gst_westeros_sink_soc_update_video_position( sink );
+            if ( !sink->soc.captureEnabled )
+            {
+               wstSendRectVideoClientConnection(sink->soc.conn);
+            }
+         }
          if ( wasPaused && !sink->soc.videoPaused )
          {
             sink->soc.updateSession= TRUE;
@@ -4435,11 +4500,6 @@ capture_start:
                 sink->soc.emitFirstFrameSignal= TRUE;
             }
             ++sink->soc.frameOutCount;
-            if ( sink->windowChange )
-            {
-               sink->windowChange= false;
-               gst_westeros_sink_soc_update_video_position( sink );
-            }
 
             if ( !sink->soc.useGfxSync || !sink->soc.conn )
             {
