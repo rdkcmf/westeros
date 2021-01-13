@@ -105,6 +105,8 @@ struct _GstWesterosSinkSoc
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;
    gboolean enableCCPassthru;
+   guint lastStartPts45k;
+   gboolean chkBufToStartPts;
    NEXUS_VideoFormat outputFormat;
    gfloat serverPlaySpeed;
    gfloat clientPlaySpeed;
