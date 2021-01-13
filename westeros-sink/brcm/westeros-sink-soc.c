@@ -48,6 +48,7 @@
 #define QOS_INTERVAL (1000)
 #define DECODE_VERIFY_DELAY (5000000)
 #define DECODE_VERIFY_MAX_BYTES (4*1024*1024)
+#define MAX_STARTPTS_TO_BUFFER_PTS_MS (5000) /* related to max reasonable Iframe distances */
 
 #ifndef DRM_FORMAT_RGBA8888
 #define DRM_FORMAT_RGBA8888 (0x34324152)
@@ -708,6 +709,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pixelAspectRatioChanged= FALSE;
    sink->soc.forceAspectRatio= FALSE;
+   sink->soc.lastStartPts45k= 0;
+   sink->soc.chkBufToStartPts= FALSE;
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.clientPlaySpeed= 1.0;
@@ -967,6 +970,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
                sink->soc.frameCount= 0;
                sink->soc.stoppedForPlaySpeedChange= TRUE;
                sink->soc.serverPlaySpeed= serverPlaySpeed;
+               sink->soc.lastStartPts45k= 0;
 
                NEXUS_VideoDecoderTrickState trickState;
                NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
@@ -1506,9 +1510,22 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
       {
          if ( videoStatus.fifoDepth || videoStatus.queueDepth )
          {
-            GST_WARNING("flushing video decoder data: fifo depth: %d frames: %d", videoStatus.fifoDepth, videoStatus.queueDepth);
+            /* We have seen the following sequence: startSeg!=0, buffer0,1 startSeg==0
+               In this case flushing will toss the first IFrame and cause video to jump forward to next iframe, which can be more than a second
+               video is lost, then audio is delayed as it needs to dump lots of frames to catch up */
+            GST_WARNING("Not flushing video decoder on startSeg==0, fifodepth: %d  frames: %d  pts: %ums  pts45k: %ums  lastStartPts45k %ums",
+                         videoStatus.fifoDepth, videoStatus.queueDepth, videoStatus.pts/45, pts45k/45, sink->soc.lastStartPts45k/45 );
+            /* The other concern is that there maybe a sequnce similar to above but the buffer0 PTS could be "far" from the previous startSeg!=0,
+               which is still in force since we haven't flushed, and therefore playback won't start
+               as the video decoder will be waiting for the buffer PTS to match/exceed the previous SetStartPts.
+               Add debug in _render to catch/Warn this case and correct later if necessary */
          }
-         NEXUS_SimpleVideoDecoder_Flush( sink->soc.videoDecoder );
+         else
+         {
+             GST_DEBUG("Flushing Decoder, will clear _SetStartPts");
+             NEXUS_SimpleVideoDecoder_Flush( sink->soc.videoDecoder );
+             sink->soc.lastStartPts45k= 0;
+         }
       }
       else
       {
@@ -1517,7 +1534,10 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
    }
    else
    {
+      GST_DEBUG("NEXUS_SimpleVideoDecoder_SetStartPts %ums", pts45k/45);
       NEXUS_SimpleVideoDecoder_SetStartPts( sink->soc.videoDecoder, pts45k );
+      sink->soc.lastStartPts45k= pts45k;
+      sink->soc.chkBufToStartPts= TRUE;
    }
 
    if ( sink->soc.clientPlaySpeed != sink->playbackRate )
@@ -1536,6 +1556,18 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       wstsw_render( sink, buffer );
    }
    #endif
+
+   if ( sink->soc.chkBufToStartPts && sink->soc.lastStartPts45k && GST_BUFFER_PTS_IS_VALID(buffer) )
+   {
+      guint bufferPtsMs= GST_TIME_AS_MSECONDS(GST_BUFFER_PTS(buffer));
+
+      if ( sink->soc.lastStartPts45k/45 > bufferPtsMs + MAX_STARTPTS_TO_BUFFER_PTS_MS )
+      {
+         /* In this case the user might be waiting a long while to see the video, warn for now, might consider calling SetStartPTS with the buffer PTS */
+         GST_WARNING("Buffer PTS %u ms is far from lastStartPts %u ms", bufferPtsMs, sink->soc.lastStartPts45k/45);
+      }
+      sink->soc.chkBufToStartPts= FALSE;
+   }
 }
 
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
@@ -1561,6 +1593,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.prevNumDecoded= 0;
    sink->soc.prevNumDecodeErrors= 0;
    sink->soc.presentationStarted= FALSE;
+   sink->soc.lastStartPts45k= 0;
    UNLOCK(sink);
 
 
@@ -1772,6 +1805,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
+   sink->soc.lastStartPts45k= 0;
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
