@@ -2174,7 +2174,14 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
 
    bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
 
-   bufferSize= 4*1024*1024;
+   if (sink->soc.lowMemoryMode)
+   {
+      bufferSize= 1*1024*1024;
+   }
+   else
+   {
+      bufferSize= 4*1024*1024;
+   }
 
    memset( &sink->soc.fmtIn, 0, sizeof(struct v4l2_format) );
    sink->soc.fmtIn.type= bufferType;
