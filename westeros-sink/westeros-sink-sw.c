@@ -71,7 +71,6 @@ static bool initSWDecoder( GstWesterosSink *sink )
    swCtx->prevFrameTime= -1LL;
    swCtx->frameRate= 60.0;
 
-
    avcodec_register_all();
    swCtx->codec= avcodec_find_decoder(AV_CODEC_ID_H264);
    if ( !swCtx->codec )
@@ -201,6 +200,8 @@ void wstsw_process_caps( GstWesterosSink *sink, GstCaps *caps )
                num= denom= 1;
             }
             sink->soc.pixelAspectRatio= (double)num/(double)denom;
+            sink->soc.havePixelAspectRatio= TRUE;
+            sink->soc.pixelAspectRatioChanged= TRUE;
          }
       }
    }
