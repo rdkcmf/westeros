@@ -705,6 +705,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.zoomSet= FALSE;
    sink->soc.zoomMode= NEXUS_VideoWindowContentMode_eFull;
    sink->soc.pixelAspectRatio= 1.0;
+   sink->soc.havePixelAspectRatio= FALSE;
+   sink->soc.pixelAspectRatioChanged= FALSE;
    sink->soc.forceAspectRatio= FALSE;
    sink->soc.outputFormat= NEXUS_VideoFormat_eUnknown;
    sink->soc.serverPlaySpeed= 1.0;
@@ -1765,6 +1767,8 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
 
    sink->videoStarted= FALSE;
    sink->soc.presentationStarted= FALSE;
+   sink->soc.pixelAspectRatio= 1.0;
+   sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.serverPlaySpeed= 1.0;
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
@@ -3400,24 +3404,30 @@ static gpointer swFirstFrameThread(gpointer data)
 static void swGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h )
 {
    int vx, vy, vw, vh;
-   int contentWidth, contentHeight;
+   int frameWidth, frameHeight;
+   double contentWidth, contentHeight;
    double arf, ard;
    vx= sink->windowX;
    vy= sink->windowY;
    vw= sink->windowWidth;
    vh= sink->windowHeight;
+   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("pixelAspectRatio: %f", sink->soc.pixelAspectRatio );
+   frameWidth= sink->soc.frameWidth;
+   frameHeight= sink->soc.frameHeight;
    if ( sink->soc.pixelAspectRatio >= 1 )
    {
-      contentWidth= sink->soc.frameWidth*sink->soc.pixelAspectRatio;
-      contentHeight= sink->soc.frameHeight;
+      contentWidth= frameWidth*sink->soc.pixelAspectRatio;
+      contentHeight= frameHeight;
    }
    else
    {
-      contentWidth= sink->soc.frameWidth;
-      contentHeight= sink->soc.frameHeight/sink->soc.pixelAspectRatio;
+      contentWidth= frameWidth;
+      contentHeight= frameHeight/sink->soc.pixelAspectRatio;
    }
+   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("frame %dx%d contentWidth: %f contentHeight %f", frameWidth, frameHeight, contentWidth, contentHeight );
    ard= (double)sink->windowWidth/(double)sink->windowHeight;
    arf= (double)contentWidth/(double)contentHeight;
+   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("ard %f arf %f\n", ard, arf);
    if ( arf >= ard )
    {
       vh= (contentHeight * sink->windowWidth) / contentWidth;
@@ -3428,6 +3438,8 @@ static void swGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int
       vw= (contentWidth * sink->windowHeight) / contentHeight;
       vx= vx+(sink->windowWidth-vw)/2;
    }
+   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("vrect %d, %d, %d, %d", vx, vy, vw, vh);
+   sink->soc.pixelAspectRatioChanged= FALSE;
    *x= vx;
    *y= vy;
    *w= vw;
