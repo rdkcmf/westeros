@@ -209,7 +209,14 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    }
    if ( sink->soc.inputFormat != V4L2_PIX_FMT_MPEG2 )
    {
-      decParm->cfg.ref_buf_margin= 7;
+      if (sink->soc.lowMemoryMode)
+      {
+         decParm->cfg.ref_buf_margin= 5;
+      }
+      else
+      {
+         decParm->cfg.ref_buf_margin= 7;
+      }
    }
 
    if ( sink->soc.haveColorimetry ||
