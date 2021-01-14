@@ -3012,6 +3012,14 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
          goto exit;
       }
 
+      usleep( 34000 );
+      WstCompositorResolutionChangeBegin( wctx );
+
+      WstCompositorResolutionChangeEnd( wctx, ow, oh );
+
+      WstCompositorInvalidateScene( wctx );
+      usleep( 34000 );
+
       if ( isBridged )
       {
          setenv( "WESTEROS_VPC_BRIDGE", value, true );
