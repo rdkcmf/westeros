@@ -72,7 +72,7 @@
 
 #define DISPLAY_SAFE_BORDER_PERCENT (5)
 
-#define DRM_NO_SRC_CROP
+//#define DRM_NO_SRC_CROP
 
 #ifndef DRM_NO_REFRESH_LOCK
 #define USE_REFRESH_LOCK
@@ -853,12 +853,11 @@ static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t ha
 static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rectW, int rectH, uint32_t *skipX, uint32_t *skipY )
 {
    uint32_t frameWidth, frameHeight;
-   uint32_t frameSkipX, frameSkipY, rectSkipX, rectSkipY;
+   uint32_t frameSkipX, frameSkipY;
 
    frameWidth= vf->frameWidth;
    frameHeight= vf->frameHeight;
 
-   rectSkipX= 0;
    frameSkipX= 0;
    #ifdef DRM_NO_SRC_CROP
    /* If drmModeSetPlane won't perform src cropping we will
@@ -870,24 +869,21 @@ static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rect
       rectX &= ~1;
       frameSkipX= -rectX*frameWidth/rectW;
       frameSkipX &= ~1;
-      rectSkipX= -rectX;
    }
    frameSkipY= 0;
-   rectSkipY= 0;
    if ( rectY < 0 )
    {
       rectY &= ~1;
       frameSkipY= -rectY*frameHeight/rectH;
       frameSkipY &= ~1;
-      rectSkipY= -rectY;
    }
    #endif
    vf->frameWidthVisible= frameWidth-frameSkipX;
    vf->frameHeightVisible= frameHeight-frameSkipY;
-   vf->rectX= rectX+rectSkipX;
-   vf->rectY= rectY+rectSkipY;
-   vf->rectW= rectW-rectSkipX;
-   vf->rectH= rectH-rectSkipY;
+   vf->rectX= rectX;
+   vf->rectY= rectY;
+   vf->rectW= rectW;
+   vf->rectH= rectH;
    if ( skipX ) *skipX= frameSkipX;
    if ( skipY ) *skipY= frameSkipY;
 }
@@ -4688,6 +4684,19 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                modeHeight= ctx->modeInfo->vdisplay;
                gfxWidth= ctx->nwFirst ? ctx->nwFirst->width : modeWidth;
                gfxHeight= ctx->nwFirst ? ctx->nwFirst->height : modeWidth;
+
+               if ( dw > gfxWidth )
+               {
+                  int cropw= dw-gfxWidth;
+                  sw -= cropw*frameWidth/rectW;
+                  dw= gfxWidth;
+               }
+               if ( dh > gfxHeight )
+               {
+                  int croph= dh-gfxHeight;
+                  sh -= croph*frameHeight/rectH;
+                  dh= gfxHeight;
+               }
 
                if ( (gfxWidth != modeWidth) || (gfxHeight != modeHeight) )
                {
