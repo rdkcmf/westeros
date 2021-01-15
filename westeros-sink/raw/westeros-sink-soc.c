@@ -43,6 +43,7 @@
 #include "westeros-sink.h"
 
 #define DEFAULT_VIDEO_SERVER "video"
+#define DEFAULT_OVERSCAN (5)
 
 #ifdef GLIB_VERSION_2_32
   #define LOCK_SOC( sink ) g_mutex_lock( &((sink)->soc.mutex) );
@@ -63,6 +64,8 @@ enum
   PROP_DEVICE= PROP_SOC_BASE,
   PROP_FORCE_ASPECT_RATIO,
   PROP_WINDOW_SHOW,
+  PROP_ZOOM_MODE,
+  PROP_OVERSCAN_SIZE,
   PROP_ENABLE_TEXTURE
 };
 enum
@@ -72,6 +75,18 @@ enum
    SIGNAL_TIMECODE,
    MAX_SIGNAL
 };
+enum
+{
+   ZOOM_NONE,
+   ZOOM_AUTO,
+   ZOOM_DIRECT,
+   ZOOM_NORMAL,
+   ZOOM_16_9_STRETCH,
+   ZOOM_4_3_PILLARBOX,
+   ZOOM_ZOOM
+};
+
+#define needBounds(sink) ( sink->soc.forceAspectRatio || (sink->soc.zoomMode != ZOOM_NONE) )
 
 static bool g_frameDebug= false;
 static guint g_signals[MAX_SIGNAL]= {0};
@@ -210,6 +225,18 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "make video window visible",
                            "true: visible, false: hidden", TRUE, G_PARAM_WRITABLE));
 
+   g_object_class_install_property (gobject_class, PROP_ZOOM_MODE,
+     g_param_spec_int ("zoom-mode",
+                       "zoom-mode",
+                       "Set zoom mode: 0-none, 1-auto, 2-direct, 3-normal, 4-16x9 stretch, 5-4x3 pillar box, 6-zoom",
+                       ZOOM_NONE, ZOOM_ZOOM, ZOOM_NONE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_OVERSCAN_SIZE,
+     g_param_spec_int ("overscan-size",
+                       "overscan-size",
+                       "Set overscan size to be used with zoom-mode 2-direct",
+                       0, 10, DEFAULT_OVERSCAN, G_PARAM_READWRITE));
+
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -283,6 +310,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pixelAspectRatioChanged= FALSE;
    sink->soc.showChanged= FALSE;
+   sink->soc.zoomMode= ZOOM_NONE;
+   sink->soc.overscanSize= DEFAULT_OVERSCAN;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->soc.frameFormatStream= 0;
@@ -420,6 +449,26 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             }
          }
          break;
+      case PROP_ZOOM_MODE:
+         {
+            gint zoom= g_value_get_int(value);
+            if ( sink->soc.zoomMode != zoom )
+            {
+               GST_DEBUG("set zoom-mode to %d", zoom);
+               sink->soc.zoomMode= zoom;
+            }
+         }
+         break;
+      case PROP_OVERSCAN_SIZE:
+         {
+            gint overscan= g_value_get_int(value);
+            if ( sink->soc.overscanSize != overscan )
+            {
+               GST_DEBUG("set overscan-size to %d", overscan);
+               sink->soc.overscanSize= overscan;
+            }
+         }
+         break;
       case PROP_ENABLE_TEXTURE:
          {
             sink->soc.enableTextureSignal= g_value_get_boolean(value);
@@ -444,6 +493,12 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_WINDOW_SHOW:
          g_value_set_boolean(value, sink->show);
+         break;
+      case PROP_ZOOM_MODE:
+         g_value_set_int(value, sink->soc.zoomMode);
+         break;
+      case PROP_OVERSCAN_SIZE:
+         g_value_set_int(value, sink->soc.overscanSize);
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
@@ -1173,7 +1228,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       sink->soc.nextFrameFd= -1;
       sink->soc.framesBeforeHideGfx= sink->soc.hideGfxFramesDelay;
    }
-   if ( sink->soc.forceAspectRatio && sink->vpcSurface )
+   if ( needBounds(sink) && sink->vpcSurface )
    {
       /* Use nominal display size provided to us by
        * the compositor to calculate the video bounds
@@ -1327,15 +1382,72 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    ard= (double)sink->soc.videoWidth/(double)sink->soc.videoHeight;
    arf= (double)contentWidth/(double)contentHeight;
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("ard %f arf %f\n", ard, arf);
-   if ( arf >= ard )
+   switch( sink->soc.zoomMode )
    {
-      vh= (contentHeight * sink->soc.videoWidth) / contentWidth;
-      vy= vy+(sink->soc.videoHeight-vh)/2;
-   }
-   else
-   {
-      vw= (contentWidth * sink->soc.videoHeight) / contentHeight;
-      vx= vx+(sink->soc.videoWidth-vw)/2;
+      case ZOOM_NONE:
+      case ZOOM_AUTO:
+      case ZOOM_NORMAL:
+         {
+            if ( arf >= ard )
+            {
+               vh= (contentHeight * sink->soc.videoWidth) / contentWidth;
+               vy= vy+(sink->soc.videoHeight-vh)/2;
+            }
+            else
+            {
+               vw= (contentWidth * sink->soc.videoHeight) / contentHeight;
+               vx= vx+(sink->soc.videoWidth-vw)/2;
+            }
+         }
+         break;
+      case ZOOM_DIRECT:
+         {
+            int safeX= (sink->soc.videoWidth*sink->soc.overscanSize)/100;
+            int safeY= (sink->soc.videoHeight*sink->soc.overscanSize)/100;
+            int safeW= sink->soc.videoWidth-2*safeX;
+            int safeH= sink->soc.videoHeight-2*safeY;
+            vx= vx+safeX;
+            vy= vy+safeY;
+            if ( arf >= ard )
+            {
+               vw= safeW;
+               vh= (contentHeight * safeW) / contentWidth;
+               vy= vy+(safeH-vh)/2;
+            }
+            else
+            {
+               vh= safeH;
+               vw= (contentWidth * safeH) / contentHeight;
+               vx= vx+(safeW-vw)/2;
+            }
+         }
+         break;
+      case ZOOM_16_9_STRETCH:
+         {
+            vw= sink->soc.videoHeight*16/9;
+            vx= vx+(sink->soc.videoWidth-vw)/2;
+         }
+         break;
+      case ZOOM_4_3_PILLARBOX:
+         {
+            vw= sink->soc.videoHeight*4/3;
+            vx= vx+(sink->soc.videoWidth-vw)/2;
+         }
+         break;
+      case ZOOM_ZOOM:
+         {
+            if ( arf >= ard )
+            {
+               vw= (contentWidth * sink->soc.videoHeight) / contentHeight;
+               vx= vx+(sink->soc.videoWidth-vw)/2;
+            }
+            else
+            {
+               vh= (contentHeight * sink->soc.videoWidth) / contentWidth;
+               vy= vy+(sink->soc.videoHeight-vh)/2;
+            }
+         }
+         break;
    }
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("vrect %d, %d, %d, %d", vx, vy, vw, vh);
    sink->soc.pixelAspectRatioChanged= FALSE;
@@ -1752,7 +1864,7 @@ static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
       vy= sink->soc.videoY;
       vw= sink->soc.videoWidth;
       vh= sink->soc.videoHeight;
-      if ( sink->soc.forceAspectRatio )
+      if ( needBounds(sink) )
       {
          wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
       }
@@ -1994,7 +2106,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          vy= sink->soc.videoY;
          vw= sink->soc.videoWidth;
          vh= sink->soc.videoHeight;
-         if ( sink->soc.forceAspectRatio )
+         if ( needBounds(sink) )
          {
             wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
          }
