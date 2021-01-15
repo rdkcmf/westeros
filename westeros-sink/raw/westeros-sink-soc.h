@@ -70,6 +70,8 @@ struct _GstWesterosSinkSoc
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;
    gboolean showChanged;
+   int zoomMode;
+   int overscanSize;
    int frameWidth;
    int frameHeight;
    uint32_t frameFormatStream;
