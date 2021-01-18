@@ -53,7 +53,7 @@
 #define MIN_OUTPUT_BUFFERS (3)
 
 #define QOS_INTERVAL (1000)
-#define DEFAULT_OVERSCAN (5)
+#define DEFAULT_OVERSCAN (0)
 
 #define IOCTL ioctl_wrapper
 
@@ -96,7 +96,6 @@ enum
 enum
 {
    ZOOM_NONE,
-   ZOOM_AUTO,
    ZOOM_DIRECT,
    ZOOM_NORMAL,
    ZOOM_16_9_STRETCH,
@@ -304,7 +303,7 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
    g_object_class_install_property (gobject_class, PROP_ZOOM_MODE,
      g_param_spec_int ("zoom-mode",
                        "zoom-mode",
-                       "Set zoom mode: 0-none, 1-auto, 2-direct, 3-normal, 4-16x9 stretch, 5-4x3 pillar box, 6-zoom",
+                       "Set zoom mode: 0-none, 1-direct, 2-normal, 3-16x9 stretch, 4-4x3 pillar box, 5-zoom",
                        ZOOM_NONE, ZOOM_ZOOM, ZOOM_NONE, G_PARAM_READWRITE));
 
    g_object_class_install_property (gobject_class, PROP_OVERSCAN_SIZE,
@@ -4091,6 +4090,7 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    int vx, vy, vw, vh;
    int frameWidth, frameHeight;
    double contentWidth, contentHeight;
+   double roix, roiy, roiw, roih;
    double arf, ard;
    vx= sink->soc.videoX;
    vy= sink->soc.videoY;
@@ -4120,12 +4120,38 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("frame %dx%d contentWidth: %f contentHeight %f", frameWidth, frameHeight, contentWidth, contentHeight );
    ard= (double)sink->soc.videoWidth/(double)sink->soc.videoHeight;
    arf= (double)contentWidth/(double)contentHeight;
+
+   /* Establish region of interest */
+   roix= 0;
+   roiy= 0;
+   roiw= contentWidth;
+   roih= contentHeight;
+
+   /* TBD: adjust region of interest based on AFD+Bars */
+
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("ard %f arf %f\n", ard, arf);
    switch( sink->soc.zoomMode )
    {
-      case ZOOM_NONE:
-      case ZOOM_AUTO:
       case ZOOM_NORMAL:
+         {
+            if ( arf >= ard )
+            {
+               vw= sink->soc.videoWidth * (1.0+(2.0*sink->soc.overscanSize/100.0));
+               vh= (roih * vw) / roiw;
+               vx= vx+(sink->soc.videoWidth-vw)/2;
+               vy= vy+(sink->soc.videoHeight-vh)/2;
+            }
+            else
+            {
+               vh= sink->soc.videoHeight * (1.0+(2.0*sink->soc.overscanSize/100.0));
+               vw= (roiw * vh) / roih;
+               vx= vx+(sink->soc.videoWidth-vw)/2;
+               vy= vy+(sink->soc.videoHeight-vh)/2;
+            }
+         }
+         break;
+      case ZOOM_NONE:
+      case ZOOM_DIRECT:
          {
             if ( arf >= ard )
             {
@@ -4139,50 +4165,36 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
             }
          }
          break;
-      case ZOOM_DIRECT:
-         {
-            int safeX= (sink->soc.videoWidth*sink->soc.overscanSize)/100;
-            int safeY= (sink->soc.videoHeight*sink->soc.overscanSize)/100;
-            int safeW= sink->soc.videoWidth-2*safeX;
-            int safeH= sink->soc.videoHeight-2*safeY;
-            vx= vx+safeX;
-            vy= vy+safeY;
-            if ( arf >= ard )
-            {
-               vw= safeW;
-               vh= (contentHeight * safeW) / contentWidth;
-               vy= vy+(safeH-vh)/2;
-            }
-            else
-            {
-               vh= safeH;
-               vw= (contentWidth * safeH) / contentHeight;
-               vx= vx+(safeW-vw)/2;
-            }
-         }
-         break;
       case ZOOM_16_9_STRETCH:
          {
-            vw= sink->soc.videoHeight*16/9;
+            vh= sink->soc.videoHeight * (1.0+(2.0*sink->soc.overscanSize/100.0));
+            vw= vh*16/9;
             vx= vx+(sink->soc.videoWidth-vw)/2;
+            vy= vy+(sink->soc.videoHeight-vh)/2;
          }
          break;
       case ZOOM_4_3_PILLARBOX:
          {
-            vw= sink->soc.videoHeight*4/3;
+            vh= sink->soc.videoHeight * (1.0+(2.0*sink->soc.overscanSize/100.0));
+            vw= vh*4/3;
             vx= vx+(sink->soc.videoWidth-vw)/2;
+            vy= vy+(sink->soc.videoHeight-vh)/2;
          }
          break;
       case ZOOM_ZOOM:
          {
             if ( arf >= ard )
             {
-               vw= (contentWidth * sink->soc.videoHeight) / contentHeight;
+               vh= sink->soc.videoHeight * (1.0+(2.0*sink->soc.overscanSize/100.0));
+               vw= (roiw * vh) / roih;
                vx= vx+(sink->soc.videoWidth-vw)/2;
+               vy= vy+(sink->soc.videoHeight-vh)/2;
             }
             else
             {
-               vh= (contentHeight * sink->soc.videoWidth) / contentWidth;
+               vw= sink->soc.videoWidth * (1.0+(2.0*sink->soc.overscanSize/100.0));
+               vh= (roih * vw) / roiw;
+               vx= vx+(sink->soc.videoWidth-vw)/2;
                vy= vy+(sink->soc.videoHeight-vh)/2;
             }
          }
