@@ -301,6 +301,8 @@ static void outputHandleMode( void *data,
    if ( flags & WL_OUTPUT_MODE_CURRENT )
    {
       LOCK( sink );
+      sink->displayWidth= width;
+      sink->displayHeight= height;
       if ( !sink->windowSizeOverride )
       {
          printf("westeros-sink: compositor sets window to (%dx%d)\n", width, height);
@@ -1128,6 +1130,9 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->windowSet= false;
    sink->windowChange= false;
    sink->windowSizeOverride= false;
+
+   sink->displayWidth= -1;
+   sink->displayHeight= -1;
    
    sink->visible= false;
    

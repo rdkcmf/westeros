@@ -257,7 +257,10 @@ struct _WstRenderSurface
    
    bool dirty;
    bool invertedY;
-   
+
+   bool haveCrop;
+   float cropTextureCoord[4][2];
+
    WstRenderSurface *surfaceFast;
 };
 
@@ -1644,16 +1647,25 @@ static void wstRendererEMBRenderSurface( WstRendererEMB *renderer, WstRenderSurf
       {0, 0, 0, 1}
    };
 
-   const float *uv= surface->invertedY ? (const float*)uvYInverted : (const float*)uvNormal;   
-
    float *matrix= (renderer->renderer->hints & WstHints_applyTransform
                   ? renderer->renderer->matrix : (float*)identityMatrix);
 
    float alpha= (renderer->renderer->hints & WstHints_applyTransform
                 ? surface->opacity*renderer->renderer->alpha : surface->opacity );
 
+   float *uv;
+
    int resW, resH;
    GLint viewport[4];
+
+   if ( surface->haveCrop )
+   {
+      uv= (float*)surface->cropTextureCoord;
+   }
+   else
+   {
+      uv= surface->invertedY ? (float*)uvYInverted : (float*)uvNormal;
+   }
 
    if ( renderer->renderer->hints & WstHints_fboTarget )
    {
@@ -2211,6 +2223,7 @@ static void wstRendererSurfaceSetGeometry( WstRenderer *renderer, WstRenderSurfa
       surface->width= width;
       surface->height= height;
       surface->dirty= true;
+      surface->haveCrop= false;
 
       if ( surface->surfaceFast )
       {
@@ -2345,6 +2358,50 @@ static float wstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurfac
    
    return zLevel;
 }
+
+#define TEXTURE_CROP_DENOM (100000)
+static void wstRendererSurfaceSetCrop( WstRenderer *renderer, WstRenderSurface *surface, float x, float y, float width, float height )
+{
+   WstRendererEMB *rendererEMB= (WstRendererEMB*)renderer->renderer;
+
+   if ( surface  )
+   {
+      if ( (surface->width > 0) && (surface->height > 0) )
+      {
+         float tx1, ty1, tx2, ty2;
+         tx1= x;
+         tx2= x+width;
+         ty1= y;
+         ty2= y+height;
+
+         if ( surface->invertedY )
+         {
+            surface->cropTextureCoord[0][0]= tx1;
+            surface->cropTextureCoord[0][1]= ty2;
+            surface->cropTextureCoord[1][0]= tx2;
+            surface->cropTextureCoord[1][1]= ty2;
+            surface->cropTextureCoord[2][0]= tx1;
+            surface->cropTextureCoord[2][1]= ty1;
+            surface->cropTextureCoord[3][0]= tx2;
+            surface->cropTextureCoord[3][1]= ty1;
+         }
+         else
+         {
+            surface->cropTextureCoord[0][0]= tx1;
+            surface->cropTextureCoord[0][1]= ty1;
+            surface->cropTextureCoord[1][0]= tx2;
+            surface->cropTextureCoord[1][1]= ty1;
+            surface->cropTextureCoord[2][0]= tx1;
+            surface->cropTextureCoord[2][1]= ty2;
+            surface->cropTextureCoord[3][0]= tx2;
+            surface->cropTextureCoord[3][1]= ty2;
+         }
+
+         surface->haveCrop= true;
+      }
+   }
+}
+
 #ifdef ENABLE_LDBPROTOCOL
 static void wstRendererQueryDmabufFormats( WstRenderer *renderer, int **formats, int *num_formats)
 {
@@ -2646,6 +2703,7 @@ int renderer_init( WstRenderer *renderer, int argc, char **argv )
       renderer->surfaceGetOpacity= wstRendererSurfaceGetOpacity;
       renderer->surfaceSetZOrder= wstRendererSurfaceSetZOrder;
       renderer->surfaceGetZOrder= wstRendererSurfaceGetZOrder;
+      renderer->surfaceSetCrop= wstRendererSurfaceSetCrop;
       #ifdef ENABLE_LDBPROTOCOL
       renderer->queryDmabufFormats= wstRendererQueryDmabufFormats;
       renderer->queryDmabufModifiers= wstRendererQueryDmabufModifiers;

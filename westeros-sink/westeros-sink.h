@@ -129,7 +129,10 @@ struct _GstWesterosSink
    bool windowChange;
    bool windowSet;
    bool windowSizeOverride;
-   
+
+   int displayWidth;
+   int displayHeight;
+
    bool visible;
    float opacity;
    float zorder;

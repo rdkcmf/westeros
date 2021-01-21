@@ -146,6 +146,7 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
 static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h );
+static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, int vh );
 static void wstProcessTextureSignal( GstWesterosSink *sink, int buffIndex );
 static bool wstProcessTextureWayland( GstWesterosSink *sink, int buffIndex );
 static int wstFindVideoBuffer( GstWesterosSink *sink, int frameNumber );
@@ -1553,7 +1554,7 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
       sink->soc.videoHeight= sink->windowHeight;
 
       wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
-      wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+      wstSetTextureCrop( sink, vx, vy, vw, vh );
 
       sink->soc.videoX= tx;
       sink->soc.videoY= ty;
@@ -2014,6 +2015,7 @@ static void wstProcessEvents( GstWesterosSink *sink )
                   (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) ||
               (sink->soc.frameOutCount > 0) )
          {
+            int vx, vy, vw, vh;
             wstTearDownOutputBuffers( sink );
 
             if ( sink->soc.isMultiPlane )
@@ -2030,6 +2032,8 @@ static void wstProcessEvents( GstWesterosSink *sink )
             wstSVPSetInputMemMode( sink, sink->soc.inputMemMode );
             #endif
             wstSetupOutput( sink );
+            wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+            wstSetTextureCrop( sink, vx, vy, vw, vh );
             sink->soc.nextFrameFd= -1;
             sink->soc.prevFrame1Fd= -1;
             sink->soc.prevFrame2Fd= -1;
@@ -4129,7 +4133,7 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
 
    /* TBD: adjust region of interest based on AFD+Bars */
 
-   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("ard %f arf %f\n", ard, arf);
+   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("ard %f arf %f", ard, arf);
    switch( sink->soc.zoomMode )
    {
       case ZOOM_NORMAL:
@@ -4206,6 +4210,133 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    *y= vy;
    *w= vw;
    *h= vh;
+}
+
+static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, int vh )
+{
+   GST_DEBUG("wstSetTextureCrop: vx %d vy %d vw %d vh %d window(%d, %d, %d, %d) display(%dx%d)",
+             vx, vy, vw, vh, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight, sink->displayWidth, sink->displayHeight);
+   if ( (sink->displayWidth != -1) && (sink->displayHeight != -1) &&
+        ( (vx < 0) || (vx+vw > sink->displayWidth) ||
+          (vy < 0) || (vy+vh > sink->displayHeight) ) )
+   {
+      int cropx, cropy, cropw, croph;
+      int wx1, wx2, wy1, wy2;
+      cropx= 0;
+      cropw= sink->windowWidth;
+      cropy= 0;
+      croph= sink->windowHeight;
+      if ( (vx < sink->windowX) || (vx+vw > sink->windowX+sink->windowWidth) )
+      {
+         GST_LOG("wstSetTextureCrop: CX1");
+         cropx= (sink->windowX-vx)*sink->windowWidth/vw;
+         cropw= (sink->windowX+sink->windowWidth-vx)*sink->windowWidth/vw - cropx;
+      }
+      else if ( vx < 0 )
+      {
+         GST_LOG("wstSetTextureCrop: CX2");
+         cropx= -vx*sink->windowWidth/vw;
+         cropw= (vw+vx)*sink->windowWidth/vw;
+      }
+      else if ( vx+vw > sink->windowWidth )
+      {
+         GST_LOG("wstSetTextureCrop: CX3");
+         cropx= 0;
+         cropw= (sink->windowWidth-vx)*sink->windowWidth/vw;
+      }
+
+      if ( (vy < sink->windowY) || (vy+vh > sink->windowY+sink->windowHeight) )
+      {
+         GST_LOG("wstSetTextureCrop: CY1");
+         cropy= (sink->windowY-vy)*sink->windowHeight/vh;
+         croph= (sink->windowY+sink->windowHeight-vy)*sink->windowHeight/vh - cropy;
+      }
+      else if ( vy < 0 )
+      {
+         GST_LOG("wstSetTextureCrop: CY2");
+         cropy= -vy*sink->windowHeight/vh;
+         croph= (vh+vy)*sink->windowHeight/vh;
+      }
+      else if ( vy+vh > sink->windowHeight )
+      {
+         GST_LOG("wstSetTextureCrop: CY3");
+         cropy= 0;
+         croph= (sink->windowHeight-vy)*sink->windowHeight/vh;
+      }
+
+      wx1= vx;
+      wx2= vx+vw;
+      wy1= vy;
+      wy2= vy+vh;
+      vx= sink->windowX;
+      vy= sink->windowY;
+      vw= sink->windowWidth;
+      vh= sink->windowHeight;
+      if ( (wx1 > vx) && (wx1 > 0) )
+      {
+         GST_LOG("wstSetTextureCrop: WX1");
+         vx= wx1;
+      }
+      else if ( (wx1 >= vx) && (wx1 < 0) )
+      {
+         GST_LOG("wstSetTextureCrop: WX2");
+         vw += wx1;
+         vx= 0;
+      }
+      else if ( wx2 < vx+vw )
+      {
+         GST_LOG("wstSetTextureCrop: WX3");
+         vw= wx2-vx;
+      }
+      if ( (wx1 >= 0) && (wx2 > vw) )
+      {
+         GST_LOG("wstSetTextureCrop: WX4");
+         vw= vw-wx1;
+      }
+      else if ( wx2 < vx+vw )
+      {
+         GST_LOG("wstSetTextureCrop: WX5");
+         vw= wx2-vx;
+      }
+
+      if ( (wy1 > vy) && (wy1 > 0) )
+      {
+         GST_LOG("wstSetTextureCrop: WY1");
+         vy= wy1;
+      }
+      else if ( (wy1 >= vy) && (wy1 < 0) )
+      {
+         GST_LOG("wstSetTextureCrop: WY2");
+         vy= 0;
+      }
+      else if ( (wy1 < vy) && (wy1 > 0) )
+      {
+         GST_LOG("wstSetTextureCrop: WY3");
+         vh -= wy1;
+      }
+      if ( (wy1 >= 0) && (wy2 > vh) )
+      {
+         GST_LOG("wstSetTextureCrop: WY4");
+         vh= vh-wy1;
+      }
+      else if ( wy2 < vy+vh )
+      {
+         GST_LOG("wstSetTextureCrop: WY5");
+         vh= wy2-vy;
+      }
+      if ( vw < 0 ) vw= 0;
+      if ( vh < 0 ) vh= 0;
+      cropx= (cropx*WL_VPC_SURFACE_CROP_DENOM)/sink->windowWidth;
+      cropy= (cropy*WL_VPC_SURFACE_CROP_DENOM)/sink->windowHeight;
+      cropw= (cropw*WL_VPC_SURFACE_CROP_DENOM)/sink->windowWidth;
+      croph= (croph*WL_VPC_SURFACE_CROP_DENOM)/sink->windowHeight;
+      GST_DEBUG("wstSetTextureCrop: %d, %d, %d, %d - %d, %d, %d, %d\n", vx, vy, vw, vh, cropx, cropy, cropw, croph);
+      wl_vpc_surface_set_geometry_with_crop( sink->vpcSurface, vx, vy, vw, vh, cropx, cropy, cropw, croph );
+   }
+   else
+   {
+      wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+   }
 }
 
 static void wstProcessTextureSignal( GstWesterosSink *sink, int buffIndex )
@@ -5293,7 +5424,7 @@ void swDisplay( GstWesterosSink *sink, SWFrame *frame )
          sink->soc.frameWidth= frame->width;
          sink->soc.frameHeight= frame->height;
          wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
-         wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+         wstSetTextureCrop( sink, vx, vy, vw, vh );
       }
 
       if ( sink->soc.enableTextureSignal )

@@ -57,7 +57,7 @@
     
   </interface>
 
-  <interface name="wl_vpc_surface" version="1">
+  <interface name="wl_vpc_surface" version="2">
 
     <description summary="vpc surface">
     An interface that may be implemented by a wl_surface which is being used to
@@ -69,6 +69,10 @@
       <entry name="unspecified" value="0"/>
       <entry name="hardware" value="1"/>
       <entry name="graphics" value="2"/>
+    </enum>
+
+    <enum name="crop">
+      <entry name="denom" value="100000"/>
     </enum>
 
     <event name="video_path_change">
@@ -91,6 +95,25 @@
       <arg name="y" type="int"/>
       <arg name="width" type="int"/>
       <arg name="height" type="int"/>
+    </request>
+
+    <request name="set_geometry_with_crop" since="2">
+      <description summary="set geometry with crop">
+      Set vpc surface geometry with the ability to crop
+      the frame.  The x, y, width, and heigth are values in
+      screen coordinates that specify the rectangle to
+      be textured with the video frame.  The crop values, when
+      divided by crop denom give the region of the frame to
+      use as the texture.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="crop_x" type="int"/>
+      <arg name="crop_y" type="int"/>
+      <arg name="crop_width" type="int"/>
+      <arg name="crop_height" type="int"/>
     </request>
 
   </interface>

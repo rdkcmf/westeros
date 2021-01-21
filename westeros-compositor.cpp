@@ -789,6 +789,9 @@ static void wstDestroyVpcSurfaceCallback(struct wl_resource *resource);
 static void wstVpcSurfaceDestroy( WstVpcSurface *vpcSurface );
 static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resource *resource,
                                        int32_t x, int32_t y, int32_t width, int32_t height );
+static void wstIVpcSurfaceSetGeometryWithCrop( struct wl_client *client, struct wl_resource *resource,
+                                       int32_t x, int32_t y, int32_t width, int32_t height,
+                                       int32_t cropX, int32_t cropY, int32_t cropW, int32_t cropH );
 static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rects );
 static bool wstInitializeKeymap( WstCompositor *wctx );
 static void wstTerminateKeymap( WstCompositor *wctx );
@@ -4776,7 +4779,8 @@ static const struct wl_vpc_interface vpc_interface_impl=
 
 static const struct wl_vpc_surface_interface vpc_surface_interface= 
 {
-   wstIVpcSurfaceSetGeometry
+   wstIVpcSurfaceSetGeometry,
+   wstIVpcSurfaceSetGeometryWithCrop
 };
 
 static void wstShmBind( struct wl_client *client, void *data, uint32_t version, uint32_t id)
@@ -8284,7 +8288,7 @@ static void wstIVpcGetVpcSurface( struct wl_client *client, struct wl_resource *
    }
    
    vpcSurface->resource= wl_resource_create(client,
-                                            &wl_vpc_surface_interface, 1, id);
+                                            &wl_vpc_surface_interface, 2, id);
    if (!vpcSurface->resource) 
    {
       free(vpcSurface);
@@ -8444,6 +8448,45 @@ static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resou
          if ( surface->compositor->ctx->renderer )
          {
             WstRendererSurfaceSetGeometry( surface->compositor->ctx->renderer, surface->surface, x, y, width, height );
+         }
+      }
+   }
+}
+
+static void wstIVpcSurfaceSetGeometryWithCrop( struct wl_client *client, struct wl_resource *resource,
+                                       int32_t x, int32_t y, int32_t width, int32_t height,
+                                       int32_t cropX, int32_t cropY, int32_t cropW, int32_t cropH )
+{
+   WstVpcSurface *vpcSurface= (WstVpcSurface*)wl_resource_get_user_data(resource);
+
+   if ( vpcSurface )
+   {
+      vpcSurface->sizeOverride= true;
+      vpcSurface->hwX= x;
+      vpcSurface->hwY= y;
+      vpcSurface->hwWidth= width;
+      vpcSurface->hwHeight= height;
+
+      WstSurface *surface= vpcSurface->surface;
+      if ( surface )
+      {
+         surface->x= x;
+         surface->y= y;
+         surface->width= width;
+         surface->height= height;
+         if ( vpcSurface->vpcSurfaceNested )
+         {
+            wl_vpc_surface_set_geometry_with_crop( vpcSurface->vpcSurfaceNested, x, y, width, height, cropX, cropY, cropW, cropH );
+         }
+         if ( surface->compositor->ctx->renderer )
+         {
+            float cx, cy, cw, ch;
+            cx= (float)cropX/(float)WL_VPC_SURFACE_CROP_DENOM;
+            cy= (float)cropY/(float)WL_VPC_SURFACE_CROP_DENOM;
+            cw= (float)cropW/(float)WL_VPC_SURFACE_CROP_DENOM;
+            ch= (float)cropH/(float)WL_VPC_SURFACE_CROP_DENOM;
+            WstRendererSurfaceSetGeometry( surface->compositor->ctx->renderer, surface->surface, x, y, width, height );
+            WstRendererSurfaceSetCrop( surface->compositor->ctx->renderer, surface->surface, cx, cy, cw, ch );
          }
       }
    }
