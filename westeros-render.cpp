@@ -224,6 +224,14 @@ float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surf
    return renderer->surfaceGetZOrder( renderer, surface, z );
 }
 
+void WstRendererSurfaceSetCrop( WstRenderer *renderer, WstRenderSurface *surface, float x, float y, float width, float height )
+{
+   if ( renderer->surfaceSetCrop )
+   {
+      renderer->surfaceSetCrop( renderer, surface, x, y, width, height );
+   }
+}
+
 void WstRendererQueryDmabufFormats( WstRenderer *renderer, int **formats, int *num_formats )
 {
    if ( renderer->queryDmabufFormats )

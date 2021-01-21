@@ -83,6 +83,7 @@ typedef void (*WSTMethodSurfaceSetOpacity)( WstRenderer *renderer, WstRenderSurf
 typedef float (*WSTMethodSurfaceGetOpacity)( WstRenderer *renderer, WstRenderSurface *surface, float *opaticty );
 typedef void (*WSTMethodSurfaceSetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float z );
 typedef float (*WSTMethodSurfaceGetZOrder)( WstRenderer *renderer, WstRenderSurface *surface, float *z );
+typedef void (*WSTMethodSurfaceSetCrop)( WstRenderer *renderer, WstRenderSurface *surface, float x, float y, float width, float height );
 typedef void (*WSTMethodQueryDmabufFormats)( WstRenderer *renderer, int **formats, int *num_formats );
 typedef void (*WSTMethodQueryDmabufModifiers)( WstRenderer *renderer, int format, uint64_t **modifiers, int *num_modifiers );
 typedef void (*WSTMethodDelegateUpdateScene)( WstRenderer *renderer, std::vector<WstRect> &rects );
@@ -111,6 +112,7 @@ typedef struct _WstRenderer
    WSTMethodSurfaceGetOpacity surfaceGetOpacity;
    WSTMethodSurfaceSetZOrder surfaceSetZOrder;
    WSTMethodSurfaceGetZOrder surfaceGetZOrder;
+   WSTMethodSurfaceSetCrop surfaceSetCrop;
    WSTMethodQueryDmabufFormats queryDmabufFormats;
    WSTMethodQueryDmabufModifiers queryDmabufModifiers;
    WSTMethodDelegateUpdateScene delegateUpdateScene;
@@ -150,6 +152,7 @@ void WstRendererSurfaceSetOpacity( WstRenderer *renderer, WstRenderSurface *surf
 float WstRendererSurfaceGetOpacity( WstRenderer *renderer, WstRenderSurface *surface, float *opacity );
 void WstRendererSurfaceSetZOrder( WstRenderer *renderer, WstRenderSurface *surface, float z );
 float WstRendererSurfaceGetZOrder( WstRenderer *renderer, WstRenderSurface *surface, float *z );
+void WstRendererSurfaceSetCrop( WstRenderer *renderer, WstRenderSurface *surface, float x, float y, float width, float height );
 void WstRendererQueryDmabufFormats( WstRenderer *renderer, int **formats, int *num_formats );
 void WstRendererQueryDmabufModifiers( WstRenderer *renderer, int format, uint64_t **modifiers, int *num_modifiers );
 void WstRendererDelegateUpdateScene( WstRenderer *renderer, std::vector<WstRect> &rects );
