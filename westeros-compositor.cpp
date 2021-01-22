@@ -8657,13 +8657,16 @@ static void wstUpdateVPCSurfaces( WstCompositor *wctx, std::vector<WstRect> &rec
             rect.y= vpcSurface->hwY;
             rect.width= vpcSurface->hwWidth;
             rect.height= vpcSurface->hwHeight;
-            if ( ctx->renderer->hints & WstHints_holePunch )
+            if ( vpcSurface->sizeOverride )
             {
-               ctx->renderer->holePunch( ctx->renderer, rect.x, rect.y, rect.width, rect.height );
-            }
-            else
-            {
-               rects.push_back(rect);
+               if ( ctx->renderer->hints & WstHints_holePunch )
+               {
+                  ctx->renderer->holePunch( ctx->renderer, rect.x, rect.y, rect.width, rect.height );
+               }
+               else
+               {
+                  rects.push_back(rect);
+               }
             }
             if ( ctx->hasVpcBridge && (vpcSurface->vpcSurfaceNested) )
             {
