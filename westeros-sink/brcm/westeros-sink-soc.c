@@ -2515,10 +2515,10 @@ static void updateVideoStatus( GstWesterosSink *sink )
    {
       return;
    }
-   
-   if ( videoPlaying && !flushStarted )
+
+   if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
    {
-      if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
+      if ( videoPlaying && !flushStarted )
       {
          LOCK( sink );
          if ( sink->flushStarted )
@@ -2651,6 +2651,19 @@ static void updateVideoStatus( GstWesterosSink *sink )
 
          sink->srcWidth= videoStatus.source.width;
          sink->srcHeight= videoStatus.source.height;
+         UNLOCK( sink );
+      }
+      else if ( !flushStarted )
+      {
+         LOCK( sink );
+         if ( (videoStatus.firstPtsPassed || videoStatus.numDecoded > sink->soc.numDecoded) && (sink->currentPTS/2 != videoStatus.pts) )
+         {
+            if (sink->soc.frameCount == 0)
+            {
+               emitFirstFrame= TRUE;
+            }
+            sink->soc.frameCount++;
+         }
          UNLOCK( sink );
       }
    }
