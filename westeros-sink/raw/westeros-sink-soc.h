@@ -99,6 +99,7 @@ struct _GstWesterosSinkSoc
    GThread *dispatchThread;
 
    gboolean emitFirstFrameSignal;
+   gboolean emitUnderflowSignal;
    gboolean useCaptureOnly;
    gboolean captureEnabled;
    int hideVideoFramesDelay;
@@ -121,6 +122,7 @@ struct _GstWesterosSinkSoc
    bool haveDrmBuffSem;
    sem_t drmBuffSem;
    GThread *firstFrameThread;
+   GThread *underflowThread;
    WstDrmBuffer drmBuffer[WST_NUM_DRM_BUFFERS];
 
    #ifdef GLIB_VERSION_2_32 

@@ -88,6 +88,7 @@ enum
 enum
 {
    SIGNAL_FIRSTFRAME,
+   SIGNAL_UNDERFLOW,
    SIGNAL_NEWTEXTURE,
    SIGNAL_DECODEERROR,
    SIGNAL_TIMECODE,
@@ -310,7 +311,7 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
    g_object_class_install_property (gobject_class, PROP_OVERSCAN_SIZE,
      g_param_spec_int ("overscan-size",
                        "overscan-size",
-                       "Set overscan size to be used with zoom-mode 2-direct",
+                       "Set overscan size to be used with applicable zoom-modes",
                        0, 10, DEFAULT_OVERSCAN, G_PARAM_READWRITE));
 
    g_object_class_install_property (gobject_class, PROP_REPORT_DECODE_ERRORS,
@@ -329,6 +330,18 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                2,
                                                G_TYPE_UINT,
                                                G_TYPE_POINTER );
+
+   g_signals[SIGNAL_UNDERFLOW]= g_signal_new( "buffer-underflow-callback",
+                                              G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                              (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                              0,    // class offset
+                                              NULL, // accumulator
+                                              NULL, // accu data
+                                              g_cclosure_marshal_VOID__UINT_POINTER,
+                                              G_TYPE_NONE,
+                                              2,
+                                              G_TYPE_UINT,
+                                              G_TYPE_POINTER );
 
    g_signals[SIGNAL_NEWTEXTURE]= g_signal_new( "new-video-texture-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -464,6 +477,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.hasEvents= FALSE;
    sink->soc.needCaptureRestart= FALSE;
    sink->soc.emitFirstFrameSignal= FALSE;
+   sink->soc.emitUnderflowSignal= FALSE;
    sink->soc.decodeError= FALSE;
    sink->soc.nextFrameFd= -1;
    sink->soc.prevFrame1Fd= -1;
@@ -1660,6 +1674,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
    sink->soc.emitFirstFrameSignal= FALSE;
+   sink->soc.emitUnderflowSignal= FALSE;
    sink->soc.decodeError= FALSE;
 
    if ( sink->soc.inputFormats )
@@ -3591,7 +3606,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
       {
          struct msghdr msg;
          struct iovec iov[1];
-         unsigned char mbody[64];
+         unsigned char mbody[256];
          unsigned char *m= mbody;
          int len;
 
@@ -3703,6 +3718,18 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
                            {
                               sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                           }
+                        }
+                        break;
+                     case 'U':
+                        if ( mlen >= 9 )
+                        {
+                           guint64 frameTime= getS64( &m[4] );
+                           GST_INFO( "underflow received: frameTime %lld eosEventSeen %d", frameTime, sink->eosEventSeen);
+                           FRAME( "out:       underflow received: frameTime %lld", frameTime);
+                           if ( !sink->eosEventSeen )
+                           {
+                              sink->soc.emitUnderflowSignal= TRUE;
                            }
                         }
                         break;
@@ -4912,6 +4939,12 @@ capture_start:
          sink->soc.emitFirstFrameSignal= FALSE;
          GST_DEBUG("wstVideoOutputThread: emit first frame signal");
          g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+      }
+      if ( sink->soc.emitUnderflowSignal )
+      {
+         sink->soc.emitUnderflowSignal= FALSE;
+         GST_DEBUG("wstVideoOutputThread: emit underflow signal");
+         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
       }
    }
 

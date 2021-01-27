@@ -171,6 +171,7 @@ struct _GstWesterosSinkSoc
    gboolean hasEvents;
    gboolean needCaptureRestart;
    gboolean emitFirstFrameSignal;
+   gboolean emitUnderflowSignal;
    gboolean decodeError;
    gboolean quitVideoOutputThread;
    GThread *videoOutputThread;

@@ -180,6 +180,7 @@ typedef struct _VideoFrame
    WstOverlayPlane *plane;
    bool hide;
    bool hidden;
+   bool canExpire;
    uint32_t fbId;
    uint32_t handle0;
    uint32_t handle1;
@@ -221,6 +222,8 @@ typedef struct _VideoFrameManager
    long long displayedFrameTime;
    int dropFrameCount;
    int dropFrameCountReported;
+   bool underflowDetected;
+   bool underflowReported;
    int bufferIdCurrent;
    bool syncInit;
    void *sync;
@@ -380,6 +383,7 @@ static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rect
 static void wstFreeVideoFrameResources( VideoFrame *f );
 static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bufferId );
 static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
+static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrameManager *vfm );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
 static void wstSelectMode( WstGLCtx *ctx, int width, int height );
@@ -1109,6 +1113,48 @@ static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameMan
    {
       FRAME("send status: frameTime %lld dropCount %d to client", vfm->displayedFrameTime, vfm->dropFrameCount);
       vfm->dropFrameCountReported= vfm->dropFrameCount;
+   }
+
+   pthread_mutex_unlock( &conn->mutex );
+}
+
+static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrameManager *vfm )
+{
+   struct msghdr msg;
+   struct iovec iov[1];
+   unsigned char mbody[4+8];
+   int len;
+   int sentLen;
+
+   pthread_mutex_lock( &conn->mutex );
+
+   msg.msg_name= NULL;
+   msg.msg_namelen= 0;
+   msg.msg_iov= iov;
+   msg.msg_iovlen= 1;
+   msg.msg_control= 0;
+   msg.msg_controllen= 0;
+   msg.msg_flags= 0;
+
+   len= 0;
+   mbody[len++]= 'V';
+   mbody[len++]= 'S';
+   mbody[len++]= 9;
+   mbody[len++]= 'U';
+   len += wstPutS64( &mbody[len], vfm->displayedFrameTime );
+
+   iov[0].iov_base= (char*)mbody;
+   iov[0].iov_len= len;
+
+   do
+   {
+      sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+   }
+   while ( (sentLen < 0) && (errno == EINTR));
+
+   if ( sentLen == len )
+   {
+      FRAME("send underflow: frameTime %lld to client", vfm->displayedFrameTime);
    }
 
    pthread_mutex_unlock( &conn->mutex );
@@ -2663,6 +2709,7 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
    vfm->queue[vfm->queueSize++]= *f;
 }
 
+#define EXPIRELIMIT (83000)
 #define US_TO_MS( t ) (((t) + 500LL) / 1000LL)
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
 {
@@ -2700,17 +2747,21 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
             FRAME("  flipTime %lld vblankTime+vblankInterval %lld", flipTime, vfm->vblankTime+vfm->vblankInterval);
             if ( US_TO_MS(vfm->vblankTime+vfm->vblankInterval) >= US_TO_MS(flipTime) || vfm->frameAdvance )
             {
-               if ( (i > 0) && (US_TO_MS(fCheck->frameTime) < US_TO_MS(vfm->frameTimeCurrent+vfm->vblankInterval)) )
+               if (
+                    ((i == 0) && fCheck->canExpire && (US_TO_MS(flipTime+EXPIRELIMIT) < US_TO_MS(vfm->vblankTime))) ||
+                    ((i > 0) && (US_TO_MS(fCheck->frameTime) < US_TO_MS(vfm->frameTimeCurrent+vfm->vblankInterval)))
+                  )
                {
                   FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
                   vfm->dropFrameCount += 1;
                   wstFreeVideoFrameResources( fCheck );
                   wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
-                  if ( vfm->queueSize > 2 )
+                  if ( vfm->queueSize > i+1 )
                   {
-                     memmove( &vfm->queue[1], &vfm->queue[2], (vfm->queueSize-2)*sizeof(VideoFrame) );
+                     memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-(i+1))*sizeof(VideoFrame) );
                   }
                   --vfm->queueSize;
+                  f= 0;
                   continue;
                }
                if ( i > 0 )
@@ -2727,6 +2778,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                if ( f->bufferId != vfm->bufferIdCurrent )
                {
                   FRAME("  time to flip frame %d buffer %d", f->frameNumber, f->bufferId);
+                  f->canExpire= !vfm->frameAdvance;
                   vfm->adjust= ((vfm->flipTimeCurrent != 0) ? (vfm->vblankInterval-(f->frameTime-vfm->frameTimeCurrent)) : 0);
                   vfm->flipTimeCurrent= flipTime;
                   vfm->frameTimeCurrent= f->frameTime + vfm->adjust;
@@ -2739,8 +2791,15 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
       }
    }
 done:
+   if ( !f && !vfm->paused && (vfm->bufferIdCurrent != -1) && !vfm->underflowReported &&
+        vfm->conn && vfm->conn->videoPlane && vfm->conn->videoPlane && (vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1) )
+   {
+      vfm->underflowDetected= true;
+      INFO("underflow detected video plane %p", vfm->conn->videoPlane);
+   }
    if ( f )
    {
+      vfm->underflowReported= false;
       vfm->bufferIdCurrent= f->bufferId;
    }
    return f;
@@ -4056,6 +4115,11 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
                   sendStatus= true;
                }
             }
+            if ( iter->vfm->underflowDetected )
+            {
+               iter->vfm->underflowReported= true;
+               wstVideoServerSendUnderflow( iter->conn, iter->vfm );
+            }
             if ( iter->vfm->dropFrameCount != iter->vfm->dropFrameCountReported )
             {
                sendStatus= true;
@@ -4806,6 +4870,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
 
    if ( (flags & DRM_MODE_ATOMIC_ALLOW_MODESET) && !rc )
    {
+      DEBUG("mode set");
       ctx->modeSet= true;
    }
 

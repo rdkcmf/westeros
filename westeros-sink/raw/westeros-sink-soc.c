@@ -71,6 +71,7 @@ enum
 enum
 {
    SIGNAL_FIRSTFRAME,
+   SIGNAL_UNDERFLOW,
    SIGNAL_NEWTEXTURE,
    SIGNAL_TIMECODE,
    MAX_SIGNAL
@@ -105,6 +106,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
 static gpointer wstDispatchThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstFirstFrameThread(gpointer data);
+static gpointer wstUnderflowThread(gpointer data);
 static bool drmInit( GstWesterosSink *sink );
 static void drmTerm( GstWesterosSink *sink );
 static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int height );
@@ -234,7 +236,7 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
    g_object_class_install_property (gobject_class, PROP_OVERSCAN_SIZE,
      g_param_spec_int ("overscan-size",
                        "overscan-size",
-                       "Set overscan size to be used with zoom-mode 2-direct",
+                       "Set overscan size to be used with applicable zoom-modes",
                        0, 10, DEFAULT_OVERSCAN, G_PARAM_READWRITE));
 
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
@@ -248,6 +250,18 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                                2,
                                                G_TYPE_UINT,
                                                G_TYPE_POINTER );
+
+   g_signals[SIGNAL_UNDERFLOW]= g_signal_new( "buffer-underflow-callback",
+                                              G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
+                                              (GSignalFlags) (G_SIGNAL_RUN_LAST),
+                                              0,    // class offset
+                                              NULL, // accumulator
+                                              NULL, // accu data
+                                              g_cclosure_marshal_VOID__UINT_POINTER,
+                                              G_TYPE_NONE,
+                                              2,
+                                              G_TYPE_UINT,
+                                              G_TYPE_POINTER );
 
    g_signals[SIGNAL_NEWTEXTURE]= g_signal_new( "new-video-texture-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -332,6 +346,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.eosDetectionThread= NULL;
    sink->soc.dispatchThread= NULL;
    sink->soc.emitFirstFrameSignal= FALSE;
+   sink->soc.emitUnderflowSignal= FALSE;
    sink->soc.nextFrameFd= -1;
    sink->soc.prevFrame1Fd= -1;
    sink->soc.prevFrame2Fd= -1;
@@ -352,6 +367,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.drmFd= -1;
    sink->soc.nextDrmBuffer= 0;
    sink->soc.firstFrameThread= NULL;
+   sink->soc.underflowThread= NULL;
    {
       int i;
       for( i= 0; i < WST_NUM_DRM_BUFFERS; ++i )
@@ -1001,7 +1017,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                }
             }
 
-            if ( sink->soc.frameOutCount == 0 )
+            if ( !sink->soc.conn && (sink->soc.frameOutCount == 0))
             {
                sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
             }
@@ -1329,6 +1345,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.syncType= -1;
    sink->soc.emitFirstFrameSignal= FALSE;
+   sink->soc.emitUnderflowSignal= FALSE;
 
    LOCK(sink);
    sink->videoStarted= FALSE;
@@ -2061,7 +2078,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
       {
          struct msghdr msg;
          struct iovec iov[1];
-         unsigned char mbody[64];
+         unsigned char mbody[256];
          unsigned char *m= mbody;
          int len;
 
@@ -2148,6 +2165,18 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            }
                         }
                         break;
+                     case 'U':
+                        if ( mlen >= 9 )
+                        {
+                           guint64 frameTime= getS64( &m[4] );
+                           GST_INFO( "underflow received: frameTime %lld eosEventSeen %d", frameTime, sink->eosEventSeen);
+                           FRAME( "out:       underflow received: frameTime %lld", frameTime);
+                           if ( !sink->eosEventSeen )
+                           {
+                              sink->soc.emitUnderflowSignal= TRUE;
+                           }
+                        }
+                        break;
                      default:
                         break;
                   }
@@ -2163,6 +2192,16 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
             {
                len= 0;
             }
+         }
+         if ( sink->soc.emitFirstFrameSignal )
+         {
+            sink->soc.emitFirstFrameSignal= FALSE;
+            sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
+         }
+         if ( sink->soc.emitUnderflowSignal )
+         {
+            sink->soc.emitUnderflowSignal= FALSE;
+            sink->soc.underflowThread= g_thread_new("westeros_underflow", wstUnderflowThread, sink);
          }
       }
    }
@@ -2426,6 +2465,21 @@ static gpointer wstFirstFrameThread(gpointer data)
       g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
       g_thread_unref( sink->soc.firstFrameThread );
       sink->soc.firstFrameThread= NULL;
+   }
+
+   return NULL;
+}
+
+static gpointer wstUnderflowThread(gpointer data)
+{
+   GstWesterosSink *sink= (GstWesterosSink*)data;
+
+   if ( sink )
+   {
+      GST_DEBUG("wstUnderflowThread: emit underflow signal");
+      g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+      g_thread_unref( sink->soc.underflowThread );
+      sink->soc.underflowThread= NULL;
    }
 
    return NULL;
