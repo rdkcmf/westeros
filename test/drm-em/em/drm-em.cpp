@@ -214,6 +214,7 @@ typedef struct _EMSimpleVideoDecoder
    uint32_t magic;
    EMCTX *ctx;
    bool inUse;
+   bool signalUnderflow;
    int type;
    uint32_t startPTS;
    bool started;
@@ -775,6 +776,14 @@ unsigned long long EMSimpleVideoDecoderGetBasePTS( EMSimpleVideoDecoder *dec )
    return dec->basePTS;
 }
 
+void EMSimpleVideoDecoderSignalUnderflow( EMSimpleVideoDecoder *dec )
+{
+   if ( dec )
+   {
+      dec->signalUnderflow= true;
+   }
+}
+
 int EMWLEGLWindowGetSwapCount( struct wl_egl_window *w )
 {
    return w->eglSwapCount;
@@ -931,6 +940,7 @@ static EMCTX* emCreate( void )
 
       ctx->simpleVideoDecoderMain.magic= EM_SIMPLE_VIDEO_DECODER_MAGIC;
       ctx->simpleVideoDecoderMain.inUse= false;
+      ctx->simpleVideoDecoderMain.signalUnderflow= false;
       ctx->simpleVideoDecoderMain.ctx= ctx;
       ctx->simpleVideoDecoderMain.videoFrameRate= 60.0;
       ctx->simpleVideoDecoderMain.videoBitRate= 8.0;
@@ -2572,6 +2582,13 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                      bool gotFrame= false;
                      while( dev->dev.v4l2.outputStreaming && !gotFrame )
                      {
+                        if ( dev->ctx->simpleVideoDecoderMain.signalUnderflow )
+                        {
+                           TRACE1("Producing underflow");
+                           dev->ctx->simpleVideoDecoderMain.signalUnderflow= false;
+                           usleep( 120000 );
+                           TRACE1("Done underflow delay");
+                        }
                         if ( dev->dev.v4l2.readyFrameCount > 0 )
                         {
                            --dev->dev.v4l2.readyFrameCount;
@@ -3241,7 +3258,7 @@ int drmWaitVBlank( int fd, drmVBlankPtr vbl )
 
    TRACE1("drmWaitVBlank");
 
-   usleep( 16667 );
+   usleep( 16000 );
 
    if ( vbl )
    {
@@ -3252,6 +3269,12 @@ int drmWaitVBlank( int fd, drmVBlankPtr vbl )
       {
          vbl->reply.tval_sec= tm.tv_sec;
          vbl->reply.tval_usec= tm.tv_nsec/1000LL;
+         vbl->reply.tval_usec += 667;
+         if ( vbl->reply.tval_usec > 1000000)
+         {
+            vbl->reply.tval_usec -= 1000000;
+            vbl->reply.tval_sec += 1;
+         }
       }
       else
       {

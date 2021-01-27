@@ -56,6 +56,7 @@
 static bool testCaseSocSinkInit( EMCTX *emctx );
 static bool testCaseSocSinkBasicPipeline( EMCTX *ctx );
 static bool testCaseSocSinkFirstFrameSignal( EMCTX *emctx );
+static bool testCaseSocSinkUnderflowSignal( EMCTX *ctx );
 static bool testCaseSocSinkElementRecycle( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReporting( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx );
@@ -66,6 +67,7 @@ static bool testCaseSocSinkFrameAdvance( EMCTX *ctx );
 static bool testCaseSocSinkInitWithCompositor( EMCTX *emctx );
 static bool testCaseSocSinkBasicPipelineWithCompositor( EMCTX *emctx );
 static bool testCaseSocSinkFirstFrameSignalWithCompositor( EMCTX *ctx );
+static bool testCaseSocSinkUnderflowSignalWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkElementRecycleWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPositionReportingWithCompositor( EMCTX *ctx );
 static bool testCaseSocSinkBasicPauseResumeWithCompositor( EMCTX *ctx );
@@ -89,6 +91,10 @@ TESTCASE socTests[]=
    { "testSocSinkFirstFrameSignal",
      "Test first frame signal",
      testCaseSocSinkFirstFrameSignal
+   },
+   { "testSocSinkUnderflowSignal",
+     "Test underflow signal",
+     testCaseSocSinkUnderflowSignal
    },
    { "testSocSinkElementRecycle",
      "Test recycling a westerossink element",
@@ -129,6 +135,10 @@ TESTCASE socTests[]=
    { "testSocSinkFirstFrameSignalWithCompositor",
      "Test first frame signal with a compositor",
      testCaseSocSinkFirstFrameSignalWithCompositor
+   },
+   { "testSocSinkUnderflowSignalWithCompositor",
+     "Test underflow signal with a compositor",
+     testCaseSocSinkUnderflowSignalWithCompositor
    },
    { "testSocSinkElementRecycleWithCompositor",
      "Test recycling a westerossink element with a compositor",
@@ -226,17 +236,31 @@ static bool testCaseSocSinkBasicPipeline( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
    EMSimpleVideoDecoder *videoDecoder= 0;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -250,6 +274,23 @@ static bool testCaseSocSinkBasicPipeline( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -308,6 +349,11 @@ exit:
    {
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -316,6 +362,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -333,18 +380,32 @@ static bool testCaseSocSinkFirstFrameSignal( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
    EMSimpleVideoDecoder *videoDecoder= 0;
    bool receivedSignal;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -358,6 +419,23 @@ static bool testCaseSocSinkFirstFrameSignal( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -424,6 +502,11 @@ exit:
    {
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -432,6 +515,165 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
+
+   return testResult;
+}
+
+static void underflowCallback(GstElement *sink, guint size, void *context, gpointer data)
+{
+   bool *gotSignal= (bool*)data;
+
+   g_print("received underflow signal\n");
+   *gotSignal= true;
+}
+
+static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
+{
+   bool testResult= false;
+   int argc= 0;
+   char **argv= 0;
+   bool result;
+   GstElement *pipeline= 0;
+   GstElement *src= 0;
+   GstElement *sink= 0;
+   EMSimpleVideoDecoder *videoDecoder= 0;
+   bool receivedSignal;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
+   int windowWidth= 1920;
+   int windowHeight= 1080;
+   WstGLCtx *glCtx= 0;
+   void  *nativeWindow= 0;
+
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
+   if ( getenv("WAYLAND_DISPLAY") == 0 )
+   {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
+      glCtx= WstGLInit();
+      if ( !glCtx )
+      {
+         EMERROR("Unable to create westeros-gl context");
+         goto exit;
+      }
+
+      nativeWindow= WstGLCreateNativeWindow( glCtx, 0, 0, windowWidth, windowHeight );
+      if ( !nativeWindow )
+      {
+         EMERROR("Unable to create westeros-gl native window");
+         goto exit;
+      }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
+   }
+
+   videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
+   if ( !videoDecoder )
+   {
+      EMERROR("Failed to obtain test video decoder");
+      goto exit;
+   }
+
+   EMSimpleVideoDecoderSetVideoSize( videoDecoder, 1920, 1080 );
+
+   gst_init( &argc, &argv );
+
+   pipeline= gst_pipeline_new("pipeline");
+   if ( !pipeline )
+   {
+      EMERROR("Failed to create pipeline instance");
+      goto exit;
+   }
+
+   src= createVideoSrc( emctx, videoDecoder );
+   if ( !src )
+   {
+      EMERROR("Failed to create src instance");
+      goto exit;
+   }
+
+   sink= gst_element_factory_make( "westerossink", "vsink" );
+   if ( !sink )
+   {
+      EMERROR("Failed to create sink instance");
+      goto exit;
+   }
+
+   gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
+
+   if ( gst_element_link( src, sink ) != TRUE )
+   {
+      EMERROR("Failed to link src and sink");
+      goto exit;
+   }
+
+   g_signal_connect( sink, "buffer-underflow-callback", G_CALLBACK(underflowCallback), &receivedSignal);
+
+   receivedSignal= false;
+
+   gst_element_set_state( pipeline, GST_STATE_PLAYING );
+
+   // Allow pipeline to run briefly
+   usleep( 200000 );
+
+   EMSimpleVideoDecoderSignalUnderflow( videoDecoder );
+
+   // Allow pipeline to run briefly
+   usleep( 200000 );
+
+   gst_element_set_state( pipeline, GST_STATE_NULL );
+
+   if ( !receivedSignal )
+   {
+      EMERROR("Failed to receive underflow signal");
+      goto exit;
+   }
+
+   testResult= true;
+
+exit:
+   if ( pipeline )
+   {
+      gst_object_unref( pipeline );
+   }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
+   if ( nativeWindow )
+   {
+      WstGLDestroyNativeWindow( glCtx, nativeWindow );
+   }
+   if ( glCtx )
+   {
+      WstGLTerm( glCtx );
+   }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -451,6 +693,7 @@ static bool testCaseSocSinkElementRecycle( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
@@ -458,13 +701,26 @@ static bool testCaseSocSinkElementRecycle( EMCTX *emctx )
    bool receivedSignal;
    bool checkTextures= false;
    int textureCount;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -478,6 +734,23 @@ static bool testCaseSocSinkElementRecycle( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -582,6 +855,11 @@ exit:
       gst_element_set_state( pipeline, GST_STATE_NULL );
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -590,6 +868,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -599,6 +878,7 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
@@ -607,13 +887,26 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
    int frameNumber;
    gint64 pos, posExpected;
    gint64 diff;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -627,6 +920,23 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -704,6 +1014,11 @@ exit:
    {
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -712,6 +1027,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -721,6 +1037,7 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
@@ -729,13 +1046,26 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
    int frameNumber;
    unsigned long long basePTS;
    gint64 pos, posExpected;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -749,6 +1079,23 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -818,11 +1165,19 @@ static bool testCaseSocSinkBasicPositionReportingProperty( EMCTX *emctx )
    testResult= true;
 
 exit:
-   EMSimpleVideoDecoderSetBasePTS( videoDecoder, 0ULL );
+   if ( videoDecoder )
+   {
+      EMSimpleVideoDecoderSetBasePTS( videoDecoder, 0ULL );
+   }
 
    if ( pipeline )
    {
       gst_object_unref( pipeline );
+   }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
    }
    if ( nativeWindow )
    {
@@ -832,6 +1187,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -841,6 +1197,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
@@ -850,13 +1207,26 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
    gint64 pos, posExpected= 0;
    gint64 diff;
    bool isPaused;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -870,6 +1240,23 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -965,6 +1352,11 @@ exit:
    {
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -973,6 +1365,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -982,6 +1375,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
@@ -992,13 +1386,26 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
    gint64 seekPos;
    gint64 diff;
    gboolean rv;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -1012,6 +1419,23 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -1136,6 +1560,11 @@ exit:
    {
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -1144,6 +1573,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -1174,6 +1604,7 @@ static bool testCaseSocSinkFrameAdvance( EMCTX *emctx )
    bool testResult= false;
    int argc= 0;
    char **argv= 0;
+   bool result;
    GstElement *pipeline= 0;
    GstElement *src= 0;
    GstElement *sink= 0;
@@ -1181,13 +1612,26 @@ static bool testCaseSocSinkFrameAdvance( EMCTX *emctx )
    float frameRate;
    int frameNumber;
    gint64 pos, posExpected;
+   EGLBoolean b;
+   TestEGLCtx eglCtx;
    int windowWidth= 1920;
    int windowHeight= 1080;
    WstGLCtx *glCtx= 0;
    void  *nativeWindow= 0;
 
+   memset( &eglCtx, 0, sizeof(TestEGLCtx) );
+
    if ( getenv("WAYLAND_DISPLAY") == 0 )
    {
+      EMStart( emctx );
+
+      result= testSetupEGL( &eglCtx, 0 );
+      if ( !result )
+      {
+         EMERROR("testSetupEGL failed");
+         goto exit;
+      }
+
       glCtx= WstGLInit();
       if ( !glCtx )
       {
@@ -1201,6 +1645,23 @@ static bool testCaseSocSinkFrameAdvance( EMCTX *emctx )
          EMERROR("Unable to create westeros-gl native window");
          goto exit;
       }
+
+      eglCtx.eglSurfaceWindow= eglCreateWindowSurface( eglCtx.eglDisplay,
+                                                     eglCtx.eglConfig,
+                                                     (EGLNativeWindowType)nativeWindow,
+                                                     NULL );
+      printf("eglCreateWindowSurface: eglSurfaceWindow %p\n", eglCtx.eglSurfaceWindow );
+
+      b= eglMakeCurrent( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow, eglCtx.eglSurfaceWindow, eglCtx.eglContext );
+      if ( !b )
+      {
+         EMERROR("error: eglMakeCurrent failed: %X", eglGetError() );
+         goto exit;
+      }
+
+      eglSwapInterval( eglCtx.eglDisplay, 1 );
+      eglSwapBuffers(eglCtx.eglDisplay, eglCtx.eglSurfaceWindow);
+      usleep( 34000 );
    }
 
    videoDecoder= EMGetSimpleVideoDecoder( emctx, EM_TUNERID_MAIN );
@@ -1289,6 +1750,11 @@ exit:
    {
       gst_object_unref( pipeline );
    }
+   if ( eglCtx.eglSurfaceWindow )
+   {
+      eglDestroySurface( eglCtx.eglDisplay, eglCtx.eglSurfaceWindow );
+      eglCtx.eglSurfaceWindow= EGL_NO_SURFACE;
+   }
    if ( nativeWindow )
    {
       WstGLDestroyNativeWindow( glCtx, nativeWindow );
@@ -1297,6 +1763,7 @@ exit:
    {
       WstGLTerm( glCtx );
    }
+   testTermEGL( &eglCtx );
 
    return testResult;
 }
@@ -1307,6 +1774,8 @@ static bool testCaseSocSinkInitWithCompositor( EMCTX *emctx )
    WstCompositor *wctx= 0;
    bool result;
    const char *value;
+
+   EMStart( emctx );
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -1356,6 +1825,8 @@ static bool testCaseSocSinkBasicPipelineWithCompositor( EMCTX *emctx )
    bool result;
    const char *value;
 
+   EMStart( emctx );
+
    wctx= WstCompositorCreate();
    if ( !wctx )
    {
@@ -1404,6 +1875,8 @@ static bool testCaseSocSinkFirstFrameSignalWithCompositor( EMCTX *emctx )
    bool result;
    const char *value;
 
+   EMStart( emctx );
+
    wctx= WstCompositorCreate();
    if ( !wctx )
    {
@@ -1445,12 +1918,64 @@ exit:
    return testResult;
 }
 
+static bool testCaseSocSinkUnderflowSignalWithCompositor( EMCTX *emctx )
+{
+   bool testResult= false;
+   WstCompositor *wctx= 0;
+   bool result;
+   const char *value;
+
+   EMStart( emctx );
+
+   wctx= WstCompositorCreate();
+   if ( !wctx )
+   {
+      EMERROR( "WstCompositorCreate failed" );
+      goto exit;
+   }
+
+   result= WstCompositorSetRendererModule( wctx, "libwesteros_render_gl.so.0.0.0" );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorSetRenderedModule failed" );
+      goto exit;
+   }
+
+   value= WstCompositorGetDisplayName( wctx );
+   if ( value == 0 )
+   {
+      EMERROR( "WstCompositorGetDisplayName failed to return auto-generated name" );
+      goto exit;
+   }
+
+   result= WstCompositorStart( wctx );
+   if ( result == false )
+   {
+      EMERROR( "WstCompositorStart failed" );
+      goto exit;
+   }
+
+   setenv( "WAYLAND_DISPLAY", value, true );
+
+   testResult= testCaseSocSinkUnderflowSignal( emctx );
+
+   WstCompositorDestroy( wctx );
+
+exit:
+
+   unsetenv( "WAYLAND_DISPLAY" );
+
+   return testResult;
+}
+
 static bool testCaseSocSinkElementRecycleWithCompositor( EMCTX *emctx )
 {
    bool testResult= false;
    WstCompositor *wctx= 0;
    bool result;
    const char *value;
+
+   EMStart( emctx );
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -1502,6 +2027,8 @@ static bool testCaseSocSinkBasicPositionReportingWithCompositor( EMCTX *emctx )
    bool result;
    const char *value;
 
+   EMStart( emctx );
+
    wctx= WstCompositorCreate();
    if ( !wctx )
    {
@@ -1549,6 +2076,8 @@ static bool testCaseSocSinkBasicPauseResumeWithCompositor( EMCTX *emctx )
    WstCompositor *wctx= 0;
    bool result;
    const char *value;
+
+   EMStart( emctx );
 
    wctx= WstCompositorCreate();
    if ( !wctx )
@@ -1598,6 +2127,8 @@ static bool testCaseSocSinkBasicSeekWithCompositor( EMCTX *emctx )
    bool result;
    const char *value;
 
+   EMStart( emctx );
+
    wctx= WstCompositorCreate();
    if ( !wctx )
    {
@@ -1646,6 +2177,8 @@ static bool testCaseSocSinkBasicSeekZeroBasedWithCompositor( EMCTX *emctx )
    bool result;
    const char *value;
 
+   EMStart( emctx );
+
    wctx= WstCompositorCreate();
    if ( !wctx )
    {
@@ -1693,6 +2226,8 @@ static bool testCaseSocSinkFrameAdvanceWithCompositor( EMCTX *emctx )
    WstCompositor *wctx= 0;
    bool result;
    const char *value;
+
+   EMStart( emctx );
 
    wctx= WstCompositorCreate();
    if ( !wctx )
