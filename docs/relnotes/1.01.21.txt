@@ -28,6 +28,11 @@ Software decode support is disabled at build time by default.  It may be enabled
 -fix memory leak on eos thread exit
 -fix size of msg buffer for session info
 
+* Video updates
+-Extend software decode support to v4l2 platform.  Software decode support is disabled at build time
+by default.  It may be enabled by defining -DENABLE_SW_DECODE in build.
+-Fixes and improvements to softare decode operation
+
 * drm: change to m4 configure macro dir
 
 * Video updates

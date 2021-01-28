@@ -1,0 +1,144 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.22 Release Notes
+------------------------------
+
+Date: Jan 28, 2020
+Tag: Westeros-1.01.22
+Changes:
+
+* Avoid event thread safety issue introduced in Wayland 1.17.91
+
+* brcm: fix slow pause/resume transition
+
+* v4l2: use gst-video to parse colorimetry if available
+
+* Video updates:
+
+-add support for SEI time codes.  Time codes attached as GstVideoTimeCodeMeta to received buffers can be used to cause a new
+'timecode-callback' signal to fire each time a frame with a new time code is presented.  Time code processing and signal
+generation is disabled by default but can be enabled via the 'enable-timecode' property
+
+* Support querying formats and modifiers for EGL_EXT_image_dma_buf_import_modifiers
+
+* Get egl display with eglGetCurrentDisplay in embedded renderer
+
+* v4l2: correct surface size on transition to graphics path
+
+* Virtual embedded updates:
+
+Add ability to bind externally launched clients to specific virtual embedded compositor instances
+-add unbound client listener
+-add bind client api
+
+* v4l2+drm updates:
+
+-add support for frame advance.  Not yet supported by amlogic avsync module
+
+* test: add video position tests for drm
+
+* video updates:
+
+-Add a 'raw' video backend for westerossink.  Building westerossink with
+this backend results in a sink that accepts raw video frames which it can
+display either to the Westeros video server (see drm/westeros-gl) on KMS
+systems and/or as textures to a Westeros compositor.  This allows a KMS
+system to use device specific HW video decoder elements terminated with a
+raw video westerossink
+
+* video updates:
+
+-assorted fixes for raw sink
+
+* video updates:
+
+-post bus message for decode error brcm and v4l2.  For brcm and v4l2 this error message will be posted
+if decoding fails to start.  For brcm it will also be posed if the Nexus video decode error count changes
+
+* v4l2: add support for AV1 codec
+
+* video updates:
+
+-add a 'decode-error-callback' signal that can be enabled via a 'report-decode-errors' property
+-change decode error message to be based on GST_STREAM_ERROR
+-post decode error message only for issues preventing decoding from starting normally
+
+* raw sink: miscellaneous fixes
+
+* drm: add alternate swap locking
+
+-an alternate mutex positioning can be enabled by adding '-DEGL_SWAP_LOCK_2' when building drm westeros-gl.
+By default the current locking is used.  It has been found that the EGL implementations on some devices
+required the alternate locking
+
+* raw-sink: fixes for dma-buf operation
+
+* v4l2: fix boundary error feeding out-of-segment buffers to decoder
+
+* v4l2: add a reduced memory mode
+
+* drm: add support for EGL protected content:
+
+-by default protected content (secure graphics) is disabled
+-enabled at runtime by defining the env var 'export WESTEROS_SECURE_GRAPHICS=1'
+
+* drm: add support for gbm modifiers:
+
+-support is disabled at build type by default.  Enable by passing --enable-gbm-modifiers to configure
+-support is disabled at runtime by default.  Enable at runtime by defining WESTEROS_GL_USE_GBM_MODIFIERS=1 to env
+
+* sink: add support for pixel aspect ratio
+
+* v4l4: add logs for HDR values
+
+* drm+v4l2+raw updates:
+
+-changes to the sink rectangle property are now sent to the video server for immediate application when video
+is presenting on a video plane
+
+* v4l2: raw: add show-video-window property
+
+* sink: improve pixel-aspect-ratio handling
+
+* brcm sink: update set start pts:
+
+-don't flush decoder on new start pts if data is already queued or frames already decoded
+
+* v4l2: more memory reductions for low memory mode
+
+* drm: video src cropping fixes
+
+* v4l2: raw: add zoom-mode and overscan-size properties
+
+* v4l2: raw: zoom updates:
+
+-set default overscan-size to 0
+-apply overscan to all zoom modes except none and direct
+
+* drm: amlogic: adjust video plane sort order
+
+-On Amlogic, adjust the video plane sort order so that the plane with HDR support is assigned the lowest z-order
+
+* Add support for video texture cropping:
+
+-add vpc_surface_set_geometry_with_crop to vpc protocol
+-apply cropping to video textures in v4l2 and raw sinks
+
+* compositor: don't hole punch prior to getting vpc geometry
+
+* bcrm sink: don't wait for playing state to fire first frame signal
+
+* sink: v4l2, raw: add support for underflow signal
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
