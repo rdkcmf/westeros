@@ -508,10 +508,16 @@ static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userDa
                   sink->releaseResources( sink );
                   EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, id );
                   GST_DEBUG("done releasing video decoder %d", id);
-                  resMgrRequestDecoder(sink);
-                  if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+                  if (
+                       (EssRMgrGetPolicyPriorityTie( sink->rm ) == false) ||
+                       (sink->resReqPrimary.resReq.priority != sink->resPriority)
+                     )
                   {
-                     sink->acquireResources( sink );
+                     resMgrRequestDecoder(sink);
+                     if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+                     {
+                        sink->acquireResources( sink );
+                     }
                   }
                }
                break;

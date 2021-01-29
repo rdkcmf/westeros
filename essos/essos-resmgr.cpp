@@ -94,6 +94,7 @@ typedef struct _EssRMgrHdr
    uint32_t version;
    uint32_t crc;
    int nextRequestId;
+   bool requesterWinsPriorityTie;
 } EssRMgrHdr;
 
 typedef struct _EssRMgrVideoDecoderNotify
@@ -328,6 +329,18 @@ void EssRMgrDestroy( EssRMgr *rm )
       essRMCloseCtrlFile( rm );
       free( rm );
    }
+}
+
+bool EssRMgrGetPolicyPriorityTie( EssRMgr *rm )
+{
+   bool policyValue= false;
+
+   if ( rm )
+   {
+      policyValue= rm->state->hdr.requesterWinsPriorityTie;
+   }
+
+   return policyValue;
 }
 
 int EssRMgrResourceGetCount( EssRMgr *rm, int type )
@@ -578,6 +591,7 @@ void EssRMgrDumpState( EssRMgr *rm )
    DEBUG("reserved size: %d", sizeof(rm->state->reserved));
    if ( essRMLockCtrlFileAndValidate( rm ) )
    {
+      printf("requester wins priority tie: %d\n", rm->state->hdr.requesterWinsPriorityTie);
       for( int i= 0; i < rm->state->base.numVideoDecoders; ++i )
       {
          printf("video decoder: %d caps %X owner %d priority %d\n",
@@ -1352,7 +1366,13 @@ static bool essRMSetPriorityVideoDecoder( EssRMgr *rm, int requestId, int priori
                      found= true;
                      pending->priorityUser= pending->notify.req.priority= priority;
                      essRMVidRemovePending( rm, id, pending );
-                     if ( pending->priorityUser >= rm->state->base.videoDecoder[id].priorityOwner )
+                     if (
+                           (pending->priorityUser > rm->state->base.videoDecoder[id].priorityOwner) ||
+                           (
+                             !rm->state->hdr.requesterWinsPriorityTie &&
+                             (pending->priorityUser == rm->state->base.videoDecoder[id].priorityOwner)
+                           )
+                        )
                      {
                         essRMVidInsertPendingByPriority( rm, id, pending );
                         rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
@@ -1559,7 +1579,7 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                }
                if ( 
                     (rm->state->base.videoDecoder[idx].pidOwner != 0) &&
-                    (rm->state->base.videoDecoder[idx].priorityOwner == priority) &&
+                    (!rm->state->hdr.requesterWinsPriorityTie && (rm->state->base.videoDecoder[idx].priorityOwner == priority)) &&
                     (rm->state->base.videoDecoder[idx].usageOwner == usage->usage)
                   )
                {
@@ -1736,6 +1756,47 @@ static bool essRMReadConfigFile( EssRMgr *rm )
       }
       if ( haveIdentifier )
       {
+         if ( (i == 6) && !strncmp( work, "policy", i) )
+         {
+            i= 0;
+            haveIdentifier= false;
+            for( ; ; )
+            {
+               c= fgetc(pFile);
+               if ( (c == ' ') || (c == '\t') || (c == ',') || (c == '(') || (c == '\n') || (c == EOF) )
+               {
+                  if ( i > 0 )
+                  {
+                     work[i]= '\0';
+                     haveIdentifier= true;
+                  }
+               }
+               else
+               {
+                  if ( i < ESSRMGR_MAX_NAMELEN )
+                  {
+                     work[i++]= c;
+                  }
+                  else
+                  {
+                     truncation= true;
+                  }
+               }
+               if ( haveIdentifier )
+               {
+                  if ( (i == 27) && !strncmp( work, "requester-wins-priority-tie", i ) )
+                  {
+                     INFO("policy: requester-wins-priority-tie");
+                     rm->state->hdr.requesterWinsPriorityTie= true;
+                  }
+               }
+               if ( (c == '\n') || (c == EOF) )
+               {
+                  break;
+               }
+            }
+         }
+         else
          if ( (i == 5) && !strncmp( work, "video", i ) )
          {
             i= 0;
