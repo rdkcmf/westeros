@@ -128,6 +128,14 @@ EssRMgr* EssRMgrCreate();
 void EssRMgrDestroy( EssRMgr *rm );
 
 /**
+ * EssRMgrGetPolicyPriorityTie
+ *
+ * Get the policy for priority ties.  Returns true if requester
+ * wins priority tie, false otherwise
+ */
+bool EssRMgrGetPolicyPriorityTie( EssRMgr *rm );
+
+/**
  * EssRMgrResourceGetCount
  *
  * Get number of instances of specified resource type

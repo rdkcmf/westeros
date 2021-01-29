@@ -119,6 +119,10 @@ static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
 #endif
 static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height );
 static void drmReleaseBuffer( GstWesterosSink *sink, int buffIndex );
+static int sinkAcquireResources( GstWesterosSink *sink );
+static void sinkReleaseResources( GstWesterosSink *sink );
+static int sinkAcquireVideo( GstWesterosSink *sink );
+static void sinkReleaseVideo( GstWesterosSink *sink );
 
 static long long getCurrentTimeMillis(void)
 {
@@ -304,6 +308,15 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                                               G_TYPE_UINT  /* seconds */
                                              );
    #endif
+
+   klass->canUseResMgr= 0;
+   {
+      const char *env= getenv("WESTEROS_SINK_USE_ESSRMGR");
+      if ( env && (atoi(env) != 0) )
+      {
+         klass->canUseResMgr= 1;
+      }
+   }
 }
 
 gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
@@ -335,6 +348,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.currentInputPTS= 0;
+   sink->soc.haveHardware= FALSE;
 
    sink->soc.updateSession= FALSE;
    sink->soc.syncType= -1;
@@ -397,6 +411,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    }
 
    sink->useSegmentPosition= TRUE;
+
+   sink->acquireResources= sinkAcquireVideo;
+   sink->releaseResources= sinkReleaseVideo;
 
    /* Request caps updates */
    sink->passCaps= TRUE;
@@ -568,6 +585,15 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
    gboolean result= FALSE;
 
    WESTEROS_UNUSED(passToDefault);
+   if ( sinkAcquireResources( sink ) )
+   {
+      result= TRUE;
+   }
+   else
+   {
+      GST_ERROR("gst_westeros_sink_null_to_ready: sinkAcquireResources failed");
+   }
+
    if ( drmInit( sink ) )
    {
       result= TRUE;
@@ -767,6 +793,14 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
+   gboolean haveHardware;
+   LOCK(sink);
+   haveHardware= sink->soc.haveHardware;
+   UNLOCK(sink);
+   if ( !haveHardware )
+   {
+      return;
+   }
    while ( sink->soc.videoPaused )
    {
       bool active= true;
@@ -1370,6 +1404,8 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       wl_sb_destroy( sink->soc.sb );
       sink->soc.sb= 0;
    }
+
+   drmTerm( sink );
 }
 
 static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h )
@@ -2489,6 +2525,7 @@ static gpointer wstUnderflowThread(gpointer data)
 
 static bool drmInit( GstWesterosSink *sink )
 {
+   bool result= false;
    const char *drmName;
 
    drmName= getenv("WESTEROS_SINK_DRM_NAME");
@@ -2505,8 +2542,10 @@ static bool drmInit( GstWesterosSink *sink )
       goto exit;
    }
 
+   result= true;
+
 exit:
-   return true;
+   return result;
 }
 
 static void drmTerm( GstWesterosSink *sink )
@@ -2854,5 +2893,47 @@ static void drmReleaseBuffer( GstWesterosSink *sink, int buffIndex )
       }
       sem_post( &sink->soc.drmBuffSem );
    }
+}
+
+static int sinkAcquireVideo( GstWesterosSink *sink )
+{
+   int result= 0;
+
+   GST_DEBUG("sinkAcquireVideo: enter");
+
+   LOCK(sink);
+   sink->soc.haveHardware= TRUE;
+   UNLOCK(sink);
+
+   GST_DEBUG("sinkAcquireVideo: exit: %d", result);
+
+   return result;
+}
+
+static void sinkReleaseVideo( GstWesterosSink *sink )
+{
+   GST_DEBUG("sinkReleaseVideo: enter");
+
+   LOCK(sink);
+   sink->soc.haveHardware= FALSE;
+   UNLOCK(sink);
+
+   wstSinkSocStopVideo( sink );
+
+   GST_DEBUG("sinkReleaseVideo: exit");
+}
+
+static int sinkAcquireResources( GstWesterosSink *sink )
+{
+   int result= 0;
+
+   result= sinkAcquireVideo( sink );
+
+   return result;
+}
+
+static void sinkReleaseResources( GstWesterosSink *sink )
+{
+   sinkReleaseVideo( sink );
 }
 

@@ -81,6 +81,7 @@ struct _GstWesterosSinkSoc
    int frameDisplayCount;
    uint32_t numDropped;
    gint64 currentInputPTS;
+   gboolean haveHardware;
 
    gboolean updateSession;
    int syncType;

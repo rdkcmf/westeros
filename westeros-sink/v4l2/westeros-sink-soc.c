@@ -167,6 +167,8 @@ static void swUnLink( GstWesterosSink *sink );
 static void swEvent( GstWesterosSink *sink, int id, int p1, void *p2 );
 static void swDisplay( GstWesterosSink *sink, SWFrame *frame );
 #endif
+static int sinkAcquireResources( GstWesterosSink *sink );
+static void sinkReleaseResources( GstWesterosSink *sink );
 static int sinkAcquireVideo( GstWesterosSink *sink );
 static void sinkReleaseVideo( GstWesterosSink *sink );
 
@@ -788,100 +790,45 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
 gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
 {
+   gboolean result= FALSE;
+
    WESTEROS_UNUSED(passToDefault);
 
-   int rc, len;
-   struct v4l2_exportbuffer eb;
-
-   sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
-   if ( sink->soc.v4l2Fd < 0 )
+   if ( sinkAcquireResources( sink ) )
    {
-      GST_ERROR("failed to open device (%s)", sink->soc.devname );
-      goto exit;
-   }
+      wstStartEvents( sink );
 
-   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QUERYCAP, &sink->soc.caps );
-   if ( rc < 0 )
-   {
-      GST_ERROR("failed query caps: %d errno %d", rc, errno);
-      goto exit;
-   }
-
-   GST_DEBUG("driver (%s) card(%s) bus_info(%s) version %d capabilities %X device_caps %X",
-           sink->soc.caps.driver, sink->soc.caps.card, sink->soc.caps.bus_info, sink->soc.caps.version, sink->soc.caps.capabilities, sink->soc.caps.device_caps );
-
-   sink->soc.deviceCaps= (sink->soc.caps.capabilities & V4L2_CAP_DEVICE_CAPS ) ? sink->soc.caps.device_caps : sink->soc.caps.capabilities;
-
-   if ( !(sink->soc.deviceCaps & (V4L2_CAP_VIDEO_M2M | V4L2_CAP_VIDEO_M2M_MPLANE) ))
-   {
-      GST_ERROR("device (%s) is not a M2M device", sink->soc.devname );
-      goto exit;
-   }
-
-   if ( !(sink->soc.deviceCaps & V4L2_CAP_STREAMING) )
-   {
-      GST_ERROR("device (%s) does not support dmabuf: no V4L2_CAP_STREAMING", sink->soc.devname );
-      goto exit;
-   }
-
-   if ( (sink->soc.deviceCaps & V4L2_CAP_VIDEO_M2M_MPLANE) && !(sink->soc.deviceCaps & V4L2_CAP_VIDEO_M2M) )
-   {
-      GST_DEBUG("device is multiplane");
-      sink->soc.isMultiPlane= TRUE;
-   }
-
-   len= strlen( (char*)sink->soc.caps.driver );
-   if ( (len == 14) && !strncmp( (char*)sink->soc.caps.driver, "aml-vcodec-dec", len) )
-   {
-      sink->soc.hideVideoFramesDelay= 2;
-      sink->soc.hideGfxFramesDelay= 3;
-      sink->soc.useGfxSync= TRUE;
-   }
-
-   eb.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
-   eb.index= -1;
-   eb.plane= -1;
-   eb.flags= (O_RDWR|O_CLOEXEC);
-   IOCTL( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &eb );
-   if ( errno == ENOTTY )
-   {
-      GST_ERROR("device (%s) does not support dmabuf: no VIDIOC_EXPBUF", sink->soc.devname );
-      goto exit;
-   }
-
-   wstGetInputFormats( sink );
-
-   wstGetOutputFormats( sink );
-
-   wstGetMaxFrameSize( sink );
-
-   wstStartEvents( sink );
-
-   if ( !sink->soc.useCaptureOnly )
-   {
-      sink->soc.conn= wstCreateVideoClientConnection( sink, DEFAULT_VIDEO_SERVER );
-      if ( !sink->soc.conn )
+      if ( !sink->soc.useCaptureOnly )
       {
-         GST_ERROR("unable to connect to video server (%s)", DEFAULT_VIDEO_SERVER );
-         sink->soc.useCaptureOnly= TRUE;
-         sink->soc.captureEnabled= TRUE;
-         printf("westeros-sink: no video server - capture only\n");
-         if ( sink->vpc )
+         sink->soc.conn= wstCreateVideoClientConnection( sink, DEFAULT_VIDEO_SERVER );
+         if ( !sink->soc.conn )
          {
-            wl_vpc_destroy( sink->vpc );
-            sink->vpc= 0;
+            GST_ERROR("unable to connect to video server (%s)", DEFAULT_VIDEO_SERVER );
+            sink->soc.useCaptureOnly= TRUE;
+            sink->soc.captureEnabled= TRUE;
+            printf("westeros-sink: no video server - capture only\n");
+            if ( sink->vpc )
+            {
+               wl_vpc_destroy( sink->vpc );
+               sink->vpc= 0;
+            }
          }
       }
+
+      LOCK(sink);
+      sink->startAfterCaps= TRUE;
+      sink->soc.videoPlaying= TRUE;
+      sink->soc.videoPaused= FALSE;
+      UNLOCK(sink);
+
+      result= TRUE;
+   }
+   else
+   {
+      GST_ERROR("gst_westeros_sink_ready_to_paused: sinkAcquireResources failed");
    }
 
-   LOCK(sink);
-   sink->startAfterCaps= TRUE;
-   sink->soc.videoPlaying= TRUE;
-   sink->soc.videoPaused= FALSE;
-   UNLOCK(sink);
-
-exit:
-   return TRUE;
+   return result;
 }
 
 gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolean *passToDefault )
@@ -5100,6 +5047,8 @@ done:
 static int sinkAcquireVideo( GstWesterosSink *sink )
 {
    int result= 0;
+   int rc, len;
+   struct v4l2_exportbuffer eb;
 
    GST_DEBUG("sinkAcquireVideo: enter");
    if ( sink->rm && sink->resAssignedId >= 0 )
@@ -5107,13 +5056,75 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       if ( swIsSWDecode( sink ) )
       {
          result= 1;
-         goto done;
+         goto exit;
       }
    }
 
+   sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
+   if ( sink->soc.v4l2Fd < 0 )
+   {
+      GST_ERROR("failed to open device (%s)", sink->soc.devname );
+      goto exit;
+   }
+
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QUERYCAP, &sink->soc.caps );
+   if ( rc < 0 )
+   {
+      GST_ERROR("failed query caps: %d errno %d", rc, errno);
+      goto exit;
+   }
+
+   GST_DEBUG("driver (%s) card(%s) bus_info(%s) version %d capabilities %X device_caps %X",
+           sink->soc.caps.driver, sink->soc.caps.card, sink->soc.caps.bus_info, sink->soc.caps.version, sink->soc.caps.capabilities, sink->soc.caps.device_caps );
+
+   sink->soc.deviceCaps= (sink->soc.caps.capabilities & V4L2_CAP_DEVICE_CAPS ) ? sink->soc.caps.device_caps : sink->soc.caps.capabilities;
+
+   if ( !(sink->soc.deviceCaps & (V4L2_CAP_VIDEO_M2M | V4L2_CAP_VIDEO_M2M_MPLANE) ))
+   {
+      GST_ERROR("device (%s) is not a M2M device", sink->soc.devname );
+      goto exit;
+   }
+
+   if ( !(sink->soc.deviceCaps & V4L2_CAP_STREAMING) )
+   {
+      GST_ERROR("device (%s) does not support dmabuf: no V4L2_CAP_STREAMING", sink->soc.devname );
+      goto exit;
+   }
+
+   if ( (sink->soc.deviceCaps & V4L2_CAP_VIDEO_M2M_MPLANE) && !(sink->soc.deviceCaps & V4L2_CAP_VIDEO_M2M) )
+   {
+      GST_DEBUG("device is multiplane");
+      sink->soc.isMultiPlane= TRUE;
+   }
+
+   len= strlen( (char*)sink->soc.caps.driver );
+   if ( (len == 14) && !strncmp( (char*)sink->soc.caps.driver, "aml-vcodec-dec", len) )
+   {
+      sink->soc.hideVideoFramesDelay= 2;
+      sink->soc.hideGfxFramesDelay= 3;
+      sink->soc.useGfxSync= TRUE;
+   }
+
+   eb.type= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+   eb.index= -1;
+   eb.plane= -1;
+   eb.flags= (O_RDWR|O_CLOEXEC);
+   IOCTL( sink->soc.v4l2Fd, VIDIOC_EXPBUF, &eb );
+   if ( errno == ENOTTY )
+   {
+      GST_ERROR("device (%s) does not support dmabuf: no VIDIOC_EXPBUF", sink->soc.devname );
+      goto exit;
+   }
+
+   wstGetInputFormats( sink );
+
+   wstGetOutputFormats( sink );
+
+   wstGetMaxFrameSize( sink );
 
    result= 1;
-done:
+
+exit:
    GST_DEBUG("sinkAcquireVideo: exit: %d", result);
 
    return result;
@@ -5122,6 +5133,8 @@ done:
 static void sinkReleaseVideo( GstWesterosSink *sink )
 {
    GST_DEBUG("sinkReleaseVideo: enter");
+
+   wstSinkSocStopVideo( sink );
 
    GST_DEBUG("sinkReleaseVideo: exit");
 }
@@ -5544,6 +5557,20 @@ void swDisplay( GstWesterosSink *sink, SWFrame *frame )
    GST_LOG("swDisplay: exit");
 }
 #endif
+
+static int sinkAcquireResources( GstWesterosSink *sink )
+{
+   int result= 0;
+
+   result= sinkAcquireVideo( sink );
+
+   return result;
+}
+
+static void sinkReleaseResources( GstWesterosSink *sink )
+{
+   sinkReleaseVideo( sink );
+}
 
 static int ioctl_wrapper( int fd, int request, void* arg )
 {
