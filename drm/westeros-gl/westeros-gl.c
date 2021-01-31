@@ -5344,6 +5344,11 @@ EGLAPI EGLContext EGLAPIENTRY eglCreateContext(EGLDisplay dpy, EGLConfig config,
 {
    EGLContext eglContext= EGL_NO_CONTEXT;
 
+   if ( !gCtx )
+   {
+      gCtx= WstGLInit();
+   }
+
    if ( gRealEGLCreateContext )
    {
       #ifdef EGL_PROTECTED_CONTENT_EXT
