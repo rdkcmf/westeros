@@ -863,6 +863,7 @@ static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rect
    frameHeight= vf->frameHeight;
 
    frameSkipX= 0;
+   frameSkipY= 0;
    #ifdef DRM_NO_SRC_CROP
    /* If drmModeSetPlane won't perform src cropping we will
       crop here in the creation of the fb.  This would be the case
@@ -874,7 +875,6 @@ static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rect
       frameSkipX= -rectX*frameWidth/rectW;
       frameSkipX &= ~1;
    }
-   frameSkipY= 0;
    if ( rectY < 0 )
    {
       rectY &= ~1;
