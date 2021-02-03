@@ -3622,13 +3622,6 @@ static WstGLCtx *wstInitCtx( void )
                               case DRM_FORMAT_NV12:
                                  isVideo= true;
                                  haveVideoPlanes= true;
-                                 #ifdef USE_AMLOGIC_MESON
-                                 /* force reverse zorder for AmLogic video
-                                  * planes so that the last one listed (which
-                                  * happens to be the one which supports HDR)
-                                  * has the lowest zorder */
-                                 zpos= planeRes->count_planes-n;
-                                 #endif
                                  break;
                               case DRM_FORMAT_ARGB8888:
                                  isGraphics= true;
