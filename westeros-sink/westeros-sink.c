@@ -537,6 +537,7 @@ static void resMgrRequestDecoder( GstWesterosSink *sink )
    {
       bool result;
 
+      sink->resReqPrimary.resReq.type= EssRMgrResType_videoDecoder;
       sink->resReqPrimary.resReq.usage= sink->resUsage;
       sink->resReqPrimary.resReq.priority= sink->resPriority;
       sink->resReqPrimary.resReq.info.video.maxWidth= sink->windowWidth;

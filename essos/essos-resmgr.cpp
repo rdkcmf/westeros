@@ -61,13 +61,14 @@
 #define ESSRMGR_MAGIC (((('E')&0xFF) << 24)|((('S')&0xFF) << 16)|((('R')&0xFF) << 8)|(('M')&0xFF))
 #define ESSRMGR_VERSION (0x010000)
 
-#define ESSRMGR_DEFAULT_CONFIG_FILE "/etc/essrmgr.conf"
+#define ESSRMGR_DEFAULT_CONFIG_FILE "/etc/default/essrmgr.conf"
 
-#define ESSRMGR_CRITERIA_MASK (0x0007)
+#define ESSRMGR_CRITERIA_MASK_VIDEO (0x0007)
+#define ESSRMGR_CRITERIA_MASK_AUDIO (0x0000)
 
 #define ESSRMGR_MAX_DECODERS (16)
 #define ESSRMGR_MAX_PENDING (ESSRMGR_MAX_DECODERS*3)
-#define ESSRMGR_FILE_SIZE (ESSRMGR_MAX_DECODERS*2048)
+#define ESSRMGR_FILE_SIZE (2*ESSRMGR_MAX_DECODERS*2048)
 
 typedef struct _EssRMgrUserNotify
 {
@@ -97,7 +98,7 @@ typedef struct _EssRMgrHdr
    bool requesterWinsPriorityTie;
 } EssRMgrHdr;
 
-typedef struct _EssRMgrVideoDecoderNotify
+typedef struct _EssRMgrDecoderNotify
 {
    int self;
    int next;
@@ -108,7 +109,7 @@ typedef struct _EssRMgrVideoDecoderNotify
    int pidUser;
    int priorityUser;
    EssRMgrUserNotify notify;
-} EssRMgrVideoDecoderNotify;
+} EssRMgrDecoderNotify;
 
 typedef struct _EssRMgrVideoDecoder
 {
@@ -122,27 +123,49 @@ typedef struct _EssRMgrVideoDecoder
    int pendingNtfyIdx;
 } EssRMgrVideoDecoder;
 
+typedef struct _EssRMgrAudioDecoder
+{
+   int capabilities;
+   int requestIdOwner;
+   int pidOwner;
+   int priorityOwner;
+   int usageOwner;
+   int pendingNtfyIdx;
+} EssRMgrAudioDecoder;
+
 typedef struct _EssRMgrBase
 {
    int numVideoDecoders;
    EssRMgrVideoDecoder videoDecoder[ESSRMGR_MAX_DECODERS];
+   int numAudioDecoders;
+   EssRMgrAudioDecoder audioDecoder[ESSRMGR_MAX_DECODERS];
 } EssRMgrBase;
 
 typedef struct _EssRMgrVidControl
 {
    sem_t semRequest;
-   EssRMgrVideoDecoderNotify revoke[ESSRMGR_MAX_DECODERS];
-   EssRMgrVideoDecoderNotify pending[ESSRMGR_MAX_PENDING];
+   EssRMgrDecoderNotify revoke[ESSRMGR_MAX_DECODERS];
+   EssRMgrDecoderNotify pending[ESSRMGR_MAX_PENDING];
    int maxPoolItems;
    int pendingPoolIdx;
 } EssRMgrVidControl;
+
+typedef struct _EssRMgrAudControl
+{
+   sem_t semRequest;
+   EssRMgrDecoderNotify revoke[ESSRMGR_MAX_DECODERS];
+   EssRMgrDecoderNotify pending[ESSRMGR_MAX_PENDING];
+   int maxPoolItems;
+   int pendingPoolIdx;
+} EssRMgrAudControl;
 
 typedef struct _EssRMgrState
 {
    EssRMgrHdr hdr;
    EssRMgrBase base;
    EssRMgrVidControl vidCtrl;
-   char reserved[ESSRMGR_FILE_SIZE-(sizeof(hdr)+sizeof(vidCtrl)+sizeof(base))];
+   EssRMgrAudControl audCtrl;
+   char reserved[ESSRMGR_FILE_SIZE-(sizeof(hdr)+sizeof(vidCtrl)+sizeof(audCtrl)+sizeof(base))];
 } EssRMgrState;
 
 typedef struct _EssRMgr
@@ -165,19 +188,32 @@ static bool essRMLockCtrlFileAndValidate( EssRMgr *rm );
 static void essRMValidateState( EssRMgr *rm );
 static bool essRMInitCtrlFile( EssRMgr *rm );
 static int essRMVidFindLowestPriorityPreemption( EssRMgr *rm, std::vector<int>& decoders, int priority );
-static EssRMgrVideoDecoderNotify* essRMVidGetPendingPoolItem( EssRMgr *rm );
-static void essRMVidPutPendingPoolItem( EssRMgr *rm, EssRMgrVideoDecoderNotify *notify );
-static void essRMVidInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMgrVideoDecoderNotify *item );
-static void essRMVidRemovePending( EssRMgr *rm, int decoderIdx, EssRMgrVideoDecoderNotify *item );
+static EssRMgrDecoderNotify* essRMVidGetPendingPoolItem( EssRMgr *rm );
+static void essRMVidPutPendingPoolItem( EssRMgr *rm, EssRMgrDecoderNotify *notify );
+static void essRMVidInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item );
+static void essRMVidRemovePending( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item );
 static bool essRMAssignVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrRequest *req );
 static bool essRMRevokeVideoDecoder( EssRMgr *rm, int decoderIdx );
-static bool essRMTransferVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrVideoDecoderNotify *pending );
+static bool essRMTransferVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *pending );
 static bool essRMRequestVideoDecoder( EssRMgr *rm, EssRMgrRequest *req );
 static void essRMReleaseVideoDecoder( EssRMgr *rm, int id );
 static bool essRMSetPriorityVideoDecoder( EssRMgr *rm, int requestId, int priority );
 static bool essRMSetUsageVideoDecoder( EssRMgr *rm, int requestId, EssRMgrUsage *usage );
 static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsage *usage, int& pendingIdx );
 static void essRMCancelRequestVideoDecoder( EssRMgr *rm, int requestId );
+static EssRMgrDecoderNotify* essRMAudGetPendingPoolItem( EssRMgr *rm );
+static void essRMAudPutPendingPoolItem( EssRMgr *rm, EssRMgrDecoderNotify *notify );
+static void essRMAudInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item );
+static void essRMAudRemovePending( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item );
+static bool essRMAssignAudioDecoder( EssRMgr *rm, int decoderIdx, EssRMgrRequest *req );
+static bool essRMRevokeAudioDecoder( EssRMgr *rm, int decoderIdx );
+static bool essRMTransferAudioDecoder( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *pending );
+static bool essRMRequestAudioDecoder( EssRMgr *rm, EssRMgrRequest *req );
+static void essRMReleaseAudioDecoder( EssRMgr *rm, int id );
+static bool essRMSetPriorityAudioDecoder( EssRMgr *rm, int requestId, int priority );
+static bool essRMSetUsageAudioDecoder( EssRMgr *rm, int requestId, EssRMgrUsage *usage );
+static int essRMFindSuitableAudioDecoder( EssRMgr *rm, int priority, EssRMgrUsage *usage, int& pendingIdx );
+static void essRMCancelRequestAudioDecoder( EssRMgr *rm, int requestId );
 static bool essRMReadConfigFile( EssRMgr *rm );
 static void* essRMNotifyThread( void *userData );
 
@@ -298,6 +334,12 @@ EssRMgr* EssRMgrCreate()
             ERROR("error creating control file request semaphore: errno %d", errno);
          }
 
+         rc= sem_init( &rm->state->audCtrl.semRequest, 1, 1 );
+         if ( rc != 0 )
+         {
+            ERROR("error creating control file request semaphore: errno %d", errno);
+         }
+
          essRMUnlockCtrlFile( rm );
       }
 
@@ -356,6 +398,9 @@ int EssRMgrResourceGetCount( EssRMgr *rm, int type )
             case EssRMgrResType_videoDecoder:
                count= rm->state->base.numVideoDecoders;
                break;
+            case EssRMgrResType_audioDecoder:
+               count= rm->state->base.numAudioDecoders;
+               break;
             default:
                break;
          }
@@ -386,6 +431,20 @@ bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *pid, int *prio
                   if ( priority )
                   {
                      *priority= rm->state->base.videoDecoder[id].priorityOwner;
+                  }
+                  result= true;
+               }
+               break;
+            case EssRMgrResType_audioDecoder:
+               if ( (id >= 0) && (id < rm->state->base.numAudioDecoders) )
+               {
+                  if ( pid )
+                  {
+                     *pid= rm->state->base.audioDecoder[id].pidOwner;
+                  }
+                  if ( priority )
+                  {
+                     *priority= rm->state->base.audioDecoder[id].priorityOwner;
                   }
                   result= true;
                }
@@ -422,6 +481,13 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
                   result= true;
                }
                break;
+            case EssRMgrResType_audioDecoder:
+               if ( (id >= 0) && (id < rm->state->base.numAudioDecoders) )
+               {
+                  caps->capabilities= rm->state->base.audioDecoder[id].capabilities;
+                  result= true;
+               }
+               break;
             default:
                break;
          }
@@ -436,6 +502,7 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
 {
    bool result= false;
    bool haveSemRequest= false;
+   sem_t *sem= 0;
    int rc;
 
    TRACE2("EssRMgrRequestResource: enter: rm %p type %d", rm, type );
@@ -454,13 +521,28 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
          goto exit;
       }
 
-      rc= essRMSemWaitChecked( &rm->state->vidCtrl.semRequest );
-      if ( rc != 0 )
+      switch( type )
       {
-         ERROR("sem_wait failed for semRequest: errno %d", errno);
-         goto exit;
+         case EssRMgrResType_videoDecoder:
+            sem= &rm->state->vidCtrl.semRequest;
+            break;
+         case EssRMgrResType_audioDecoder:
+            sem= &rm->state->audCtrl.semRequest;
+            break;
+         default:
+            ERROR("unsupported resource type: %d", type);
+            goto exit;
       }
-      haveSemRequest= true;
+      if ( sem )
+      {
+         rc= essRMSemWaitChecked( sem );
+         if ( rc != 0 )
+         {
+            ERROR("sem_wait failed for semRequest: errno %d", errno);
+            goto exit;
+         }
+         haveSemRequest= true;
+      }
       
       if ( essRMLockCtrlFileAndValidate( rm ) )
       {
@@ -470,6 +552,9 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
          {
             case EssRMgrResType_videoDecoder:
                result= essRMRequestVideoDecoder( rm, req );
+               break;
+            case EssRMgrResType_audioDecoder:
+               result= essRMRequestAudioDecoder( rm, req );
                break;
             default:
                ERROR("unsupported resource type: %d", type);
@@ -487,7 +572,7 @@ exit:
 
    if ( haveSemRequest )
    {
-      sem_post( &rm->state->vidCtrl.semRequest );
+      sem_post( sem );
    }
 
    TRACE2("EssRMgrRequestResource: exit: rm %p type %d result %d", rm, type, result );
@@ -507,6 +592,9 @@ void EssRMgrReleaseResource( EssRMgr *rm, int type, int id )
          {
             case EssRMgrResType_videoDecoder:
                essRMReleaseVideoDecoder( rm, id );
+               break;
+            case EssRMgrResType_audioDecoder:
+               essRMReleaseAudioDecoder( rm, id );
                break;
             default:
                ERROR("unsupported resource type: %d", type);
@@ -532,6 +620,9 @@ bool EssRMgrRequestSetPriority( EssRMgr *rm, int type, int requestId, int priori
             case EssRMgrResType_videoDecoder:
                result= essRMSetPriorityVideoDecoder( rm, requestId, priority );
                break;
+            case EssRMgrResType_audioDecoder:
+               result= essRMSetPriorityAudioDecoder( rm, requestId, priority );
+               break;
             default:
                break;
          }
@@ -555,6 +646,9 @@ bool EssRMgrRequestSetUsage( EssRMgr *rm, int type, int requestId, EssRMgrUsage 
             case EssRMgrResType_videoDecoder:
                result= essRMSetUsageVideoDecoder( rm, requestId, usage );
                break;
+            case EssRMgrResType_audioDecoder:
+               result= essRMSetUsageAudioDecoder( rm, requestId, usage );
+               break;
             default:
                break;
          }
@@ -576,6 +670,9 @@ void EssRMgrRequestCancel( EssRMgr *rm, int type, int requestId )
          {
             case EssRMgrResType_videoDecoder:
                essRMCancelRequestVideoDecoder( rm, requestId );
+               break;
+            case EssRMgrResType_audioDecoder:
+               essRMCancelRequestAudioDecoder( rm, requestId );
                break;
             default:
                break;
@@ -599,6 +696,14 @@ void EssRMgrDumpState( EssRMgr *rm )
                 rm->state->base.videoDecoder[i].capabilities,
                 rm->state->base.videoDecoder[i].pidOwner,
                 rm->state->base.videoDecoder[i].priorityOwner );
+      }
+      for( int i= 0; i < rm->state->base.numAudioDecoders; ++i )
+      {
+         printf("audio decoder: %d caps %X owner %d priority %d\n",
+                i,
+                rm->state->base.audioDecoder[i].capabilities,
+                rm->state->base.audioDecoder[i].pidOwner,
+                rm->state->base.audioDecoder[i].priorityOwner );
       }
       essRMUnlockCtrlFile( rm );
    }
@@ -634,6 +739,13 @@ static void essRMInitDefaultState( EssRMgr *rm )
                break;
          }
       }
+      rm->state->base.numAudioDecoders= ESSRMGR_MAX_DECODERS;
+      for( int i= 0; i < ESSRMGR_MAX_DECODERS; ++i )
+      {
+         rm->state->base.audioDecoder[i].requestIdOwner= 0;
+         rm->state->base.audioDecoder[i].pidOwner= 0;
+         rm->state->base.audioDecoder[i].capabilities= EssRMgrAudCap_none;
+      }
    }
 
    for( int i= 0; i < rm->state->base.numVideoDecoders; ++i )
@@ -641,17 +753,17 @@ static void essRMInitDefaultState( EssRMgr *rm )
       int rc= sem_init( &rm->state->vidCtrl.revoke[i].semNotify, 1, 0 );
       if ( rc != 0 )
       {
-         ERROR("Error creating semaphore semNotify for decoder %d: errno %d", i, errno );
+         ERROR("Error creating semaphore semNotify for video decoder %d: errno %d", i, errno );
       }
       rc= sem_init( &rm->state->vidCtrl.revoke[i].semConfirm, 1, 0 );
       if ( rc != 0 )
       {
-         ERROR("Error creating semaphore semConfirm for decoder %d: errno %d", i, errno );
+         ERROR("Error creating semaphore semConfirm for video decoder %d: errno %d", i, errno );
       }
       rc= sem_init( &rm->state->vidCtrl.revoke[i].semComplete, 1, 0 );
       if ( rc != 0 )
       {
-         ERROR("Error creating semaphore semComplete for decoder %d: errno %d", i, errno );
+         ERROR("Error creating semaphore semComplete for video decoder %d: errno %d", i, errno );
       }
       rm->state->base.videoDecoder[i].pendingNtfyIdx= -1;
    }
@@ -660,7 +772,7 @@ static void essRMInitDefaultState( EssRMgr *rm )
    DEBUG("vid pendingPool: max pending %d", maxPending);
    for( int i= 0; i < maxPending; ++i )
    {
-      EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[i];
+      EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[i];
       int rc= sem_init( &pending->semNotify, 1, 0 );
       if ( rc != 0 )
       {
@@ -683,6 +795,54 @@ static void essRMInitDefaultState( EssRMgr *rm )
    }
    rm->state->vidCtrl.pendingPoolIdx= 0;
    rm->state->vidCtrl.maxPoolItems= maxPending;
+
+   for( int i= 0; i < rm->state->base.numAudioDecoders; ++i )
+   {
+      int rc= sem_init( &rm->state->audCtrl.revoke[i].semNotify, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semNotify for audio decoder %d: errno %d", i, errno );
+      }
+      rc= sem_init( &rm->state->audCtrl.revoke[i].semConfirm, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semConfirm for audio decoder %d: errno %d", i, errno );
+      }
+      rc= sem_init( &rm->state->audCtrl.revoke[i].semComplete, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semComplete for audio decoder %d: errno %d", i, errno );
+      }
+      rm->state->base.audioDecoder[i].pendingNtfyIdx= -1;
+   }
+
+   maxPending= 3*rm->state->base.numAudioDecoders;
+   DEBUG("aud pendingPool: max pending %d", maxPending);
+   for( int i= 0; i < maxPending; ++i )
+   {
+      EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[i];
+      int rc= sem_init( &pending->semNotify, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semNotify for aud pending pool entry %d: errno %d", i, errno );
+      }
+      rc= sem_init( &pending->semConfirm, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semConfirm for aud pending pool entry %d: errno %d", i, errno );
+      }
+      rc= sem_init( &pending->semComplete, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semComplete for aud pending pool entry %d: errno %d", i, errno );
+      }
+      pending->self= i;
+      pending->next= ((i+1 < maxPending) ? i+1 : -1);
+      pending->prev= ((i > 0) ? i-1 : -1);
+      DEBUG("aud pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
+   }
+   rm->state->audCtrl.pendingPoolIdx= 0;
+   rm->state->audCtrl.maxPoolItems= maxPending;
 
    rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
 }
@@ -796,7 +956,7 @@ static bool essRMLockCtrlFileAndValidate( EssRMgr *rm )
 static void essRMValidateState( EssRMgr *rm )
 {
    EssRMgrState *state;
-   EssRMgrVideoDecoderNotify *iter;
+   EssRMgrDecoderNotify *iter;
    bool error= false;
    bool updateCRC= false;
    uint32_t crc;
@@ -851,6 +1011,23 @@ static void essRMValidateState( EssRMgr *rm )
             state->base.videoDecoder[i].pidOwner= 0;
             state->base.videoDecoder[i].priorityOwner= 0;
             state->base.videoDecoder[i].usageOwner= 0;
+            updateCRC= true;
+         }
+      }
+   }
+
+   for( int i= 0; i < state->base.numAudioDecoders; ++i )
+   {
+      if ( state->base.audioDecoder[i].pidOwner != 0 )
+      {
+         int rc= kill( state->base.audioDecoder[i].pidOwner, 0 );
+         if ( rc != 0 )
+         {
+            DEBUG("removing dead owner pid %d aud decoder %d", state->base.audioDecoder[i].pidOwner, i );
+            state->base.audioDecoder[i].requestIdOwner= -1;
+            state->base.audioDecoder[i].pidOwner= 0;
+            state->base.audioDecoder[i].priorityOwner= 0;
+            state->base.audioDecoder[i].usageOwner= 0;
             updateCRC= true;
          }
       }
@@ -911,9 +1088,9 @@ static int essRMVidFindLowestPriorityPreemption( EssRMgr *rm, std::vector<int>& 
    return preemptIdx;
 }
 
-static EssRMgrVideoDecoderNotify* essRMVidGetPendingPoolItem( EssRMgr *rm )
+static EssRMgrDecoderNotify* essRMVidGetPendingPoolItem( EssRMgr *rm )
 {
-   EssRMgrVideoDecoderNotify *notify= 0;
+   EssRMgrDecoderNotify *notify= 0;
 
    DEBUG("essRMVidGetPendingPoolItem: state %p pendingPool %d", rm->state, rm->state->vidCtrl.pendingPoolIdx);
    if ( rm->state->vidCtrl.pendingPoolIdx >= 0 )
@@ -931,7 +1108,7 @@ static EssRMgrVideoDecoderNotify* essRMVidGetPendingPoolItem( EssRMgr *rm )
    return notify;
 }
 
-static void essRMVidPutPendingPoolItem( EssRMgr *rm, EssRMgrVideoDecoderNotify *notify )
+static void essRMVidPutPendingPoolItem( EssRMgr *rm, EssRMgrDecoderNotify *notify )
 {
    notify->next= rm->state->vidCtrl.pendingPoolIdx;
    if ( notify->next >= 0 )
@@ -942,10 +1119,10 @@ static void essRMVidPutPendingPoolItem( EssRMgr *rm, EssRMgrVideoDecoderNotify *
    notify->prev= -1;
 }
 
-static void essRMVidInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMgrVideoDecoderNotify *item )
+static void essRMVidInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item )
 {
-   EssRMgrVideoDecoderNotify *insertAfter= 0;
-   EssRMgrVideoDecoderNotify *iter= 0;
+   EssRMgrDecoderNotify *insertAfter= 0;
+   EssRMgrDecoderNotify *iter= 0;
    int *list= &rm->state->base.videoDecoder[decoderIdx].pendingNtfyIdx;
    
    if ( *list >= 0 ) iter= &rm->state->vidCtrl.pending[*list];
@@ -977,7 +1154,7 @@ static void essRMVidInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMg
    }
 }
 
-static void essRMVidRemovePending( EssRMgr *rm, int decoderIdx, EssRMgrVideoDecoderNotify *item )
+static void essRMVidRemovePending( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item )
 {
    int *list= &rm->state->base.videoDecoder[decoderIdx].pendingNtfyIdx;
 
@@ -1053,7 +1230,7 @@ static bool essRMRevokeVideoDecoder( EssRMgr *rm, int decoderIdx )
       int pidPreempt= rm->state->base.videoDecoder[decoderIdx].pidOwner;
 
       // preempt current owner
-      DEBUG("preempting pid %d to revoke decoder %d", pidPreempt, decoderIdx );
+      DEBUG("preempting pid %d to revoke video decoder %d", pidPreempt, decoderIdx );
 
       rm->state->vidCtrl.revoke[decoderIdx].notify.needConfirmation= true;
 
@@ -1068,7 +1245,7 @@ static bool essRMRevokeVideoDecoder( EssRMgr *rm, int decoderIdx )
             rc= sem_trywait( &rm->state->vidCtrl.revoke[decoderIdx].semConfirm );
             if ( rc == 0 )
             {
-               DEBUG("preemption of pid %d to revoke decoder %d successful", pidPreempt, decoderIdx );
+               DEBUG("preemption of pid %d to revoke video decoder %d successful", pidPreempt, decoderIdx );
                break;
             }
             if ( --retry == 0 )
@@ -1096,7 +1273,7 @@ exit:
    return result;
 }
 
-static bool essRMTransferVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrVideoDecoderNotify *pending )
+static bool essRMTransferVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *pending )
 {
    bool result= false;
 
@@ -1158,7 +1335,7 @@ static bool essRMRequestVideoDecoder( EssRMgr *rm, EssRMgrRequest *req )
    bool madeAssignment= false;
    int rc;
 
-   TRACE2("EssRMgrRequestVideoDecoder: enter: rm %p requestId %d", rm, req->requestId );
+   TRACE2("essRMgrRequestVideoDecoder: enter: rm %p requestId %d", rm, req->requestId );
 
    if ( rm && req )
    {
@@ -1178,7 +1355,7 @@ static bool essRMRequestVideoDecoder( EssRMgr *rm, EssRMgrRequest *req )
          {
             if ( !essRMRevokeVideoDecoder( rm, assignIdx ) )
             {
-               ERROR("failed to revoke decoder %d", assignIdx);
+               ERROR("failed to revoke video decoder %d", assignIdx);
                goto exit;
             }
          }
@@ -1199,13 +1376,13 @@ static bool essRMRequestVideoDecoder( EssRMgr *rm, EssRMgrRequest *req )
       }
       else if ( (pendingIdx >= 0 ) && req->asyncEnable )
       {
-         EssRMgrVideoDecoderNotify *pending= essRMVidGetPendingPoolItem( rm );
+         EssRMgrDecoderNotify *pending= essRMVidGetPendingPoolItem( rm );
          if ( pending )
          {
             pthread_t threadId;
             pthread_attr_t attr;
 
-            DEBUG("request %d entering pending state for decoder %d pid %d", req->requestId, pendingIdx, pid );
+            DEBUG("request %d entering pending state for video decoder %d pid %d", req->requestId, pendingIdx, pid );
             pending->notify.needNotification= true;
             pending->notify.rm= rm;
             pending->notify.notifyCB= req->notifyCB;
@@ -1295,7 +1472,7 @@ static void essRMReleaseVideoDecoder( EssRMgr *rm, int id )
 
             if ( rm->state->base.videoDecoder[id].pendingNtfyIdx >= 0 )
             {
-               EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[rm->state->base.videoDecoder[id].pendingNtfyIdx];
+               EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[rm->state->base.videoDecoder[id].pendingNtfyIdx];
                rm->state->base.videoDecoder[id].pendingNtfyIdx= pending->next;
                if ( pending->next >= 0 )
                {
@@ -1310,7 +1487,7 @@ static void essRMReleaseVideoDecoder( EssRMgr *rm, int id )
          }
          else
          {
-            ERROR("pid %d attempting to release decoder %d owned by pid %d", 
+            ERROR("pid %d attempting to release video decoder %d owned by pid %d",
                    pid, id, rm->state->base.videoDecoder[id].pidOwner );
          }
       }
@@ -1334,14 +1511,14 @@ static bool essRMSetPriorityVideoDecoder( EssRMgr *rm, int requestId, int priori
             if ( (rm->state->base.videoDecoder[id].requestIdOwner == requestId) &&
                  (rm->state->base.videoDecoder[id].pidOwner == pid) )
             {
-               DEBUG("found request %d as owner of decoder %d", requestId, id);
+               DEBUG("found request %d as owner of video decoder %d", requestId, id);
                found= true;
                rm->state->base.videoDecoder[id].priorityOwner= priority;
 
                pendingNtfyIdx= rm->state->base.videoDecoder[id].pendingNtfyIdx;
                if ( pendingNtfyIdx >= 0 )
                {
-                  EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
+                  EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
                   if ( priority <= pending->priorityUser )
                   {
                      pendingNtfyIdx= -1;
@@ -1358,10 +1535,10 @@ static bool essRMSetPriorityVideoDecoder( EssRMgr *rm, int requestId, int priori
                pendingNtfyIdx= rm->state->base.videoDecoder[id].pendingNtfyIdx;
                while ( pendingNtfyIdx >= 0 )
                {
-                  EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
+                  EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
                   if ( (pending->notify.req.requestId == requestId) && (pending->pidUser == pid) )
                   {
-                     DEBUG("found request %d in decoder %d pending list: change priority from %d to %d owner priority %d", 
+                     DEBUG("found request %d in video decoder %d pending list: change priority from %d to %d owner priority %d",
                            requestId, id, pending->priorityUser, priority, rm->state->base.videoDecoder[id].priorityOwner );
                      found= true;
                      pending->priorityUser= pending->notify.req.priority= priority;
@@ -1401,7 +1578,7 @@ static bool essRMSetPriorityVideoDecoder( EssRMgr *rm, int requestId, int priori
          {
             if ( essRMRevokeVideoDecoder( rm, id ) )
             {
-               EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
+               EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
 
                result= essRMTransferVideoDecoder( rm, id, pending );
 
@@ -1426,7 +1603,7 @@ static bool essRMSetUsageVideoDecoder( EssRMgr *rm, int requestId, EssRMgrUsage 
          int id;
          int pendingNtfyIdx= -1;
          int pid= getpid();
-         EssRMgrVideoDecoderNotify *pending= 0;
+         EssRMgrDecoderNotify *pending= 0;
 
          for( id= 0; id < rm->state->base.numVideoDecoders; ++id )
          {
@@ -1444,7 +1621,7 @@ static bool essRMSetUsageVideoDecoder( EssRMgr *rm, int requestId, EssRMgrUsage 
 
                pendingNtfyIdx= rm->state->base.videoDecoder[id].pendingNtfyIdx;
 
-               testResult= (usage->usage & rm->state->base.videoDecoder[id].capabilities) & ESSRMGR_CRITERIA_MASK;
+               testResult= (usage->usage & rm->state->base.videoDecoder[id].capabilities) & ESSRMGR_CRITERIA_MASK_VIDEO;
                if ( testResult )
                {
                   // owned decoder is no longer eligible for new usage
@@ -1454,16 +1631,16 @@ static bool essRMSetUsageVideoDecoder( EssRMgr *rm, int requestId, EssRMgrUsage 
                   goto exit;
                }
 
-               testResultOrg= (~(usageOrg ^ (rm->state->base.videoDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK);
-               testResult= (~(usage->usage ^ (rm->state->base.videoDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK);
+               testResultOrg= (~(usageOrg ^ (rm->state->base.videoDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK_VIDEO);
+               testResult= (~(usage->usage ^ (rm->state->base.videoDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK_VIDEO);
                if (
                     (testResult != testResultOrg) &&
                     (testResult != 0) &&
                     (pendingNtfyIdx >= 0)
                   )
                {
-                  EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
-                  testResult= (~(pending->notify.req.usage ^ (rm->state->base.videoDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK);
+                  EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
+                  testResult= (~(pending->notify.req.usage ^ (rm->state->base.videoDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK_VIDEO);
                   if ( testResult == 0 )
                   {
                      // owned decoder is now more suitable for a pending request
@@ -1525,10 +1702,10 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
       // Deterimine set of defined decoders that are do not violate usage constraints
       for( i= 0; i < rm->state->base.numVideoDecoders; ++i )
       {
-         testResult= (usage->usage & rm->state->base.videoDecoder[i].capabilities) & ESSRMGR_CRITERIA_MASK;
+         testResult= (usage->usage & rm->state->base.videoDecoder[i].capabilities) & ESSRMGR_CRITERIA_MASK_VIDEO;
          if ( testResult == 0 )
          {
-            DEBUG("decoder %d caps 0x%X eligible", i, rm->state->base.videoDecoder[i].capabilities);
+            DEBUG("video decoder %d caps 0x%X eligible", i, rm->state->base.videoDecoder[i].capabilities);
             eligibleDecoders.push_back( i );
          }
       }
@@ -1543,10 +1720,10 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
          for( i= 0; i < eligibleDecoders.size(); ++i )
          {
             idx= eligibleDecoders[i];
-            testResult= (~(usage->usage ^ (rm->state->base.videoDecoder[idx].capabilities)) & ESSRMGR_CRITERIA_MASK);
+            testResult= (~(usage->usage ^ (rm->state->base.videoDecoder[idx].capabilities)) & ESSRMGR_CRITERIA_MASK_VIDEO);
             if ( testResult == 0 )
             {
-               DEBUG("decoder %d caps 0x%X ideal", i, rm->state->base.videoDecoder[idx].capabilities);
+               DEBUG("video decoder %d caps 0x%X ideal", i, rm->state->base.videoDecoder[idx].capabilities);
                bestDecoders.push_back( idx );
             }
          }
@@ -1569,7 +1746,7 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                         (usage->info.video.maxHeight > rm->state->base.videoDecoder[idx].maxHeight))
                      )
                   {
-                     TRACE1("decoder %d disqualified: size constraints: target (%dx%d) limit (%dx%d)",
+                     TRACE1("video decoder %d disqualified: size constraints: target (%dx%d) limit (%dx%d)",
                            idx,
                            usage->info.video.maxWidth, usage->info.video.maxHeight,
                            rm->state->base.videoDecoder[idx].maxWidth,
@@ -1583,7 +1760,7 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                     (rm->state->base.videoDecoder[idx].usageOwner == usage->usage)
                   )
                {
-                  TRACE1("decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
+                  TRACE1("video decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
                          idx,
                          rm->state->base.videoDecoder[idx].pidOwner,
                          priority,
@@ -1599,7 +1776,7 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                     (rm->state->base.videoDecoder[idx].priorityOwner < priority)
                   )
                {
-                  TRACE1("decoder %d disqualified: priorty: owner pid %d pri %d req pri %d",
+                  TRACE1("video decoder %d disqualified: priorty: owner pid %d pri %d req pri %d",
                          idx,
                          rm->state->base.videoDecoder[idx].pidOwner,
                          rm->state->base.videoDecoder[idx].priorityOwner,
@@ -1622,7 +1799,7 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                     (rm->state->base.videoDecoder[suitableIdx].priorityOwner > rm->state->base.videoDecoder[idx].priorityOwner)
                   )
                {
-                  TRACE1("decoder %d disqualified: curr candidate for preemption has lower priority: %d vs %d",
+                  TRACE1("video decoder %d disqualified: curr candidate for preemption has lower priority: %d vs %d",
                          rm->state->base.videoDecoder[suitableIdx].priorityOwner,
                          rm->state->base.videoDecoder[idx].priorityOwner );
                   continue;
@@ -1670,7 +1847,7 @@ static void essRMCancelRequestVideoDecoder( EssRMgr *rm, int requestId )
             if ( (rm->state->base.videoDecoder[id].requestIdOwner == requestId) &&
                  (rm->state->base.videoDecoder[id].pidOwner == pid) )
             {
-               DEBUG("found request %d as owner of decoder %d", requestId, id);
+               DEBUG("found request %d as owner of video decoder %d", requestId, id);
                found= true;
                essRMReleaseVideoDecoder( rm, id );
             }
@@ -1679,12 +1856,777 @@ static void essRMCancelRequestVideoDecoder( EssRMgr *rm, int requestId )
                pendingNtfyIdx= rm->state->base.videoDecoder[id].pendingNtfyIdx;
                while ( pendingNtfyIdx >= 0 )
                {
-                  EssRMgrVideoDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
+                  EssRMgrDecoderNotify *pending= &rm->state->vidCtrl.pending[pendingNtfyIdx];
                   if ( (pending->notify.req.requestId == requestId) && (pending->pidUser == pid) )
                   {
-                     DEBUG("found request %d in decoder %d pending list", requestId, id );
+                     DEBUG("found request %d in video decoder %d pending list", requestId, id );
                      found= true;
                      essRMVidRemovePending( rm, id, pending );
+                     break;
+                  }
+                  pendingNtfyIdx= pending->next;
+               }
+            }
+            if ( found )
+            {
+               break;
+            }
+         }
+      }
+   }
+}
+
+static EssRMgrDecoderNotify* essRMAudGetPendingPoolItem( EssRMgr *rm )
+{
+   EssRMgrDecoderNotify *notify= 0;
+
+   DEBUG("essRMAudGetPendingPoolItem: state %p pendingPool %d", rm->state, rm->state->audCtrl.pendingPoolIdx);
+   if ( rm->state->audCtrl.pendingPoolIdx >= 0 )
+   {
+      notify= &rm->state->audCtrl.pending[rm->state->audCtrl.pendingPoolIdx];
+      DEBUG("essRMAudGetPendingPoolItem: notify %d notify->next %d notify->prev %d", notify->self, notify->next, notify->prev );
+      rm->state->audCtrl.pendingPoolIdx= notify->next;
+      if ( notify->next >= 0 )
+      {
+         rm->state->audCtrl.pending[notify->next].prev= -1;
+      }
+      notify->next= -1;
+   }
+
+   return notify;
+}
+
+static void essRMAudPutPendingPoolItem( EssRMgr *rm, EssRMgrDecoderNotify *notify )
+{
+   notify->next= rm->state->audCtrl.pendingPoolIdx;
+   if ( notify->next >= 0 )
+   {
+      rm->state->audCtrl.pending[notify->next].prev= notify->self;
+   }
+   rm->state->audCtrl.pendingPoolIdx= notify->self;
+   notify->prev= -1;
+}
+
+static void essRMAudInsertPendingByPriority( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item )
+{
+   EssRMgrDecoderNotify *insertAfter= 0;
+   EssRMgrDecoderNotify *iter= 0;
+   int *list= &rm->state->base.audioDecoder[decoderIdx].pendingNtfyIdx;
+
+   if ( *list >= 0 ) iter= &rm->state->audCtrl.pending[*list];
+
+   while ( iter )
+   {
+      if ( item->priorityUser < iter->priorityUser )
+      {
+         break;
+      }
+      insertAfter= iter;
+      iter= ((iter->next >= 0) ? &rm->state->audCtrl.pending[iter->next] : 0);
+   }
+   if ( insertAfter )
+   {
+      item->prev= insertAfter->self;
+      item->next= insertAfter->next;
+      insertAfter->next= item->self;
+   }
+   else
+   {
+      item->next= *list;
+      item->prev= -1;
+      *list= item->self;
+   }
+   if ( item->next >= 0 )
+   {
+      rm->state->audCtrl.pending[item->next].prev= item->self;
+   }
+}
+
+static void essRMAudRemovePending( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *item )
+{
+   int *list= &rm->state->base.audioDecoder[decoderIdx].pendingNtfyIdx;
+
+   if ( item->next >= 0 )
+      rm->state->audCtrl.pending[item->next].prev= item->prev;
+   if ( item->prev >= 0 )
+      rm->state->audCtrl.pending[item->prev].next= item->next;
+   else
+      *list= -1;
+   item->next= item->prev= -1;
+}
+
+static bool essRMAssignAudioDecoder( EssRMgr *rm, int decoderIdx, EssRMgrRequest *req )
+{
+   bool result= false;
+   pthread_t threadId;
+   pthread_attr_t attr;
+   int rc;
+   int pid= getpid();
+
+   rm->state->audCtrl.revoke[decoderIdx].notify.needNotification= true;
+   rm->state->audCtrl.revoke[decoderIdx].notify.rm= rm;
+   rm->state->audCtrl.revoke[decoderIdx].notify.notifyCB= req->notifyCB;
+   rm->state->audCtrl.revoke[decoderIdx].notify.notifyUserData= req->notifyUserData;
+   rm->state->audCtrl.revoke[decoderIdx].notify.semNotify= &rm->state->audCtrl.revoke[decoderIdx].semNotify;
+   rm->state->audCtrl.revoke[decoderIdx].notify.semConfirm= &rm->state->audCtrl.revoke[decoderIdx].semConfirm;
+   rm->state->audCtrl.revoke[decoderIdx].notify.semComplete= 0;
+   rm->state->audCtrl.revoke[decoderIdx].notify.event= EssRMgrEvent_revoked;
+   rm->state->audCtrl.revoke[decoderIdx].notify.type= EssRMgrResType_audioDecoder;
+   rm->state->audCtrl.revoke[decoderIdx].notify.priority= req->priority;
+   rm->state->audCtrl.revoke[decoderIdx].notify.resourceIdx= decoderIdx;
+   rm->state->audCtrl.revoke[decoderIdx].notify.req= *req;
+   rm->state->audCtrl.revoke[decoderIdx].pidUser= pid;
+   rm->state->audCtrl.revoke[decoderIdx].priorityUser= req->priority;
+
+   rc= pthread_attr_init( &attr );
+   if ( rc )
+   {
+      ERROR("unable to init pthread attr: errno %d", errno);
+   }
+
+   rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
+   if ( rc )
+   {
+      ERROR("unable to set pthread attr detached: errno %d", errno);
+   }
+
+   rc= pthread_create( &threadId, &attr, essRMNotifyThread, &rm->state->audCtrl.revoke[decoderIdx].notify );
+   if ( rc == 0 )
+   {
+      rm->state->base.audioDecoder[decoderIdx].requestIdOwner= req->requestId;
+      rm->state->base.audioDecoder[decoderIdx].pidOwner= pid;
+      rm->state->base.audioDecoder[decoderIdx].priorityOwner= req->priority;
+      rm->state->base.audioDecoder[decoderIdx].usageOwner= req->usage;
+
+      result= true;
+   }
+   else
+   {
+      ERROR("error starting notification thread: errno %d", errno );
+   }
+
+   return result;
+}
+
+static bool essRMRevokeAudioDecoder( EssRMgr *rm, int decoderIdx )
+{
+   bool result= false;
+
+   if ( rm )
+   {
+      int rc;
+      int pidPreempt= rm->state->base.audioDecoder[decoderIdx].pidOwner;
+
+      // preempt current owner
+      DEBUG("preempting pid %d to revoke decoder %d", pidPreempt, decoderIdx );
+
+      rm->state->audCtrl.revoke[decoderIdx].notify.needConfirmation= true;
+
+      rc= sem_post( &rm->state->audCtrl.revoke[decoderIdx].semNotify );
+      if ( rc == 0 )
+      {
+         int retry= 300;
+
+         essRMUnlockCtrlFile( rm );
+         for( ; ; )
+         {
+            rc= sem_trywait( &rm->state->audCtrl.revoke[decoderIdx].semConfirm );
+            if ( rc == 0 )
+            {
+               DEBUG("preemption of pid %d to revoke audio decoder %d successful", pidPreempt, decoderIdx );
+               break;
+            }
+            if ( --retry == 0 )
+            {
+               INFO("preemption timeout waiting for pid %d to release audio decoder %d", pidPreempt, decoderIdx );
+               break;
+            }
+            usleep( 10000 );
+         }
+         if ( !essRMLockCtrlFileAndValidate( rm ) )
+         {
+            ERROR("error locking control file: errno %d", errno);
+         }
+      }
+      else
+      {
+         ERROR("sem_post failed errno %d for semNotify)");
+         goto exit;
+      }
+
+      result= true;
+   }
+
+exit:
+   return result;
+}
+
+static bool essRMTransferAudioDecoder( EssRMgr *rm, int decoderIdx, EssRMgrDecoderNotify *pending )
+{
+   bool result= false;
+
+   if ( rm )
+   {
+      int pid= getpid();
+
+      pending->notify.needConfirmation= true;
+
+      int rc= sem_post( &pending->semNotify );
+      if ( rc == 0 )
+      {
+         int retry= 300;
+
+         essRMUnlockCtrlFile( rm );
+         for( ; ; )
+         {
+            rc= sem_trywait( &pending->semConfirm );
+            if ( rc == 0 )
+            {
+               DEBUG("transfer of audio decoder %d to pid %d successful",
+                      decoderIdx,
+                      pending->pidUser );
+               break;
+            }
+            if ( --retry == 0 )
+            {
+               INFO("timeout waiting to tranfer audio decoder %d to pid %d",
+                    decoderIdx,
+                    pending->pidUser );
+               break;
+            }
+            usleep( 10000 );
+         }
+         if ( essRMLockCtrlFileAndValidate( rm ) )
+         {
+            result= true;
+         }
+         else
+         {
+            ERROR("error locking control file: errno %d", errno);
+         }
+      }
+      else
+      {
+         ERROR("sem_post failed errno %d for semNotify)");
+      }
+
+      essRMAudPutPendingPoolItem( rm, pending );
+   }
+
+exit:
+   return result;
+}
+
+static bool essRMRequestAudioDecoder( EssRMgr *rm, EssRMgrRequest *req )
+{
+   bool result= false;
+   bool madeAssignment= false;
+   int rc;
+
+   TRACE2("essRMgrRequestAudioDecoder: enter: rm %p requestId %d", rm, req->requestId );
+
+   if ( rm && req )
+   {
+      int assignIdx= -1, pendingIdx= -1;
+      EssRMgrUsage usage;
+      int pid= getpid();
+
+      usage.usage= req->usage;
+      usage.info= req->info;
+      assignIdx= essRMFindSuitableAudioDecoder( rm, req->priority, &usage, pendingIdx );
+
+      if ( assignIdx >= 0 )
+      {
+         pthread_t threadId;
+
+         if ( rm->state->base.audioDecoder[assignIdx].pidOwner != 0 )
+         {
+            if ( !essRMRevokeAudioDecoder( rm, assignIdx ) )
+            {
+               ERROR("failed to revoke audio decoder %d", assignIdx);
+               goto exit;
+            }
+         }
+
+         if ( essRMAssignAudioDecoder( rm, assignIdx, req ) )
+         {
+            req->assignedId= assignIdx;
+            req->assignedCaps= rm->state->base.audioDecoder[assignIdx].capabilities;
+            result= true;
+         }
+
+         rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+      }
+      else if ( (pendingIdx >= 0 ) && req->asyncEnable )
+      {
+         EssRMgrDecoderNotify *pending= essRMAudGetPendingPoolItem( rm );
+         if ( pending )
+         {
+            pthread_t threadId;
+            pthread_attr_t attr;
+
+            DEBUG("request %d entering pending state for audio decoder %d pid %d", req->requestId, pendingIdx, pid );
+            pending->notify.needNotification= true;
+            pending->notify.rm= rm;
+            pending->notify.notifyCB= req->notifyCB;
+            pending->notify.notifyUserData= req->notifyUserData;
+            pending->notify.semNotify= &pending->semNotify;
+            pending->notify.semConfirm= &pending->semConfirm;
+            pending->notify.semComplete= 0;
+            pending->notify.event= EssRMgrEvent_granted;
+            pending->notify.type= EssRMgrResType_audioDecoder;
+            pending->notify.priority= req->priority;
+            pending->notify.resourceIdx= pendingIdx;
+            pending->notify.req= *req;
+            pending->pidUser= pid;
+            pending->priorityUser= req->priority;
+
+            rc= pthread_attr_init( &attr );
+            if ( rc )
+            {
+               ERROR("unable to init pthread attr: errno %d", errno);
+            }
+
+            rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
+            if ( rc )
+            {
+               ERROR("unable to set pthread attr detached: errno %d", errno);
+            }
+
+            rc= pthread_create( &threadId, &attr, essRMNotifyThread, &pending->notify );
+            if ( rc == 0 )
+            {
+               essRMAudInsertPendingByPriority( rm, pendingIdx, pending );
+
+               req->assignedId= -1;
+
+               result= true;
+            }
+            else
+            {
+               ERROR("error starting notification thread: errno %d", errno );
+            }
+
+            rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+         }
+         else
+         {
+            ERROR("pending pool empty, must deny request");
+         }
+      }
+   }
+
+exit:
+
+   return result;
+}
+
+static void essRMReleaseAudioDecoder( EssRMgr *rm, int id )
+{
+   if ( rm )
+   {
+      if ( (id >= 0) && (id < rm->state->base.numAudioDecoders) )
+      {
+         int pid= getpid();
+         if ( pid == rm->state->base.audioDecoder[id].pidOwner )
+         {
+            DEBUG("pid %d releasing audio decoder %d", pid, id);
+            rm->state->base.audioDecoder[id].requestIdOwner= -1;
+            rm->state->base.audioDecoder[id].pidOwner= 0;
+            rm->state->base.audioDecoder[id].priorityOwner= 0;
+            rm->state->base.audioDecoder[id].usageOwner= 0;
+
+            rm->state->audCtrl.revoke[id].notify.notifyCB= 0;
+            rm->state->audCtrl.revoke[id].notify.notifyUserData= 0;
+            if ( rm->state->audCtrl.revoke[id].notify.needNotification )
+            {
+               rm->state->audCtrl.revoke[id].notify.needNotification= false;
+               rm->state->audCtrl.revoke[id].notify.semComplete= &rm->state->audCtrl.revoke[id].semComplete;
+               sem_post( &rm->state->audCtrl.revoke[id].semNotify );
+               essRMSemWaitChecked( &rm->state->audCtrl.revoke[id].semComplete );
+               rm->state->audCtrl.revoke[id].notify.semComplete= 0;
+            }
+
+            if ( rm->state->audCtrl.revoke[id].notify.needConfirmation )
+            {
+               rm->state->audCtrl.revoke[id].notify.needConfirmation= false;
+               sem_post( &rm->state->audCtrl.revoke[id].semConfirm );
+            }
+
+            if ( rm->state->base.audioDecoder[id].pendingNtfyIdx >= 0 )
+            {
+               EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[rm->state->base.audioDecoder[id].pendingNtfyIdx];
+               rm->state->base.audioDecoder[id].pendingNtfyIdx= pending->next;
+               if ( pending->next >= 0 )
+               {
+                  rm->state->audCtrl.pending[pending->next].prev= -1;
+               }
+               rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+
+               essRMTransferAudioDecoder( rm, id, pending );
+            }
+
+            rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+         }
+         else
+         {
+            ERROR("pid %d attempting to release audio decoder %d owned by pid %d",
+                   pid, id, rm->state->base.audioDecoder[id].pidOwner );
+         }
+      }
+   }
+}
+
+static bool essRMSetPriorityAudioDecoder( EssRMgr *rm, int requestId, int priority )
+{
+   bool result= false;
+
+   if ( rm )
+   {
+      if ( (requestId >= 0) && (requestId < rm->state->hdr.nextRequestId) )
+      {
+         int id;
+         bool found= false;
+         int pendingNtfyIdx= -1;
+         int pid= getpid();
+         for( id= 0; id < rm->state->base.numAudioDecoders; ++id )
+         {
+            if ( (rm->state->base.audioDecoder[id].requestIdOwner == requestId) &&
+                 (rm->state->base.audioDecoder[id].pidOwner == pid) )
+            {
+               DEBUG("found request %d as owner of audio decoder %d", requestId, id);
+               found= true;
+               rm->state->base.audioDecoder[id].priorityOwner= priority;
+
+               pendingNtfyIdx= rm->state->base.audioDecoder[id].pendingNtfyIdx;
+               if ( pendingNtfyIdx >= 0 )
+               {
+                  EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[pendingNtfyIdx];
+                  if ( priority <= pending->priorityUser )
+                  {
+                     pendingNtfyIdx= -1;
+                     result= true;
+                  }
+                  else
+                  {
+                     essRMAudRemovePending( rm, id, pending );
+                  }
+               }
+            }
+            else
+            {
+               pendingNtfyIdx= rm->state->base.audioDecoder[id].pendingNtfyIdx;
+               while ( pendingNtfyIdx >= 0 )
+               {
+                  EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[pendingNtfyIdx];
+                  if ( (pending->notify.req.requestId == requestId) && (pending->pidUser == pid) )
+                  {
+                     DEBUG("found request %d in audio decoder %d pending list: change priority from %d to %d owner priority %d",
+                           requestId, id, pending->priorityUser, priority, rm->state->base.audioDecoder[id].priorityOwner );
+                     found= true;
+                     pending->priorityUser= pending->notify.req.priority= priority;
+                     essRMAudRemovePending( rm, id, pending );
+                     if (
+                           (pending->priorityUser > rm->state->base.audioDecoder[id].priorityOwner) ||
+                           (
+                             !rm->state->hdr.requesterWinsPriorityTie &&
+                             (pending->priorityUser == rm->state->base.audioDecoder[id].priorityOwner)
+                           )
+                        )
+                     {
+                        essRMAudInsertPendingByPriority( rm, id, pending );
+                        rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+                        result= true;
+                        goto exit;
+                     }
+                     break;
+                  }
+                  pendingNtfyIdx= pending->next;
+               }
+            }
+            if ( found )
+            {
+               break;
+            }
+         }
+
+         if ( !found )
+         {
+            ERROR("requestId %d not found", requestId );
+         }
+
+         rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+
+         if ( pendingNtfyIdx >= 0 )
+         {
+            if ( essRMRevokeAudioDecoder( rm, id ) )
+            {
+               EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[pendingNtfyIdx];
+
+               result= essRMTransferAudioDecoder( rm, id, pending );
+
+               rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+            }
+         }
+      }
+   }
+
+exit:
+   return result;
+}
+
+static bool essRMSetUsageAudioDecoder( EssRMgr *rm, int requestId, EssRMgrUsage *usage )
+{
+   bool result= false;
+
+   if ( rm )
+   {
+      if ( (requestId >= 0) && (requestId < rm->state->hdr.nextRequestId) )
+      {
+         int id;
+         int pendingNtfyIdx= -1;
+         int pid= getpid();
+         EssRMgrDecoderNotify *pending= 0;
+
+         for( id= 0; id < rm->state->base.numAudioDecoders; ++id )
+         {
+            if ( (rm->state->base.audioDecoder[id].requestIdOwner == requestId) &&
+                 (rm->state->base.audioDecoder[id].pidOwner == pid) )
+            {
+               int usageOrg;
+               int testResult, testResultOrg;
+
+               usageOrg= rm->state->base.audioDecoder[id].usageOwner;
+
+               // update owner's usage
+               rm->state->base.audioDecoder[id].usageOwner= usage->usage;
+               rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+
+               pendingNtfyIdx= rm->state->base.audioDecoder[id].pendingNtfyIdx;
+
+               testResult= (usage->usage & rm->state->base.audioDecoder[id].capabilities) & ESSRMGR_CRITERIA_MASK_AUDIO;
+               if ( testResult )
+               {
+                  // owned decoder is no longer eligible for new usage
+                  essRMRevokeAudioDecoder( rm, id );
+
+                  result= true;
+                  goto exit;
+               }
+
+               testResultOrg= (~(usageOrg ^ (rm->state->base.audioDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK_AUDIO);
+               testResult= (~(usage->usage ^ (rm->state->base.audioDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK_AUDIO);
+               if (
+                    (testResult != testResultOrg) &&
+                    (testResult != 0) &&
+                    (pendingNtfyIdx >= 0)
+                  )
+               {
+                  EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[pendingNtfyIdx];
+                  testResult= (~(pending->notify.req.usage ^ (rm->state->base.audioDecoder[id].capabilities)) & ESSRMGR_CRITERIA_MASK_AUDIO);
+                  if ( testResult == 0 )
+                  {
+                     // owned decoder is now more suitable for a pending request
+                     if ( pendingNtfyIdx >= 0 )
+                     {
+                        essRMRevokeAudioDecoder( rm, id );
+                     }
+                  }
+               }
+
+               result= true;
+               goto exit;
+            }
+            else
+            {
+               pendingNtfyIdx= rm->state->base.audioDecoder[id].pendingNtfyIdx;
+               while ( pendingNtfyIdx >= 0 )
+               {
+                  pending= &rm->state->audCtrl.pending[pendingNtfyIdx];
+                  if ( (pending->notify.req.requestId == requestId) && (pending->pidUser == pid) )
+                  {
+                     EssRMgrRequest req;
+
+                     // remove pending request and then re-issue with new usage
+                     essRMAudRemovePending( rm, id, pending );
+
+                     req= pending->notify.req;
+                     req.usage= usage->usage;
+                     req.info= usage->info;
+
+                     essRMAudPutPendingPoolItem( rm, pending);
+
+                     result= essRMRequestAudioDecoder( rm, &req);
+                     goto exit;
+                  }
+                  pendingNtfyIdx= pending->next;
+               }
+            }
+         }
+      }
+   }
+
+exit:
+
+   return result;
+}
+
+static int essRMFindSuitableAudioDecoder( EssRMgr *rm, int priority, EssRMgrUsage *usage, int& pendingIdx )
+{
+   int suitableIdx= -1;
+
+   pendingIdx= -1;
+
+   if ( rm )
+   {
+      int i, j, testResult, idx;
+      std::vector<int> eligibleDecoders, bestDecoders;
+
+      // Deterimine set of defined decoders that are do not violate usage constraints
+      for( i= 0; i < rm->state->base.numAudioDecoders; ++i )
+      {
+         testResult= (usage->usage & rm->state->base.audioDecoder[i].capabilities) & ESSRMGR_CRITERIA_MASK_AUDIO;
+         if ( testResult == 0 )
+         {
+            DEBUG("audio decoder %d caps 0x%X eligible", i, rm->state->base.audioDecoder[i].capabilities);
+            eligibleDecoders.push_back( i );
+         }
+      }
+      if ( eligibleDecoders.size() )
+      {
+         int currMaxSize= -1;
+         int maxSize;
+         std::vector<int> *group;
+
+         // Check eligible decoders for one that meets constraints but does not provide
+         // unnecessary capabilities
+         for( i= 0; i < eligibleDecoders.size(); ++i )
+         {
+            idx= eligibleDecoders[i];
+            testResult= (~(usage->usage ^ (rm->state->base.audioDecoder[idx].capabilities)) & ESSRMGR_CRITERIA_MASK_AUDIO);
+            if ( testResult == 0 )
+            {
+               DEBUG("audio decoder %d caps 0x%X ideal", i, rm->state->base.audioDecoder[idx].capabilities);
+               bestDecoders.push_back( idx );
+            }
+         }
+
+         // Look for the most suitable decoder
+         for( i= 0; i < 2; i++ )
+         {
+            group= ((i == 0) ? &bestDecoders : &eligibleDecoders);
+            for( j= 0; j < group->size(); ++j )
+            {
+               idx= group->at(j);
+               maxSize= -1;
+               if (
+                    (rm->state->base.audioDecoder[idx].pidOwner != 0) &&
+                    (!rm->state->hdr.requesterWinsPriorityTie && (rm->state->base.audioDecoder[idx].priorityOwner == priority)) &&
+                    (rm->state->base.audioDecoder[idx].usageOwner == usage->usage)
+                  )
+               {
+                  TRACE1("audio decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
+                         idx,
+                         rm->state->base.audioDecoder[idx].pidOwner,
+                         priority,
+                         usage->usage );
+                  if ( pendingIdx < 0 )
+                  {
+                     pendingIdx= idx;
+                  }
+                  continue;
+               }
+               if (
+                    (rm->state->base.audioDecoder[idx].pidOwner != 0) &&
+                    (rm->state->base.audioDecoder[idx].priorityOwner < priority)
+                  )
+               {
+                  TRACE1("audio decoder %d disqualified: priorty: owner pid %d pri %d req pri %d",
+                         idx,
+                         rm->state->base.audioDecoder[idx].pidOwner,
+                         rm->state->base.audioDecoder[idx].priorityOwner,
+                         priority );
+                  if ( pendingIdx < 0 )
+                  {
+                     pendingIdx= idx;
+                  }
+                  continue;
+               }
+               if ( suitableIdx == -1 )
+               {
+                  suitableIdx= idx;
+                  currMaxSize= maxSize;
+               }
+               else
+               if (
+                    (rm->state->base.audioDecoder[suitableIdx].pidOwner != 0) &&
+                    (rm->state->base.audioDecoder[idx].pidOwner != 0) &&
+                    (rm->state->base.audioDecoder[suitableIdx].priorityOwner > rm->state->base.audioDecoder[idx].priorityOwner)
+                  )
+               {
+                  TRACE1("audio decoder %d disqualified: curr candidate for preemption has lower priority: %d vs %d",
+                         rm->state->base.audioDecoder[suitableIdx].priorityOwner,
+                         rm->state->base.audioDecoder[idx].priorityOwner );
+                  continue;
+               }
+               else
+               if (
+                    (currMaxSize != -1) &&
+                    (maxSize == -1) || (maxSize < currMaxSize)
+                  )
+               {
+                  if (
+                       (rm->state->base.audioDecoder[suitableIdx].pidOwner > 0) ||
+                       (rm->state->base.audioDecoder[idx].pidOwner == 0)
+                     )
+                  {
+                     suitableIdx= idx;
+                     currMaxSize= maxSize;
+                  }
+               }
+            }
+            if ( suitableIdx >= 0 )
+            {
+               break;
+            }
+         }
+      }
+   }
+
+   return suitableIdx;
+}
+
+static void essRMCancelRequestAudioDecoder( EssRMgr *rm, int requestId )
+{
+   if ( rm )
+   {
+      if ( (requestId >= 0) && (requestId < rm->state->hdr.nextRequestId) )
+      {
+         int id;
+         bool found= false;
+         int pendingNtfyIdx= -1;
+         int pid= getpid();
+
+         for( id= 0; id < rm->state->base.numAudioDecoders; ++id )
+         {
+            if ( (rm->state->base.audioDecoder[id].requestIdOwner == requestId) &&
+                 (rm->state->base.audioDecoder[id].pidOwner == pid) )
+            {
+               DEBUG("found request %d as owner of audio decoder %d", requestId, id);
+               found= true;
+               essRMReleaseAudioDecoder( rm, id );
+            }
+            else
+            {
+               pendingNtfyIdx= rm->state->base.audioDecoder[id].pendingNtfyIdx;
+               while ( pendingNtfyIdx >= 0 )
+               {
+                  EssRMgrDecoderNotify *pending= &rm->state->audCtrl.pending[pendingNtfyIdx];
+                  if ( (pending->notify.req.requestId == requestId) && (pending->pidUser == pid) )
+                  {
+                     DEBUG("found request %d in audio decoder %d pending list", requestId, id );
+                     found= true;
+                     essRMAudRemovePending( rm, id, pending );
                      break;
                   }
                   pendingNtfyIdx= pending->next;
@@ -1710,6 +2652,7 @@ static bool essRMReadConfigFile( EssRMgr *rm )
    int c, i, capabilities;
    bool haveIdentifier, truncation;
    int videoIndex= 0;
+   int audioIndex= 0;
    int maxWidth, maxHeight;
 
    configFileName= getenv("ESSRMGR_CONFIG_FILE");
@@ -1936,6 +2879,56 @@ static bool essRMReadConfigFile( EssRMgr *rm )
                }
             }
          }
+         else
+         if ( (i == 5) && !strncmp( work, "audio", i ) )
+         {
+            i= 0;
+            haveIdentifier= false;
+            capabilities= 0;
+            for( ; ; )
+            {
+               c= fgetc(pFile);
+               if ( (c == ' ') || (c == '\t') || (c == ',') || (c == '(') || (c == '\n') || (c == EOF) )
+               {
+                  if ( i > 0 )
+                  {
+                     work[i]= '\0';
+                     haveIdentifier= true;
+                  }
+               }
+               else
+               {
+                  if ( i < ESSRMGR_MAX_NAMELEN )
+                  {
+                     work[i++]= c;
+                  }
+                  else
+                  {
+                     truncation= true;
+                  }
+               }
+               if ( haveIdentifier )
+               {
+                  if ( (i == 4) && !strncmp( work, "none", i ) )
+                  {
+                     capabilities |= EssRMgrAudCap_none;
+                  }
+                  else
+                  {
+                     WARNING("unknown attribute: (%s)", work );
+                  }
+                  i= 0;
+                  haveIdentifier= false;
+               }
+               if ( (c == '\n') || (c == EOF) )
+               {
+                  INFO("adding audio %d caps %lX", audioIndex, capabilities);
+                  rm->state->base.audioDecoder[audioIndex].capabilities= capabilities;
+                  ++audioIndex;
+                  break;
+               }
+            }
+         }
          i= 0;
          haveIdentifier= false;
          if ( truncation )
@@ -1947,8 +2940,10 @@ static bool essRMReadConfigFile( EssRMgr *rm )
    }
 
    rm->state->base.numVideoDecoders= videoIndex;
+   rm->state->base.numAudioDecoders= audioIndex;
 
-   INFO("config file defines %d video decoders", rm->state->base.numVideoDecoders);
+   INFO("config file defines %d video decoders %d audio decoders",
+        rm->state->base.numVideoDecoders, rm->state->base.numAudioDecoders);
 
    result= true;
 

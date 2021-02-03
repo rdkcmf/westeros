@@ -32,12 +32,12 @@ typedef struct _EssRMgr EssRMgr;
 
 typedef enum _EssRMgrResType
 {
-   EssRMgrResType_videoDecoder
+   EssRMgrResType_videoDecoder,
+   EssRMgrResType_audioDecoder
 } EssRMgrResType;
 
 typedef enum _EssRMgrVideoDecoderCaps
 {
-
    EssRMgrVidCap_none=                (0),
    EssRMgrVidCap_limitedResolution=   (1<<0),
    EssRMgrVidCap_limitedQuality=      (1<<1),
@@ -49,13 +49,22 @@ typedef enum _EssRMgrVideoDecoderCaps
 
 typedef enum _EssRMgrVideoUsage
 {
-
    EssRMgrVidUse_none=                (0),
    EssRMgrVidUse_fullResolution=      (1<<0),
    EssRMgrVidUse_fullQuality=         (1<<1),
    EssRMgrVidUse_fullPerformance=     (1<<2),
 
 } EssRMgrVideoUsage;
+
+typedef enum _EssRMgrAudioDecoderCaps
+{
+   EssRMgrAudCap_none=                (0),
+} EssRMgrAudioDecoderCaps;
+
+typedef enum _EssRMgrAudioUsage
+{
+   EssRMgrAudUse_none=                (0),
+} EssRMgrAudioUsage;
 
 typedef enum _EssRMgrEvent
 {
@@ -80,9 +89,14 @@ typedef struct _EssRMgrVideoInfo
    int maxHeight;
 } EssRMgrVideoInfo;
 
+typedef struct _EssRMgrAudioInfo
+{
+} EssRMgrAudioInfo;
+
 typedef union EssRMgrUsageInfo
 {
    EssRMgrVideoInfo video;
+   EssRMgrVideoInfo audio;
 } EssRMgrUsageInfo;
 
 typedef struct _EssRMgrRequest
