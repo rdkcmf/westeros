@@ -44,6 +44,7 @@ struct aml_vdec_cfg_infos
    uint32_t ref_buf_margin;
    uint32_t canvas_mem_mode;
    uint32_t canvas_mem_endian;
+   uint32_t low_latency_mode;
 };
 
 #define SEI_PicTiming (1)
@@ -55,7 +56,6 @@ struct vframe_content_light_level_s
    uint32_t present_flag;
    uint32_t max_content;
    uint32_t max_pic_average;
-   uint32_t low_latency_mode;
 };
 
 /* master_display_colour_info_volume from SEI */
