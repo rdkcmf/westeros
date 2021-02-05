@@ -113,6 +113,9 @@ struct _GstWesterosSinkSoc
    struct wl_sb *sb;
    int activeBuffers;
    double frameRate;
+   int frameRateFractionNum;
+   int frameRateFractionDenom;
+   gboolean frameRateChanged;
    double pixelAspectRatio;
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;

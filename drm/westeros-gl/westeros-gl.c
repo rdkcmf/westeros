@@ -262,6 +262,8 @@ typedef struct _WstOverlayPlane
    bool readyToFlip;
    bool hide;
    bool hidden;
+   int frameRateNum;
+   int frameRateDenom;
    int frameCount;
    long long flipTimeBase;
    long long frameTimeBase;
@@ -1514,13 +1516,30 @@ static void *wstVideoServerConnectionThread( void *arg )
                         break;
                     case 'W':
                         {
-                           DEBUG("got position video plane %d", conn->videoPlane->plane->plane_id);
                            pthread_mutex_lock( &gMutex );
                            rectX= (int)wstGetU32( m+1 );
                            rectY= (int)wstGetU32( m+5 );
                            rectW= (int)wstGetU32( m+9 );
                            rectH= (int)wstGetU32( m+13 );
+                           DEBUG("got position video plane %d: (%d, %d, %d, %d)",
+                                  conn->videoPlane->plane->plane_id,
+                                  rectX, rectY, rectW, rectH);
                            wstVideoFrameManagerUpdateRect( conn->videoPlane->vfm, rectX, rectY, rectW, rectH );
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                     case 'R':
+                        {
+                           int num, denom;
+                           pthread_mutex_lock( &gMutex );
+                           num= (int)wstGetU32( m+1 );
+                           denom= (int)wstGetU32( m+5 );
+                           DEBUG("got frame rate video plane %d: (%d / %d)", conn->videoPlane->plane->plane_id, num, denom);
+                           if ( (num > 0) && (denom > 0) )
+                           {
+                              conn->videoPlane->frameRateNum= num;
+                              conn->videoPlane->frameRateDenom= denom;
+                           }
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
@@ -2718,6 +2737,36 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
    if ( vfm->sync )
    {
       f= wstAVSyncPop( vfm );
+      if ( f )
+      {
+         if ( f->bufferId != vfm->bufferIdCurrent )
+         {
+            f->canExpire= !vfm->frameAdvance;
+            vfm->flipTimeCurrent= vfm->vblankTime;
+         }
+         if ( f->canExpire && (vfm->vblankTime - vfm->flipTimeCurrent) > EXPIRELIMIT )
+         {
+            bool underflow= false;
+            if  ( vfm->queueSize <= 1 )
+            {
+               DEBUG("underflow: frame expired, queue size 1");
+               underflow= true;
+            }
+            else
+            {
+               long long frameGap= vfm->queue[1].frameTime - vfm->queue[0].frameTime;
+               if ( frameGap > EXPIRELIMIT )
+               {
+                  DEBUG("underflow: frame expired, queue size %d gap %lld us", vfm->queueSize, frameGap );
+                  underflow= true;
+               }
+            }
+            if ( underflow )
+            {
+               f= 0;
+            }
+         }
+      }
       goto done;
    }
    #endif
@@ -2752,8 +2801,11 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                     ((i > 0) && (US_TO_MS(fCheck->frameTime) < US_TO_MS(vfm->frameTimeCurrent+vfm->vblankInterval)))
                   )
                {
-                  FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
-                  vfm->dropFrameCount += 1;
+                  if ( i > 0 )
+                  {
+                     FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
+                     vfm->dropFrameCount += 1;
+                  }
                   wstFreeVideoFrameResources( fCheck );
                   wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
                   if ( vfm->queueSize > i+1 )
