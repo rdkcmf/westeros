@@ -66,6 +66,9 @@ struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
    double frameRate;
+   int frameRateFractionNum;
+   int frameRateFractionDenom;
+   gboolean frameRateChanged;
    double pixelAspectRatio;
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;

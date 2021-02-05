@@ -423,6 +423,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.sb= 0;
    sink->soc.activeBuffers= 0;
    sink->soc.frameRate= 0.0;
+   sink->soc.frameRateFractionNum= 0;
+   sink->soc.frameRateFractionDenom= 1;
+   sink->soc.frameRateChanged= FALSE;
    sink->soc.pixelAspectRatio= 1.0;
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pixelAspectRatioChanged= FALSE;
@@ -985,6 +988,12 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                g_print("westeros-sink: caps have framerate of 0 - assume 60\n");
                sink->soc.frameRate= 60.0;
+            }
+            if ( (sink->soc.frameRateFractionNum != num) || (sink->soc.frameRateFractionDenom != denom) )
+            {
+               sink->soc.frameRateFractionNum= num;
+               sink->soc.frameRateFractionDenom= denom;
+               sink->soc.frameRateChanged= TRUE;
             }
          }
          sink->soc.pixelAspectRatio= 1.0;
@@ -3402,6 +3411,50 @@ static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
    }
 }
 
+static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[12];
+      int len;
+      int sentLen;
+      GstWesterosSink *sink= conn->sink;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 9;
+      mbody[len++]= 'R';
+      len += putU32( &mbody[len], sink->soc.frameRateFractionNum );
+      len += putU32( &mbody[len], sink->soc.frameRateFractionDenom );
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent frame rate to video server");
+         FRAME("sent frame rate to video server");
+      }
+   }
+}
+
 #ifdef USE_AMLOGIC_MESON
 static GstElement* wstFindAudioSink( GstWesterosSink *sink )
 {
@@ -4692,6 +4745,11 @@ capture_start:
             {
                wstSendHideVideoClientConnection( sink->soc.conn, !sink->show );
             }
+         }
+         if ( sink->soc.frameRateChanged )
+         {
+            sink->soc.frameRateChanged= FALSE;
+            wstSendRateVideoClientConnection( sink->soc.conn );
          }
          if ( wasPaused && !sink->soc.videoPaused )
          {
