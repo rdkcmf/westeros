@@ -251,6 +251,7 @@ typedef struct _WstOverlayPlane
    bool inUse;
    bool supportsVideo;
    bool supportsGraphics;
+   bool frameRateMatchingPlane;
    int zOrder;
    uint32_t crtc_id;
    drmModePlane *plane;
@@ -357,6 +358,7 @@ typedef struct _WstGLCtx
    pthread_t refreshThreadId;
    bool refreshThreadStarted;
    bool refreshThreadStopRequested;
+   bool autoFRMModeEnabled;
 } WstGLCtx;
 
 typedef struct _WstGLSizeCBInfo
@@ -389,6 +391,7 @@ static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrame
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
 static void wstSelectMode( WstGLCtx *ctx, int width, int height );
+static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom );
 static void wstStartRefreshThread( WstGLCtx *ctx );
 static void wstSwapDRMBuffers( WstGLCtx *ctx );
 static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx );
@@ -1539,6 +1542,10 @@ static void *wstVideoServerConnectionThread( void *arg )
                            {
                               conn->videoPlane->frameRateNum= num;
                               conn->videoPlane->frameRateDenom= denom;
+                              if ( gCtx->autoFRMModeEnabled && conn->videoPlane->frameRateMatchingPlane )
+                              {
+                                 wstSelectRate( gCtx, num, denom );
+                              }
                            }
                            pthread_mutex_unlock( &gMutex );
                         }
@@ -2118,6 +2125,10 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                         sprintf( conn->response, "%d: %s", -1, "get video missing argument(s)" );
                      }
                   }
+                  else if ( (tlen == 13) && !strncmp( tok, "auto-frm-mode", tlen) )
+                  {
+                     sprintf( conn->response, "%d: auto-frm-mode %d", 0, gCtx->autoFRMModeEnabled );
+                  }
                   else if ( (tlen == 8) && !strncmp( tok, "loglevel", tlen ) )
                   {
                      sprintf( conn->response, "%d: loglevel %d", 0, g_activeLevel );
@@ -2286,6 +2297,38 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                         {
                            sprintf( conn->response, "%d: %s", -1, "set video missing argument(s)" );
                         }
+                     }
+                  }
+                  else if ( (tlen == 13) && !strncmp( tok, "auto-frm-mode", tlen) )
+                  {
+                     tok= strtok_r( 0, " ", &ctx );
+                     if ( tok )
+                     {
+                        int value= -1;
+                        tlen= strlen( tok );
+                        if ( (tlen == 1) && !strncmp( tok, "0", tlen) )
+                        {
+                           value= 0;
+                        }
+                        else if ( (tlen == 1) && !strncmp( tok, "1", tlen) )
+                        {
+                           value= 1;
+                        }
+                        if ( value >= 0 )
+                        {
+                           pthread_mutex_lock( &gMutex );
+                           gCtx->autoFRMModeEnabled= value;
+                           pthread_mutex_unlock( &gMutex );
+                           sprintf( conn->response, "%d: auto-frm-mode %d", 0, gCtx->autoFRMModeEnabled );
+                        }
+                        else
+                        {
+                           sprintf( conn->response, "%d: %s", -1, "set auto-frm-mode invalid argument(s)" );
+                        }
+                     }
+                     else
+                     {
+                        sprintf( conn->response, "%d: %s", -1, "set auto-frm-mode missing argument(s)" );
                      }
                   }
                   else if ( (tlen == 8) && !strncmp( tok, "loglevel", tlen ) )
@@ -3673,6 +3716,10 @@ static WstGLCtx *wstInitCtx( void )
                            {
                               case DRM_FORMAT_NV12:
                                  isVideo= true;
+                                 if ( !haveVideoPlanes )
+                                 {
+                                    newPlane->frameRateMatchingPlane= true;
+                                 }
                                  haveVideoPlanes= true;
                                  break;
                               case DRM_FORMAT_ARGB8888:
@@ -4109,6 +4156,82 @@ static void wstSelectMode( WstGLCtx *ctx, int width, int height )
          }
       }
       INFO("choosing output mode: %dx%dx%d", ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh);
+   }
+}
+
+static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom )
+{
+   if ( ctx && ctx->modeSet )
+   {
+      int targetRate;
+      int miMatch= -1;
+      static bool policiesSet= false;
+      static bool policyTruncate= false;
+
+      if ( !policiesSet )
+      {
+         const char *env;
+         env= getenv("WESTEROS_GL_FRM_TRUNCATE");
+         if ( env && atoi(env) )
+         {
+            policyTruncate= true;
+         }
+         policiesSet= true;
+      }
+
+      if ( rateDenom <= 0 ) rateDenom= 1;
+      if ( policyTruncate )
+      {
+         targetRate= rateNum  / rateDenom;
+      }
+      else
+      {
+         targetRate= (rateNum + rateDenom-1) / rateDenom;
+      }
+
+      if ( ctx->conn && (ctx->conn->count_modes > 1) )
+      {
+         int i;
+         drmModeModeInfo *modeCheck;
+
+         DEBUG("wstSelectRate: target %d : current mode: %dx%dx%d", targetRate,
+                ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh );
+
+         for( i= 0; i < ctx->conn->count_modes; ++i )
+         {
+            modeCheck= &ctx->conn->modes[i];
+
+            if ( (modeCheck->hdisplay == ctx->modeInfo->hdisplay) &&
+                 (modeCheck->vdisplay == ctx->modeInfo->vdisplay) )
+            {
+               DEBUG("wstSelectRate: check mode %d of %d: %dx%dx%d", i, ctx->conn->count_modes,
+                     modeCheck->hdisplay, modeCheck->vdisplay, modeCheck->vrefresh );
+
+               if ( modeCheck->vrefresh % targetRate == 0 )
+               {
+                  if ( (miMatch >= 0) && (ctx->conn->modes[miMatch].vrefresh > modeCheck->vrefresh) )
+                  {
+                     continue;
+                  }
+                  miMatch= i;
+               }
+            }
+         }
+      }
+      if ( miMatch >= 0 )
+      {
+         ctx->modeNext= ctx->conn->modes[miMatch];
+         ctx->modeSetPending= true;
+
+         INFO("wstSelectRate: requesting change to %dx%dx%d, target content rate %d",
+              ctx->modeNext.hdisplay, ctx->modeNext.vdisplay, ctx->modeNext.vrefresh, targetRate );
+      }
+      else
+      {
+         DEBUG("wstSelectRate: remaining at %dx%dx%d, num modes %d",
+               ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh,
+               ctx->conn->count_modes );
+      }
    }
 }
 
