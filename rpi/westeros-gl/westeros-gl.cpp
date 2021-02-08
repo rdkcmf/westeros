@@ -143,17 +143,18 @@ static bool wstGLSetupDisplay( WstGLCtx *ctx )
          if ( dispmanDisplay == DISPMANX_NO_HANDLE )
          {
             printf("wstGLSetupDisplay: vc_dispmanx_display_open failed for display %d\n", displayId );
+            pthread_mutex_unlock( &g_mutex );
             goto exit;
          }
          gDispmanDisplay= dispmanDisplay;
       }
       pthread_mutex_unlock( &g_mutex );
-      printf("wstGLSetupDisplay: dispmanDisplay %p\n", dispmanDisplay );
+      printf("wstGLSetupDisplay: dispmanDisplay %p\n", gDispmanDisplay );
 
       ctx->displayId= displayId;
       ctx->displayWidth= width;
       ctx->displayHeight= height;
-      ctx->dispmanDisplay= dispmanDisplay;
+      ctx->dispmanDisplay= gDispmanDisplay;
 
       result= true;
    }
