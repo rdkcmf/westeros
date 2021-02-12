@@ -522,10 +522,10 @@ exit:
 
 static void underflowCallback(GstElement *sink, guint size, void *context, gpointer data)
 {
-   bool *gotSignal= (bool*)data;
+   int *gotSignalCount= (int*)data;
 
    g_print("received underflow signal\n");
-   *gotSignal= true;
+   *gotSignalCount= *gotSignalCount+1;
 }
 
 static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
@@ -538,7 +538,7 @@ static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
    GstElement *src= 0;
    GstElement *sink= 0;
    EMSimpleVideoDecoder *videoDecoder= 0;
-   bool receivedSignal;
+   int receivedSignalCount;
    EGLBoolean b;
    TestEGLCtx eglCtx;
    int windowWidth= 1920;
@@ -631,9 +631,9 @@ static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
       goto exit;
    }
 
-   g_signal_connect( sink, "buffer-underflow-callback", G_CALLBACK(underflowCallback), &receivedSignal);
+   g_signal_connect( sink, "buffer-underflow-callback", G_CALLBACK(underflowCallback), &receivedSignalCount);
 
-   receivedSignal= false;
+   receivedSignalCount= 0;
 
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
 
@@ -647,9 +647,15 @@ static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
 
-   if ( !receivedSignal )
+   if ( receivedSignalCount == 0 )
    {
       EMERROR("Failed to receive underflow signal");
+      goto exit;
+   }
+
+   if ( receivedSignalCount > 1 )
+   {
+      EMERROR("Received excess underflow signals: count %d", receivedSignalCount);
       goto exit;
    }
 
