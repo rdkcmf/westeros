@@ -4285,6 +4285,7 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
             }
             if ( iter->vfm->underflowDetected )
             {
+               iter->vfm->underflowDetected= false;
                iter->vfm->underflowReported= true;
                wstVideoServerSendUnderflow( iter->conn, iter->vfm );
             }
