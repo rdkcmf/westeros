@@ -452,6 +452,7 @@ static void resMgrInit( GstWesterosSink *sink )
          GST_ERROR("gst_westeros_sink: resMgrInit: failed to create resmgr");
       }
 
+      sink->resAssignedId= -1;
       sink->resReqPrimary.sink= sink;
       sink->resReqPrimary.resReq.assignedId= -1;
       sink->resReqPrimary.resReq.requestId= -1;
@@ -468,6 +469,7 @@ static void resMgrTerm( GstWesterosSink *sink )
    {
       EssRMgrDestroy( sink->rm );
       sink->rm= 0;
+      sink->resAssignedId= -1;
       sink->resReqPrimary.resReq.assignedId= -1;
       sink->resReqPrimary.resReq.requestId= -1;
       sink->resReqSecondary.resReq.assignedId= -1;
@@ -514,7 +516,7 @@ static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userDa
                      )
                   {
                      resMgrRequestDecoder(sink);
-                     if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+                     if ( sink->resAssignedId >= 0 )
                      {
                         sink->acquireResources( sink );
                      }
@@ -580,10 +582,11 @@ static void resMgrReleaseDecoder( GstWesterosSink *sink )
 {
    if ( sink->rm )
    {
-      if ( sink->resReqPrimary.resReq.assignedId >= 0 )
+      if ( sink->resAssignedId >= 0 )
       {
-         EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, sink->resReqPrimary.resReq.assignedId );
+         EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, sink->resAssignedId );
          sink->resReqPrimary.resReq.assignedId= -1;
+         sink->resAssignedId= -1;
       }
    }
 }
