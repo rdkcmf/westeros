@@ -258,7 +258,7 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
                decParm->hdr.signal_type |= 7;
                break;
             case 6: /* BT2020 */
-               decParm->hdr.signal_type |= 10;
+               decParm->hdr.signal_type |= 9;
                break;
             default: /* unknown */
                decParm->hdr.signal_type |= 2;
@@ -279,26 +279,30 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
             case 10: /* LOG316 */
                decParm->hdr.signal_type |= (10<<8);
                break;
-            case 11: /* BT2020_12 */
+            case 12: /* BT2020_12 */
                decParm->hdr.signal_type |= (15<<8);
                break;
-            case 13: /* BT2020_10 */
+            case 11: /* BT2020_10 */
                decParm->hdr.signal_type |= (14<<8);
                break;
-            case 14: /* SMPTE2084 */
+            case 13: /* SMPTE2084 */
                decParm->hdr.signal_type |= (16<<8);
                break;
+            case 14: /* ARIB_STD_B67 */
+               decParm->hdr.signal_type |= (18<<8);
+               break;
+            #if ((GST_VERSION_MAJOR == 1) && (GST_VERSION_MINOR >= 18))
             case 16: /* BT601 */
                decParm->hdr.signal_type |= (3<<8);
                break;
+            #endif
             case 1: /* GAMMA10 */
             case 2: /* GAMMA18 */
             case 3: /* GAMMA20 */
             case 4: /* GAMMA22 */
             case 7: /* SRGB */
             case 8: /* GAMMA28 */
-            case 12: /* ADOBERGB */
-            case 15: /* ARIB_STD_B76 */
+            case 15: /* ADOBERGB */
             default:
                break;
          }
