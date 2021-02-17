@@ -1612,7 +1612,6 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       sink->soc.v4l2Fd= -1;
       close( fdToClose );
    }
-   UNLOCK(sink);
 
    sink->soc.prevFrame1Fd= -1;
    sink->soc.prevFrame2Fd= -1;
@@ -1644,7 +1643,6 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       sink->soc.outputFormats= 0;
    }
 
-   LOCK(sink);
    sink->videoStarted= FALSE;
    UNLOCK(sink);
 
@@ -1669,11 +1667,13 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       sink->soc.dispatchThread= NULL;
    }
 
+   LOCK(sink);
    if ( sink->soc.sb )
    {
       wl_sb_destroy( sink->soc.sb );
       sink->soc.sb= 0;
    }
+   UNLOCK(sink);
 }
 
 static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dummySink )
