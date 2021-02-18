@@ -2976,7 +2976,20 @@ static void* essRMNotifyThread( void *userData )
             case EssRMgrEvent_granted:
                if ( essRMLockCtrlFileAndValidate( notify->rm ) )
                {
-                  if ( essRMAssignVideoDecoder( notify->rm, notify->resourceIdx, &notify->req ) )
+                  bool result;
+                  switch( notify->type )
+                  {
+                     case EssRMgrResType_videoDecoder:
+                        result= essRMAssignVideoDecoder( notify->rm, notify->resourceIdx, &notify->req );
+                        break;
+                     case EssRMgrResType_audioDecoder:
+                        result= essRMAssignAudioDecoder( notify->rm, notify->resourceIdx, &notify->req );
+                        break;
+                     default:
+                        result= false;
+                        break;
+                  }
+                  if ( result )
                   {
                      invokeCallback= true;
                      notify->rm->state->hdr.crc= getCRC32( (unsigned char *)&notify->rm->state->base, sizeof(EssRMgrBase) );
