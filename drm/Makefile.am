@@ -34,11 +34,12 @@ if ENABLE_GBM_MODIFIERS
 AM_CFLAGS += -DUSE_GBM_MODIFIERS
 endif
 
-lib_LTLIBRARIES = libwesteros_gl.la
+lib_LTLIBRARIES = libwesteros_gl.la libwesteros_gl_console_helper.la
 
 bin_PROGRAMS = westeros-gl-console
 
-BUILT_SOURCES = libwesteros_gl.la
+BUILT_SOURCES = libwesteros_gl.la libwesteros_gl_console_helper.la
+
 
 libwesteros_gl_la_SOURCES = westeros-gl/westeros-gl.c
 
@@ -51,9 +52,19 @@ libwesteros_gl_la_LDFLAGS= \
    -ldrm \
    -lgbm
 
+
+libwesteros_gl_console_helper_la_SOURCES = westeros-gl/westeros-gl-console-helper.c
+
+libwesteros_gl_console_helper_la_include_HEADERS = westeros-gl/westeros-gl-console-helper.h
+libwesteros_gl_console_helper_la_includedir = $(includedir)
+libwesteros_gl_console_helper_la_CFLAGS= $(AM_CFLAGS) -D_GNU_SOURCE
+
+libwesteros_gl_console_helper_la_LDFLAGS= $(AM_LDFLAGS)
+
+
 westeros_gl_console_SOURCES = westeros-gl/westeros-gl-console.c
-westeros_gl_consoloe_CFLAGS = $(AM_CFLAGS) -D_GNU_SOURCE
-westeros_gl_LDFLAGS = $(AM_LDFLAGS)
+westeros_gl_console_CFLAGS = $(AM_CFLAGS) -D_GNU_SOURCE
+westeros_gl_console_LDFLAGS = $(AM_LDFLAGS) -lwesteros_gl_console_helper
 
 pkgconfigdir = $(libdir)/pkgconfig
    
