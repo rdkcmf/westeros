@@ -4358,6 +4358,12 @@ static void wstReleasePreviousBuffers( WstGLCtx *ctx )
             }
          }
 
+         if ( iter->videoFrame[FRAME_FREE].vf )
+         {
+            free( iter->videoFrame[FRAME_FREE].vf );
+            iter->videoFrame[FRAME_FREE].vf= 0;
+         }
+
          if ( iter->videoFrame[FRAME_FREE].bufferId != -1 )
          {
             wstVideoServerSendBufferRelease( iter->conn, iter->videoFrame[FRAME_FREE].bufferId );
