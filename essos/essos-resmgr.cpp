@@ -1205,6 +1205,7 @@ static bool essRMAssignVideoDecoder( EssRMgr *rm, int decoderIdx, EssRMgrRequest
    rc= pthread_create( &threadId, &attr, essRMNotifyThread, &rm->state->vidCtrl.revoke[decoderIdx].notify );
    if ( rc == 0 )
    {
+      INFO("video decoder %d assigned to pid %d", decoderIdx, pid);
       rm->state->base.videoDecoder[decoderIdx].requestIdOwner= req->requestId;
       rm->state->base.videoDecoder[decoderIdx].pidOwner= pid;
       rm->state->base.videoDecoder[decoderIdx].priorityOwner= req->priority;
@@ -1993,6 +1994,7 @@ static bool essRMAssignAudioDecoder( EssRMgr *rm, int decoderIdx, EssRMgrRequest
    rc= pthread_create( &threadId, &attr, essRMNotifyThread, &rm->state->audCtrl.revoke[decoderIdx].notify );
    if ( rc == 0 )
    {
+      INFO("audio decoder %d assigned to pid %d", decoderIdx, pid);
       rm->state->base.audioDecoder[decoderIdx].requestIdOwner= req->requestId;
       rm->state->base.audioDecoder[decoderIdx].pidOwner= pid;
       rm->state->base.audioDecoder[decoderIdx].priorityOwner= req->priority;
