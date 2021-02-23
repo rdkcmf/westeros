@@ -2520,7 +2520,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
          eosEventSeen= sink->eosEventSeen;
          UNLOCK(sink)
 
-         if ( videoPlaying && eosEventSeen && (outputFrameCount > 0) && (outputFrameCount == count) )
+         if ( videoPlaying && eosEventSeen && (outputFrameCount == count) )
          {
             --eosCountDown;
             if ( eosCountDown == 0 )
