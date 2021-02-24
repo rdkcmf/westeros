@@ -2214,6 +2214,14 @@ static bool wstSetInputFormat( GstWesterosSink *sink )
 
    memset( &sink->soc.fmtIn, 0, sizeof(struct v4l2_format) );
    sink->soc.fmtIn.type= bufferType;
+   if ( sink->soc.frameWidthStream != -1 )
+   {
+      sink->soc.frameWidth= sink->soc.frameWidthStream;
+   }
+   if ( sink->soc.frameHeightStream != -1 )
+   {
+      sink->soc.frameHeight= sink->soc.frameHeightStream;
+   }
    if ( sink->soc.isMultiPlane )
    {
       sink->soc.fmtIn.fmt.pix_mp.pixelformat= sink->soc.inputFormat;
@@ -2286,6 +2294,14 @@ static bool wstSetOutputFormat( GstWesterosSink *sink )
       else
       {
          sink->soc.fmtOut.fmt.pix_mp.num_planes= 2;
+      }
+      if ( sink->soc.frameWidthStream != -1 )
+      {
+         sink->soc.frameWidth= sink->soc.frameWidthStream;
+      }
+      if ( sink->soc.frameHeightStream != -1 )
+      {
+         sink->soc.frameHeight= sink->soc.frameHeightStream;
       }
       sink->soc.fmtOut.fmt.pix_mp.pixelformat= pixelFormat;
       sink->soc.fmtOut.fmt.pix_mp.width= sink->soc.frameWidth;
@@ -4718,6 +4734,11 @@ capture_start:
             }
 
             if ( sink->soc.quitVideoOutputThread ) break;
+
+            if ( pfd.revents & (POLLIN|POLLRDNORM) )
+            {
+               goto capture_ready;
+            }
          }
 
          usleep( 1000 );
@@ -4794,7 +4815,7 @@ capture_start:
                   gint64 now= g_get_monotonic_time();
                   float frameRate= (sink->soc.frameRate != 0.0 ? sink->soc.frameRate : 30.0);
                   float frameDelay= sink->soc.frameInCount / sink->soc.frameRate;
-                  if ( (frameDelay > 1.0) && (now-sink->soc.videoStartTime > 2000000LL) )
+                  if ( (frameDelay > 1.0) && (now-sink->soc.videoStartTime > 3000000LL) )
                   {
                      sink->soc.decodeError= TRUE;
                      postDecodeError( sink );
@@ -4805,6 +4826,7 @@ capture_start:
             }
          }
 
+      capture_ready:
          buffIndex= wstGetOutputBuffer( sink );
 
          if ( sink->soc.quitVideoOutputThread ) break;
