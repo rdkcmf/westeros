@@ -505,6 +505,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoY= sink->windowY;
    sink->soc.videoWidth= sink->windowWidth;
    sink->soc.videoHeight= sink->windowHeight;
+   sink->soc.prerollBuffer= 0;
    sink->soc.frameStepOnPreroll= FALSE;
    sink->soc.lowMemoryMode= FALSE;
    sink->soc.forceAspectRatio= FALSE;
@@ -821,7 +822,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
       LOCK(sink);
       sink->startAfterCaps= TRUE;
       sink->soc.videoPlaying= TRUE;
-      sink->soc.videoPaused= FALSE;
+      sink->soc.videoPaused= TRUE;
       UNLOCK(sink);
 
       result= TRUE;
@@ -1141,6 +1142,19 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       return;
    }
    #endif
+   if ( sink->soc.prerollBuffer )
+   {
+      bool alreadyRendered= false;
+      if ( buffer == sink->soc.prerollBuffer )
+      {
+         alreadyRendered= true;
+      }
+      sink->soc.prerollBuffer= 0;
+      if ( alreadyRendered )
+      {
+         return;
+      }
+   }
    if ( (sink->soc.v4l2Fd >= 0) && !sink->flushStarted )
    {
       gint64 nanoTime;
@@ -4810,7 +4824,7 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
-               if ( (sink->soc.frameOutCount == 0) && (sink->soc.frameInCount > 0) && !sink->soc.decodeError )
+               if ( (sink->soc.frameOutCount == 0) && (sink->soc.frameInCount > 0) && !sink->soc.videoPaused && !sink->soc.decodeError )
                {
                   gint64 now= g_get_monotonic_time();
                   float frameRate= (sink->soc.frameRate != 0.0 ? sink->soc.frameRate : 30.0);
@@ -5108,6 +5122,15 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
    }
 
    sink->soc.videoPlaying= TRUE;
+
+   if ( GST_BASE_SINK(sink)->need_preroll && !GST_BASE_SINK(sink)->have_preroll )
+   {
+      if ( sink->soc.prerollBuffer != buffer )
+      {
+         gst_westeros_sink_soc_render( sink, buffer );
+         sink->soc.prerollBuffer= buffer;
+      }
+   }
 
    if ( sink->soc.frameStepOnPreroll )
    {

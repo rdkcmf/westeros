@@ -94,19 +94,32 @@ void *sync_free_frame( struct vframe *vf )
       VideoFrame *fCheck= &vfm->queue[i];
       if ( fCheck->vf == vf )
       {
-         fCheck->vf= 0;
-         vfm->dropFrameCount += 1;
-         wstFreeVideoFrameResources( fCheck );
-         wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
-         if ( i+1 < vfm->queueSize )
+         if ( fCheck->canExpire )
          {
-            memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-i-1)*sizeof(VideoFrame) );
+            fCheck->vf= 0;
+            vfm->dropFrameCount += 1;
+            wstFreeVideoFrameResources( fCheck );
+            wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
+            if ( i+1 < vfm->queueSize )
+            {
+               memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-i-1)*sizeof(VideoFrame) );
+            }
+            --vfm->queueSize;
          }
-         --vfm->queueSize;
+         else
+         {
+            /* canExpire of false means this frame has
+             * been forced to display via frame advance so it
+             * will be freed when released by the display */
+            vf= 0;
+         }
          break;
       }
    }
-   free( vf );
+   if ( vf )
+   {
+      free( vf );
+   }
 }
 
 static void wstAVSyncSetSyncType( VideoFrameManager *vfm, int type )

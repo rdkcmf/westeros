@@ -50,6 +50,7 @@ typedef struct _AppCtx
    bool needToAddStateTimer;
    bool needToSetRate;
    bool stepVideo;
+   bool videoPeek;
    int countDownToStep;
    const char *videoRectOverride;
    bool haveMode;
@@ -72,6 +73,7 @@ static void showUsage()
    printf("  -s : secure video\n" );
    printf("  -R <rate> : play with rate\n" );
    printf("  -S : step frame by frame\n" );
+   printf("  -V : video peek\n" );
    printf("  -z <zorder> : video z-order, 0.0 - 1.0\n");
    printf("  -? : show usage\n" );
    printf("\n" );   
@@ -222,9 +224,30 @@ gboolean stateChangeTimerTimeout( gpointer userData )
          {
             if ( --ctx->countDownToStep <= 0 )
             {
+               GstState state, pending;
+               g_object_set(G_OBJECT(ctx->westerossink), "frame-step-on-preroll", TRUE, NULL );
                gst_element_send_event( ctx->westerossink,
                                        gst_event_new_step( GST_FORMAT_BUFFERS, 1, 1.0, TRUE, FALSE) );
+               gst_element_get_state(ctx->pipeline, &state, &pending, 100*1000000);
+               g_object_set(G_OBJECT(ctx->westerossink), "frame-step-on-preroll", FALSE, NULL );
                ctx->countDownToStep= TIMEOUTS_PER_STEP;
+               if ( ctx->videoPeek )
+               {
+                  ctx->stepVideo= false;
+               }
+            }
+            return G_SOURCE_CONTINUE;
+         }
+         else
+         {
+            if ( --ctx->countDownToStep <= 0 )
+            {
+               if ( GST_STATE_CHANGE_FAILURE == gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING) )
+               {
+                  g_print("Error: unable to move to PLAYING\n");
+                  g_main_loop_quit( ctx->loop );
+               }
+               goto exit;
             }
             return G_SOURCE_CONTINUE;
          }
@@ -351,7 +374,6 @@ bool createPipeline( AppCtx *ctx )
 
    if ( ctx->stepVideo )
    {
-      g_object_set(G_OBJECT(ctx->westerossink), "frame-step-on-preroll", TRUE, NULL );
       g_object_set(G_OBJECT(ctx->westerossink), "async", TRUE, NULL );
    }
 
@@ -450,6 +472,7 @@ int main( int argc, char **argv )
    bool emitPosition= false;
    bool useSecureVideo= false;
    bool stepVideo= false;
+   bool videoPeek= false;
    gfloat rate= 1.0f;
    gfloat zorder= 0.0f;
    const char *videoRect= 0;
@@ -515,6 +538,10 @@ int main( int argc, char **argv )
             case 'S':
                stepVideo= true;
                break;
+            case 'V':
+               videoPeek= true;
+               stepVideo= true;
+               break;
             case 'z':
                if ( argidx+1 < argc )
                {
@@ -571,6 +598,7 @@ int main( int argc, char **argv )
    ctx->useSecureVideo= useSecureVideo;
    ctx->videoRectOverride= videoRect;
    ctx->stepVideo= stepVideo;
+   ctx->videoPeek= videoPeek;
    ctx->countDownToStep= TIMEOUTS_PER_STEP;
    ctx->rate= rate;
    ctx->zorder= zorder;

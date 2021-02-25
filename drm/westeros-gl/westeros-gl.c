@@ -1405,6 +1405,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                                  videoFrame.frameTime= frameTime;
                                  videoFrame.frameNumber= conn->videoPlane->frameCount++;
                                  videoFrame.vf= 0;
+                                 videoFrame.canExpire= true;
                                  conn->videoPlane->hidden= false;
                                  wstVideoFrameManagerPushFrame( conn->videoPlane->vfm, &videoFrame );
                                  pthread_mutex_unlock( &gMutex );
@@ -2779,7 +2780,10 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
    #ifdef WESTEROS_GL_AVSYNC
    if ( vfm->sync )
    {
-      f= wstAVSyncPop( vfm );
+      if ( !vfm->paused )
+      {
+         f= wstAVSyncPop( vfm );
+      }
       if ( f )
       {
          if ( f->bufferId != vfm->bufferIdCurrent )
@@ -2809,6 +2813,12 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                f= 0;
             }
          }
+      }
+      else if ( vfm->paused && vfm->frameAdvance && (vfm->bufferIdCurrent == -1) && vfm->queueSize )
+      {
+         f= &vfm->queue[0];
+         f->canExpire= false;
+         vfm->frameAdvance= false;
       }
       goto done;
    }
