@@ -4617,7 +4617,10 @@ capture_start:
    if ( (sink->soc.v4l2Fd == -1) || (sink->soc.outBuffers == 0) || sink->soc.quitVideoOutputThread )
    {
       UNLOCK(sink);
-      postDecodeError( sink );
+      if ( !sink->soc.quitVideoOutputThread )
+      {
+         postDecodeError( sink );
+      }
       goto exit;
    }
    for( i= 0; i < sink->soc.numBuffersOut; ++i )
