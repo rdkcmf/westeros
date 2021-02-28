@@ -1158,6 +1158,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
    if ( (sink->soc.v4l2Fd >= 0) && !sink->flushStarted )
    {
       gint64 nanoTime;
+      gint64 duration;
       int rc, buffIndex;
       int inSize, offset, avail, copylen;
       unsigned char *inData;
@@ -1199,6 +1200,11 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          guint64 prevPTS;
 
          nanoTime= GST_BUFFER_PTS(buffer);
+         duration= GST_BUFFER_DURATION(buffer);
+         if ( !GST_CLOCK_TIME_IS_VALID(duration) )
+         {
+            duration= 0;
+         }
          {
             guint64 gstNow= getGstClockTime(sink);
             if ( gstNow <= nanoTime )
@@ -1207,7 +1213,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (gstNow-nanoTime)/1000LL);
          }
          LOCK(sink)
-         if ( nanoTime >= sink->segment.start )
+         if ( nanoTime+duration >= sink->segment.start )
          {
             if ( sink->prevPositionSegmentStart == 0xFFFFFFFFFFFFFFFFLL )
             {
@@ -3735,19 +3741,22 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            guint64 frameTime= getS64( &m[4] );
                            sink->soc.numDropped= getU32( &m[12] );
                            FRAME( "out:       status received: frameTime %lld numDropped %d", frameTime, sink->soc.numDropped);
-                           gint64 currentNano= frameTime*1000LL;
-                           gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
-                           sink->position= sink->positionSegmentStart + currentNano - firstNano;
-                           sink->currentPTS= currentNano / (GST_SECOND/90000LL);
-                           GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
-                           if (sink->soc.frameDisplayCount == 0)
+                           if ( sink->prevPositionSegmentStart != 0xFFFFFFFFFFFFFFFFLL )
                            {
-                               sink->soc.emitFirstFrameSignal= TRUE;
-                           }
-                           ++sink->soc.frameDisplayCount;
-                           if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
-                           {
-                              sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                              gint64 currentNano= frameTime*1000LL;
+                              gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
+                              sink->position= sink->positionSegmentStart + currentNano - firstNano;
+                              sink->currentPTS= currentNano / (GST_SECOND/90000LL);
+                              GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
+                              if (sink->soc.frameDisplayCount == 0)
+                              {
+                                  sink->soc.emitFirstFrameSignal= TRUE;
+                              }
+                              ++sink->soc.frameDisplayCount;
+                              if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+                              {
+                                 sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                              }
                            }
                         }
                         break;
