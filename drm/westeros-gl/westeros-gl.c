@@ -2033,7 +2033,7 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
    char *tok, *ctx;
    int tlen;
 
-   DEBUG("ds msg len %d (%s)", mlen, m);
+   INFO("ds msg len %d (%s)", mlen, m);
 
    if ( m && (mlen > 0) )
    {
