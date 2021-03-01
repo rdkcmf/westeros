@@ -128,6 +128,7 @@ struct _GstWesterosSinkSoc
    int frameHeightStream;
    int frameInCount;
    int frameOutCount;
+   int frameDecodeCount;
    int frameDisplayCount;
    uint32_t numDropped;
    uint32_t inputFormat;
