@@ -71,7 +71,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define INT_FRAME(FORMAT, ...)      frameLog( "FRAME: " FORMAT "\n", __VA_ARGS__)
 #define FRAME(...)                  INT_FRAME(__VA_ARGS__, "")
 
-#define postDecodeError( sink ) postErrorMessage( (sink), GST_STREAM_ERROR_DECODE, "video decode error" )
+#define postDecodeError( sink ) postErrorMessage( (sink), GST_STREAM_ERROR_DECODE, "video decode error", __LINE__ )
 
 enum
 {
@@ -155,7 +155,7 @@ static int wstFindCurrentVideoBuffer( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
-static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText );
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, int lineNumber );
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static int ioctl_wrapper( int fd, int request, void* arg );
 static bool swIsSWDecode( GstWesterosSink *sink );
@@ -439,6 +439,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
    sink->soc.videoStartTime= 0;
+   sink->soc.frameDecodeCount= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
@@ -1417,6 +1418,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    LOCK(sink);
    sink->soc.frameInCount= 0;
    sink->soc.frameOutCount= 0;
+   sink->soc.frameDecodeCount= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.frameDisplayCount= 0;
@@ -1432,6 +1434,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    sink->soc.videoStartTime= g_get_monotonic_time();
 
    sink->soc.frameOutCount= 0;
+   sink->soc.frameDecodeCount= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.frameDisplayCount= 0;
@@ -4836,7 +4839,7 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
-               if ( (sink->soc.frameOutCount == 0) && (sink->soc.frameInCount > 0) && !sink->soc.videoPaused && !sink->soc.decodeError )
+               if ( (sink->soc.frameDecodeCount == 0) && (sink->soc.frameInCount > 0) && !sink->soc.videoPaused && !sink->soc.decodeError )
                {
                   gint64 now= g_get_monotonic_time();
                   float frameRate= (sink->soc.frameRate != 0.0 ? sink->soc.frameRate : 30.0);
@@ -4856,6 +4859,8 @@ capture_start:
          buffIndex= wstGetOutputBuffer( sink );
 
          if ( sink->soc.quitVideoOutputThread ) break;
+
+         ++sink->soc.frameDecodeCount;
 
          {
             bool gfxFrame= false;
@@ -5099,9 +5104,10 @@ static gpointer wstDispatchThread(gpointer data)
    return NULL;
 }
 
-static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText )
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, int lineNumber )
 {
    GError *error= g_error_new(GST_STREAM_ERROR, errorCode, errorText);
+   g_print("westeros-sink: postErrorMessage: code %d (%s) line %d\n", errorCode, errorText, lineNumber);
    if ( error )
    {
       GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));

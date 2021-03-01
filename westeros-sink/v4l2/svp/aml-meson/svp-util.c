@@ -475,6 +475,7 @@ static void wstSVPDestroyGemBuffer( GstWesterosSink *sink, WstGemBuffer *gemBuf 
             GST_ERROR("Failed to release gem buffer handle %d: DRM_IOCTL_MODE_DESTROY_DUMB rc %d errno %d",
                       gemBuf->handle[i], rc, errno );
          }
+         gemBuf->handle[i]= 0;
       }
    }
 }
