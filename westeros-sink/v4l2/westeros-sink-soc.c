@@ -83,7 +83,8 @@ enum
   PROP_ZOOM_MODE,
   PROP_OVERSCAN_SIZE,
   PROP_ENABLE_TEXTURE,
-  PROP_REPORT_DECODE_ERRORS
+  PROP_REPORT_DECODE_ERRORS,
+  PROP_QUEUED_FRAMES
 };
 enum
 {
@@ -320,6 +321,12 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
      g_param_spec_boolean ("report-decode-errors",
                            "enable decodoe error signal",
                            "0: disable; 1: enable", FALSE, G_PARAM_READWRITE));
+
+   g_object_class_install_property (gobject_class, PROP_QUEUED_FRAMES,
+     g_param_spec_uint ("queued-frames",
+                       "queued frames",
+                       "Get number for frames that are decoded and queued for rendering",
+                       0, G_MAXUINT32, 0, G_PARAM_READABLE ));
 
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -737,6 +744,37 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_REPORT_DECODE_ERRORS:
          g_value_set_boolean(value, sink->soc.enableDecodeErrorSignal);
+         break;
+      case PROP_QUEUED_FRAMES:
+         {
+            guint queuedFrames= 0;
+
+            /*
+             * An app would use the property to gauge buffering.  Hence
+             * we need to set need_preroll to FALSE and signal preroll
+             * to allow further bufferig while in paused state.  This is
+             * because westerossink does both the decoding and the display
+             */
+            GstBaseSink *basesink;
+            basesink = GST_BASE_SINK(sink);
+            GST_BASE_SINK_PREROLL_LOCK(basesink);
+            if ( GST_BASE_SINK(sink)->need_preroll && GST_BASE_SINK(sink)->have_preroll )
+            {
+               GST_BASE_SINK(sink)->need_preroll= FALSE;
+               GST_BASE_SINK(sink)->have_preroll= FALSE;
+               GST_BASE_SINK_PREROLL_SIGNAL(basesink);
+            }
+            GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+
+            LOCK(sink);
+            if ( sink->soc.frameInCount > sink->soc.frameDecodeCount )
+            {
+               queuedFrames= sink->soc.frameInCount - sink->soc.frameDecodeCount;
+            }
+            UNLOCK(sink);
+            GST_DEBUG("queuedFrames %d (in %d dec %d disp %d)\n", queuedFrames, sink->soc.frameInCount, sink->soc.frameDecodeCount, sink->soc.frameDisplayCount);
+            g_value_set_uint(value, queuedFrames);
+         }
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -4070,6 +4108,10 @@ static void buffer_release( void *data, struct wl_buffer *buffer )
    {
       FRAME("out:       wayland release received for buffer %d", binfo->buffIndex);
       LOCK(sink);
+      if ( !sink->soc.conn )
+      {
+        ++sink->soc.frameDisplayCount;
+      }
       if ( binfo->buffIndex == sink->soc.pauseGfxBuffIndex )
       {
          sink->soc.pauseGfxBuffIndex= -1;
