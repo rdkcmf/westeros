@@ -214,6 +214,54 @@ static void frameLog( const char *fmt, ... )
    }
 }
 
+static FILE *gAvProgOut= 0;
+
+static void avProgInit()
+{
+   const char *env= getenv("AV_PROGRESSION");
+   if ( env )
+   {
+      int len= strlen(env);
+      if ( (len == 1) && !strncmp( "1", env, len) )
+      {
+         gAvProgOut= stderr;
+      }
+      else
+      {
+         gAvProgOut= fopen( env, "at" );
+      }
+   }
+}
+
+static void avProgLog( long long nanoTime, int syncGroup, const char *edge, const char *desc )
+{
+   if ( gAvProgOut )
+   {
+      struct timespec tp;
+      unsigned pts= 0;
+
+      if ( GST_CLOCK_TIME_IS_VALID(nanoTime) )
+      {
+         pts= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
+      }
+
+      clock_gettime(CLOCK_MONOTONIC, &tp);
+      fprintf(gAvProgOut, "AVPROG: [%6u.%6u] %u %d %c %s %s\n", tp.tv_sec, tp.tv_nsec, pts, syncGroup, 'V', edge, desc);
+   }
+}
+
+static void avProgTerm()
+{
+   if ( gAvProgOut )
+   {
+      if ( gAvProgOut != stderr )
+      {
+         fclose( gAvProgOut );
+      }
+      gAvProgOut= 0;
+   }
+}
+
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
    WESTEROS_UNUSED(wl_sb);
@@ -826,6 +874,8 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
 
    WESTEROS_UNUSED(passToDefault);
 
+   avProgInit();
+
    result= TRUE;
 
    return result;
@@ -938,6 +988,8 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
    WESTEROS_UNUSED(sink);
 
    wstSinkSocStopVideo( sink );
+
+   avProgTerm();
 
    *passToDefault= false;
 
@@ -1234,6 +1286,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       }
       #endif
 
+      avProgLog( GST_BUFFER_PTS(buffer), 0, "GtoS", "");
+
       if ( GST_BUFFER_PTS_IS_VALID(buffer) )
       {
          guint64 prevPTS;
@@ -1340,6 +1394,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
             goto exit;
          }
+         avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", "");
          sink->soc.inBuffers[buffIndex].queued= true;
          sink->soc.inBuffers[buffIndex].gstbuf= gst_buffer_ref(buffer);
       }
@@ -1412,6 +1467,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
                   goto exit;
                }
+               avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", "");
                sink->soc.inBuffers[buffIndex].queued= true;
             }
          }
@@ -4001,6 +4057,8 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          wstLockOutputBuffer( sink, buffIndex );
          FRAME("out:       send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
 
+         avProgLog( sink->soc.outBuffers[buffIndex].frameTime*1000L, 0, "WtoW", "");
+
          do
          {
             sentLen= sendmsg( conn->socketFd, &msg, 0 );
@@ -4911,6 +4969,7 @@ capture_start:
             gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
+            avProgLog( frameTime, 0, "DtoS", "");
 
             sink->soc.outBuffers[buffIndex].frameTime= currFramePTS;
 
