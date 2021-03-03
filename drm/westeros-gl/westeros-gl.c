@@ -510,6 +510,51 @@ static void wstFrameLog( const char *fmt, ... )
    }
 }
 
+static FILE *gAvProgOut= 0;
+
+static void avProgInit()
+{
+   const char *env= getenv("AV_PROGRESSION");
+   if ( env )
+   {
+      int len= strlen(env);
+      if ( (len == 1) && !strncmp( "1", env, len) )
+      {
+         gAvProgOut= stderr;
+      }
+      else
+      {
+         gAvProgOut= fopen( env, "at" );
+      }
+   }
+}
+
+static void avProgLog( long long nanoTime, int syncGroup, const char *edge, const char *desc )
+{
+   if ( gAvProgOut )
+   {
+      struct timespec tp;
+      unsigned pts;
+
+      pts= ((nanoTime / 1000000000LL) * 90000)+(((nanoTime % 1000000000LL) * 90000) / 1000000000LL);
+
+      clock_gettime(CLOCK_MONOTONIC, &tp);
+      fprintf(gAvProgOut, "AVPROG: [%6u.%6u] %u %d %c %s %s\n", tp.tv_sec, tp.tv_nsec, pts, syncGroup, 'V', edge, desc);
+   }
+}
+
+static void avProgTerm()
+{
+   if ( gAvProgOut )
+   {
+      if ( gAvProgOut != stderr )
+      {
+         fclose( gAvProgOut );
+      }
+      gAvProgOut= 0;
+   }
+}
+
 static void wstUpdateResources( int type, bool add, long long v, int line )
 {
    pthread_mutex_lock( &resMutex );
@@ -1942,6 +1987,8 @@ static bool wstInitVideoServer( VideoServerCtx *server )
    bool result= false;
    int rc;
 
+   avProgInit();
+
    if ( !wstInitServiceServer( "video", &server->server ) )
    {
       ERROR("wstInitVideoServer: Error: unable to start service server");
@@ -1967,6 +2014,8 @@ static void wstTermVideoServer( VideoServerCtx *server )
    if ( server )
    {
       int i;
+
+      avProgTerm();
 
       wstTermServiceServer( server->server );
       server->server= 0;
@@ -5027,6 +5076,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                                         "IN_FENCE_FD", -1 );
 
                   FRAME("commit frame %d buffer %d", iter->videoFrame[FRAME_CURR].frameNumber, iter->videoFrame[FRAME_CURR].bufferId);
+                  avProgLog( iter->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", "");
                }
             }
          }
