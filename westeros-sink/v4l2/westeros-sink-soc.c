@@ -71,7 +71,14 @@ GST_DEBUG_CATEGORY_EXTERN (gst_westeros_sink_debug);
 #define INT_FRAME(FORMAT, ...)      frameLog( "FRAME: " FORMAT "\n", __VA_ARGS__)
 #define FRAME(...)                  INT_FRAME(__VA_ARGS__, "")
 
-#define postDecodeError( sink ) postErrorMessage( (sink), GST_STREAM_ERROR_DECODE, "video decode error", __LINE__ )
+#define postDecodeError( sink, description ) \
+                                { \
+                                   GThread *temp= sink->soc.videoOutputThread; \
+                                   postErrorMessage( (sink), GST_STREAM_ERROR_DECODE, "video decode error", description); \
+                                   sink->soc.videoOutputThread= 0; \
+                                   wstSinkSocStopVideo( sink ); \
+                                   sink->soc.videoOutputThread= temp; \
+                                }
 
 enum
 {
@@ -156,7 +163,7 @@ static int wstFindCurrentVideoBuffer( GstWesterosSink *sink );
 static gpointer wstVideoOutputThread(gpointer data);
 static gpointer wstEOSDetectionThread(gpointer data);
 static gpointer wstDispatchThread(gpointer data);
-static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, int lineNumber );
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, const char *description );
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static int ioctl_wrapper( int fd, int request, void* arg );
 static bool swIsSWDecode( GstWesterosSink *sink );
@@ -4731,7 +4738,8 @@ capture_start:
       UNLOCK(sink);
       if ( !sink->soc.quitVideoOutputThread )
       {
-         postDecodeError( sink );
+         GST_ERROR("wstVideoOutputThread: v4l2Fd %d outBuffers %p", sink->soc.v4l2Fd, sink->soc.outBuffers);
+         postDecodeError( sink, "no dev/no outBuffers" );
       }
       goto exit;
    }
@@ -4749,7 +4757,7 @@ capture_start:
       {
          GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
          UNLOCK(sink);
-         postDecodeError( sink );
+         postDecodeError( sink, "output enqueue error" );
          goto exit;
       }
       sink->soc.outBuffers[i].queued= true;
@@ -4760,7 +4768,7 @@ capture_start:
    {
       GST_ERROR("wstVideoOutputThread: streamon failed for output: rc %d errno %d", rc, errno );
       UNLOCK(sink);
-      postDecodeError( sink );
+      postDecodeError( sink, "STREAMON failure" );
       goto exit;
    }
 
@@ -4947,7 +4955,8 @@ capture_start:
                   if ( (frameDelay > 1.0) && (now-sink->soc.videoStartTime > 3000000LL) )
                   {
                      sink->soc.decodeError= TRUE;
-                     postDecodeError( sink );
+                     postDecodeError( sink, "no output from decoder" );
+                     goto exit;
                   }
                }
                usleep( 1000 );
@@ -5205,10 +5214,10 @@ static gpointer wstDispatchThread(gpointer data)
    return NULL;
 }
 
-static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, int lineNumber )
+static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, const char *description )
 {
    GError *error= g_error_new(GST_STREAM_ERROR, errorCode, errorText);
-   g_print("westeros-sink: postErrorMessage: code %d (%s) line %d\n", errorCode, errorText, lineNumber);
+   g_print("westeros-sink: postErrorMessage: code %d (%s) (%s)\n", errorCode, errorText, description);
    if ( error )
    {
       GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));
