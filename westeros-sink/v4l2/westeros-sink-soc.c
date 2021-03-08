@@ -2127,8 +2127,12 @@ static void wstProcessEvents( GstWesterosSink *sink )
             wstSVPSetInputMemMode( sink, sink->soc.inputMemMode );
             #endif
             wstSetupOutput( sink );
-            wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
-            wstSetTextureCrop( sink, vx, vy, vw, vh );
+
+            if ( needBounds(sink) && sink->vpcSurface )
+            {
+                wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+                wstSetTextureCrop( sink, vx, vy, vw, vh );
+            }
             sink->soc.nextFrameFd= -1;
             sink->soc.prevFrame1Fd= -1;
             sink->soc.prevFrame2Fd= -1;
