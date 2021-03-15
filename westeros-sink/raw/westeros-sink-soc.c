@@ -2603,7 +2603,7 @@ static bool drmInit( GstWesterosSink *sink )
    }
 
    GST_DEBUG("drmInit");
-   sink->soc.drmFd= open( drmName, O_RDWR );
+   sink->soc.drmFd= open( drmName, O_RDWR | O_CLOEXEC );
    if ( sink->soc.drmFd < 0 )
    {
       GST_ERROR("Failed to open drm node (%s): %d", drmName, errno);

@@ -3453,7 +3453,7 @@ static WstGLCtx *wstInitCtx( void )
       ctx->ueventFd= -1;
       #endif
       ctx->drmFd= -1;
-      ctx->drmFd= open(card, O_RDWR);
+      ctx->drmFd= open(card, O_RDWR|O_CLOEXEC);
       if ( ctx->drmFd < 0 )
       {
          ERROR("wstInitCtx: failed to open card (%s)", card);

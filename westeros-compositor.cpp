@@ -8710,7 +8710,7 @@ static int wstConvertToReadOnlyFile( int fd )
       link[len]= '\0';
       if ( strstr( link, TEMPFILE_PREFIX ) )
       {
-         readOnlyFd= open( link, O_RDONLY );
+         readOnlyFd= open( link, O_RDONLY | O_CLOEXEC );
          if ( readOnlyFd < 0 )
          {
             ERROR( "unable to obtain a readonly fd for fd %d", fd);

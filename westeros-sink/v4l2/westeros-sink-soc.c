@@ -1957,7 +1957,7 @@ static void wstDiscoverVideoDecoder( GstWesterosSinkClass *klass )
             strcpy( name, "/dev/" );
             strcat( name, dirent->d_name );
             GST_DEBUG("checking device: %s", name);
-            fd= open( name, O_RDWR );
+            fd= open( name, O_RDWR | O_CLOEXEC );
             if ( fd < 0 )
             {
                goto done_check;
@@ -4135,7 +4135,7 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
          close( fdToClose );
       }
 
-      sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
+      sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR | O_CLOEXEC );
       if ( sink->soc.v4l2Fd < 0 )
       {
          GST_ERROR("failed to open device (%s)", sink->soc.devname );
@@ -5297,7 +5297,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       }
    }
 
-   sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR );
+   sink->soc.v4l2Fd= open( sink->soc.devname, O_RDWR | O_CLOEXEC );
    if ( sink->soc.v4l2Fd < 0 )
    {
       GST_ERROR("failed to open device (%s)", sink->soc.devname );
@@ -5545,7 +5545,7 @@ static gpointer swFirstFrameThread(gpointer data)
 static bool swInit( GstWesterosSink *sink )
 {
    GST_DEBUG("swInit");
-   sink->soc.drmFd= open( "/dev/dri/card0", O_RDWR);
+   sink->soc.drmFd= open( "/dev/dri/card0", O_RDWR | O_CLOEXEC);
    if ( sink->soc.drmFd < 0 )
    {
       GST_ERROR("Failed to open drm render node: %d", errno);

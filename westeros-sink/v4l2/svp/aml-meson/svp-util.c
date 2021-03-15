@@ -565,7 +565,7 @@ static bool wstSVPSetupOutputBuffersDmabuf( GstWesterosSink *sink )
          drmName= DEFAULT_DRM_NAME;
       }
 
-      sink->soc.drmFd= open( drmName, O_RDWR );
+      sink->soc.drmFd= open( drmName, O_RDWR|O_CLOEXEC );
       if ( sink->soc.drmFd < 0 )
       {
          GST_ERROR("Failed to open drm render node: %d", errno);
