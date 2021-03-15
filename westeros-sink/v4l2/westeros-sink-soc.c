@@ -1496,6 +1496,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             goto exit;
          }
 
+         wstSetupOutput( sink );
+
          if ( !gst_westeros_sink_soc_start_video( sink ) )
          {
             GST_ERROR("gst_westeros_sink_soc_render: gst_westeros_sink_soc_start_video failed");
@@ -1512,7 +1514,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    GST_DEBUG("gst_westeros_sink_soc_flush");
    if ( sink->videoStarted )
    {
-      wstDecoderReset( sink, true );
+      wstDecoderReset( sink, false );
    }
    LOCK(sink);
    sink->soc.frameInCount= 0;
@@ -2100,8 +2102,7 @@ static void wstProcessEvents( GstWesterosSink *sink )
          fmtOut.type= bufferType;
          rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &fmtOut );
 
-         if ( (sink->soc.numBuffersOut == 0) ||
-              (sink->soc.isMultiPlane &&
+         if ( (sink->soc.isMultiPlane &&
                 ( (fmtOut.fmt.pix_mp.width != sink->soc.fmtOut.fmt.pix_mp.width) ||
                   (fmtOut.fmt.pix_mp.height != sink->soc.fmtOut.fmt.pix_mp.height) ) ) ||
               (!sink->soc.isMultiPlane &&
@@ -4735,87 +4736,84 @@ static gpointer wstVideoOutputThread(gpointer data)
    GST_DEBUG("wstVideoOutputThread: enter");
 
 capture_start:
-   if ( sink->soc.numBuffersOut )
+   LOCK(sink);
+   if ( (sink->soc.v4l2Fd == -1) || (sink->soc.outBuffers == 0) || sink->soc.quitVideoOutputThread )
    {
-      LOCK(sink);
-      if ( (sink->soc.v4l2Fd == -1) || (sink->soc.outBuffers == 0) || sink->soc.quitVideoOutputThread )
+      UNLOCK(sink);
+      if ( !sink->soc.quitVideoOutputThread )
       {
-         UNLOCK(sink);
-         if ( !sink->soc.quitVideoOutputThread )
-         {
-            GST_ERROR("wstVideoOutputThread: v4l2Fd %d outBuffers %p", sink->soc.v4l2Fd, sink->soc.outBuffers);
-            postDecodeError( sink, "no dev/no outBuffers" );
-         }
-         goto exit;
+         GST_ERROR("wstVideoOutputThread: v4l2Fd %d outBuffers %p", sink->soc.v4l2Fd, sink->soc.outBuffers);
+         postDecodeError( sink, "no dev/no outBuffers" );
       }
-      for( i= 0; i < sink->soc.numBuffersOut; ++i )
+      goto exit;
+   }
+   for( i= 0; i < sink->soc.numBuffersOut; ++i )
+   {
+      if ( sink->soc.isMultiPlane )
       {
-         if ( sink->soc.isMultiPlane )
+         for( j= 0; j < sink->soc.outBuffers[i].planeCount; ++j )
          {
-            for( j= 0; j < sink->soc.outBuffers[i].planeCount; ++j )
-            {
-               sink->soc.outBuffers[i].buf.m.planes[j].bytesused= sink->soc.outBuffers[i].buf.m.planes[j].length;
-            }
+            sink->soc.outBuffers[i].buf.m.planes[j].bytesused= sink->soc.outBuffers[i].buf.m.planes[j].length;
          }
-         rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[i].buf );
-         if ( rc < 0 )
-         {
-            GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
-            UNLOCK(sink);
-            postDecodeError( sink, "output enqueue error" );
-            goto exit;
-         }
-         sink->soc.outBuffers[i].queued= true;
       }
-
-      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtOut.type );
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.outBuffers[i].buf );
       if ( rc < 0 )
       {
-         GST_ERROR("wstVideoOutputThread: streamon failed for output: rc %d errno %d", rc, errno );
+         GST_ERROR("wstVideoOutputThread: failed to queue output buffer: rc %d errno %d", rc, errno);
          UNLOCK(sink);
-         postDecodeError( sink, "STREAMON failure" );
+         postDecodeError( sink, "output enqueue error" );
          goto exit;
       }
+      sink->soc.outBuffers[i].queued= true;
+   }
 
-      bufferType= sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :V4L2_BUF_TYPE_VIDEO_CAPTURE;
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtOut.type );
+   if ( rc < 0 )
+   {
+      GST_ERROR("wstVideoOutputThread: streamon failed for output: rc %d errno %d", rc, errno );
+      UNLOCK(sink);
+      postDecodeError( sink, "STREAMON failure" );
+      goto exit;
+   }
+
+   bufferType= sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :V4L2_BUF_TYPE_VIDEO_CAPTURE;
+   memset( &selection, 0, sizeof(selection) );
+   selection.type= bufferType;
+   selection.target= V4L2_SEL_TGT_COMPOSE_DEFAULT;
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
+   if ( rc < 0 )
+   {
+      bufferType= V4L2_BUF_TYPE_VIDEO_CAPTURE;
       memset( &selection, 0, sizeof(selection) );
       selection.type= bufferType;
       selection.target= V4L2_SEL_TGT_COMPOSE_DEFAULT;
       rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
       if ( rc < 0 )
       {
-         bufferType= V4L2_BUF_TYPE_VIDEO_CAPTURE;
-         memset( &selection, 0, sizeof(selection) );
-         selection.type= bufferType;
-         selection.target= V4L2_SEL_TGT_COMPOSE_DEFAULT;
-         rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
-         if ( rc < 0 )
-         {
-            GST_WARNING("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
-         }
-      }
-      GST_DEBUG("Out compose default: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
-
-      memset( &selection, 0, sizeof(selection) );
-      selection.type= bufferType;
-      selection.target= V4L2_SEL_TGT_COMPOSE;
-      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
-      if ( rc < 0 )
-      {
          GST_WARNING("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
       }
-      GST_DEBUG("Out compose: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
-      if ( rc == 0 )
-      {
-         sink->soc.frameWidth= selection.r.width;
-         sink->soc.frameHeight= selection.r.height;
-      }
-      UNLOCK(sink);
-
-      g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
-
-      wstSetSessionInfo( sink );
    }
+   GST_DEBUG("Out compose default: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
+
+   memset( &selection, 0, sizeof(selection) );
+   selection.type= bufferType;
+   selection.target= V4L2_SEL_TGT_COMPOSE;
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_SELECTION, &selection );
+   if ( rc < 0 )
+   {
+      GST_WARNING("wstVideoOutputThread: failed to get compose rect: rc %d errno %d", rc, errno );
+   }
+   GST_DEBUG("Out compose: (%d, %d, %d, %d)", selection.r.left, selection.r.top, selection.r.width, selection.r.height );
+   if ( rc == 0 )
+   {
+      sink->soc.frameWidth= selection.r.width;
+      sink->soc.frameHeight= selection.r.height;
+   }
+   UNLOCK(sink);
+
+   g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
+
+   wstSetSessionInfo( sink );
 
    for( ; ; )
    {

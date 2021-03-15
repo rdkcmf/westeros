@@ -321,7 +321,6 @@ typedef struct _EMDevice
          unsigned char *map[EM_V4L2_MAP_MAX];
          bool inputStreaming;
          bool outputStreaming;
-         bool emitSourceChangeEvent;
          int frameWidthSrc;
          int frameHeightSrc;
          int frameWidth;
@@ -2643,10 +2642,6 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
             switch( *type )
             {
                case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
-                  if ( !dev->dev.v4l2.inputStreaming )
-                  {
-                     dev->dev.v4l2.emitSourceChangeEvent= true;
-                  }
                   dev->dev.v4l2.inputStreaming= true;
                   rc= 0;
                   break;
@@ -2686,19 +2681,6 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
             }
          }
          break;
-      case VIDIOC_DQEVENT:
-         {
-            TRACE1("VIDIOC_DQEVENT");
-            if ( dev->dev.v4l2.emitSourceChangeEvent )
-            {
-               struct v4l2_event *event= (struct v4l2_event*)arg;
-               event->type= V4L2_EVENT_SOURCE_CHANGE;
-               event->u.src_change.changes= V4L2_EVENT_SRC_CH_RESOLUTION;
-               dev->dev.v4l2.emitSourceChangeEvent= false;
-            }
-            rc= 0;
-         }
-         break;
 
       //TBD
 
@@ -2720,10 +2702,7 @@ static int EMV4l2Poll( EMDevice *dev, struct pollfd *fds, int nfds, int timeout 
          break;
       }
    }
-   if ( dev->dev.v4l2.emitSourceChangeEvent )
-   {
-      fds->revents |= POLLPRI;
-   }
+   // TBD: events
    return rc;
 }
 
