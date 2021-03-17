@@ -1714,6 +1714,7 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
       {
          int currMaxSize= -1;
          int maxSize;
+         int preemptIdx= -1;
          std::vector<int> *group;
 
          // Check eligible decoders for one that meets constraints but does not provide
@@ -1757,18 +1758,26 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                }
                if ( 
                     (rm->state->base.videoDecoder[idx].pidOwner != 0) &&
-                    (!rm->state->hdr.requesterWinsPriorityTie && (rm->state->base.videoDecoder[idx].priorityOwner == priority)) &&
+                    (rm->state->base.videoDecoder[idx].priorityOwner == priority) &&
                     (rm->state->base.videoDecoder[idx].usageOwner == usage->usage)
                   )
                {
-                  TRACE1("video decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
-                         idx,
-                         rm->state->base.videoDecoder[idx].pidOwner,
-                         priority,
-                         usage->usage );
-                  if ( pendingIdx < 0 )
+                  if ( rm->state->hdr.requesterWinsPriorityTie )
                   {
-                     pendingIdx= idx;
+                     TRACE1("audio decoder %d in use but possible preemption target", idx);
+                     preemptIdx= idx;
+                  }
+                  else
+                  {
+                     TRACE1("video decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
+                            idx,
+                            rm->state->base.videoDecoder[idx].pidOwner,
+                            priority,
+                            usage->usage );
+                     if ( pendingIdx < 0 )
+                     {
+                        pendingIdx= idx;
+                     }
                   }
                   continue;
                }
@@ -1825,6 +1834,11 @@ static int essRMFindSuitableVideoDecoder( EssRMgr *rm, int priority, EssRMgrUsag
             {
                break;
             }
+         }
+         if ( (suitableIdx < 0) && (preemptIdx >= 0) )
+         {
+            TRACE1("no suitable free - preempting video decoder %d", preemptIdx);
+            suitableIdx= preemptIdx;
          }
       }
    }
@@ -2498,6 +2512,7 @@ static int essRMFindSuitableAudioDecoder( EssRMgr *rm, int priority, EssRMgrUsag
       {
          int currMaxSize= -1;
          int maxSize;
+         int preemptIdx= -1;
          std::vector<int> *group;
 
          // Check eligible decoders for one that meets constraints but does not provide
@@ -2523,18 +2538,26 @@ static int essRMFindSuitableAudioDecoder( EssRMgr *rm, int priority, EssRMgrUsag
                maxSize= -1;
                if (
                     (rm->state->base.audioDecoder[idx].pidOwner != 0) &&
-                    (!rm->state->hdr.requesterWinsPriorityTie && (rm->state->base.audioDecoder[idx].priorityOwner == priority)) &&
+                    (rm->state->base.audioDecoder[idx].priorityOwner == priority) &&
                     (rm->state->base.audioDecoder[idx].usageOwner == usage->usage)
                   )
                {
-                  TRACE1("audio decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
-                         idx,
-                         rm->state->base.audioDecoder[idx].pidOwner,
-                         priority,
-                         usage->usage );
-                  if ( pendingIdx < 0 )
+                  if ( rm->state->hdr.requesterWinsPriorityTie )
                   {
-                     pendingIdx= idx;
+                     TRACE1("audio decoder %d in use but possible preemption target", idx);
+                     preemptIdx= idx;
+                  }
+                  else
+                  {
+                     TRACE1("audio decoder %d disqualified: same pri,same usage: owner pid %d pri %d usage 0x%X",
+                            idx,
+                            rm->state->base.audioDecoder[idx].pidOwner,
+                            priority,
+                            usage->usage );
+                     if ( pendingIdx < 0 )
+                     {
+                        pendingIdx= idx;
+                     }
                   }
                   continue;
                }
@@ -2591,6 +2614,11 @@ static int essRMFindSuitableAudioDecoder( EssRMgr *rm, int priority, EssRMgrUsag
             {
                break;
             }
+         }
+         if ( (suitableIdx < 0) && (preemptIdx >= 0) )
+         {
+            TRACE1("no suitable free - preempting audio decoder %d", preemptIdx);
+            suitableIdx= preemptIdx;
          }
       }
    }
