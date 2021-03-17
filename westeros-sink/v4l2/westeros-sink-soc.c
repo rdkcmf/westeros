@@ -492,6 +492,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pixelAspectRatioChanged= FALSE;
    sink->soc.showChanged= FALSE;
+   sink->soc.zoomModeUser= FALSE;
    sink->soc.zoomMode= ZOOM_NONE;
    sink->soc.overscanSize= DEFAULT_OVERSCAN;
    sink->soc.frameWidth= -1;
@@ -731,6 +732,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             {
                GST_DEBUG("set zoom-mode to %d", zoom);
                sink->soc.zoomMode= zoom;
+               sink->soc.zoomModeUser= TRUE;
             }
          }
          break;
@@ -3724,6 +3726,10 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
             g_free( clockName );
          }
       }
+      if ( sink->resAssignedId >= 0 )
+      {
+         sink->soc.sessionId= sink->resAssignedId;
+      }
       if ( (syncTypePrev != sink->soc.syncType) || (sessionIdPrev != sink->soc.sessionId) )
       {
          wstSendSessionInfoVideoClientConnection( sink->soc.conn );
@@ -3877,6 +3883,24 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            {
                               sink->soc.emitUnderflowSignal= TRUE;
                            }
+                        }
+                        break;
+                     case 'Z':
+                        if ( mlen >= 5)
+                        {
+                          int zoomMode= getU32( &m[4] );
+                          GST_DEBUG("got zoom-mode %d from video server", zoomMode);
+                          if ( sink->soc.zoomModeUser == FALSE )
+                          {
+                             if ( (zoomMode >= ZOOM_NONE) && (zoomMode <= ZOOM_ZOOM) )
+                             {
+                                sink->soc.zoomMode= zoomMode;
+                             }
+                          }
+                          else
+                          {
+                             GST_DEBUG("user zoom mode set: ignore server value");
+                          }
                         }
                         break;
                      default:
