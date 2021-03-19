@@ -4843,6 +4843,18 @@ capture_start:
 
    for( ; ; )
    {
+      if ( sink->soc.emitFirstFrameSignal )
+      {
+         sink->soc.emitFirstFrameSignal= FALSE;
+         GST_DEBUG("wstVideoOutputThread: emit first frame signal");
+         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+      }
+      if ( sink->soc.emitUnderflowSignal )
+      {
+         sink->soc.emitUnderflowSignal= FALSE;
+         GST_DEBUG("wstVideoOutputThread: emit underflow signal");
+         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+      }
       if ( sink->soc.quitVideoOutputThread )
       {
          break;
@@ -5131,18 +5143,6 @@ capture_start:
             }
             UNLOCK(sink);
          }
-      }
-      if ( sink->soc.emitFirstFrameSignal )
-      {
-         sink->soc.emitFirstFrameSignal= FALSE;
-         GST_DEBUG("wstVideoOutputThread: emit first frame signal");
-         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
-      }
-      if ( sink->soc.emitUnderflowSignal )
-      {
-         sink->soc.emitUnderflowSignal= FALSE;
-         GST_DEBUG("wstVideoOutputThread: emit underflow signal");
-         g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
       }
    }
 
