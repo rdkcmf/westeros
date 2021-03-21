@@ -134,6 +134,8 @@ struct _GstWesterosSinkSoc
    uint32_t numDropped;
    uint32_t inputFormat;
    uint32_t outputFormat;
+   gboolean interlaced;
+   gint64 prevDecodedTimestamp;
    gint64 currentInputPTS;
    gint64 videoStartTime;
 

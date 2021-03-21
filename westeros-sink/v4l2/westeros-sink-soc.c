@@ -507,6 +507,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
+   sink->soc.interlaced= FALSE;
+   sink->soc.prevDecodedTimestamp= 0;
    sink->soc.currentInputPTS= 0;
    sink->soc.devname= strdup(gDeviceName);
    sink->soc.enableTextureSignal= FALSE;
@@ -1131,6 +1133,23 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                sink->soc.frameHeight= height;
             }
             sink->soc.frameHeightStream= height;
+         }
+         sink->soc.interlaced= FALSE;
+         if ( gst_structure_has_field(structure, "interlace-mode") )
+         {
+            const char *mode= gst_structure_get_string(structure,"interlace-mode");
+            if ( mode )
+            {
+               int len= strlen(mode);
+               if ( (len == 11) && !strncmp( mode, "progressive", len) )
+               {
+                  sink->soc.interlaced= FALSE;
+               }
+               else
+               {
+                  sink->soc.interlaced= TRUE;
+               }
+            }
          }
          if ( gst_structure_has_field(structure, "colorimetry") )
          {
@@ -5006,6 +5025,13 @@ capture_start:
             sink->soc.resubFd= -1;
 
             gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
+            if ( sink->soc.interlaced && (currFramePTS == 0) && (sink->soc.frameDecodeCount > 1) )
+            {
+               currFramePTS= sink->soc.prevDecodedTimestamp + 1000000LL/(sink->soc.frameRate*2);
+               sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec= currFramePTS / 1000000LL;
+               sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec= currFramePTS % 1000000LL;
+            }
+            sink->soc.prevDecodedTimestamp= currFramePTS;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
             avProgLog( frameTime, 0, "DtoS", "");
