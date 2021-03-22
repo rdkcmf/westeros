@@ -2405,7 +2405,7 @@ static void processTextureWayland( GstWesterosSink *sink, NEXUS_SurfaceHandle su
    struct wl_buffer *buff;
 
    bufferInfo *binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
-   if ( binfo )
+   if ( binfo && sink->surface )
    {
       binfo->sink= sink;
       binfo->deviceBuffer= surface;
