@@ -1,0 +1,125 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.22 Release Notes
+------------------------------
+
+Date: March 22, 2021
+Tag: Westeros-1.01.23
+Changes:
+
+
+* sink: v4l2: raw: increase use of essos resource manager
+
+-runtime disabled by default. Enable with env var 'WESTEROS_SINK_USE_ESSRMGR=1'
+plus steps to runtime enable and configure essos resource manager
+
+* drm: fix uninitialized variable 
+
+* drm: allow eglCreateContext to be called prior to eglCreateDisplay
+
+* essos: add audio to resource manager
+
+* drm: revert adjustment of video plane order:
+
+-Remove change affecting AmLogic video plane order
+
+* v4l2: fix definition of low_latency_mode in aml_vdec_cfg_infos
+
+* drm: sink: v4l2, raw: updates
+
+-v4l2 and raw sink now send content frame rate to video server
+-update underflow logic to work with amlogic avsync module enabled
+
+* rpi: updates:
+
+-fix potential uninitialized var use in wstGLSetupDisplay
+-fix potential failure to release mutex
+
+* drm: add frame rate matching mode:
+
+-runtime disabled by default
+-enable with westeros-gl-console command 'set auto-frm-mode 1'
+
+* drm: clear underflow condition after it is reported
+
+* sink: fix resource release on shutdown:
+
+-fix incorrect call to EssRMgrReleaseResource on element shutdown for
+case where resource has been already revoked
+
+* v4l2: adjust hdr parameter handling for amlogic
+
+* v4l2: adjust locking in wstSinkSocStopVideo
+
+* drm: add westeros-gl-console helper lib
+
+* essos: fix async grant notifications for audio
+
+* drm: fix leak of avsync struct vframe
+
+* essos: add info log for decoder assignments
+
+* sink: v4l2: raw: allow EOS detection with no decoded frames
+
+* v4l2: video updates:
+
+-use stream frame dimensions when setting formats after a flush
+-process decoded frames in paused state
+
+* drm, v4l2 updates:
+
+-add support for video peek
+-add option to use video peek in westeros_player via -V arg
+
+* v4l2: refine a decode error post condition to avoid spurious error
+
+* v4l2: raw: fix temporarily bad position reporting after seek
+
+* v4l2 updates:
+
+-avoid spurious decode error posts after seeks by tracking decoded frame count instead of output frame count
+-add line number to decode error posts to identify source
+-clear gem handle after free
+
+* drm: change log level for display server commands
+
+* v4l2:add queued-frames property
+
+* drm: v4l2: add support for AV_PROGRESSION logging
+
+* v4l2: close decoder when posting decode error
+
+* v4l2: fix segfault crash while setting texture crop
+
+Reason for change: there is a segmentation fault while playing back
+adaptive streams using aamp-cli + v4l2 westeros sink.
+The issue caused due to no null pointer handling
+
+* v4l2: don't setup output until device emits source change event
+
+* core: drm, v4l2, raw: add missing O_CLOEXEC flags
+
+* resmgr: don't preempt unless no other unowned suitable resource
+
+* drm: v4l2: raw: add support for global zoom-mode
+
+* v4l2: fix missing underflow signals
+
+* v4l2: interpolate pts for interlaced content if decoder emits zero timestamp
+
+* Fixing crash when exiting SW decoder playback
+
+* v4l2: allow capture setup before event for rpi v4l2 driver
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
