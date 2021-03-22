@@ -4,7 +4,7 @@ Westeros Release Notes
 Westeros 1.01.22 Release Notes
 ------------------------------
 
-Date: Jan 28, 2020
+Date: Jan 28, 2021
 Tag: Westeros-1.01.22
 Changes:
 
