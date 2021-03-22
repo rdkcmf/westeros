@@ -1509,12 +1509,21 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       if ( !sink->videoStarted )
       {
+         int len;
+
          GST_DEBUG("gst_westeros_sink_soc_render: issue input VIDIOC_STREAMON");
          rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
          if ( rc < 0 )
          {
             GST_ERROR("streamon failed for input: rc %d errno %d", rc, errno );
             goto exit;
+         }
+
+         len= strlen( (char*)sink->soc.caps.driver );
+         if ( (len == 13) && !strncmp( (char*)sink->soc.caps.driver, "bcm2835-codec", len) )
+         {
+            GST_DEBUG("Setup output prior to source change for (%s)", sink->soc.caps.driver);
+            wstSetupOutput( sink );
          }
 
          if ( !gst_westeros_sink_soc_start_video( sink ) )
