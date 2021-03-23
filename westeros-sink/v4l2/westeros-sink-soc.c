@@ -245,7 +245,7 @@ static void avProgLog( long long nanoTime, int syncGroup, const char *edge, cons
    if ( gAvProgOut )
    {
       struct timespec tp;
-      unsigned pts= 0;
+      unsigned long long pts= 0;
 
       if ( GST_CLOCK_TIME_IS_VALID(nanoTime) )
       {
@@ -253,7 +253,7 @@ static void avProgLog( long long nanoTime, int syncGroup, const char *edge, cons
       }
 
       clock_gettime(CLOCK_MONOTONIC, &tp);
-      fprintf(gAvProgOut, "AVPROG: [%6u.%6u] %u %d %c %s %s\n", tp.tv_sec, tp.tv_nsec, pts, syncGroup, 'V', edge, desc);
+      fprintf(gAvProgOut, "AVPROG: [%6u.%06u] %llu %d %c %s %s\n", tp.tv_sec, tp.tv_nsec/1000, pts, syncGroup, 'V', edge, desc);
    }
 }
 
