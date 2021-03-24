@@ -4292,6 +4292,13 @@ static void sinkReleaseVideo( GstWesterosSink *sink )
 {
    GST_DEBUG("sinkReleaseVideo: enter");
    LOCK( sink );
+   if ( sink->soc.videoDecoder )
+   {
+      NEXUS_SimpleVideoDecoderHandle videoDecoder= sink->soc.videoDecoder;
+      UNLOCK( sink );
+      NEXUS_StopCallbacks( videoDecoder );
+      LOCK( sink );
+   }
    if ( sink->soc.connectId != 0 )
    {
       if ( sink->soc.stcChannel )
@@ -4316,8 +4323,6 @@ static void sinkReleaseVideo( GstWesterosSink *sink )
       sink->soc.stcChannel= NULL;
       sink->soc.videoPidChannel= NULL;
       sink->soc.codec= bvideo_codec_unknown;
-
-      NEXUS_StopCallbacks( sink->soc.videoDecoder );
 
       GST_DEBUG("sinkReleaseVideo: disconnect");
       NxClient_Disconnect(sink->soc.connectId);
