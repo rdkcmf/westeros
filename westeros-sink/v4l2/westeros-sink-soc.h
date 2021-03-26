@@ -117,6 +117,7 @@ struct _GstWesterosSinkSoc
    int frameRateFractionDenom;
    gboolean frameRateChanged;
    double pixelAspectRatio;
+   double pixelAspectRatioNext;
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;
    gboolean showChanged;

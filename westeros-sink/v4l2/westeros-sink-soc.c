@@ -489,6 +489,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameRateFractionDenom= 1;
    sink->soc.frameRateChanged= FALSE;
    sink->soc.pixelAspectRatio= 1.0;
+   sink->soc.pixelAspectRatioNext= 1.0;
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pixelAspectRatioChanged= FALSE;
    sink->soc.showChanged= FALSE;
@@ -1099,16 +1100,15 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                sink->soc.frameRateChanged= TRUE;
             }
          }
-         sink->soc.pixelAspectRatio= 1.0;
+         sink->soc.pixelAspectRatioNext= 1.0;
          if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
          {
             if ( (num <= 0) || (denom <= 0))
             {
                num= denom= 1;
             }
-            sink->soc.pixelAspectRatio= (double)num/(double)denom;
+            sink->soc.pixelAspectRatioNext= (double)num/(double)denom;
             sink->soc.havePixelAspectRatio= TRUE;
-            sink->soc.pixelAspectRatioChanged= TRUE;
          }
          if ( gst_structure_get_int( structure, "width", &width ) )
          {
@@ -1774,6 +1774,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameWidthStream= -1;
    sink->soc.frameHeightStream= -1;
    sink->soc.pixelAspectRatio= 1.0;
+   sink->soc.pixelAspectRatioNext= 1.0;
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pauseGfxBuffIndex= -1;
    sink->soc.syncType= -1;
@@ -2166,6 +2167,11 @@ static void wstProcessEvents( GstWesterosSink *sink )
             sink->soc.prevFrame1Fd= -1;
             sink->soc.prevFrame2Fd= -1;
             sink->soc.needCaptureRestart= TRUE;
+            if ( sink->soc.havePixelAspectRatio )
+            {
+               sink->soc.pixelAspectRatioChanged= TRUE;
+               sink->soc.pixelAspectRatio= sink->soc.pixelAspectRatioNext;
+            }
          }
       }
    }
@@ -4332,16 +4338,8 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    vw= sink->soc.videoWidth;
    vh= sink->soc.videoHeight;
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("pixelAspectRatio: %f", sink->soc.pixelAspectRatio );
-   if ( sink->soc.havePixelAspectRatio )
-   {
-      frameWidth= sink->soc.frameWidthStream;
-      frameHeight= sink->soc.frameHeightStream;
-   }
-   else
-   {
-      frameWidth= sink->soc.frameWidth;
-      frameHeight= sink->soc.frameHeight;
-   }
+   frameWidth= sink->soc.frameWidth;
+   frameHeight= sink->soc.frameHeight;
    if ( sink->soc.pixelAspectRatio >= 1 )
    {
       contentWidth= frameWidth*sink->soc.pixelAspectRatio;
