@@ -1256,6 +1256,21 @@ static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMod
    pthread_mutex_unlock( &conn->mutex );
 }
 
+static int wstAdaptFd( int fdin )
+{
+   int fdout= fdin;
+   if ( fdin >= 0 )
+   {
+      int fddup= fcntl( fdin, F_DUPFD_CLOEXEC, 0 );
+      if ( fddup >= 0 )
+      {
+         close( fdin );
+         fdout= fddup;
+      }
+   }
+   return fdout;
+}
+
 static void *wstVideoServerConnectionThread( void *arg )
 {
    VideoServerConnection *conn= (VideoServerConnection*)arg;
@@ -1365,14 +1380,14 @@ static void *wstVideoServerConnectionThread( void *arg )
                           cmsg->cmsg_type == SCM_RIGHTS &&
                           cmsg->cmsg_len >= CMSG_LEN(sizeof(int)) )
                      {
-                        fd0 = ((int*)CMSG_DATA(cmsg))[0];
+                        fd0 = wstAdaptFd( ((int*)CMSG_DATA(cmsg))[0] );
                         if ( cmsg->cmsg_len >= CMSG_LEN(2*sizeof(int)) )
                         {
-                           fd1 = ((int*)CMSG_DATA(cmsg))[1];
+                           fd1 = wstAdaptFd( ((int*)CMSG_DATA(cmsg))[1] );
                         }
                         if ( cmsg->cmsg_len >= CMSG_LEN(3*sizeof(int)) )
                         {
-                           fd2 = ((int*)CMSG_DATA(cmsg))[2];
+                           fd2 = wstAdaptFd( ((int*)CMSG_DATA(cmsg))[2] );
                         }
                      }
                      break;
