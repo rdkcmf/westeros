@@ -3028,6 +3028,14 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
 {
    int bufferIndex= -1;
    int i;
+
+   LOCK(sink);
+   if (!sink->soc.inBuffers)
+   {
+      UNLOCK(sink);
+      return bufferIndex;
+   }
+
    for( i= 0; i < sink->soc.numBuffersIn; ++i )
    {
       if ( !sink->soc.inBuffers[i].queued )
@@ -3036,6 +3044,7 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
          break;
       }
    }
+   UNLOCK(sink);
 
    if ( bufferIndex < 0 )
    {
