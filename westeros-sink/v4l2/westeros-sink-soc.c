@@ -281,6 +281,87 @@ static const struct wl_sb_listener sbListener = {
 	sbFormat
 };
 
+static void wstPushPixelAspectRatio( GstWesterosSink *sink, double pixelAspectRatio, int frameWidth, int frameHeight )
+{
+   if ( sink->soc.parNextCount >= sink->soc.parNextCapacity )
+   {
+      int newCapacity= sink->soc.parNextCapacity*2+3;
+      WstPARInfo *newParNext= (WstPARInfo*)calloc( newCapacity, sizeof(WstPARInfo) );
+      if ( newParNext )
+      {
+         if ( sink->soc.parNext && sink->soc.parNextCount )
+         {
+            memcpy( newParNext, sink->soc.parNext, sink->soc.parNextCount*sizeof(WstPARInfo) );
+            free( sink->soc.parNext );
+            sink->soc.parNext= 0;
+         }
+         sink->soc.parNext= newParNext;
+         sink->soc.parNextCapacity= newCapacity;
+      }
+      else
+      {
+         GST_ERROR("Failed to expand pixel-aspect-ratio stack from size %d to %d", sink->soc.parNextCapacity, newCapacity );
+      }
+   }
+   if ( sink->soc.parNext && (sink->soc.parNextCount < sink->soc.parNextCapacity) )
+   {
+      double parPrev;
+      int widthPrev, heightPrev;
+      if ( sink->soc.parNextCount == 0 )
+      {
+         parPrev= sink->soc.pixelAspectRatio;
+         widthPrev= sink->soc.frameWidth;
+         heightPrev= sink->soc.frameHeight;
+      }
+      else
+      {
+         parPrev= sink->soc.parNext[sink->soc.parNextCount-1].par;
+         widthPrev= sink->soc.parNext[sink->soc.parNextCount-1].frameWidth;
+         heightPrev= sink->soc.parNext[sink->soc.parNextCount-1].frameHeight;
+      }
+      if ( (parPrev != pixelAspectRatio) ||
+           (widthPrev != frameWidth) ||
+           (heightPrev != frameHeight) )
+      {
+         sink->soc.parNext[sink->soc.parNextCount].par= pixelAspectRatio;
+         sink->soc.parNext[sink->soc.parNextCount].frameWidth= frameWidth;
+         sink->soc.parNext[sink->soc.parNextCount].frameHeight= frameHeight;
+         ++sink->soc.parNextCount;
+         GST_DEBUG("push pixelAspectRatio %f (%dx%d) count %d capactiy %d",
+                 pixelAspectRatio, frameWidth, frameHeight, sink->soc.parNextCount, sink->soc.parNextCapacity);
+      }
+   }
+}
+
+static double wstPopPixelAspectRatio( GstWesterosSink *sink )
+{
+   double pixelAspectRatio;
+   pixelAspectRatio= sink->soc.pixelAspectRatio;
+   if ( sink->soc.parNextCount > 0 )
+   {
+      pixelAspectRatio= sink->soc.parNext[0].par;
+      GST_DEBUG("pop pixelAspectRatio %f",
+              pixelAspectRatio, sink->soc.parNext[0].frameWidth, sink->soc.parNext[0].frameHeight);
+      if ( --sink->soc.parNextCount > 0 )
+      {
+         memmove( &sink->soc.parNext[0], &sink->soc.parNext[1], sink->soc.parNextCount*sizeof(WstPARInfo) );
+      }
+   }
+   return pixelAspectRatio;
+}
+
+static void wstFlushPixelAspectRatio( GstWesterosSink *sink, bool full )
+{
+   sink->soc.parNextCount= 0;
+   GST_DEBUG("flush pixelAspectRatio");
+   if ( full && sink->soc.parNext )
+   {
+      free( sink->soc.parNext );
+      sink->soc.parNext= 0;
+      sink->soc.parNextCapacity= 0;
+   }
+}
+
 #ifdef USE_GST1
 static GstFlowReturn wstChain(GstPad *pad, GstObject *parent, GstBuffer *buf)
 {
@@ -489,7 +570,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.frameRateFractionDenom= 1;
    sink->soc.frameRateChanged= FALSE;
    sink->soc.pixelAspectRatio= 1.0;
-   sink->soc.pixelAspectRatioNext= 1.0;
+   sink->soc.parNext= 0;
+   sink->soc.parNextCapacity= 0;
+   sink->soc.parNextCount= 0;
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pixelAspectRatioChanged= FALSE;
    sink->soc.showChanged= FALSE;
@@ -1084,6 +1167,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
       if ( result == TRUE )
       {
          gint num, denom, width, height;
+         double pixelAspectRatioNext;
          if ( gst_structure_get_fraction( structure, "framerate", &num, &denom ) )
          {
             if ( denom == 0 ) denom= 1;
@@ -1100,16 +1184,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                sink->soc.frameRateChanged= TRUE;
             }
          }
-         sink->soc.pixelAspectRatioNext= 1.0;
-         if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
-         {
-            if ( (num <= 0) || (denom <= 0))
-            {
-               num= denom= 1;
-            }
-            sink->soc.pixelAspectRatioNext= (double)num/(double)denom;
-            sink->soc.havePixelAspectRatio= TRUE;
-         }
+         width= -1;
          if ( gst_structure_get_int( structure, "width", &width ) )
          {
             if ( (sink->soc.frameWidth != -1) && (sink->soc.frameWidth != width) )
@@ -1122,6 +1197,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             }
             sink->soc.frameWidthStream= width;
          }
+         height= -1;
          if ( gst_structure_get_int( structure, "height", &height ) )
          {
             if ( (sink->soc.frameHeight != -1) && (sink->soc.frameHeight != height) )
@@ -1134,6 +1210,17 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             }
             sink->soc.frameHeightStream= height;
          }
+         pixelAspectRatioNext= 1.0;
+         if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
+         {
+            if ( (num <= 0) || (denom <= 0))
+            {
+               num= denom= 1;
+            }
+            pixelAspectRatioNext= (double)num/(double)denom;
+            sink->soc.havePixelAspectRatio= TRUE;
+         }
+         wstPushPixelAspectRatio( sink, pixelAspectRatioNext, width, height );
          sink->soc.interlaced= FALSE;
          if ( gst_structure_has_field(structure, "interlace-mode") )
          {
@@ -1552,6 +1639,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.numDropped= 0;
    sink->soc.frameDisplayCount= 0;
    sink->soc.videoStartTime= 0;
+   wstFlushPixelAspectRatio( sink, false );
    UNLOCK(sink);
 }
 
@@ -1774,7 +1862,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameWidthStream= -1;
    sink->soc.frameHeightStream= -1;
    sink->soc.pixelAspectRatio= 1.0;
-   sink->soc.pixelAspectRatioNext= 1.0;
+   wstFlushPixelAspectRatio( sink, true );
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.pauseGfxBuffIndex= -1;
    sink->soc.syncType= -1;
@@ -2158,6 +2246,11 @@ static void wstProcessEvents( GstWesterosSink *sink )
             #endif
             wstSetupOutput( sink );
 
+            if ( sink->soc.havePixelAspectRatio )
+            {
+               sink->soc.pixelAspectRatioChanged= TRUE;
+               sink->soc.pixelAspectRatio= wstPopPixelAspectRatio( sink );
+            }
             if ( needBounds(sink) && sink->vpcSurface )
             {
                 wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
@@ -2167,11 +2260,6 @@ static void wstProcessEvents( GstWesterosSink *sink )
             sink->soc.prevFrame1Fd= -1;
             sink->soc.prevFrame2Fd= -1;
             sink->soc.needCaptureRestart= TRUE;
-            if ( sink->soc.havePixelAspectRatio )
-            {
-               sink->soc.pixelAspectRatioChanged= TRUE;
-               sink->soc.pixelAspectRatio= sink->soc.pixelAspectRatioNext;
-            }
          }
       }
    }

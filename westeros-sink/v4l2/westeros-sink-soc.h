@@ -108,6 +108,13 @@ typedef struct _WstSWBuffer
 } WstSWBuffer;
 #endif
 
+typedef struct _WstPARInfo
+{
+   double par;
+   int frameWidth;
+   int frameHeight;
+} WstPARInfo;
+
 struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
@@ -117,7 +124,9 @@ struct _GstWesterosSinkSoc
    int frameRateFractionDenom;
    gboolean frameRateChanged;
    double pixelAspectRatio;
-   double pixelAspectRatioNext;
+   WstPARInfo *parNext;
+   int parNextCount;
+   int parNextCapacity;
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;
    gboolean showChanged;
