@@ -84,6 +84,10 @@ enum
 {
   PROP_DEVICE= PROP_SOC_BASE,
   PROP_FRAME_STEP_ON_PREROLL,
+  #ifdef USE_AMLOGIC_MESON_MSYNC
+  PROP_AVSYNC_SESSION,
+  PROP_AVSYNC_MODE,
+  #endif
   PROP_LOW_MEMORY_MODE,
   PROP_FORCE_ASPECT_RATIO,
   PROP_WINDOW_SHOW,
@@ -183,6 +187,11 @@ static void sinkReleaseVideo( GstWesterosSink *sink );
 #ifdef USE_AMLOGIC_MESON
 #include "meson_drm.h"
 #include <xf86drm.h>
+#ifdef USE_AMLOGIC_MESON_MSYNC
+#define INVALID_SESSION_ID (16)
+#include "gstamlclock.h"
+#include "gstamlhalasink_new.h"
+#endif
 #include "svp/aml-meson/svp-util.c"
 #endif
 
@@ -422,6 +431,17 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "frame step on preroll",
                            "allow frame stepping on preroll into pause", FALSE, G_PARAM_READWRITE));
 
+   #ifdef USE_AMLOGIC_MESON_MSYNC
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_AVSYNC_SESSION,
+     g_param_spec_int ("avsync-session", "avsync session",
+                       "avsync session id to link video and audio. If set, this sink won't look for it from audio sink",
+                       G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_AVSYNC_MODE,
+     g_param_spec_int ("avsync-mode", "avsync mode",
+                       "Vmaster(0) Amaster(1) PCRmaster(2) IPTV(3) FreeRun(4)",
+                       G_MININT, G_MAXINT, 0, G_PARAM_WRITABLE));
+   #endif
+
    g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_LOW_MEMORY_MODE,
        g_param_spec_boolean ("low-memory", "low memory mode",
            "Reduce memory usage if possible",
@@ -613,7 +633,11 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.formatsSet= FALSE;
    sink->soc.updateSession= FALSE;
    sink->soc.syncType= -1;
+   #ifdef USE_AMLOGIC_MESON_MSYNC
+   sink->soc.sessionId= -1;
+   #else
    sink->soc.sessionId= 0;
+   #endif
    sink->soc.bufferCohort= 0;
    sink->soc.minBuffersIn= 0;
    sink->soc.minBuffersOut= 0;
@@ -741,6 +765,10 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       printf("westeros-sink: low memory mode\n");
    }
 
+   #ifdef USE_AMLOGIC_MESON_MSYNC
+   printf("westeros-sink: msync enabled\n");
+   #endif
+
    env= getenv( "WESTEROS_SINK_DEBUG_FRAME" );
    if ( env )
    {
@@ -789,6 +817,29 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
             break;
          }
+      #ifdef USE_AMLOGIC_MESON_MSYNC
+      case PROP_AVSYNC_SESSION:
+         {
+            int id= g_value_get_int(value);
+            if (id >= 0)
+            {
+               sink->soc.userSession= TRUE;
+               sink->soc.sessionId= id;
+               GST_WARNING("AV sync session %d", id);
+            }
+            break;
+         }
+      case PROP_AVSYNC_MODE:
+         {
+            int mode= g_value_get_int(value);
+            if (mode >= 0)
+            {
+               sink->soc.syncType= mode;
+               GST_WARNING("AV sync mode %d", mode);
+            }
+            break;
+         }
+      #endif
       case PROP_LOW_MEMORY_MODE:
          {
             sink->soc.lowMemoryMode= g_value_get_boolean(value);
@@ -868,6 +919,14 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
       case PROP_FRAME_STEP_ON_PREROLL:
          g_value_set_boolean(value, sink->soc.frameStepOnPreroll);
          break;
+      #ifdef USE_AMLOGIC_MESON_MSYNC
+      case PROP_AVSYNC_SESSION:
+         g_value_set_int(value, sink->soc.sessionId);
+         break;
+      case PROP_AVSYNC_MODE:
+         g_value_set_int(value, sink->soc.syncType);
+         break;
+      #endif
       case PROP_LOW_MEMORY_MODE:
          g_value_set_boolean(value, sink->soc.lowMemoryMode);
          break;
@@ -1027,7 +1086,12 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
    LOCK( sink );
    sink->soc.videoPlaying= TRUE;
    sink->soc.videoPaused= FALSE;
-   sink->soc.updateSession= TRUE;
+   #ifdef USE_AMLOGIC_MESON_MSYNC
+   if ( !sink->soc.userSession )
+   #endif
+   {
+      sink->soc.updateSession= TRUE;
+   }
    UNLOCK( sink );
 
    return TRUE;
@@ -3827,6 +3891,35 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       GstClock *clock= GST_ELEMENT_CLOCK(element);
       int syncTypePrev= sink->soc.syncType;
       int sessionIdPrev= sink->soc.sessionId;
+      #ifdef USE_AMLOGIC_MESON_MSYNC
+      if ( sink->soc.userSession )
+      {
+         syncTypePrev= -1;
+         sessionIdPrev= -1;
+      }
+      else
+      {
+         sink->soc.syncType= 0;
+         sink->soc.sessionId= INVALID_SESSION_ID;
+         audioSink= wstFindAudioSink( sink );
+         if ( audioSink )
+         {
+            GstClock* amlclock= gst_aml_hal_asink_get_clock( audioSink );
+            if (amlclock)
+            {
+               sink->soc.syncType= 1;
+               sink->soc.sessionId= gst_aml_clock_get_session_id( amlclock );
+               gst_object_unref( amlclock );
+            }
+            else
+            {
+               GST_WARNING ("no clock: vmaster mode");
+            }
+            gst_object_unref( audioSink );
+            GST_WARNING("AmlHalAsink detected, sesison_id: %d", sink->soc.sessionId);
+         }
+      }
+      #else
       sink->soc.syncType= 0;
       sink->soc.sessionId= 0;
       audioSink= wstFindAudioSink( sink );
@@ -3862,6 +3955,7 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       {
          sink->soc.sessionId= sink->resAssignedId;
       }
+      #endif
       if ( (syncTypePrev != sink->soc.syncType) || (sessionIdPrev != sink->soc.sessionId) )
       {
          wstSendSessionInfoVideoClientConnection( sink->soc.conn );
@@ -5077,7 +5171,12 @@ capture_start:
          }
          if ( wasPaused && !sink->soc.videoPaused )
          {
-            sink->soc.updateSession= TRUE;
+            #ifdef USE_AMLOGIC_MESON_MSYNC
+            if ( !sink->soc.userSession )
+            #endif
+            {
+               sink->soc.updateSession= TRUE;
+            }
             wstSendPauseVideoClientConnection( sink->soc.conn, false);
             wasPaused= false;
          }

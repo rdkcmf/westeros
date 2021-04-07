@@ -228,6 +228,7 @@ typedef struct _VideoFrameManager
    int bufferIdCurrent;
    bool syncInit;
    void *sync;
+   int syncSession;
 } VideoFrameManager;
 
 #define ACTIVE_FRAMES (4)
@@ -2831,6 +2832,7 @@ static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *con
       vfm->queueCapacity= VFM_QUEUE_CAPACITY;
       vfm->queueSize= 0;
       vfm->bufferIdCurrent= -1;
+      vfm->syncSession= -1;
 
       for( i= 0; i < vfm->queueCapacity; ++i )
       {

@@ -21,6 +21,9 @@
 #include "aml_avsync.h"
 #include "aml_avsync_log.h"
 
+#ifdef USE_AMLOGIC_MESON_MSYNC
+#define INVALID_SESSION_ID (16)
+#endif
 
 static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
 {
@@ -62,6 +65,35 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       }
       pts90K vsyncInterval= 90000LL/refreshRate;
 
+      #ifdef USE_AMLOGIC_MESON_MSYNC
+      INFO("msync enabled");
+      if ( sessionId == INVALID_SESSION_ID )
+      {
+         int session= av_sync_open_session(&sessionId);
+         if ( session < 0 )
+         {
+            ERROR("Failed to alloc avsync session");
+            return;
+         }
+         vfm->syncSession= session;
+      }
+
+      vfm->sync= av_sync_create( sessionId, /* session_id */
+                                 vfm->conn->syncType,
+                                 AV_SYNC_TYPE_VIDEO,
+                                 3 /* start threshold */
+                               );
+      if ( vfm->sync )
+      {
+         struct video_config config;
+         config.delay= 2;
+         av_sync_video_config( vfm->sync, &config);
+      }
+      else
+      {
+         ERROR("Failed to create vfm sync module");
+      }
+      #else
       vfm->sync= av_sync_create( sessionId, /* session_id */
                                  vfm->conn->syncType,
                                  3, /* start threshold */
@@ -71,6 +103,7 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       {
          ERROR("Failed to create vfm sync module");
       }
+      #endif
       DEBUG("Created sync module: %p vsyncInterval %d", vfm->sync, vsyncInterval );
    }
 }
@@ -81,6 +114,13 @@ static void wstAVSyncTerm( VideoFrameManager *vfm )
    {
       av_sync_destroy( vfm->sync );
       vfm->sync= 0;
+      #ifdef USE_AMLOGIC_MESON_MSYNC
+      if (vfm->syncSession != -1)
+      {
+         av_sync_close_session( vfm->syncSession );
+         vfm->syncSession = -1;
+      }
+      #endif
    }
 }
 
@@ -179,7 +219,9 @@ static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm )
          {
             pts90K vsyncInterval= (90000LL*vfm->vblankInterval+500000LL)/1000000LL;
             INFO("updating vblankInterval to %d (%lld us)", vsyncInterval, vfm->vblankInterval);
+            #ifndef USE_AMLOGIC_MESON_MSYNC
             av_sync_update_vsync_interval( vfm->sync, vsyncInterval );
+            #endif
          }
          vfm->vblankIntervalPrev= vfm->vblankInterval;
       }

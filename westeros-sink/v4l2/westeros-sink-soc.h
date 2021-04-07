@@ -169,6 +169,9 @@ struct _GstWesterosSinkSoc
    gboolean updateSession;
    int syncType;
    int sessionId;
+   #ifdef USE_AMLOGIC_MESON_MSYNC
+   gboolean userSession;
+   #endif
    int bufferCohort;
    uint32_t minBuffersIn;
    uint32_t minBuffersOut;
