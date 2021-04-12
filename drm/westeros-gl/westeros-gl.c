@@ -5246,6 +5246,16 @@ static void wstSwapDRMBuffers( WstGLCtx *ctx )
       ctx->notifySizeChange= true;
       ctx->modeCurrent= ctx->modeNext;
       ctx->modeSetPending= false;
+      #ifdef DRM_USE_OUT_FENCE
+      #ifdef USE_REFRESH_LOCK
+      if ( ctx->modeSet && g_useRefreshLock )
+      {
+      #endif
+         wstSwapWaitFence( ctx );
+      #ifdef USE_REFRESH_LOCK
+      }
+      #endif
+      #endif
       ctx->modeSet= false;
    }
 
