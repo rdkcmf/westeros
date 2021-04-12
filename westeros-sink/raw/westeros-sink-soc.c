@@ -1138,7 +1138,9 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
             if ( !sink->soc.conn && (sink->soc.frameOutCount == 0))
             {
+               LOCK(sink);
                sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
+               UNLOCK(sink);
             }
 
             drmBuff->frameTime= ((GST_BUFFER_PTS(buffer) + 500LL) / 1000LL);
@@ -2421,12 +2423,16 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
          if ( sink->soc.emitFirstFrameSignal )
          {
             sink->soc.emitFirstFrameSignal= FALSE;
+            LOCK(sink);
             sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
+            UNLOCK(sink);
          }
          if ( sink->soc.emitUnderflowSignal )
          {
             sink->soc.emitUnderflowSignal= FALSE;
+            LOCK(sink);
             sink->soc.underflowThread= g_thread_new("westeros_underflow", wstUnderflowThread, sink);
+            UNLOCK(sink);
          }
       }
    }
@@ -2688,8 +2694,10 @@ static gpointer wstFirstFrameThread(gpointer data)
    {
       GST_DEBUG("wstFirstFrameThread: emit first frame signal");
       g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
+      LOCK(sink);
       g_thread_unref( sink->soc.firstFrameThread );
       sink->soc.firstFrameThread= NULL;
+      UNLOCK(sink);
    }
 
    return NULL;
@@ -2703,8 +2711,10 @@ static gpointer wstUnderflowThread(gpointer data)
    {
       GST_DEBUG("wstUnderflowThread: emit underflow signal");
       g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_UNDERFLOW], 0, 0, NULL);
+      LOCK(sink);
       g_thread_unref( sink->soc.underflowThread );
       sink->soc.underflowThread= NULL;
+      UNLOCK(sink);
    }
 
    return NULL;
