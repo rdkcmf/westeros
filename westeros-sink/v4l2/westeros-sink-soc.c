@@ -254,7 +254,7 @@ static void avProgLog( long long nanoTime, int syncGroup, const char *edge, cons
    if ( gAvProgOut )
    {
       struct timespec tp;
-      unsigned long long pts= 0;
+      long long pts= -1LL;
 
       if ( GST_CLOCK_TIME_IS_VALID(nanoTime) )
       {
@@ -262,7 +262,7 @@ static void avProgLog( long long nanoTime, int syncGroup, const char *edge, cons
       }
 
       clock_gettime(CLOCK_MONOTONIC, &tp);
-      fprintf(gAvProgOut, "AVPROG: [%6u.%06u] %llu %d %c %s %s\n", tp.tv_sec, tp.tv_nsec/1000, pts, syncGroup, 'V', edge, desc);
+      fprintf(gAvProgOut, "AVPROG: [%6u.%06u] %lld %d %c %s %s\n", tp.tv_sec, tp.tv_nsec/1000, pts, syncGroup, 'V', edge, desc);
    }
 }
 
@@ -3227,6 +3227,11 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
          sink->soc.inBuffers[bufferIndex].queued= false;
       }
    }
+   if ( bufferIndex >= 0 )
+   {
+      sink->soc.inBuffers[bufferIndex].buf.timestamp.tv_sec= -1;
+      sink->soc.inBuffers[bufferIndex].buf.timestamp.tv_usec= 0;
+   }
 
    return bufferIndex;
 }
@@ -5237,13 +5242,18 @@ capture_start:
          ++sink->soc.frameDecodeCount;
 
          {
+            gint64 currFramePTS= 0;
             bool gfxFrame= false;
             sink->soc.resubFd= -1;
 
-            gint64 currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
-            if ( sink->soc.interlaced && (currFramePTS == 0) && (sink->soc.frameDecodeCount > 1) )
+            if ( sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec != -1 )
             {
-               currFramePTS= sink->soc.prevDecodedTimestamp + 1000000LL/(sink->soc.frameRate*2);
+               currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
+            }
+            if ( (currFramePTS == 0) && (sink->soc.frameDecodeCount > 1) )
+            {
+               double rate= (sink->soc.interlaced ? sink->soc.frameRate*2 : sink->soc.frameRate);
+               currFramePTS= sink->soc.prevDecodedTimestamp + 1000000LL/rate;
                sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec= currFramePTS / 1000000LL;
                sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec= currFramePTS % 1000000LL;
             }
