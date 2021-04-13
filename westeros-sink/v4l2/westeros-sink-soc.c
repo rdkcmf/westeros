@@ -52,7 +52,7 @@
 #define NUM_OUTPUT_BUFFERS (6)
 #define MIN_OUTPUT_BUFFERS (3)
 
-#define QOS_INTERVAL (1000)
+#define QOS_INTERVAL (120)
 #define DEFAULT_OVERSCAN (0)
 
 #define IOCTL ioctl_wrapper
@@ -5354,7 +5354,7 @@ capture_start:
                wstRequeueOutputBuffer( sink, buffIndex );
             }
 
-            if ( ((sink->soc.frameInCount % QOS_INTERVAL) == 0) && sink->soc.frameInCount )
+            if ( ((sink->soc.frameDecodeCount % QOS_INTERVAL) == 0) && sink->soc.frameInCount )
             {
                GstMessage *msg= gst_message_new_qos( GST_OBJECT_CAST(sink),
                                                      FALSE, /* live */
