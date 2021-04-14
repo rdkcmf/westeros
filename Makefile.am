@@ -70,6 +70,10 @@ if ENABLE_XDG_V5
 AM_CXXFLAGS += -DUSE_XDG_VERSION5 -I$(srcdir)/protocol/version5
 endif
 
+if ENABLE_XDG_STABLE
+AM_CXXFLAGS += -DUSE_XDG_STABLE -I$(srcdir)/protocol/stable
+endif
+
 AM_CFLAGS = $(AM_CXXFLAGS) -Wno-deprecated-declarations
 
 if ENABLE_WESTEROS_LDBPROTOCOL
@@ -180,6 +184,10 @@ endif
 
 if ENABLE_XDG_V5
 libwesteros_compositor_la_SOURCES += protocol/version5/xdg-shell-protocol.c
+endif
+
+if ENABLE_XDG_STABLE
+libwesteros_compositor_la_SOURCES += protocol/stable/xdg-shell-protocol.c
 endif
 
 if ENABLE_WESTEROS_SBPROTOCOL

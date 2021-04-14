@@ -17,11 +17,13 @@
 # limitations under the License.
 #
 
-all: xdgv4 xdgv5 vpc
+all: xdgv4 xdgv5 xdgstable vpc
 
 xdgv4: xgd-server-header-v4 xgd-code-v4
 
 xdgv5: xgd-server-header-v5 xgd-code-v5
+
+xdgstable: xgd-server-header-stable xgd-code-stable
 
 xgd-server-header-v4:
 	$(SCANNER_TOOL) server-header < version4/xdg-shell.xml > version4/xdg-shell-server-protocol.h
@@ -34,6 +36,12 @@ xgd-server-header-v5:
 
 xgd-code-v5:
 	$(SCANNER_TOOL) code < version5/xdg-shell.xml > version5/xdg-shell-protocol.c
+
+xgd-server-header-stable:
+	$(SCANNER_TOOL) server-header < stable/xdg-shell.xml > stable/xdg-shell-server-protocol.h
+
+xgd-code-stable:
+	$(SCANNER_TOOL) code < stable/xdg-shell.xml > stable/xdg-shell-protocol.c
 
 vpc: vpc-client-header vpc-server-header vpc-code
 

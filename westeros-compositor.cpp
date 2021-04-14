@@ -68,6 +68,12 @@
 
 #include "westeros-version.h"
 
+#if defined ( USE_XDG_STABLE )
+// It's neither defined nor used for 'stable' version
+// but minimizes the number of if/defs.
+#define XDG_SURFACE_STATE_FULLSCREEN 2
+#endif
+
 #define WST_MAX_ERROR_DETAIL (512)
 
 #define MAX_NESTED_NAME_LEN (32)
@@ -672,6 +678,20 @@ static void wstIXdgPong( struct wl_client *client,
                          uint32_t serial );
 static void wstIXdgShellSurfaceDestroy( struct wl_client *client,
                                         struct wl_resource *resource );
+static void wstIXdgCreatePositioner( struct wl_client *client,
+                                     struct wl_resource *resource,
+                                     uint32_t id);
+static void wstIXdgShellGetTopLevel( struct wl_client *client,
+                                     struct wl_resource *resource,
+                                     uint32_t id);
+static void wstIXdgShellGetPopup( struct wl_client *client,
+                                  struct wl_resource *resource,
+                                  uint32_t id,
+                                  struct wl_resource *parent,
+                                  struct wl_resource *positioner);
+static void wstIXdgShellAckConfigure( struct wl_client *client,
+                                      struct wl_resource *resource,
+                                      uint32_t serial);
 static void wstIXdgShellSurfaceSetParent( struct wl_client *client,
                                           struct wl_resource *resource,
                                           struct wl_resource *parentResource );
@@ -3683,7 +3703,13 @@ static void* wstCompositorThread( void *arg )
       goto exit;
    }
 
-   if (!wl_global_create(ctx->display, &xdg_shell_interface, 1, ctx, wstXdgShellBind))
+   if (!wl_global_create(ctx->display,
+#if defined ( USE_XDG_STABLE )
+                         &xdg_wm_base_interface,
+#else
+                         &xdg_shell_interface,
+#endif
+                         1, ctx, wstXdgShellBind))
    {
       ERROR("unable to create xdg-shell interface");
       goto exit;
@@ -4725,6 +4751,15 @@ static const struct xdg_shell_interface xdg_shell_interface_impl=
    wstIXdgGetXdgPopup,
    wstIXdgPong
 };
+
+#elif defined ( USE_XDG_STABLE )
+static const struct xdg_wm_base_interface xdg_shell_interface_impl=
+{
+   wstIXdgDestroy,
+   wstIXdgCreatePositioner,
+   wstIXdgGetXdgSurface,
+   wstIXdgPong
+};
 #else
 
 #error "No supported version of xdg_shell protocol specified"
@@ -4733,6 +4768,13 @@ static const struct xdg_shell_interface xdg_shell_interface_impl=
 
 static const struct xdg_surface_interface xdg_surface_interface_impl=
 {
+#if defined ( USE_XDG_STABLE )
+   wstIXdgShellSurfaceDestroy,
+   wstIXdgShellGetTopLevel,
+   wstIXdgShellGetPopup,
+   wstIXdgShellSurfaceSetWindowGeometry,
+   wstIXdgShellAckConfigure
+#else
    wstIXdgShellSurfaceDestroy,
    wstIXdgShellSurfaceSetParent,
    wstIXdgShellSurfaceSetTitle,
@@ -4747,6 +4789,7 @@ static const struct xdg_surface_interface xdg_surface_interface_impl=
    wstIXdgShellSurfaceSetFullscreen,
    wstIXdgShellSurfaceUnSetFullscreen,
    wstIXdgShellSurfaceSetMinimized
+#endif /* USE_XDG_STABLE */
 };
 
 static const struct wl_seat_interface seat_interface=
@@ -6664,7 +6707,11 @@ static void wstXdgShellBind( struct wl_client *client, void *data, uint32_t vers
    WARNING("wstXdgShellBind: xdg-shell is currently a stub impl");
    
    resource= wl_resource_create(client, 
+#if defined ( USE_XDG_STABLE )
+                                &xdg_wm_base_interface,
+#else
                                 &xdg_shell_interface,
+#endif
                                 MIN(version, 1), 
                                 id);
    if (!resource) 
@@ -6684,6 +6731,16 @@ static void wstIXdgDestroy( struct wl_client *client, struct wl_resource *resour
    WESTEROS_UNUSED(client);
    wl_resource_destroy( resource );
 }
+
+#if defined ( USE_XDG_STABLE )
+static void wstIXdgCreatePositioner( struct wl_client *client, struct wl_resource *resource, uint32_t id)
+{
+   WESTEROS_UNUSED(client);
+   WESTEROS_UNUSED(resource);
+   WESTEROS_UNUSED(id);
+   WARNING("wstIXdgCreatePositioner: xdg_surface is currently a stub impl");
+}
+#endif /* USE_XDG_STABLE */
 
 static void wstIXdgUseUnstableVersion( struct wl_client *client, struct wl_resource *resource, int32_t version )
 {
@@ -6744,9 +6801,11 @@ static void wstIXdgGetXdgSurface( struct wl_client *client,
       *entry= XDG_SURFACE_STATE_FULLSCREEN;
       serial= wl_display_next_serial( compositor->ctx->display );
       xdg_surface_send_configure( shellSurface->resource,
+#if !defined ( USE_XDG_STABLE )
                                   compositor->outputWidth,
                                   compositor->outputHeight,
                                   &states,
+#endif
                                   serial );
                                   
       wl_array_release( &states );
@@ -6909,6 +6968,37 @@ static void wstIXdgShellSurfaceSetWindowGeometry( struct wl_client *client,
    WESTEROS_UNUSED(height);
 }
                                                   
+static void wstIXdgShellGetTopLevel( struct wl_client *client,
+                                     struct wl_resource *resource,
+                                     uint32_t id)
+{
+   WESTEROS_UNUSED(client);
+   WESTEROS_UNUSED(resource);
+   WESTEROS_UNUSED(id);
+}
+
+static void wstIXdgShellGetPopup( struct wl_client *client,
+                                  struct wl_resource *resource,
+                                  uint32_t id,
+                                  struct wl_resource *parent,
+                                  struct wl_resource *positioner)
+{
+   WESTEROS_UNUSED(client);
+   WESTEROS_UNUSED(resource);
+   WESTEROS_UNUSED(id);
+   WESTEROS_UNUSED(parent);
+   WESTEROS_UNUSED(positioner);
+}
+
+static void wstIXdgShellAckConfigure( struct wl_client *client,
+                                      struct wl_resource *resource,
+                                      uint32_t serial)
+{
+   WESTEROS_UNUSED(client);
+   WESTEROS_UNUSED(resource);
+   WESTEROS_UNUSED(serial);
+}
+
 static void wstIXdgShellSurfaceSetMaximized( struct wl_client *client,
                                              struct wl_resource *resource )
 {
@@ -6964,9 +7054,11 @@ static void wstXdgSurfaceSendConfigure( WstCompositor *wctx, WstSurface *surface
       WstShellSurface *shellSurface= (*it);
       
       xdg_surface_send_configure( shellSurface->resource,
+#if !defined ( USE_XDG_STABLE )
                                   wctx->outputWidth,
                                   wctx->outputHeight,
                                   &states,
+#endif
                                   serial );
    }
                                

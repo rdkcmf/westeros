@@ -55,6 +55,7 @@ GLEW_DETECTED=" "
 WAYLAND_EGL_DETECTED=" "
 ENABLE_XDG_V4=" "
 ENABLE_XDG_V5=" "
+ENABLE_XDG_STABLE=" "
 ENABLE_ESSOS=" "
 
 # Checks for library functions.
@@ -185,6 +186,18 @@ AC_ARG_ENABLE([xdgv5],
               ],
               [echo "xdg_shell protocol v5 is disabled"])
 AM_CONDITIONAL([ENABLE_XDG_V5], [test x$ENABLE_XDG_V5 = xtrue])
+
+AC_ARG_ENABLE([xdgstable],
+              AS_HELP_STRING([--enable-xdgstable],[enable xdg_shell stable protocol (default is no)]),
+              [
+                case "${enableval}" in
+                 yes) ENABLE_XDG_STABLE=true ENABLE_XDG_V5=false ENABLE_XDG_V4=false ;;
+                  no) AC_MSG_NOTICE([xdg_shell stable protocol is disabled]) ;;
+                   *) AC_MSG_ERROR([bad value ${enableval} for --enable-xdgstable]) ;;
+                esac
+              ],
+              [echo "xdg_shell stable protocol is disabled"])
+AM_CONDITIONAL([ENABLE_XDG_STABLE], [test x$ENABLE_XDG_STABLE = xtrue])
 
 AC_ARG_ENABLE([essos],
               AS_HELP_STRING([--enable-essos],[enable essos (default is yes)]),
