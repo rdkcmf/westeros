@@ -167,7 +167,7 @@ AC_ARG_ENABLE([xdgv4],
               [
                 case "${enableval}" in
                  yes) ENABLE_XDG_V4=true ENABLE_XDG_V5=false ;;
-                  no) AC_MSG_ERROR([xdg_shell protocol v4 is disabled]) ;;
+                  no) AC_MSG_NOTICE([xdg_shell protocol v4 is disabled]) ;;
                    *) AC_MSG_ERROR([bad value ${enableval} for --enable-xdgv4]) ;;
                 esac
               ],
@@ -179,7 +179,7 @@ AC_ARG_ENABLE([xdgv5],
               [
                 case "${enableval}" in
                  yes) ENABLE_XDG_V5=true ENABLE_XDG_V4=false ;;
-                  no) AC_MSG_ERROR([xdg_shell protocol v5 is disabled]) ;;
+                  no) AC_MSG_NOTICE([xdg_shell protocol v5 is disabled]) ;;
                    *) AC_MSG_ERROR([bad value ${enableval} for --enable-xdgv5]) ;;
                 esac
               ],
