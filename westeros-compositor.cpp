@@ -3358,7 +3358,7 @@ static void sbReferenceBuffer(void *userData, struct wl_client *client, uint32_t
    WESTEROS_UNUSED(client);
    
    // The value of 'native_handle' is the address or id of the low level buffer that is valid across process boundaries
-   buffer->driverBuffer= (void*)name;
+   buffer->driverBuffer= (void*)(uintptr_t)name;
 }
 
 static void sbReleaseBuffer(void *userData, struct wl_sb_buffer *buffer)
