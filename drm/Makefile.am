@@ -45,12 +45,12 @@ libwesteros_gl_la_SOURCES = westeros-gl/westeros-gl.c
 
 libwesteros_gl_la_include_HEADERS = westeros-gl/westeros-gl.h
 libwesteros_gl_la_includedir = $(includedir)
-libwesteros_gl_la_CFLAGS= $(AM_CFLAGS) -D_GNU_SOURCE 
+libwesteros_gl_la_CFLAGS= $(AM_CFLAGS) $(GBM_CFLAGS) $(LIBDRM_CFLAGS) -D_GNU_SOURCE
 
 libwesteros_gl_la_LDFLAGS= \
    $(AM_LDFLAGS) \
-   -ldrm \
-   -lgbm
+   $(LIBDRM_LIBS) \
+   $(GBM_LIBS)
 
 
 libwesteros_gl_console_helper_la_SOURCES = westeros-gl/westeros-gl-console-helper.c

@@ -58,6 +58,8 @@ PKG_CHECK_MODULES([WAYLAND_CLIENT],[wayland-client >= 1.6.0])
 PKG_CHECK_MODULES([EGL],[egl >= 0.0],[EGL_DETECTED=true],[EGL_DETECTED=false])
 AM_CONDITIONAL([HAVE_EGL], [test x$EGL_DETECTED = xtrue])
 PKG_CHECK_MODULES([WAYLAND_SERVER],[wayland-server >= 1.6.0])
+PKG_CHECK_MODULES([GBM],[gbm >= 12.0.1])
+PKG_CHECK_MODULES([LIBDRM],[libdrm >= 2.0])
 
 AC_ARG_ENABLE([gbm-modifiers],
               AS_HELP_STRING([--enable-gbm-modifiers],[enable gbm modifiers (default is no)]),

@@ -191,6 +191,8 @@ linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c:
 .drm-em:
 	mkdir -p $(WID)/usr/include && \
 	cp ../drm-em/wayland-egl.pc $(CID)/share/pkgconfig && \
+	cp ../drm-em/gbm.pc $(CID)/share/pkgconfig && \
+	cp ../drm-em/libdrm.pc $(CID)/share/pkgconfig && \
 	cp ../drm-em/include/* $(WID)/include -r && \
 	cd ../drm-em/em && \
 	cp $(CID)/../mesa/mesa-mesa-19.2.4/src/gbm/main/gbm.h $(WID)/include && \
