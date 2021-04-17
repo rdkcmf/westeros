@@ -32,18 +32,19 @@ void notify( EssRMgr *rm, int event, int type, int id, void* userData )
    switch( type )
    {
       case EssRMgrResType_videoDecoder:
+      case EssRMgrResType_audioDecoder:
          switch( event )
          {
             case EssRMgrEvent_granted:
-               printf("granted decoder %d\n", id );
+               printf("granted resource type %d id %d\n", type, id );
                req->assignedId= id;
                break;
             case EssRMgrEvent_revoked:
                {
                   req->assignedId= -1;
-                  printf("releasing video decoder %d\n", id);
-                  EssRMgrReleaseResource( rm, EssRMgrResType_videoDecoder, id );
-                  printf("done releasing video decoder %d\n", id);
+                  printf("releasing resource type %d id %d\n", type, id);
+                  EssRMgrReleaseResource( rm, type, id );
+                  printf("done releasing resource type %d id %d\n", type, id);
                }
                break;
             default:
@@ -61,6 +62,7 @@ static void showUsage()
    printf("usage:\n");
    printf(" essos-sample-resmgr [options]\n" );
    printf("where [options] are:\n" );
+   printf("  --type <res type>\n" );
    printf("  --delay <delay in ms>\n");
    printf("  --priority <priority>\n");
    printf("  --priority2 <priority>\n");
@@ -72,6 +74,10 @@ static void showUsage()
    printf("  --loop <count>\n" );
    printf("  --list : list current assignments\n");
    printf("  --lock : lock file\n");
+   printf("  --get-policy-tie\n");
+   printf("  --get-count <type>\n");
+   printf("  --get-owner <type> <id>\n");
+   printf("  --get-caps <type> <id>\n");
    printf("  -? : show usage\n" );
    printf("\n" );   
 }
@@ -81,6 +87,7 @@ int main( int argc, const char **argv )
    int rc= 0;
    EssRMgr *rm= 0;
    int argidx;
+   int resType= EssRMgrResType_videoDecoder;
    int priority= 100;
    int priority2= -1;
    int usage= 0;
@@ -95,6 +102,15 @@ int main( int argc, const char **argv )
    bool releaseRequest= true;
    bool makeLock= false;
    bool listAssignments= false;
+   bool getPolicyTie= false;
+   bool getCount= false;
+   int getCountType= 0;
+   bool getOwner= false;
+   int getOwnerType= 0;
+   int getOwnerId= 0;
+   bool getCaps= false;
+   int getCapsType= 0;
+   int getCapsId= 0;
 
    printf("essos-sample-resmgr v1.0\n");
 
@@ -118,6 +134,14 @@ int main( int argc, const char **argv )
             {
                looping= true;
                loopMax= atoi( argv[argidx] );
+            }
+         }
+         else if ( (len == 6) && !strncmp( argv[argidx], "--type", len) )
+         {
+            ++argidx;
+            if ( argidx < argc )
+            {
+               resType= atoi( argv[argidx] );
             }
          }
          else if ( (len == 7) && !strncmp( argv[argidx], "--delay", len) )
@@ -201,6 +225,41 @@ int main( int argc, const char **argv )
          {
             listAssignments= true;
          }
+         else if ( (len == 16) && !strncmp( argv[argidx], "--get-policy-tie", len) )
+         {
+            getPolicyTie= true;
+         }
+         else if ( (len == 11) && !strncmp( argv[argidx], "--get-count", len) )
+         {
+            ++argidx;
+            if ( argidx < argc )
+            {
+               getCount= true;
+               getCountType= atoi( argv[argidx] );
+            }
+         }
+         else if ( (len == 11) && !strncmp( argv[argidx], "--get-owner", len) )
+         {
+            ++argidx;
+            if ( argidx+1 < argc )
+            {
+               getOwner= true;
+               getOwnerType= atoi( argv[argidx] );
+               ++argidx;
+               getOwnerId= atoi( argv[argidx] );
+            }
+         }
+         else if ( (len == 10) && !strncmp( argv[argidx], "--get-caps", len) )
+         {
+            ++argidx;
+            if ( argidx+1 < argc )
+            {
+               getCaps= true;
+               getCapsType= atoi( argv[argidx] );
+               ++argidx;
+               getCapsId= atoi( argv[argidx] );
+            }
+         }
          else
          {
             printf( "unknown option %s\n\n", argv[argidx] );
@@ -237,6 +296,7 @@ int main( int argc, const char **argv )
       {
          bool result;
 
+         req.type= resType;
          req.assignedId= -1;
          req.requestId= -1;
          req.usage= usage;
@@ -245,7 +305,7 @@ int main( int argc, const char **argv )
          req.notifyCB= notify;
          req.notifyUserData= &req;
 
-         result= EssRMgrRequestResource( rm, EssRMgrResType_videoDecoder, &req );
+         result= EssRMgrRequestResource( rm, resType, &req );
          printf("EssRMgrRequestResource result %d\n", result);
          if ( result )
          {
@@ -263,7 +323,7 @@ int main( int argc, const char **argv )
                if ( req.requestId >= 0 )
                {
                   printf("changing priority from %d to %d\n", priority, priority2 );
-                  EssRMgrRequestSetPriority( rm, EssRMgrResType_videoDecoder, req.requestId, priority2 );
+                  EssRMgrRequestSetPriority( rm, resType, req.requestId, priority2 );
                }
                usleep( delay/2 );
             }
@@ -276,7 +336,7 @@ int main( int argc, const char **argv )
                   usageNew.usage= usage2;
                   usageNew.info= req.info;
                   printf("changing usage from %x to %x\n", usage, usage2 );
-                  EssRMgrRequestSetUsage( rm, EssRMgrResType_videoDecoder, req.requestId, &usageNew );
+                  EssRMgrRequestSetUsage( rm, resType, req.requestId, &usageNew );
                }
                usleep( delay/2 );
             }
@@ -289,7 +349,7 @@ int main( int argc, const char **argv )
                if ( req.assignedId >= 0 )
                {
                   printf("EssRMgrReleaseResource\n");
-                  EssRMgrReleaseResource( rm, EssRMgrResType_videoDecoder, req.assignedId );
+                  EssRMgrReleaseResource( rm, resType, req.assignedId );
                }
                usleep( delay );
             }
@@ -299,6 +359,38 @@ int main( int argc, const char **argv )
       if ( listAssignments )
       {
          EssRMgrDumpState( rm );
+      }
+
+      if ( getPolicyTie )
+      {
+         bool result= EssRMgrGetPolicyPriorityTie( rm );
+         printf("policy: requester-wins-priority-tie: %d\n", result);
+      }
+
+      if ( getCount )
+      {
+         int count= EssRMgrResourceGetCount( rm, getCountType );
+         printf("count for resource type %d: %d\n", getCountType, count);
+      }
+
+      if ( getOwner )
+      {
+         int client= 0, priority= 0;
+         bool result= EssRMgrResourceGetOwner( rm, getOwnerType, getOwnerId, &client, &priority );
+         printf("owner for resource type %d id %d: result %d: client %d priority %d\n",
+                 getOwnerType, getOwnerId, result, client, priority);
+      }
+
+      if ( getCaps )
+      {
+         EssRMgrCaps caps;
+         bool result= EssRMgrResourceGetCaps( rm, getCapsType, getCapsId, &caps );
+         printf("caps for resource type %d id %d: result %d: caps %X\n",
+                getCapsType, getCapsId, result, caps.capabilities);
+         if ( (getCapsType == EssRMgrResType_videoDecoder) && (caps.capabilities & EssRMgrVidCap_limitedResolution) )
+         {
+            printf("  (%dx%d)\n", caps.info.video.maxWidth, caps.info.video.maxHeight );
+         }
       }
    }
  

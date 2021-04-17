@@ -128,6 +128,20 @@ typedef struct _EssRMgrUsage
 
 
 /**
+ * EssRMgrInit
+ *
+ * Initialize resource manager
+ */
+bool EssRMgrInit();
+
+/**
+ * EssRMgrTerm
+ *
+ * Terminate resource manager
+ */
+void EssRMgrTerm();
+
+/**
  * EssRMgrCreate
  *
  * Create an Essos resource manager context.
@@ -161,7 +175,7 @@ int EssRMgrResourceGetCount( EssRMgr *rm, int type );
  *
  * Get current owner of specified resource
  */
-bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *pid, int *priority );
+bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *client, int *priority );
 
 /**
  * EssRMgrResourceGetCaps
