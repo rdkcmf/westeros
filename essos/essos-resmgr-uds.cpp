@@ -68,9 +68,11 @@ typedef struct _EssRMgrBase
 {
    bool requesterWinsPriorityTie;
    int numVideoDecoders;
-   EssRMgrResource videoDecoder[ESSRMGR_MAX_DECODERS];
+   EssRMgrResource videoDecoder[ESSRMGR_MAX_ITEMS];
    int numAudioDecoders;
-   EssRMgrResource audioDecoder[ESSRMGR_MAX_DECODERS];
+   EssRMgrResource audioDecoder[ESSRMGR_MAX_ITEMS];
+   int numFrontEnds;
+   EssRMgrResource frontEnd[ESSRMGR_MAX_ITEMS];
 } EssRMgrBase;
 
 typedef struct _EssRMgrResourceControl
@@ -86,6 +88,7 @@ typedef struct _EssRMgrState
    EssRMgrBase base;
    EssRMgrResourceControl vidCtrl;
    EssRMgrResourceControl audCtrl;
+   EssRMgrResourceControl feCtrl;
 } EssRMgrState;
 
 typedef struct _EssRMgrResourceConnection
@@ -474,6 +477,15 @@ static void essRMDumpState( EssRMgrResourceConnection *conn, int requestId )
                state->base.audioDecoder[i].priorityOwner );
       essRMSendDumpStateResponse( conn, requestId, msg );
    }
+   for( int i= 0; i < state->base.numFrontEnds; ++i )
+   {
+      snprintf(msg, sizeof(msg), "frontend: %d caps %X owner %d priority %d\n",
+               i,
+               state->base.frontEnd[i].capabilities,
+               (state->base.frontEnd[i].connOwner  ? state->base.frontEnd[i].connOwner->clientId : 0),
+               state->base.frontEnd[i].priorityOwner );
+      essRMSendDumpStateResponse( conn, requestId, msg );
+   }
    essRMSendDumpStateResponse( conn, requestId, 0 );
 }
 
@@ -609,6 +621,7 @@ static void *essRMResourceConnectionThread( void *arg )
                               result= essRMRequestResource( conn, &req );
                               break;
                            case EssRMgrResType_audioDecoder:
+                           case EssRMgrResType_frontEnd:
                               result= essRMRequestResource( conn, &req );
                               break;
                            default:
@@ -629,9 +642,8 @@ static void *essRMResourceConnectionThread( void *arg )
                         switch( type )
                         {
                            case EssRMgrResType_videoDecoder:
-                              essRMReleaseResource( conn, type, assignedId );
-                              break;
                            case EssRMgrResType_audioDecoder:
+                           case EssRMgrResType_frontEnd:
                               essRMReleaseResource( conn, type, assignedId );
                               break;
                            default:
@@ -675,6 +687,7 @@ static void *essRMResourceConnectionThread( void *arg )
                               essRMSetUsageResource( conn, requestId, type, &usage );
                               break;
                            case EssRMgrResType_audioDecoder:
+                           case EssRMgrResType_frontEnd:
                               essRMSetUsageResource( conn, requestId, type, &usage );
                               break;
                            default:
@@ -718,6 +731,9 @@ static void *essRMResourceConnectionThread( void *arg )
                                     case EssRMgrResType_audioDecoder:
                                        value1= server->state->base.numAudioDecoders;
                                        break;
+                                    case EssRMgrResType_frontEnd:
+                                       value1= server->state->base.numFrontEnds;
+                                       break;
                                     default:
                                        ERROR("unsupported resource type: %d", type);
                                        break;
@@ -753,6 +769,16 @@ static void *essRMResourceConnectionThread( void *arg )
                                           }
                                        }
                                        break;
+                                    case EssRMgrResType_frontEnd:
+                                       if ( id < server->state->base.numFrontEnds )
+                                       {
+                                          if ( server->state->base.frontEnd[id].connOwner )
+                                          {
+                                             value1= server->state->base.frontEnd[id].connOwner->clientId;
+                                             value2= server->state->base.frontEnd[id].priorityOwner;
+                                          }
+                                       }
+                                       break;
                                     default:
                                        ERROR("unsupported resource type: %d", type);
                                        break;
@@ -780,6 +806,12 @@ static void *essRMResourceConnectionThread( void *arg )
                                        if ( id < server->state->base.numAudioDecoders )
                                        {
                                           value1= server->state->base.audioDecoder[id].capabilities;
+                                       }
+                                       break;
+                                    case EssRMgrResType_frontEnd:
+                                       if ( id < server->state->base.numFrontEnds )
+                                       {
+                                          value1= server->state->base.frontEnd[id].capabilities;
                                        }
                                        break;
                                     default:
@@ -1187,8 +1219,8 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    if ( !essRMReadConfigFile(server) )
    {
       ERROR("Error processing config file: using default config");
-      server->state->base.numVideoDecoders= ESSRMGR_MAX_DECODERS;
-      for( int i= 0; i < ESSRMGR_MAX_DECODERS; ++i )
+      server->state->base.numVideoDecoders= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
       {
          server->state->base.videoDecoder[i].requestIdOwner= 0;
          server->state->base.videoDecoder[i].connOwner= 0;
@@ -1202,12 +1234,19 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
                break;
          }
       }
-      server->state->base.numAudioDecoders= ESSRMGR_MAX_DECODERS;
-      for( int i= 0; i < ESSRMGR_MAX_DECODERS; ++i )
+      server->state->base.numAudioDecoders= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
       {
          server->state->base.audioDecoder[i].requestIdOwner= 0;
          server->state->base.audioDecoder[i].connOwner= 0;
          server->state->base.audioDecoder[i].capabilities= EssRMgrAudCap_none;
+      }
+      server->state->base.numFrontEnds= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
+      {
+         server->state->base.frontEnd[i].requestIdOwner= 0;
+         server->state->base.frontEnd[i].connOwner= 0;
+         server->state->base.frontEnd[i].capabilities= EssRMgrFECap_none;
       }
    }
 
@@ -1252,6 +1291,27 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    }
    server->state->audCtrl.pendingPoolIdx= 0;
    server->state->audCtrl.maxPoolItems= maxPending;
+
+   for( int i= 0; i < server->state->base.numFrontEnds; ++i )
+   {
+      server->state->base.frontEnd[i].type= EssRMgrResType_frontEnd;
+      server->state->base.frontEnd[i].criteriaMask= ESSRMGR_CRITERIA_MASK_FE;
+      server->state->base.frontEnd[i].pendingNtfyIdx= -1;
+   }
+
+   maxPending= 3*server->state->base.numFrontEnds;
+   DEBUG("fe pendingPool: max pending %d", maxPending);
+   for( int i= 0; i < maxPending; ++i )
+   {
+      EssRMgrResourceNotify *pending= &server->state->feCtrl.pending[i];
+      pending->type= EssRMgrResType_frontEnd;
+      pending->self= i;
+      pending->next= ((i+1 < maxPending) ? i+1 : -1);
+      pending->prev= ((i > 0) ? i-1 : -1);
+      DEBUG("fe pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
+   }
+   server->state->feCtrl.pendingPoolIdx= 0;
+   server->state->feCtrl.maxPoolItems= maxPending;
 }
 
 static EssRMgrRequestInfo *essRMFindRequestByRequestId( EssRMgr *rm, int requestId, bool remove )
@@ -2359,6 +2419,7 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
                   caps->info.video.maxHeight= info->value3;
                   break;
                case EssRMgrResType_audioDecoder:
+               case EssRMgrResType_frontEnd:
                   break;
                default:
                   ERROR("Bad resource type: %d", type);
@@ -2631,6 +2692,9 @@ static bool essRMRequestResource( EssRMgrResourceConnection *conn, EssRMgrReques
          case EssRMgrResType_audioDecoder:
             res= server->state->base.audioDecoder;
             break;
+         case EssRMgrResType_frontEnd:
+            res= server->state->base.frontEnd;
+            break;
          default:
             ERROR("Bad resource type: %d", req->type);
             break;
@@ -2724,6 +2788,11 @@ static void essRMReleaseResource( EssRMgrResourceConnection *conn, int type, int
             res= server->state->base.audioDecoder;
             ctrl= &server->state->audCtrl;
             break;
+         case EssRMgrResType_frontEnd:
+            maxId= server->state->base.numFrontEnds;
+            res= server->state->base.frontEnd;
+            ctrl= &server->state->feCtrl;
+            break;
          default:
             ERROR("Bad resource type: %d", type);
             break;
@@ -2786,6 +2855,11 @@ static bool essRMSetPriorityResource( EssRMgrResourceConnection *conn, int reque
             maxId= server->state->base.numAudioDecoders;
             res= server->state->base.audioDecoder;
             ctrl= &server->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            maxId= server->state->base.numFrontEnds;
+            res= server->state->base.frontEnd;
+            ctrl= &server->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -2902,6 +2976,11 @@ static bool essRMSetUsageResource( EssRMgrResourceConnection *conn, int requestI
             maxId= server->state->base.numAudioDecoders;
             res= server->state->base.audioDecoder;
             ctrl= &server->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            maxId= server->state->base.numFrontEnds;
+            res= server->state->base.frontEnd;
+            ctrl= &server->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -3020,6 +3099,11 @@ static int essRMFindSuitableResource( EssRMgrResourceConnection *conn, int type,
             maxId= server->state->base.numAudioDecoders;
             res= server->state->base.audioDecoder;
             ctrl= &server->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            maxId= server->state->base.numFrontEnds;
+            res= server->state->base.frontEnd;
+            ctrl= &server->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -3204,6 +3288,11 @@ static void essRMCancelRequestResource( EssRMgrResourceConnection *conn, int req
                res= server->state->base.audioDecoder;
                ctrl= &server->state->audCtrl;
                break;
+            case EssRMgrResType_frontEnd:
+               maxId= server->state->base.numFrontEnds;
+               res= server->state->base.frontEnd;
+               ctrl= &server->state->feCtrl;
+               break;
             default:
                ERROR("Bad resource type: %d", type);
                break;
@@ -3257,6 +3346,9 @@ static EssRMgrResourceNotify* essRMGetPendingPoolItem( EssRMgrResourceConnection
       case EssRMgrResType_audioDecoder:
          ctrl= &conn->server->state->audCtrl;
          break;
+      case EssRMgrResType_frontEnd:
+         ctrl= &conn->server->state->feCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", type);
          break;
@@ -3291,6 +3383,9 @@ static void essRMPutPendingPoolItem( EssRMgrResourceConnection *conn, EssRMgrRes
       case EssRMgrResType_audioDecoder:
          ctrl= &conn->server->state->audCtrl;
          break;
+      case EssRMgrResType_frontEnd:
+         ctrl= &conn->server->state->feCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", notify->type);
          break;
@@ -3322,6 +3417,10 @@ static void essRMInsertPendingByPriority( EssRMgrResourceConnection *conn, int i
       case EssRMgrResType_audioDecoder:
          res= conn->server->state->base.audioDecoder;
          ctrl= &conn->server->state->audCtrl;
+         break;
+      case EssRMgrResType_frontEnd:
+         res= conn->server->state->base.frontEnd;
+         ctrl= &conn->server->state->feCtrl;
          break;
       default:
          ERROR("Bad resource type: %d", item->type);
@@ -3375,6 +3474,10 @@ static void essRMRemovePending( EssRMgrResourceConnection *conn, int id, EssRMgr
          res= conn->server->state->base.audioDecoder;
          ctrl= &conn->server->state->audCtrl;
          break;
+      case EssRMgrResType_frontEnd:
+         res= conn->server->state->base.frontEnd;
+         ctrl= &conn->server->state->feCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", item->type);
          break;
@@ -3410,6 +3513,10 @@ static bool essRMAssignResource( EssRMgrResourceConnection *conn, int id, EssRMg
          res= conn->server->state->base.audioDecoder;
          typeName= "audio decoder";
          break;
+      case EssRMgrResType_frontEnd:
+         res= conn->server->state->base.frontEnd;
+         typeName= "frontend";
+         break;
       default:
          ERROR("Bad resource type: %d", req->type);
          break;
@@ -3440,6 +3547,9 @@ static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int 
          break;
       case EssRMgrResType_audioDecoder:
          res= conn->server->state->base.audioDecoder;
+         break;
+      case EssRMgrResType_frontEnd:
+         res= conn->server->state->base.frontEnd;
          break;
       default:
          ERROR("Bad resource type: %d", type);
@@ -3509,6 +3619,7 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
    bool haveIdentifier, truncation;
    int videoIndex= 0;
    int audioIndex= 0;
+   int feIndex= 0;
    int maxWidth, maxHeight;
 
    configFileName= getenv("ESSRMGR_CONFIG_FILE");
@@ -3785,6 +3896,56 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
                }
             }
          }
+         else
+         if ( (i == 8) && !strncmp( work, "frontend", i ) )
+         {
+            i= 0;
+            haveIdentifier= false;
+            capabilities= 0;
+            for( ; ; )
+            {
+               c= fgetc(pFile);
+               if ( (c == ' ') || (c == '\t') || (c == ',') || (c == '(') || (c == '\n') || (c == EOF) )
+               {
+                  if ( i > 0 )
+                  {
+                     work[i]= '\0';
+                     haveIdentifier= true;
+                  }
+               }
+               else
+               {
+                  if ( i < ESSRMGR_MAX_NAMELEN )
+                  {
+                     work[i++]= c;
+                  }
+                  else
+                  {
+                     truncation= true;
+                  }
+               }
+               if ( haveIdentifier )
+               {
+                  if ( (i == 4) && !strncmp( work, "none", i ) )
+                  {
+                     capabilities |= EssRMgrFECap_none;
+                  }
+                  else
+                  {
+                     WARNING("unknown attribute: (%s)", work );
+                  }
+                  i= 0;
+                  haveIdentifier= false;
+               }
+               if ( (c == '\n') || (c == EOF) )
+               {
+                  INFO("adding frontend %d caps %lX", feIndex, capabilities);
+                  server->state->base.frontEnd[feIndex].capabilities= capabilities;
+                  ++feIndex;
+                  break;
+               }
+            }
+         }
          i= 0;
          haveIdentifier= false;
          if ( truncation )
@@ -3797,9 +3958,12 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
 
    server->state->base.numVideoDecoders= videoIndex;
    server->state->base.numAudioDecoders= audioIndex;
+   server->state->base.numFrontEnds= feIndex;
 
-   INFO("config file defines %d video decoders %d audio decoders",
-        server->state->base.numVideoDecoders, server->state->base.numAudioDecoders);
+   INFO("config file defines %d video decoders %d audio decoders %d frontends",
+        server->state->base.numVideoDecoders,
+        server->state->base.numAudioDecoders,
+        server->state->base.numFrontEnds);
 
    result= true;
 

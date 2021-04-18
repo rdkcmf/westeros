@@ -24,7 +24,7 @@
 #define ESSRMGR_MAGIC (((('E')&0xFF) << 24)|((('S')&0xFF) << 16)|((('R')&0xFF) << 8)|(('M')&0xFF))
 #define ESSRMGR_VERSION (0x010000)
 
-#define ESSRMGR_FILE_SIZE (2*ESSRMGR_MAX_DECODERS*2048)
+#define ESSRMGR_FILE_SIZE (2*ESSRMGR_MAX_ITEMS*2048)
 
 typedef struct _EssRMgrUserNotify
 {
@@ -84,7 +84,7 @@ typedef struct _EssRMgrResource
 typedef struct _EssRMgrResourceControl
 {
    sem_t semRequest;
-   EssRMgrResourceNotify revoke[ESSRMGR_MAX_DECODERS];
+   EssRMgrResourceNotify revoke[ESSRMGR_MAX_ITEMS];
    EssRMgrResourceNotify pending[ESSRMGR_MAX_PENDING];
    int maxPoolItems;
    int pendingPoolIdx;
@@ -93,9 +93,11 @@ typedef struct _EssRMgrResourceControl
 typedef struct _EssRMgrBase
 {
    int numVideoDecoders;
-   EssRMgrResource videoDecoder[ESSRMGR_MAX_DECODERS];
+   EssRMgrResource videoDecoder[ESSRMGR_MAX_ITEMS];
    int numAudioDecoders;
-   EssRMgrResource audioDecoder[ESSRMGR_MAX_DECODERS];
+   EssRMgrResource audioDecoder[ESSRMGR_MAX_ITEMS];
+   int numFrontEnds;
+   EssRMgrResource frontEnd[ESSRMGR_MAX_ITEMS];
 } EssRMgrBase;
 
 typedef struct _EssRMgrState
@@ -104,7 +106,8 @@ typedef struct _EssRMgrState
    EssRMgrBase base;
    EssRMgrResourceControl vidCtrl;
    EssRMgrResourceControl audCtrl;
-   char reserved[ESSRMGR_FILE_SIZE-(sizeof(hdr)+sizeof(vidCtrl)+sizeof(audCtrl)+sizeof(base))];
+   EssRMgrResourceControl feCtrl;
+   char reserved[ESSRMGR_FILE_SIZE-(sizeof(hdr)+sizeof(vidCtrl)+sizeof(audCtrl)+sizeof(feCtrl)+sizeof(base))];
 } EssRMgrState;
 
 typedef struct _EssRMgr
@@ -264,6 +267,12 @@ EssRMgr* EssRMgrCreate()
             ERROR("error creating control file request semaphore: errno %d", errno);
          }
 
+         rc= sem_init( &rm->state->feCtrl.semRequest, 1, 1 );
+         if ( rc != 0 )
+         {
+            ERROR("error creating control file request semaphore: errno %d", errno);
+         }
+
          essRMUnlockCtrlFile( rm );
       }
 
@@ -325,6 +334,9 @@ int EssRMgrResourceGetCount( EssRMgr *rm, int type )
             case EssRMgrResType_audioDecoder:
                count= rm->state->base.numAudioDecoders;
                break;
+            case EssRMgrResType_frontEnd:
+               count= rm->state->base.numFrontEnds;
+               break;
             default:
                break;
          }
@@ -373,6 +385,20 @@ bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *pid, int *prio
                   result= true;
                }
                break;
+            case EssRMgrResType_frontEnd:
+               if ( (id >= 0) && (id < rm->state->base.numFrontEnds) )
+               {
+                  if ( pid )
+                  {
+                     *pid= rm->state->base.frontEnd[id].pidOwner;
+                  }
+                  if ( priority )
+                  {
+                     *priority= rm->state->base.frontEnd[id].priorityOwner;
+                  }
+                  result= true;
+               }
+               break;
             default:
                break;
          }
@@ -409,6 +435,13 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
                if ( (id >= 0) && (id < rm->state->base.numAudioDecoders) )
                {
                   caps->capabilities= rm->state->base.audioDecoder[id].capabilities;
+                  result= true;
+               }
+               break;
+            case EssRMgrResType_frontEnd:
+               if ( (id >= 0) && (id < rm->state->base.numFrontEnds) )
+               {
+                  caps->capabilities= rm->state->base.frontEnd[id].capabilities;
                   result= true;
                }
                break;
@@ -453,6 +486,9 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
          case EssRMgrResType_audioDecoder:
             sem= &rm->state->audCtrl.semRequest;
             break;
+         case EssRMgrResType_frontEnd:
+            sem= &rm->state->feCtrl.semRequest;
+            break;
          default:
             ERROR("unsupported resource type: %d", type);
             goto exit;
@@ -476,6 +512,7 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
          {
             case EssRMgrResType_videoDecoder:
             case EssRMgrResType_audioDecoder:
+            case EssRMgrResType_frontEnd:
                result= essRMRequestResource( rm, req );
                break;
             default:
@@ -514,6 +551,7 @@ void EssRMgrReleaseResource( EssRMgr *rm, int type, int id )
          {
             case EssRMgrResType_videoDecoder:
             case EssRMgrResType_audioDecoder:
+            case EssRMgrResType_frontEnd:
                essRMReleaseResource( rm, type, id );
                break;
             default:
@@ -539,6 +577,7 @@ bool EssRMgrRequestSetPriority( EssRMgr *rm, int type, int requestId, int priori
          {
             case EssRMgrResType_videoDecoder:
             case EssRMgrResType_audioDecoder:
+            case EssRMgrResType_frontEnd:
                result= essRMSetPriorityResource( rm, requestId, type, priority );
                break;
             default:
@@ -563,6 +602,7 @@ bool EssRMgrRequestSetUsage( EssRMgr *rm, int type, int requestId, EssRMgrUsage 
          {
             case EssRMgrResType_videoDecoder:
             case EssRMgrResType_audioDecoder:
+            case EssRMgrResType_frontEnd:
                result= essRMSetUsageResource( rm, requestId, type, usage );
                break;
             default:
@@ -586,6 +626,7 @@ void EssRMgrRequestCancel( EssRMgr *rm, int type, int requestId )
          {
             case EssRMgrResType_videoDecoder:
             case EssRMgrResType_audioDecoder:
+            case EssRMgrResType_frontEnd:
                essRMCancelRequestResource( rm, requestId, type );
                break;
             default:
@@ -619,6 +660,14 @@ void EssRMgrDumpState( EssRMgr *rm )
                 rm->state->base.audioDecoder[i].pidOwner,
                 rm->state->base.audioDecoder[i].priorityOwner );
       }
+      for( int i= 0; i < rm->state->base.numFrontEnds; ++i )
+      {
+         printf("frontend: %d caps %X owner %d priority %d\n",
+                i,
+                rm->state->base.frontEnd[i].capabilities,
+                rm->state->base.frontEnd[i].pidOwner,
+                rm->state->base.frontEnd[i].priorityOwner );
+      }
       essRMUnlockCtrlFile( rm );
    }
 }
@@ -635,8 +684,8 @@ static void essRMInitDefaultState( EssRMgr *rm )
    if ( !essRMReadConfigFile(rm) )
    {
       ERROR("Error processing config file: using default config");
-      rm->state->base.numVideoDecoders= ESSRMGR_MAX_DECODERS;
-      for( int i= 0; i < ESSRMGR_MAX_DECODERS; ++i )
+      rm->state->base.numVideoDecoders= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
       {
          rm->state->base.videoDecoder[i].requestIdOwner= 0;
          rm->state->base.videoDecoder[i].pidOwner= 0;
@@ -650,12 +699,19 @@ static void essRMInitDefaultState( EssRMgr *rm )
                break;
          }
       }
-      rm->state->base.numAudioDecoders= ESSRMGR_MAX_DECODERS;
-      for( int i= 0; i < ESSRMGR_MAX_DECODERS; ++i )
+      rm->state->base.numAudioDecoders= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
       {
          rm->state->base.audioDecoder[i].requestIdOwner= 0;
          rm->state->base.audioDecoder[i].pidOwner= 0;
          rm->state->base.audioDecoder[i].capabilities= EssRMgrAudCap_none;
+      }
+      rm->state->base.numFrontEnds= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
+      {
+         rm->state->base.frontEnd[i].requestIdOwner= 0;
+         rm->state->base.frontEnd[i].pidOwner= 0;
+         rm->state->base.frontEnd[i].capabilities= EssRMgrFECap_none;
       }
    }
 
@@ -761,6 +817,57 @@ static void essRMInitDefaultState( EssRMgr *rm )
    rm->state->audCtrl.pendingPoolIdx= 0;
    rm->state->audCtrl.maxPoolItems= maxPending;
 
+   for( int i= 0; i < rm->state->base.numFrontEnds; ++i )
+   {
+      int rc= sem_init( &rm->state->feCtrl.revoke[i].semNotify, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semNotify for front end %d: errno %d", i, errno );
+      }
+      rc= sem_init( &rm->state->feCtrl.revoke[i].semConfirm, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semConfirm for front end %d: errno %d", i, errno );
+      }
+      rc= sem_init( &rm->state->feCtrl.revoke[i].semComplete, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semComplete for front end %d: errno %d", i, errno );
+      }
+      rm->state->base.frontEnd[i].type= EssRMgrResType_frontEnd;
+      rm->state->base.frontEnd[i].criteriaMask= ESSRMGR_CRITERIA_MASK_FE;
+      rm->state->base.frontEnd[i].pendingNtfyIdx= -1;
+   }
+
+   maxPending= 3*rm->state->base.numFrontEnds;
+   DEBUG("fe pendingPool: max pending %d", maxPending);
+   for( int i= 0; i < maxPending; ++i )
+   {
+      EssRMgrResourceNotify *pending= &rm->state->feCtrl.pending[i];
+      int rc= sem_init( &pending->semNotify, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semNotify for fe pending pool entry %d: errno %d", i, errno );
+      }
+      rc= sem_init( &pending->semConfirm, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semConfirm for fe pending pool entry %d: errno %d", i, errno );
+      }
+      rc= sem_init( &pending->semComplete, 1, 0 );
+      if ( rc != 0 )
+      {
+         ERROR("Error creating semaphore semComplete for fe pending pool entry %d: errno %d", i, errno );
+      }
+      pending->type= EssRMgrResType_frontEnd;
+      pending->self= i;
+      pending->next= ((i+1 < maxPending) ? i+1 : -1);
+      pending->prev= ((i > 0) ? i-1 : -1);
+      DEBUG("fe pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
+   }
+   rm->state->feCtrl.pendingPoolIdx= 0;
+   rm->state->feCtrl.maxPoolItems= maxPending;
+
    rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
 }
 
@@ -776,6 +883,7 @@ static bool essRMReadConfigFile( EssRMgr *rm )
    bool haveIdentifier, truncation;
    int videoIndex= 0;
    int audioIndex= 0;
+   int feIndex= 0;
    int maxWidth, maxHeight;
 
    configFileName= getenv("ESSRMGR_CONFIG_FILE");
@@ -1052,6 +1160,56 @@ static bool essRMReadConfigFile( EssRMgr *rm )
                }
             }
          }
+         else
+         if ( (i == 8) && !strncmp( work, "frontend", i ) )
+         {
+            i= 0;
+            haveIdentifier= false;
+            capabilities= 0;
+            for( ; ; )
+            {
+               c= fgetc(pFile);
+               if ( (c == ' ') || (c == '\t') || (c == ',') || (c == '(') || (c == '\n') || (c == EOF) )
+               {
+                  if ( i > 0 )
+                  {
+                     work[i]= '\0';
+                     haveIdentifier= true;
+                  }
+               }
+               else
+               {
+                  if ( i < ESSRMGR_MAX_NAMELEN )
+                  {
+                     work[i++]= c;
+                  }
+                  else
+                  {
+                     truncation= true;
+                  }
+               }
+               if ( haveIdentifier )
+               {
+                  if ( (i == 4) && !strncmp( work, "none", i ) )
+                  {
+                     capabilities |= EssRMgrAudCap_none;
+                  }
+                  else
+                  {
+                     WARNING("unknown attribute: (%s)", work );
+                  }
+                  i= 0;
+                  haveIdentifier= false;
+               }
+               if ( (c == '\n') || (c == EOF) )
+               {
+                  INFO("adding frontend %d caps %lX", feIndex, capabilities);
+                  rm->state->base.frontEnd[feIndex].capabilities= capabilities;
+                  ++feIndex;
+                  break;
+               }
+            }
+         }
          i= 0;
          haveIdentifier= false;
          if ( truncation )
@@ -1064,9 +1222,12 @@ static bool essRMReadConfigFile( EssRMgr *rm )
 
    rm->state->base.numVideoDecoders= videoIndex;
    rm->state->base.numAudioDecoders= audioIndex;
+   rm->state->base.numFrontEnds= feIndex;
 
-   INFO("config file defines %d video decoders %d audio decoders",
-        rm->state->base.numVideoDecoders, rm->state->base.numAudioDecoders);
+   INFO("config file defines %d video decoders %d audio decoders %d frontends",
+        rm->state->base.numVideoDecoders,
+        rm->state->base.numAudioDecoders,
+        rm->state->base.numFrontEnds);
 
    result= true;
 
@@ -1307,6 +1468,9 @@ static EssRMgrResourceNotify* essRMGetPendingPoolItem( EssRMgr *rm, int type )
       case EssRMgrResType_audioDecoder:
          ctrl= &rm->state->audCtrl;
          break;
+      case EssRMgrResType_frontEnd:
+         ctrl= &rm->state->feCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", type);
          break;
@@ -1341,6 +1505,9 @@ static void essRMPutPendingPoolItem( EssRMgr *rm, EssRMgrResourceNotify *notify 
       case EssRMgrResType_audioDecoder:
          ctrl= &rm->state->audCtrl;
          break;
+      case EssRMgrResType_frontEnd:
+         ctrl= &rm->state->feCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", notify->type);
          break;
@@ -1372,6 +1539,10 @@ static void essRMInsertPendingByPriority( EssRMgr *rm, int id, EssRMgrResourceNo
       case EssRMgrResType_audioDecoder:
          res= rm->state->base.audioDecoder;
          ctrl= &rm->state->audCtrl;
+         break;
+      case EssRMgrResType_frontEnd:
+         res= rm->state->base.frontEnd;
+         ctrl= &rm->state->feCtrl;
          break;
       default:
          ERROR("Bad resource type: %d", item->type);
@@ -1425,6 +1596,10 @@ static void essRMRemovePending( EssRMgr *rm, int id, EssRMgrResourceNotify *item
          res= rm->state->base.audioDecoder;
          ctrl= &rm->state->audCtrl;
          break;
+      case EssRMgrResType_frontEnd:
+         res= rm->state->base.frontEnd;
+         ctrl= &rm->state->feCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", item->type);
          break;
@@ -1465,6 +1640,11 @@ static bool essRMAssignResource( EssRMgr *rm, int id, EssRMgrRequest *req )
          res= rm->state->base.audioDecoder;
          ctrl= &rm->state->audCtrl;
          typeName= "audio decoder";
+         break;
+      case EssRMgrResType_frontEnd:
+         res= rm->state->base.frontEnd;
+         ctrl= &rm->state->feCtrl;
+         typeName= "frontend";
          break;
       default:
          ERROR("Bad resource type: %d", req->type);
@@ -1538,6 +1718,10 @@ static bool essRMRevokeResource( EssRMgr *rm, int type, int id )
          case EssRMgrResType_audioDecoder:
             res= rm->state->base.audioDecoder;
             ctrl= &rm->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            res= rm->state->base.frontEnd;
+            ctrl= &rm->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -1672,6 +1856,9 @@ static bool essRMRequestResource( EssRMgr *rm, EssRMgrRequest *req )
          case EssRMgrResType_audioDecoder:
             res= rm->state->base.audioDecoder;
             break;
+         case EssRMgrResType_frontEnd:
+            res= rm->state->base.frontEnd;
+            break;
          default:
             ERROR("Bad resource type: %d", req->type);
             break;
@@ -1794,6 +1981,11 @@ static void essRMReleaseResource( EssRMgr *rm, int type, int id )
             res= rm->state->base.audioDecoder;
             ctrl= &rm->state->audCtrl;
             break;
+         case EssRMgrResType_frontEnd:
+            maxId= rm->state->base.numFrontEnds;
+            res= rm->state->base.frontEnd;
+            ctrl= &rm->state->feCtrl;
+            break;
          default:
             ERROR("Bad resource type: %d", type);
             break;
@@ -1873,6 +2065,11 @@ static bool essRMSetPriorityResource( EssRMgr *rm, int requestId, int type, int 
             maxId= rm->state->base.numAudioDecoders;
             res= rm->state->base.audioDecoder;
             ctrl= &rm->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            maxId= rm->state->base.numFrontEnds;
+            res= rm->state->base.frontEnd;
+            ctrl= &rm->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -1990,6 +2187,11 @@ static bool essRMSetUsageResource( EssRMgr *rm, int requestId, int type, EssRMgr
             maxId= rm->state->base.numAudioDecoders;
             res= rm->state->base.audioDecoder;
             ctrl= &rm->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            maxId= rm->state->base.numFrontEnds;
+            res= rm->state->base.frontEnd;
+            ctrl= &rm->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -2109,6 +2311,11 @@ static int essRMFindSuitableResource( EssRMgr *rm, int type, int priority, EssRM
             maxId= rm->state->base.numAudioDecoders;
             res= rm->state->base.audioDecoder;
             ctrl= &rm->state->audCtrl;
+            break;
+         case EssRMgrResType_frontEnd:
+            maxId= rm->state->base.numFrontEnds;
+            res= rm->state->base.frontEnd;
+            ctrl= &rm->state->feCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -2293,6 +2500,11 @@ static void essRMCancelRequestResource( EssRMgr *rm, int requestId, int type )
                res= rm->state->base.audioDecoder;
                ctrl= &rm->state->audCtrl;
                break;
+            case EssRMgrResType_frontEnd:
+               maxId= rm->state->base.numFrontEnds;
+               res= rm->state->base.frontEnd;
+               ctrl= &rm->state->feCtrl;
+               break;
             default:
                ERROR("Bad resource type: %d", type);
                break;
@@ -2364,6 +2576,7 @@ static void* essRMNotifyThread( void *userData )
                   {
                      case EssRMgrResType_videoDecoder:
                      case EssRMgrResType_audioDecoder:
+                     case EssRMgrResType_frontEnd:
                         result= essRMAssignResource( notify->rm, notify->resourceIdx, &notify->req );
                         break;
                      default:

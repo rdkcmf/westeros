@@ -33,6 +33,7 @@ void notify( EssRMgr *rm, int event, int type, int id, void* userData )
    {
       case EssRMgrResType_videoDecoder:
       case EssRMgrResType_audioDecoder:
+      case EssRMgrResType_frontEnd:
          switch( event )
          {
             case EssRMgrEvent_granted:
