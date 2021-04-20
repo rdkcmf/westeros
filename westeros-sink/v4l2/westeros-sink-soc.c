@@ -5066,6 +5066,7 @@ capture_start:
 
    for( ; ; )
    {
+      bool havePriEvent= false;
       if ( sink->soc.emitFirstFrameSignal )
       {
          sink->soc.emitFirstFrameSignal= FALSE;
@@ -5204,19 +5205,16 @@ capture_start:
 
             if ( sink->soc.quitVideoOutputThread ) break;
 
-            if ( pfd.revents & POLLPRI )
-            {
-               wstProcessEvents( sink );
-               if ( sink->soc.needCaptureRestart )
-               {
-                  break;
-               }
-            }
-
-            if ( sink->soc.quitVideoOutputThread ) break;
-
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
+               if ( pfd.revents & POLLPRI )
+               {
+                  wstProcessEvents( sink );
+                  if ( sink->soc.needCaptureRestart )
+                  {
+                     break;
+                  }
+               }
                if ( (sink->soc.frameDecodeCount == 0) && (sink->soc.frameInCount > 0) && !sink->soc.videoPaused && !sink->soc.decodeError )
                {
                   gint64 now= g_get_monotonic_time();
@@ -5231,6 +5229,10 @@ capture_start:
                }
                usleep( 1000 );
                continue;
+            }
+            if ( pfd.revents & POLLPRI )
+            {
+               havePriEvent= true;
             }
          }
 
@@ -5382,6 +5384,14 @@ capture_start:
                wstSendFrameAdvanceVideoClientConnection( sink->soc.conn );
             }
             UNLOCK(sink);
+         }
+      }
+      if ( havePriEvent )
+      {
+         wstProcessEvents( sink );
+         if ( sink->soc.needCaptureRestart )
+         {
+            break;
          }
       }
    }
