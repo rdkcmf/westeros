@@ -1421,6 +1421,23 @@ static void essRMValidateState( EssRMgr *rm )
       }
    }
 
+   for( int i= 0; i < state->base.numFrontEnds; ++i )
+   {
+      if ( state->base.frontEnd[i].pidOwner != 0 )
+      {
+         int rc= kill( state->base.frontEnd[i].pidOwner, 0 );
+         if ( rc != 0 )
+         {
+            DEBUG("removing dead owner pid %d frontend %d", state->base.frontEnd[i].pidOwner, i );
+            state->base.frontEnd[i].requestIdOwner= -1;
+            state->base.frontEnd[i].pidOwner= 0;
+            state->base.frontEnd[i].priorityOwner= 0;
+            state->base.frontEnd[i].usageOwner= 0;
+            updateCRC= true;
+         }
+      }
+   }
+
    if ( updateCRC )
    {
       state->hdr.crc= getCRC32( (unsigned char *)&state->base, sizeof(EssRMgrBase) );

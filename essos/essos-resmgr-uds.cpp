@@ -157,6 +157,7 @@ typedef struct _EssRMgrRequestInfo
    int value1;
    int value2;
    int value3;
+   EssRMgr *rm;
    EssRMgrRequest *req;
 } EssRMgrRequestInfo;
 
@@ -183,6 +184,8 @@ static void essRMRemovePending( EssRMgrResourceConnection *conn, int id, EssRMgr
 static bool essRMAssignResource( EssRMgrResourceConnection *conn, int id, EssRMgrRequest *req );
 static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int id, bool wait );
 static bool essRMTransferResource( EssRMgrResourceConnection *conn, EssRMgrResourceNotify *pending );
+static void essRMInvokeNotify( EssRMgr *rm, int event, EssRMgrRequestInfo *info );
+static void* essRMNotifyThread( void *userData );
 
 static EssRMgrResourceServerCtx *gCtx= 0;
 
@@ -514,6 +517,18 @@ static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
          state->base.audioDecoder[i].connOwner= 0;
          state->base.audioDecoder[i].priorityOwner= 0;
          state->base.audioDecoder[i].usageOwner= 0;
+      }
+   }
+
+   for( int i= 0; i < state->base.numFrontEnds; ++i )
+   {
+      if ( state->base.frontEnd[i].connOwner == conn )
+      {
+         DEBUG("removing dead owner conn %p frontend %d", conn, i );
+         state->base.frontEnd[i].requestIdOwner= -1;
+         state->base.frontEnd[i].connOwner= 0;
+         state->base.frontEnd[i].priorityOwner= 0;
+         state->base.frontEnd[i].usageOwner= 0;
       }
    }
 }
@@ -1452,9 +1467,7 @@ static void *essRMClientConnectionThread( void *userData )
                            {
                               if ( info->req->asyncEnable )
                               {
-                                 DEBUG("calling notify callback");
-                                 info->req->notifyCB( rm, EssRMgrEvent_granted, info->req->type, info->req->assignedId, info->req->notifyUserData );
-                                 DEBUG("done calling notify callback");
+                                 essRMInvokeNotify( rm, EssRMgrEvent_granted, info );
                               }
                               else
                               {
@@ -1479,9 +1492,7 @@ static void *essRMClientConnectionThread( void *userData )
                         info= essRMFindRequestByResource( rm, type, assignedId, false );
                         if ( info )
                         {
-                           DEBUG("calling notify callback");
-                           info->req->notifyCB( rm, EssRMgrEvent_revoked, info->req->type, info->req->assignedId, info->req->notifyUserData );
-                           DEBUG("done calling notify callback");
+                           essRMInvokeNotify( rm, EssRMgrEvent_revoked, info );
                         }
                         else
                         {
@@ -1570,17 +1581,17 @@ static void essRMDestroyClientConnection( EssRMgrClientConnection *conn )
    {
       conn->addr.sun_path[0]= '\0';
 
-      if ( conn->socketFd >= 0 )
-      {
-         close( conn->socketFd );
-         conn->socketFd= -1;
-      }
-
       if ( conn->threadStarted )
       {
          conn->threadStopRequested= true;
          shutdown( conn->socketFd, SHUT_RDWR );
          pthread_join( conn->threadId, NULL );
+      }
+
+      if ( conn->socketFd >= 0 )
+      {
+         close( conn->socketFd );
+         conn->socketFd= -1;
       }
 
       pthread_mutex_destroy( &conn->mutex );
@@ -3605,6 +3616,47 @@ static bool essRMTransferResource( EssRMgrResourceConnection *conn, EssRMgrResou
 
 exit:
    return result;
+}
+
+static void essRMInvokeNotify( EssRMgr *rm, int event, EssRMgrRequestInfo *info )
+{
+   int rc;
+   pthread_t threadId;
+   pthread_attr_t attr;
+
+   rc= pthread_attr_init( &attr );
+   if ( rc )
+   {
+      ERROR("unable to init pthread attr: errno %d", errno);
+   }
+
+   rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
+   if ( rc )
+   {
+      ERROR("unable to set pthread attr detached: errno %d", errno);
+   }
+
+   info->rm= rm;
+   info->value1= event;
+   rc= pthread_create( &threadId, &attr, essRMNotifyThread, info );
+   if ( rc )
+   {
+      ERROR("unable to start notify thread for event %d res type %d id %d", event, info->req->type, info->req->assignedId);
+   }
+}
+
+static void* essRMNotifyThread( void *userData )
+{
+   EssRMgrRequestInfo *info= (EssRMgrRequestInfo*)userData;
+   if ( info )
+   {
+      EssRMgr *rm= info->rm;
+      int event= info->value1;
+      DEBUG("calling notify callback");
+      info->req->notifyCB( rm, event, info->req->type, info->req->assignedId, info->req->notifyUserData );
+      DEBUG("done calling notify callback");
+   }
+   return NULL;
 }
 
 #define ESSRMGR_MAX_NAMELEN (255)
