@@ -212,6 +212,8 @@ typedef struct _EssCtx
    struct wl_surface *wlsurface;
    struct wl_simple_shell *shell;
    struct wl_egl_window *wleglwindow;
+   struct wl_shell_surface *shellSurface;
+   struct wl_shell *wlshell;
 
    struct xkb_context *xkbCtx;
    struct xkb_keymap *xkbKeymap;
@@ -1865,6 +1867,32 @@ static void essSetDisplaySize( EssCtx *ctx, int width, int height, bool customSa
    }
 }
 
+static void essShellSurfacePing(void *data, struct wl_shell_surface *shell_surface, uint32_t serial)
+{
+   ESS_UNUSED(data);
+   wl_shell_surface_pong(shell_surface, serial);
+}
+
+static void essShellSurfaceConfigure(void *data, struct wl_shell_surface *shell_surface, uint32_t edges, int32_t width, int32_t height)
+{
+   ESS_UNUSED(shell_surface);
+   ESS_UNUSED(edges);
+   EssCtx *ctx= (EssCtx*)data;
+   wl_egl_window_resize(ctx->wleglwindow, width, height, 0, 0);
+}
+
+static void essShellSurfacePopupDone(void *data, struct wl_shell_surface *shell_surface)
+{
+   ESS_UNUSED(data);
+   ESS_UNUSED(shell_surface);
+}
+
+static const struct wl_shell_surface_listener essShellSurfaceListener= {
+   essShellSurfacePing,
+   essShellSurfaceConfigure,
+   essShellSurfacePopupDone
+};
+
 static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
 {
    bool result= false;
@@ -1881,6 +1909,17 @@ static bool essCreateNativeWindow( EssCtx *ctx, int width, int height )
                      "Error.  Unable to create wayland surface" );
             goto exit;
          }
+
+         ctx->shellSurface= wl_shell_get_shell_surface(ctx->wlshell, ctx->wlsurface);
+         if ( !ctx->shellSurface )
+         {
+            sprintf( ctx->lastErrorDetail,
+                     "Error.  Unable to get shell surface" );
+            goto exit;
+         }
+
+         wl_shell_surface_add_listener(ctx->shellSurface, &essShellSurfaceListener, ctx);
+         wl_shell_surface_set_toplevel(ctx->shellSurface);
 
          ctx->wleglwindow= wl_egl_window_create(ctx->wlsurface, width, height);
          if ( !ctx->wleglwindow )
@@ -2838,6 +2877,10 @@ static void essRegistryHandleGlobal(void *data,
       DEBUG("essRegistryHandleGlobal: wlseat %p", ctx->wlseat);
       wl_seat_add_listener(ctx->wlseat, &essSeatListener, ctx);
    }
+   else if ( (len==8) && !strncmp(interface, "wl_shell", len) ) {
+      ctx->wlshell= (struct wl_shell*)wl_registry_bind(registry, id, &wl_shell_interface, 1);
+      DEBUG("essRegistryHandleGlobal: wlshell %p", ctx->wlshell);
+   }
    else if ( (len==9) && !strncmp(interface, "wl_output", len) ) {
       ctx->wloutput= (struct wl_output*)wl_registry_bind(registry, id, &wl_output_interface, 2);
       DEBUG("essRegistryHandleGlobal: wloutput %p", ctx->wloutput);
@@ -2927,6 +2970,12 @@ static void essPlatformTermWayland( EssCtx *ctx )
             ctx->wleglwindow= 0;
          }
 
+         if ( ctx->shellSurface )
+         {
+            wl_shell_surface_destroy( ctx->shellSurface );
+            ctx->shellSurface= 0;
+         }
+
          if ( ctx->wlsurface )
          {
             wl_surface_destroy( ctx->wlsurface );
@@ -2937,6 +2986,12 @@ static void essPlatformTermWayland( EssCtx *ctx )
          {
             wl_compositor_destroy( ctx->wlcompositor );
             ctx->wlcompositor= 0;
+         }
+
+         if ( ctx->wlshell )
+         {
+            wl_shell_destroy(ctx->wlshell);
+            ctx->wlshell= 0;
          }
 
          if ( ctx->wlseat )
