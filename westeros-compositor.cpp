@@ -6408,7 +6408,7 @@ static void wstOutputBind( struct wl_client *client, void *data, uint32_t versio
                         WL_OUTPUT_MODE_CURRENT,
                         wctx->outputWidth,
                         wctx->outputHeight,
-                        output->refreshRate );
+                        output->refreshRate * 1000);
 
    if ( version >= WL_OUTPUT_DONE_SINCE_VERSION )
    {
@@ -6441,7 +6441,7 @@ static void wstOutputChangeSize( WstCompositor *wctx )
                               WL_OUTPUT_MODE_CURRENT,
                               wctx->outputWidth,
                               wctx->outputHeight,
-                              output->refreshRate );
+                              output->refreshRate * 1000);
       }
    }
    
