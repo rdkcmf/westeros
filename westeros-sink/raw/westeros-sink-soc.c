@@ -452,6 +452,16 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
 
    gst_base_sink_set_sync(GST_BASE_SINK(sink), TRUE);
 
+   if ( getenv("WESTEROS_SINK_USE_FREERUN") )
+   {
+       gst_base_sink_set_sync(GST_BASE_SINK(sink), FALSE);
+       printf("westeros-sink: using freerun\n");
+   }
+   else
+   {
+       gst_base_sink_set_sync(GST_BASE_SINK(sink), TRUE);
+   }
+
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), TRUE);
 
    if ( getenv("WESTEROS_SINK_USE_GFX") )
@@ -727,6 +737,13 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
    {
+       /* To complete transition to paused state in async_enabled mode, we need a preroll buffer pushed to the pad;
+          This is a workaround to avoid the need for preroll buffer. */
+       GstBaseSink *basesink;
+       basesink = GST_BASE_SINK(sink);
+       GST_BASE_SINK_PREROLL_LOCK (basesink);
+       basesink->have_preroll = 1;
+       GST_BASE_SINK_PREROLL_UNLOCK (basesink);
       *passToDefault= true;
    }
    else
@@ -872,6 +889,7 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
 void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 {
+   gboolean flushStarted;
    gboolean haveHardware;
    LOCK(sink);
    haveHardware= sink->soc.haveHardware;
@@ -900,7 +918,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
    {
       gint64 nanoTime;
       gint64 duration;
-      int rc, buffIndex;
+      int rc, buffIndex= -1;
       int inSize= 0, offset, avail, copylen;
       unsigned char *inData= 0;
       WstDrmBuffer *drmBuff= 0;
@@ -941,376 +959,390 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          drmBuff= drmGetBuffer( sink, sink->soc.frameWidth, sink->soc.frameHeight );
       }
 
-      ++sink->soc.frameInCount;
+      LOCK(sink);
+      flushStarted= sink->flushStarted;
+      UNLOCK(sink);
 
-      if ( GST_BUFFER_PTS_IS_VALID(buffer) )
-      {
-         guint64 prevPTS;
-
-         nanoTime= GST_BUFFER_PTS(buffer);
-         duration= GST_BUFFER_DURATION(buffer);
-         if ( !GST_CLOCK_TIME_IS_VALID(duration) )
-         {
-            duration= 0;
-         }
-         {
-            guint64 gstNow= getGstClockTime(sink);
-            if ( gstNow <= nanoTime )
-               FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (nanoTime-gstNow)/1000LL);
-            else
-               FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (gstNow-nanoTime)/1000LL);
-         }
-         LOCK(sink)
-         if ( nanoTime+duration >= sink->segment.start )
-         {
-            if ( sink->prevPositionSegmentStart == 0xFFFFFFFFFFFFFFFFLL )
-            {
-               sink->soc.currentInputPTS= 0;
-            }
-            prevPTS= sink->soc.currentInputPTS;
-            sink->soc.currentInputPTS= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
-            if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
-            {
-               sink->firstPTS= sink->soc.currentInputPTS;
-               sink->prevPositionSegmentStart = sink->positionSegmentStart;
-               GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
-            }
-            if ( sink->soc.currentInputPTS != 0 || sink->soc.frameInCount == 0 )
-            {
-               if ( (sink->soc.currentInputPTS < sink->firstPTS) && (sink->soc.currentInputPTS > 90000) )
-               {
-                  /* If we have hit a discontinuity that doesn't look like rollover, then
-                     treat this as the case of looping a short clip.  Adjust our firstPTS
-                     to keep our running time correct. */
-                  sink->firstPTS= sink->firstPTS-(prevPTS-sink->soc.currentInputPTS);
-               }
-            }
-         }
-         UNLOCK(sink);
-      }
-
-      if ( sink->display )
-      {
-         if ( sink->soc.dispatchThread == NULL )
-         {
-            sink->soc.quitDispatchThread= FALSE;
-            GST_DEBUG_OBJECT(sink, "starting westeros_sink_dispatch thread");
-            sink->soc.dispatchThread= g_thread_new("westeros_sink_dispatch", wstDispatchThread, sink);
-         }
-      }
-      if ( sink->soc.eosDetectionThread == NULL )
-      {
-         sink->soc.videoPlaying= TRUE;;
-         sink->soc.quitEOSDetectionThread= FALSE;
-         GST_DEBUG_OBJECT(sink, "starting westeros_sink_eos thread");
-         sink->soc.eosDetectionThread= g_thread_new("westeros_sink_eos", wstEOSDetectionThread, sink);
-      }
-
-      if ( inSize )
+      if ( flushStarted )
       {
          if ( drmBuff )
          {
-            if ( !sink->videoStarted )
+            drmReleaseBuffer( sink, drmBuff->buffIndex );
+         }
+      }
+      else
+      {
+         ++sink->soc.frameInCount;
+
+         if ( GST_BUFFER_PTS_IS_VALID(buffer) )
+         {
+            guint64 prevPTS;
+
+            nanoTime= GST_BUFFER_PTS(buffer);
+            duration= GST_BUFFER_DURATION(buffer);
+            if ( !GST_CLOCK_TIME_IS_VALID(duration) )
             {
-               sink->videoStarted= TRUE;
-               wstSetSessionInfo( sink );
+               duration= 0;
             }
-
-            buffIndex= drmBuff->buffIndex;
-
-            if ( !importedBuffer )
             {
-               unsigned char *data;
-               unsigned char *Y, *U, *V;
-               int Ystride, Ustride, Vstride;
-               #ifdef USE_GST_VIDEO
-               GstVideoMeta *meta= gst_buffer_get_video_meta(buffer);
-               #endif
-
-               switch( sink->soc.frameFormatStream )
+               guint64 gstNow= getGstClockTime(sink);
+               if ( gstNow <= nanoTime )
+                  FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (nanoTime-gstNow)/1000LL);
+               else
+                  FRAME("in: frame PTS %lld gst clock %lld: lead time %lld us", nanoTime, gstNow, (gstNow-nanoTime)/1000LL);
+            }
+            LOCK(sink)
+            if ( nanoTime+duration >= sink->segment.start )
+            {
+               if ( sink->prevPositionSegmentStart == 0xFFFFFFFFFFFFFFFFLL )
                {
-                  case DRM_FORMAT_NV12:
-                  case DRM_FORMAT_NV21:
-                     sink->soc.frameFormatOut= sink->soc.frameFormatStream;
-                     Y= inData;
-                     #ifdef USE_GST_VIDEO
-                     if ( meta )
-                     {
-                        Ystride= meta->stride[0];
-                        Ustride= meta->stride[1];
-                     }
-                     else
-                     #endif
-                     {
-                        Ystride= ((sink->soc.frameWidth + 3) & ~3);
-                        Ustride= Ystride;
-                     }
-                     Vstride= 0;
-                     U= Y + Ystride*sink->soc.frameHeight;
-                     V= 0;
-                     break;
-                  case DRM_FORMAT_YUV420:
-                     sink->soc.frameFormatOut= DRM_FORMAT_NV12;
-                     Y= inData;
-                     #ifdef USE_GST_VIDEO
-                     if ( meta )
-                     {
-                        Ystride= meta->stride[0];
-                        Ustride= meta->stride[1];
-                        Vstride= meta->stride[2];
-                     }
-                     else
-                     #endif
-                     {
-                        Ystride= ((sink->soc.frameWidth + 3) & ~3);
-                        Ustride= Ystride/2;
-                        Vstride= Ystride/2;
-                     }
-                     U= Y + Ystride*sink->soc.frameHeight;
-                     V= U + Ustride*sink->soc.frameHeight/2;
-                     break;
-                  default:
-                     Y= U= V= 0;
-                     break;
+                  sink->soc.currentInputPTS= 0;
+               }
+               prevPTS= sink->soc.currentInputPTS;
+               sink->soc.currentInputPTS= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
+               if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
+               {
+                  sink->firstPTS= sink->soc.currentInputPTS;
+                  sink->prevPositionSegmentStart = sink->positionSegmentStart;
+                  GST_DEBUG("SegmentStart changed! Updating first PTS to %lld ", sink->firstPTS);
+               }
+               if ( sink->soc.currentInputPTS != 0 || sink->soc.frameInCount == 0 )
+               {
+                  if ( (sink->soc.currentInputPTS < sink->firstPTS) && (sink->soc.currentInputPTS > 90000) )
+                  {
+                     /* If we have hit a discontinuity that doesn't look like rollover, then
+                        treat this as the case of looping a short clip.  Adjust our firstPTS
+                        to keep our running time correct. */
+                     sink->firstPTS= sink->firstPTS-(prevPTS-sink->soc.currentInputPTS);
+                  }
+               }
+            }
+            UNLOCK(sink);
+         }
+
+         if ( sink->display )
+         {
+            if ( sink->soc.dispatchThread == NULL )
+            {
+               sink->soc.quitDispatchThread= FALSE;
+               GST_DEBUG_OBJECT(sink, "starting westeros_sink_dispatch thread");
+               sink->soc.dispatchThread= g_thread_new("westeros_sink_dispatch", wstDispatchThread, sink);
+            }
+         }
+         if ( sink->soc.eosDetectionThread == NULL )
+         {
+            sink->soc.videoPlaying= TRUE;
+            sink->soc.quitEOSDetectionThread= FALSE;
+            GST_DEBUG_OBJECT(sink, "starting westeros_sink_eos thread");
+            sink->soc.eosDetectionThread= g_thread_new("westeros_sink_eos", wstEOSDetectionThread, sink);
+         }
+
+         if ( inSize )
+         {
+            if ( drmBuff )
+            {
+               if ( !sink->videoStarted )
+               {
+                  sink->videoStarted= TRUE;
+                  wstSetSessionInfo( sink );
                }
 
-               if ( Y )
+               buffIndex= drmBuff->buffIndex;
+
+               if ( !importedBuffer )
                {
-                  data= (unsigned char*)mmap( NULL, drmBuff->size[0], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[0] );
-                  if ( data )
+                  unsigned char *data;
+                  unsigned char *Y, *U, *V;
+                  int Ystride, Ustride, Vstride;
+                  #ifdef USE_GST_VIDEO
+                  GstVideoMeta *meta= gst_buffer_get_video_meta(buffer);
+                  #endif
+
+                  switch( sink->soc.frameFormatStream )
                   {
-                     int row;
-                     unsigned char *destRow= data;
-                     unsigned char *srcYRow= Y;
-                     for( row= 0; row < sink->soc.frameHeight; ++row )
-                     {
-                        memcpy( destRow, srcYRow, Ystride );
-                        destRow += drmBuff->pitch[0];
-                        srcYRow += Ystride;
-                     }
-                     munmap( data, drmBuff->size[0] );
+                     case DRM_FORMAT_NV12:
+                     case DRM_FORMAT_NV21:
+                        sink->soc.frameFormatOut= sink->soc.frameFormatStream;
+                        Y= inData;
+                        #ifdef USE_GST_VIDEO
+                        if ( meta )
+                        {
+                           Ystride= meta->stride[0];
+                           Ustride= meta->stride[1];
+                        }
+                        else
+                        #endif
+                        {
+                           Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                           Ustride= Ystride;
+                        }
+                        Vstride= 0;
+                        U= Y + Ystride*sink->soc.frameHeight;
+                        V= 0;
+                        break;
+                     case DRM_FORMAT_YUV420:
+                        sink->soc.frameFormatOut= DRM_FORMAT_NV12;
+                        Y= inData;
+                        #ifdef USE_GST_VIDEO
+                        if ( meta )
+                        {
+                           Ystride= meta->stride[0];
+                           Ustride= meta->stride[1];
+                           Vstride= meta->stride[2];
+                        }
+                        else
+                        #endif
+                        {
+                           Ystride= ((sink->soc.frameWidth + 3) & ~3);
+                           Ustride= Ystride/2;
+                           Vstride= Ystride/2;
+                        }
+                        U= Y + Ystride*sink->soc.frameHeight;
+                        V= U + Ustride*sink->soc.frameHeight/2;
+                        break;
+                     default:
+                        Y= U= V= 0;
+                        break;
                   }
-                  if ( U && !V )
+
+                  if ( Y )
                   {
-                     data= (unsigned char*)mmap( NULL, drmBuff->size[1], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[1] );
+                     data= (unsigned char*)mmap( NULL, drmBuff->size[0], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[0] );
                      if ( data )
                      {
                         int row;
                         unsigned char *destRow= data;
-                        unsigned char *srcURow= U;
-                        for( row= 0; row < sink->soc.frameHeight; row += 2 )
+                        unsigned char *srcYRow= Y;
+                        for( row= 0; row < sink->soc.frameHeight; ++row )
                         {
-                           memcpy( destRow, srcURow, Ustride );
-                           destRow += drmBuff->pitch[1];
-                           srcURow += Ustride;
+                           memcpy( destRow, srcYRow, Ystride );
+                           destRow += drmBuff->pitch[0];
+                           srcYRow += Ystride;
                         }
-                        munmap( data, drmBuff->size[1] );
+                        munmap( data, drmBuff->size[0] );
                      }
-                  }
-                  if ( U && V )
-                  {
-                     data= (unsigned char*)mmap( NULL, drmBuff->size[1], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[1] );
-                     if ( data )
+                     if ( U && !V )
                      {
-                        int row, col;
-                        unsigned char *dest, *destRow= data;
-                        unsigned char *srcU, *srcURow= U;
-                        unsigned char *srcV, *srcVRow= V;
-                        for( row= 0; row < sink->soc.frameHeight; row += 2 )
+                        data= (unsigned char*)mmap( NULL, drmBuff->size[1], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[1] );
+                        if ( data )
                         {
-                           dest= destRow;
-                           srcU= srcURow;
-                           srcV= srcVRow;
-                           for( col= 0; col < sink->soc.frameWidth; col += 2 )
+                           int row;
+                           unsigned char *destRow= data;
+                           unsigned char *srcURow= U;
+                           for( row= 0; row < sink->soc.frameHeight; row += 2 )
                            {
-                              *dest++= *srcU++;
-                              *dest++= *srcV++;
+                              memcpy( destRow, srcURow, Ustride );
+                              destRow += drmBuff->pitch[1];
+                              srcURow += Ustride;
                            }
-                           destRow += drmBuff->pitch[1];
-                           srcURow += Ustride;
-                           srcVRow += Vstride;
+                           munmap( data, drmBuff->size[1] );
                         }
-                        munmap( data, drmBuff->size[1] );
+                     }
+                     if ( U && V )
+                     {
+                        data= (unsigned char*)mmap( NULL, drmBuff->size[1], PROT_READ | PROT_WRITE, MAP_SHARED, sink->soc.drmFd, drmBuff->offset[1] );
+                        if ( data )
+                        {
+                           int row, col;
+                           unsigned char *dest, *destRow= data;
+                           unsigned char *srcU, *srcURow= U;
+                           unsigned char *srcV, *srcVRow= V;
+                           for( row= 0; row < sink->soc.frameHeight; row += 2 )
+                           {
+                              dest= destRow;
+                              srcU= srcURow;
+                              srcV= srcVRow;
+                              for( col= 0; col < sink->soc.frameWidth; col += 2 )
+                              {
+                                 *dest++= *srcU++;
+                                 *dest++= *srcV++;
+                              }
+                              destRow += drmBuff->pitch[1];
+                              srcURow += Ustride;
+                              srcVRow += Vstride;
+                           }
+                           munmap( data, drmBuff->size[1] );
+                        }
                      }
                   }
                }
-            }
 
-            if ( !sink->soc.conn && (sink->soc.frameOutCount == 0))
-            {
-               LOCK(sink);
-               sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
-               UNLOCK(sink);
-            }
-
-            drmBuff->frameTime= ((GST_BUFFER_PTS(buffer) + 500LL) / 1000LL);
-
-            if ( !sink->soc.conn )
-            {
-               /* If we are not connected to a video server, set position here */
-               gint64 frameTime= GST_BUFFER_PTS(buffer);
-               gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
-               sink->position= sink->positionSegmentStart + frameTime - firstNano;
-               sink->currentPTS= frameTime / (GST_SECOND/90000LL);
-               if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+               if ( !sink->soc.conn && (sink->soc.frameOutCount == 0))
                {
-                  sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                  LOCK(sink);
+                  sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", wstFirstFrameThread, sink);
+                  UNLOCK(sink);
                }
-            }
 
-            if ( sink->soc.enableTextureSignal )
-            {
-               int fd0, l0, s0, fd1, l1, fd2, s1, l2, s2;
-               void *p0, *p1, *p2;
+               drmBuff->frameTime= ((GST_BUFFER_PTS(buffer) + 500LL) / 1000LL);
 
-               fd0= drmBuff->fd[0];
-               fd1= drmBuff->fd[1];
-               fd2= -1;
-               s0= drmBuff->pitch[0];
-               s1= drmBuff->pitch[1];
-               s2= 0;
-               l0= drmBuff->size[0];
-               l1= drmBuff->size[1];
-               l2= 0;
-               p0= 0;
-               p1= 0;
-               p2= 0;
-
-               g_signal_emit( G_OBJECT(sink),
-                              g_signals[SIGNAL_NEWTEXTURE],
-                              0,
-                              sink->soc.frameFormatOut,
-                              sink->soc.frameWidth,
-                              sink->soc.frameHeight,
-                              fd0, l0, s0, p0,
-                              fd1, l1, s1, p1,
-                              fd2, l2, s2, p2
-                            );
-            }
-            else if ( sink->soc.captureEnabled && sink->soc.sb && sink->show )
-            {
-               bufferInfo *binfo;
-               binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
-               if ( binfo )
+               if ( !sink->soc.conn )
                {
-                  struct wl_buffer *wlbuff;
-                  int fd0, fd1, fd2;
-                  int stride0, stride1;
-                  int offset1= 0;
-                  int pixelFormat;
+                  /* If we are not connected to a video server, set position here */
+                  gint64 frameTime= GST_BUFFER_PTS(buffer);
+                  gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
+                  sink->position= sink->positionSegmentStart + frameTime - firstNano;
+                  sink->currentPTS= frameTime / (GST_SECOND/90000LL);
+                  if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+                  {
+                     sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                  }
+               }
+
+               if ( sink->soc.enableTextureSignal )
+               {
+                  int fd0, l0, s0, fd1, l1, fd2, s1, l2, s2;
+                  void *p0, *p1, *p2;
+
                   fd0= drmBuff->fd[0];
                   fd1= drmBuff->fd[1];
-                  fd2= fd0;
-                  stride0= drmBuff->pitch[0];
-                  stride1= drmBuff->pitch[1];
-                  pixelFormat= (sink->soc.frameFormatOut == DRM_FORMAT_NV12) ? WL_SB_FORMAT_NV12 : WL_SB_FORMAT_NV21;
+                  fd2= -1;
+                  s0= drmBuff->pitch[0];
+                  s1= drmBuff->pitch[1];
+                  s2= 0;
+                  l0= drmBuff->size[0];
+                  l1= drmBuff->size[1];
+                  l2= 0;
+                  p0= 0;
+                  p1= 0;
+                  p2= 0;
 
-                  binfo->sink= sink;
-                  binfo->buffIndex= buffIndex;
-
-                  wlbuff= wl_sb_create_planar_buffer_fd2( sink->soc.sb,
-                                                          fd0,
-                                                          fd1,
-                                                          fd2,
-                                                          drmBuff->width,
-                                                          drmBuff->height,
-                                                          pixelFormat,
-                                                          0, /* offset0 */
-                                                          offset1, /* offset1 */
-                                                          0, /* offset2 */
-                                                          stride0, /* stride0 */
-                                                          stride1, /* stride1 */
-                                                          0  /* stride2 */
-                                                        );
-                  if ( wlbuff )
+                  g_signal_emit( G_OBJECT(sink),
+                                 g_signals[SIGNAL_NEWTEXTURE],
+                                 0,
+                                 sink->soc.frameFormatOut,
+                                 sink->soc.frameWidth,
+                                 sink->soc.frameHeight,
+                                 fd0, l0, s0, p0,
+                                 fd1, l1, s1, p1,
+                                 fd2, l2, s2, p2
+                               );
+               }
+               else if ( sink->soc.captureEnabled && sink->soc.sb && sink->show )
+               {
+                  bufferInfo *binfo;
+                  binfo= (bufferInfo*)malloc( sizeof(bufferInfo) );
+                  if ( binfo )
                   {
-                     wl_buffer_add_listener( wlbuff, &wl_buffer_listener, binfo );
-                     wl_surface_attach( sink->surface, wlbuff, sink->windowX, sink->windowY );
-                     wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-                     wl_surface_commit( sink->surface );
-                     wl_display_flush(sink->display);
+                     struct wl_buffer *wlbuff;
+                     int fd0, fd1, fd2;
+                     int stride0, stride1;
+                     int offset1= 0;
+                     int pixelFormat;
+                     fd0= drmBuff->fd[0];
+                     fd1= drmBuff->fd[1];
+                     fd2= fd0;
+                     stride0= drmBuff->pitch[0];
+                     stride1= drmBuff->pitch[1];
+                     pixelFormat= (sink->soc.frameFormatOut == DRM_FORMAT_NV12) ? WL_SB_FORMAT_NV12 : WL_SB_FORMAT_NV21;
 
-                     drmLockBuffer( sink, buffIndex );
+                     binfo->sink= sink;
+                     binfo->buffIndex= buffIndex;
 
-                     /* Advance any frames sent to video server towards requeueing to decoder */
-                     sink->soc.resubFd= sink->soc.prevFrame2Fd;
-                     sink->soc.prevFrame2Fd=sink->soc.prevFrame1Fd;
-                     sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
-                     sink->soc.nextFrameFd= -1;
-
-                     if ( sink->soc.framesBeforeHideVideo )
+                     wlbuff= wl_sb_create_planar_buffer_fd2( sink->soc.sb,
+                                                             fd0,
+                                                             fd1,
+                                                             fd2,
+                                                             drmBuff->width,
+                                                             drmBuff->height,
+                                                             pixelFormat,
+                                                             0, /* offset0 */
+                                                             offset1, /* offset1 */
+                                                             0, /* offset2 */
+                                                             stride0, /* stride0 */
+                                                             stride1, /* stride1 */
+                                                             0  /* stride2 */
+                                                           );
+                     if ( wlbuff )
                      {
-                        if ( --sink->soc.framesBeforeHideVideo == 0 )
+                        wl_buffer_add_listener( wlbuff, &wl_buffer_listener, binfo );
+                        wl_surface_attach( sink->surface, wlbuff, sink->windowX, sink->windowY );
+                        wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+                        wl_surface_commit( sink->surface );
+                        wl_display_flush(sink->display);
+
+                        drmLockBuffer( sink, buffIndex );
+
+                        /* Advance any frames sent to video server towards requeueing to decoder */
+                        sink->soc.resubFd= sink->soc.prevFrame2Fd;
+                        sink->soc.prevFrame2Fd=sink->soc.prevFrame1Fd;
+                        sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
+                        sink->soc.nextFrameFd= -1;
+
+                        if ( sink->soc.framesBeforeHideVideo )
                         {
-                           wstSendHideVideoClientConnection( sink->soc.conn, true );
+                           if ( --sink->soc.framesBeforeHideVideo == 0 )
+                           {
+                              wstSendHideVideoClientConnection( sink->soc.conn, true );
+                           }
+                        }
+                     }
+                     else
+                     {
+                        free( binfo );
+                     }
+                  }
+               }
+               if ( sink->soc.conn )
+               {
+                  if ( sink->windowChange )
+                  {
+                     sink->windowChange= false;
+                     gst_westeros_sink_soc_update_video_position( sink );
+                     if ( !sink->soc.captureEnabled )
+                     {
+                        wstSendRectVideoClientConnection(sink->soc.conn);
+                     }
+                  }
+                  if ( sink->soc.showChanged )
+                  {
+                     sink->soc.showChanged= FALSE;
+                     if ( !sink->soc.captureEnabled )
+                     {
+                        wstSendHideVideoClientConnection( sink->soc.conn, !sink->show );
+                     }
+                  }
+                  if ( sink->soc.frameRateChanged )
+                  {
+                     sink->soc.frameRateChanged= FALSE;
+                     wstSendRateVideoClientConnection( sink->soc.conn );
+                  }
+                  sink->soc.resubFd= sink->soc.prevFrame2Fd;
+                  sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
+                  sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
+                  sink->soc.nextFrameFd= sink->soc.drmBuffer[buffIndex].fd[0];
+
+                  if ( wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex ) )
+                  {
+                     buffIndex= -1;
+                  }
+
+                  if ( sink->soc.framesBeforeHideGfx )
+                  {
+                     if ( --sink->soc.framesBeforeHideGfx == 0 )
+                     {
+                        wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
+                        wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+                        wl_surface_commit( sink->surface );
+                        wl_display_flush(sink->display);
+                        wl_display_dispatch_queue_pending(sink->display, sink->queue);
+                        if ( sink->show )
+                        {
+                           wstSendHideVideoClientConnection( sink->soc.conn, false );
                         }
                      }
                   }
-                  else
-                  {
-                     free( binfo );
-                  }
                }
             }
-            if ( sink->soc.conn )
+            if ( buffIndex != -1 )
             {
-               if ( sink->windowChange )
-               {
-                  sink->windowChange= false;
-                  gst_westeros_sink_soc_update_video_position( sink );
-                  if ( !sink->soc.captureEnabled )
-                  {
-                     wstSendRectVideoClientConnection(sink->soc.conn);
-                  }
-               }
-               if ( sink->soc.showChanged )
-               {
-                  sink->soc.showChanged= FALSE;
-                  if ( !sink->soc.captureEnabled )
-                  {
-                     wstSendHideVideoClientConnection( sink->soc.conn, !sink->show );
-                  }
-               }
-               if ( sink->soc.frameRateChanged )
-               {
-                  sink->soc.frameRateChanged= FALSE;
-                  wstSendRateVideoClientConnection( sink->soc.conn );
-               }
-               sink->soc.resubFd= sink->soc.prevFrame2Fd;
-               sink->soc.prevFrame2Fd= sink->soc.prevFrame1Fd;
-               sink->soc.prevFrame1Fd= sink->soc.nextFrameFd;
-               sink->soc.nextFrameFd= sink->soc.drmBuffer[buffIndex].fd[0];
-
-               if ( wstSendFrameVideoClientConnection( sink->soc.conn, buffIndex ) )
-               {
-                  buffIndex= -1;
-               }
-
-               if ( sink->soc.framesBeforeHideGfx )
-               {
-                  if ( --sink->soc.framesBeforeHideGfx == 0 )
-                  {
-                     wl_surface_attach( sink->surface, 0, sink->windowX, sink->windowY );
-                     wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-                     wl_surface_commit( sink->surface );
-                     wl_display_flush(sink->display);
-                     wl_display_dispatch_queue_pending(sink->display, sink->queue);
-                     if ( sink->show )
-                     {
-                        wstSendHideVideoClientConnection( sink->soc.conn, false );
-                     }
-                  }
-               }
+               drmReleaseBuffer( sink, buffIndex );
             }
          }
-         if ( buffIndex != -1 )
-         {
-            drmReleaseBuffer( sink, buffIndex );
-         }
+         LOCK(sink);
+         ++sink->soc.frameOutCount;
+         UNLOCK(sink);
       }
-      LOCK(sink);
-      ++sink->soc.frameOutCount;
-      UNLOCK(sink);
 
       if ( !importedBuffer )
       {
@@ -1329,6 +1361,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
       LOCK(sink);
       sink->videoStarted= FALSE;
       UNLOCK(sink);
+      wstSendFlushVideoClientConnection( sink->soc.conn );
       sink->startAfterCaps= TRUE;
       sink->soc.prevFrameTimeGfx= 0;
       sink->soc.prevFramePTSGfx= 0;
@@ -1756,6 +1789,11 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
       conn->socketFd= -1;
       conn->name= name;
       conn->sink= sink;
+      #ifdef GLIB_VERSION_2_32
+      g_mutex_init( &conn->mutex );
+      #else
+      conn->mutex= g_mutex_new();
+      #endif
 
       workingDir= getenv("XDG_RUNTIME_DIR");
       if ( !workingDir )
@@ -1818,6 +1856,12 @@ static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn )
          close( conn->socketFd );
          conn->socketFd= -1;
       }
+
+      #ifdef GLIB_VERSION_2_32
+      g_mutex_clear( &conn->mutex );
+      #else
+      g_mutex_free( conn->mutex );
+      #endif
 
       free( conn );
    }
@@ -1882,6 +1926,7 @@ static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bo
       int len;
       int sentLen;
 
+      LOCK_CONN( conn );
       msg.msg_name= NULL;
       msg.msg_namelen= 0;
       msg.msg_iov= iov;
@@ -1911,6 +1956,7 @@ static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bo
          GST_LOG("sent hide %d to video server", hide);
          FRAME("sent hide %d to video server", hide);
       }
+      UNLOCK_CONN( conn );
    }
 }
 
@@ -1925,6 +1971,7 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
       int len;
       int sentLen;
 
+      LOCK_CONN( conn );
       msg.msg_name= NULL;
       msg.msg_namelen= 0;
       msg.msg_iov= iov;
@@ -1955,6 +2002,7 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
          GST_DEBUG("sent session info: type %d sessionId %d to video server", sink->soc.syncType, sink->soc.sessionId);
          g_print("sent session info: type %d sessionId %d to video server\n", sink->soc.syncType, sink->soc.sessionId);
       }
+      UNLOCK_CONN( conn );
    }
 }
 
@@ -2136,6 +2184,7 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
       int len;
       int sentLen;
 
+      LOCK_CONN( conn );
       msg.msg_name= NULL;
       msg.msg_namelen= 0;
       msg.msg_iov= iov;
@@ -2164,6 +2213,7 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
          GST_LOG("sent flush to video server");
          FRAME("sent flush to video server");
       }
+      UNLOCK_CONN( conn );
    }
 }
 
@@ -2188,6 +2238,7 @@ static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
          wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
       }
 
+      LOCK_CONN( conn );
       msg.msg_name= NULL;
       msg.msg_namelen= 0;
       msg.msg_iov= iov;
@@ -2220,6 +2271,7 @@ static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
          GST_LOG("sent position to video server");
          FRAME("sent position to video server");
       }
+      UNLOCK_CONN( conn );
    }
 }
 
@@ -2234,6 +2286,7 @@ static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn )
       int sentLen;
       GstWesterosSink *sink= conn->sink;
 
+      LOCK_CONN( conn );
       msg.msg_name= NULL;
       msg.msg_namelen= 0;
       msg.msg_iov= iov;
@@ -2264,6 +2317,7 @@ static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn )
          GST_LOG("sent frame rate to video server");
          FRAME("sent frame rate to video server");
       }
+      UNLOCK_CONN( conn );
    }
 }
 
@@ -2521,6 +2575,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
             wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
          }
 
+         LOCK_CONN( conn );
          i= 0;
          mbody[i++]= 'V';
          mbody[i++]= 'S';
@@ -2592,6 +2647,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
                drmReleaseBuffer( sink, buffIndex );
             }
          }
+         UNLOCK_CONN( conn );
       }
 
 exit:
@@ -2936,6 +2992,7 @@ static bool drmUnlockAllBuffers( GstWesterosSink *sink )
 {
    WstDrmBuffer *drmBuff= 0;
    int buffIndex;
+   bool didUnlock= false;
    for( buffIndex= 0; buffIndex < WST_NUM_DRM_BUFFERS; ++buffIndex )
    {
       drmBuff= &sink->soc.drmBuffer[buffIndex];
@@ -2943,9 +3000,13 @@ static bool drmUnlockAllBuffers( GstWesterosSink *sink )
       {
          drmBuff->locked= false;
          drmBuff->lockCount= 0;
+         didUnlock= true;
       }
    }
-   sem_post( &sink->soc.drmBuffSem );
+   if ( didUnlock )
+   {
+      sem_post( &sink->soc.drmBuffSem );
+   }
 }
 
 #ifdef USE_GST_ALLOCATORS
@@ -3040,11 +3101,16 @@ static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height 
    int buffIndex;
    int rc;
 
+   GST_BASE_SINK_PREROLL_UNLOCK(GST_BASE_SINK(sink));
    for ( ; ; )
    {
       rc= sem_trywait( &sink->soc.drmBuffSem );
       if ( rc )
       {
+         if ( sink->flushStarted )
+         {
+            break;
+         }
          if ( errno == EAGAIN )
          {
             usleep( 1000 );
@@ -3053,6 +3119,12 @@ static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height 
          }
       }
       break;
+   }
+   GST_BASE_SINK_PREROLL_LOCK(GST_BASE_SINK(sink));
+
+   if ( sink->flushStarted )
+   {
+      goto exit;
    }
 
    for( buffIndex= 0; buffIndex < WST_NUM_DRM_BUFFERS; ++buffIndex )
@@ -3075,6 +3147,7 @@ static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height 
          drmBuff= 0;
       }
    }
+exit:
    return drmBuff;
 }
 

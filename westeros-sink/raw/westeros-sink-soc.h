@@ -39,7 +39,20 @@ typedef struct _WstVideoClientConnection
    int socketFd;
    int serverRefreshRate;
    gint64 serverRefreshPeriod;
+   #ifdef GLIB_VERSION_2_32
+   GMutex mutex;
+   #else
+   GMutex *mutex;
+   #endif
 } WstVideoClientConnection;
+
+#ifdef GLIB_VERSION_2_32
+  #define LOCK_CONN( conn ) g_mutex_lock( &((conn)->mutex) );
+  #define UNLOCK_CONN( conn ) g_mutex_unlock( &((conn)->mutex) );
+#else
+  #define LOCK_CONN( conn ) g_mutex_lock( (conn)->mutex );
+  #define UNLOCK_CONN( conn ) g_mutex_unlock( (conn)->mutex );
+#endif
 
 #define WST_NUM_DRM_BUFFERS (20)
 #define WST_MAX_PLANE (2)
