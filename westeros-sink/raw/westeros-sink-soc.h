@@ -75,6 +75,22 @@ typedef struct _WstDrmBuffer
    GstBuffer *gstbuf;
 } WstDrmBuffer;
 
+#ifdef USE_GST_AFD
+typedef struct _WstAFDInfo
+{
+   gint64 pts;
+   int frameNumber;
+   int spec;
+   int field;
+   int afd;
+   bool haveBar;
+   bool isLetterbox;
+   int f;
+   int d1;
+   int d2;
+} WstAFDInfo;
+#endif
+
 struct _GstWesterosSinkSoc
 {
    struct wl_sb *sb;
@@ -85,6 +101,9 @@ struct _GstWesterosSinkSoc
    double pixelAspectRatio;
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;
+   #ifdef USE_GST_AFD
+   WstAFDInfo afdActive;
+   #endif
    gboolean showChanged;
    gboolean zoomModeUser;
    int zoomMode;

@@ -110,10 +110,27 @@ typedef struct _WstSWBuffer
 
 typedef struct _WstPARInfo
 {
+   int frameNumber;
    double par;
    int frameWidth;
    int frameHeight;
 } WstPARInfo;
+
+#ifdef USE_GST_AFD
+typedef struct _WstAFDInfo
+{
+   gint64 pts;
+   int frameNumber;
+   int spec;
+   int field;
+   int afd;
+   bool haveBar;
+   bool isLetterbox;
+   int f;
+   int d1;
+   int d2;
+} WstAFDInfo;
+#endif
 
 struct _GstWesterosSinkSoc
 {
@@ -129,6 +146,12 @@ struct _GstWesterosSinkSoc
    int parNextCapacity;
    gboolean havePixelAspectRatio;
    gboolean pixelAspectRatioChanged;
+   #ifdef USE_GST_AFD
+   WstAFDInfo afdActive;
+   WstAFDInfo *afdInfo;
+   int afdInfoCount;
+   int afdInfoCapacity;
+   #endif
    gboolean showChanged;
    gboolean zoomModeUser;
    int zoomMode;
