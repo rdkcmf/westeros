@@ -74,7 +74,7 @@ static void essrm_printf( int level, const char *fmt, ... )
    {
       va_list argptr;
       va_start( argptr, fmt );
-      vprintf( fmt, argptr );
+      vfprintf( stderr, fmt, argptr );
       va_end( argptr );
    }
 }
