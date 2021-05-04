@@ -1782,6 +1782,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
       #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
       NxClient_DisplaySettings displaySettings;
       NEXUS_VideoDecoderStreamInformation streamInfo;
+      NEXUS_SimpleVideoDecoder_GetStreamInformation(sink->soc.videoDecoder, &streamInfo);
       #endif
       NEXUS_SimpleVideoDecoder_Stop(sink->soc.videoDecoder);
       #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
