@@ -37,6 +37,9 @@
 
 #ifdef USE_GST_AFD
 #include "gst/video/video-anc.h"
+#ifndef gst_buffer_get_video_afd_meta
+#undef USE_GST_AFD
+#endif
 #endif
 
 #ifdef USE_GST_ALLOCATORS
