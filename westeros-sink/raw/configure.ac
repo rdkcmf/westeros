@@ -70,7 +70,7 @@ AS_IF([test "x$enable_gstreamer1" = "xyes"], [
     PKG_CHECK_MODULES([GSTALLOCATORS], [gstreamer-allocators-1.0 >= 1.4],[GST_ALLOCATORS_DETECTED=true],[GST_ALLOCATORS_DETECTED=false])
     AC_DEFINE(USE_GST1, 1, [Build with GStreamer 1.x])
     CFLAGS="$CFLAGS $GST_CFLAGS"
-    AC_CHECK_HEADER([gstreamer-1.0/gst/video/video-anc.h],[GST_AFD_DETECTED=true],[GST_AFD_DETECTED=false],[])
+    AC_CHECK_TYPES([GstVideoAFDMeta, GstVideoBarMeta],[GST_AFD_DETECTED=true],[GST_AFD_DETECTED=false],[[#include "gstreamer-1.0/gst/video/video-anc.h"]])
   ], [])
 ], [])
 
