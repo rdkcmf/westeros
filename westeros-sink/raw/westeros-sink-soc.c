@@ -436,7 +436,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.sb= 0;
    sink->soc.frameRate= 0.0;
    sink->soc.frameRateFractionNum= 0;
-   sink->soc.frameRateFractionDenom= 1;
+   sink->soc.frameRateFractionDenom= 0;
    sink->soc.frameRateChanged= FALSE;
    sink->soc.pixelAspectRatio= 1.0;
    sink->soc.havePixelAspectRatio= FALSE;
@@ -913,6 +913,11 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                sink->soc.frameRateFractionDenom= denom;
                sink->soc.frameRateChanged= TRUE;
             }
+         }
+         if ( (sink->soc.frameRate == 0.0) && (sink->soc.frameRateFractionDenom == 0) )
+         {
+            sink->soc.frameRateFractionDenom= 1;
+            sink->soc.frameRateChanged= TRUE;
          }
          sink->soc.pixelAspectRatio= 1.0;
          if ( gst_structure_get_fraction( structure, "pixel-aspect-ratio", &num, &denom ) )
@@ -1587,6 +1592,9 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.nextFrameFd= -1;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
+   sink->soc.frameRate= 0.0;
+   sink->soc.frameRateFractionNum= 0;
+   sink->soc.frameRateFractionDenom= 0;
    sink->soc.pixelAspectRatio= 1.0;
    sink->soc.havePixelAspectRatio= FALSE;
    sink->soc.syncType= -1;

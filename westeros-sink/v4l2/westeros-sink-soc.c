@@ -756,7 +756,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.activeBuffers= 0;
    sink->soc.frameRate= 0.0;
    sink->soc.frameRateFractionNum= 0;
-   sink->soc.frameRateFractionDenom= 1;
+   sink->soc.frameRateFractionDenom= 0;
    sink->soc.frameRateChanged= FALSE;
    sink->soc.pixelAspectRatio= 1.0;
    sink->soc.parNext= 0;
@@ -1422,6 +1422,11 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                sink->soc.frameRateFractionDenom= denom;
                sink->soc.frameRateChanged= TRUE;
             }
+         }
+         if ( (sink->soc.frameRate == 0.0) && (sink->soc.frameRateFractionDenom == 0) )
+         {
+            sink->soc.frameRateFractionDenom= 1;
+            sink->soc.frameRateChanged= TRUE;
          }
          width= -1;
          if ( gst_structure_get_int( structure, "width", &width ) )
@@ -2106,6 +2111,9 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
    sink->soc.frameHeightStream= -1;
+   sink->soc.frameRate= 0.0;
+   sink->soc.frameRateFractionNum= 0;
+   sink->soc.frameRateFractionDenom= 0;
    sink->soc.pixelAspectRatio= 1.0;
    wstFlushPixelAspectRatio( sink, true );
    #ifdef USE_GST_AFD

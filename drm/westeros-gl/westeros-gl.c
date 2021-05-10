@@ -16,9 +16,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -338,6 +338,7 @@ typedef struct _WstGLCtx
    bool haveNativeFence;
    bool graphicsPreferPrimary;
    bool secureGraphics;
+   int defaultRate;
    drmModeObjectProperties *connectorProps;
    drmModePropertyRes **connectorPropRes;
    drmModeObjectProperties *crtcProps;
@@ -377,6 +378,7 @@ typedef struct _WstGLSizeCBInfo
 
 static void wstLog( int level, const char *fmt, ... );
 static void wstFrameLog( const char *fmt, ... );
+static void avProgLog( long long nanoTime, int syncGroup, const char *edge, const char *desc );
 static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *conn );
 static void wstDestroyVideoFrameManager( VideoFrameManager *vfm );
 static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
@@ -1653,6 +1655,12 @@ static void *wstVideoServerConnectionThread( void *arg )
                            num= (int)wstGetU32( m+1 );
                            denom= (int)wstGetU32( m+5 );
                            DEBUG("got frame rate video plane %d: (%d / %d)", conn->videoPlane->plane->plane_id, num, denom);
+                           if ( (num == 0) && (gCtx->defaultRate > 0) )
+                           {
+                              num= gCtx->defaultRate;
+                              denom= 1;
+                              DEBUG("frame rate unknown, use default rate video plane %d: (%d / %d)", conn->videoPlane->plane->plane_id, num, denom);
+                           }
                            if ( (num > 0) && (denom > 0) )
                            {
                               conn->videoPlane->frameRateNum= num;
@@ -1692,6 +1700,11 @@ exit:
    {
       pthread_mutex_lock( &gMutex );
       pthread_mutex_lock( &gCtx->mutex );
+
+      if ( gCtx->autoFRMModeEnabled && conn->videoPlane->frameRateMatchingPlane )
+      {
+         wstSelectRate( gCtx, gCtx->defaultRate, 1 );
+      }
 
       drmModePlane *plane= conn->videoPlane->plane;
       plane->crtc_id= gCtx->enc->crtc_id;
@@ -4376,7 +4389,7 @@ static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom )
             }
          }
       }
-      if ( miMatch >= 0 )
+      if ( (miMatch >= 0) && (ctx->modeInfo->vrefresh != ctx->conn->modes[miMatch].vrefresh) )
       {
          ctx->modeNext= ctx->conn->modes[miMatch];
          ctx->modeSetPending= true;
@@ -5206,6 +5219,10 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
    {
       DEBUG("mode set");
       ctx->modeSet= true;
+      if ( ctx->defaultRate == 0 )
+      {
+         ctx->defaultRate= ctx->modeInfo->vrefresh;
+      }
    }
 
 exit:
