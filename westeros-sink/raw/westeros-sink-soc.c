@@ -575,7 +575,6 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
       sink->soc.haveDrmBuffSem= false;
       sem_destroy( &sink->soc.drmBuffSem );
    }
-   sem_destroy( &sink->soc.drmBuffSem );
    #ifdef GLIB_VERSION_2_32
    g_mutex_clear( &sink->soc.mutex );
    #else
@@ -2969,7 +2968,7 @@ static void drmTerm( GstWesterosSink *sink )
    if ( sink->soc.drmFd >= 0 )
    {
       close( sink->soc.drmFd );
-      sink->soc.drmFd= 1;
+      sink->soc.drmFd= -1;
    }
 }
 
@@ -3267,6 +3266,12 @@ static WstDrmBuffer *drmGetBuffer( GstWesterosSink *sink, int width, int height 
 
    if ( sink->flushStarted )
    {
+      if ( !rc )
+      {
+         /* If we succeeded in decrementing semaphore count
+          * above but are not returning the buffer, do a post */
+         sem_post( &sink->soc.drmBuffSem );
+      }
       goto exit;
    }
 
