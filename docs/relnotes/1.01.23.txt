@@ -1,7 +1,7 @@
 Westeros Release Notes
 ======================
 
-Westeros 1.01.22 Release Notes
+Westeros 1.01.23 Release Notes
 ------------------------------
 
 Date: March 22, 2021
@@ -111,6 +111,10 @@ The issue caused due to no null pointer handling
 * Fixing crash when exiting SW decoder playback
 
 * v4l2: allow capture setup before event for rpi v4l2 driver
+
+* drm: v4l2: corrections to av progression logging
+
+* brcm: sink: don't hold lock when invoking stop callbacks
 
 
 Depedencies

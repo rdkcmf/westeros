@@ -136,6 +136,7 @@ void *sync_free_frame( struct vframe *vf )
       {
          if ( fCheck->canExpire )
          {
+            avProgLog( fCheck->frameTime*1000LL, 0, "WtoD", "drop");
             fCheck->vf= 0;
             vfm->dropFrameCount += 1;
             wstFreeVideoFrameResources( fCheck );
