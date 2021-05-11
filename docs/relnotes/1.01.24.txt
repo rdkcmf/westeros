@@ -1,0 +1,122 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.24 Release Notes
+------------------------------
+
+Date: May 11, 2021
+Tag: Westeros-1.01.24
+Changes:
+
+
+* v4l2: Apply new pixel aspect ratio after resolution change
+
+* drm: ensure received dmabuf fd's have O_CLOEXEC set
+
+* v4l2: fix potential crash getting input buffers
+
+* v4l2: add a stack for managing pixel-aspect-ratio
+
+* v4l2: check pts valid in wstChain
+
+* v4l2, drm: add support for amlogic msync
+
+* raw: add missing locking
+
+* drm: fix sync leak on mode change
+
+* v4l2: extend pts interpolation to non-interlaced content
+
+* v4l2: report QOS every 120 decoded frames
+
+* Fix compilation errors
+
+* Add missing dependencies: libdrm and gbm
+
+* Fix configure premature error caused by AC_MSG_ERROR
+
+* Fix compilation error
+
+Fixes:
+westeros-nested.cpp:1104:46: error: cast from ‘void*’ to ‘uint32_t’ {aka ‘unsigned int’} loses precision [-fpermissive]
+ 1104 |                                    (uint32_t)deviceBuffer,
+      |                                              ^~~~~~~~~~~~
+
+Note: The API might not work on 64-bit platforms, it needs to be double checked.
+
+* Fix cast warning
+
+Fixes the following warning:
+
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ 3379 |    buffer->driverBuffer= (void*)name;
+      |                          ^~~~~~~~~~~
+
+* essos resource manager updates:
+
+-two implementaitions are now available: shared memory and unix domain sockets.
+The shm impl is the version that has been used to date, and remains the
+default implementation for now.  The uds impl can be enabled at build time
+with -DUSE_ESSRMGR_UDS_IMPL. The uds impl uses a centralized resource servrer
+that maintains global state.  Resources are requested and released via uds
+messages between the server and cliets.  The client API is the same for both
+implementations.
+
+* Add frontend resource type to ERM
+
+* Add support for xdg stable version
+
+Note: It just provides stubs not a real implementation.
+
+* Essos resource manager updates:
+
+-add missing code to cleanup dead frontend owners
+-uds impl invoke notify callbacks on dedicated thread
+
+* v4l2: resolution change update:
+
+-ensure last frame at old resolution is dequeued and processed prior to
+commencing resolution change processing.  This will increase the number of
+decode frames queued for display and hence decrease the chances of underflow
+during resolution changes, in addition to not dropping a frame
+
+* Fix Wayland wl_output.mode() "refresh" unit
+
+Fixes wl_output.mode() notification, refresh parameter
+unit from [Hz] to [mHz] as per Wayland protocol
+specification[1].
+
+* Fix essos and Weston interoperability
+
+* raw sink: seek fixes
+
+* v4l2, raw: add support for AFD and Bar meta data
+
+* erm: change erm logging to use stderr
+
+* v4l2: raw: fix potential build errors related to AFD support
+
+* brcm: fix restoration of SDR after HDR video
+
+* v4l2, raw: improve detection of AFD/Bar support
+
+* raw: raw sink updates:
+
+-fix buffer semaphore post imbalance during flush
+-fix invalidation of drm fd
+-remove duplicate sem destroy
+
+* drm, v4l2, raw: use default display mode rate if content rate is unknown
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
