@@ -45,6 +45,16 @@ struct aml_vdec_cfg_infos
    uint32_t canvas_mem_mode;
    uint32_t canvas_mem_endian;
    uint32_t low_latency_mode;
+   uint32_t uvm_hook_type;
+   /*
+    * bit 16       : force progressive output flag.
+    * bit 15       : enable nr.
+    * bit 14       : enable di local buff.
+    * bit 1        : Non-standard dv flag.
+    * bit 0        : dv two layer flag.
+    */
+   uint32_t metadata_config_flag; // for metadata config flag
+   uint32_t data[5];
 };
 
 #define SEI_PicTiming (1)
@@ -102,6 +112,9 @@ struct aml_vdec_ps_infos
    uint32_t dpb_size;
    uint32_t ref_frames;
    uint32_t reorder_frames;
+   uint32_t reorder_margin;
+   uint32_t field;
+   uint32_t data[3];
 };
 
 struct aml_vdec_cnt_infos
@@ -207,16 +220,13 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    {
       sink->soc.preferNV12M= FALSE;
    }
-   if ( sink->soc.inputFormat != V4L2_PIX_FMT_MPEG2 )
+   if (sink->soc.lowMemoryMode)
    {
-      if (sink->soc.lowMemoryMode)
-      {
-         decParm->cfg.ref_buf_margin= 5;
-      }
-      else
-      {
-         decParm->cfg.ref_buf_margin= 7;
-      }
+      decParm->cfg.ref_buf_margin= 5;
+   }
+   else
+   {
+      decParm->cfg.ref_buf_margin= 7;
    }
 
    if ( sink->soc.haveColorimetry ||

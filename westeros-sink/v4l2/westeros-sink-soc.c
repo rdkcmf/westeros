@@ -2464,6 +2464,7 @@ static void wstProcessEvents( GstWesterosSink *sink )
          struct v4l2_format fmtIn, fmtOut;
          int32_t bufferType;
 
+         avProgLog( 0, 0, "DtoS", "source change start");
          g_print("westeros-sink: source change event\n");
          memset( &fmtIn, 0, sizeof(fmtIn));
          bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
@@ -5483,6 +5484,13 @@ capture_start:
          buffIndex= wstGetOutputBuffer( sink );
 
          if ( sink->soc.quitVideoOutputThread ) break;
+
+         if ( (sink->soc.outBuffers[buffIndex].buf.flags & V4L2_BUF_FLAG_LAST) &&
+              (sink->soc.outBuffers[buffIndex].buf.bytesused == 0) )
+         {
+            GST_DEBUG("skip empty last buffer");
+            continue;
+         }
 
          ++sink->soc.frameDecodeCount;
 
