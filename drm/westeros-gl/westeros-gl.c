@@ -1440,7 +1440,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                            uint32_t handle0, handle1;
 
                            wstUpdateResources( WSTRES_FD_VIDEO, true, fd0, __LINE__);
-                           frameWidth= wstGetU32( m+1 );
+                           frameWidth= (wstGetU32( m+1 ) & ~1);
                            frameHeight= ((wstGetU32( m+5)+1) & ~1);
                            frameFormat= wstGetU32( m+9);
                            rectX= (int)wstGetU32( m+13 );
@@ -3057,7 +3057,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
    }
 done:
    if ( !f && !vfm->paused && (vfm->bufferIdCurrent != -1) && !vfm->underflowReported &&
-        vfm->conn && vfm->conn->videoPlane && vfm->conn->videoPlane && (vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1) )
+        vfm->conn && vfm->conn->videoPlane && (vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1) )
    {
       vfm->underflowDetected= true;
       INFO("underflow detected video plane %p", vfm->conn->videoPlane);
@@ -3065,6 +3065,10 @@ done:
    if ( f )
    {
       vfm->underflowReported= false;
+      if ( vfm->bufferIdCurrent == f->bufferId )
+      {
+         avProgLog( vfm->conn->videoPlane->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", "hold");
+      }
       vfm->bufferIdCurrent= f->bufferId;
    }
    return f;
