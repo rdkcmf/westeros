@@ -983,6 +983,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
    {
       return;
    }
+   GST_BASE_SINK_PREROLL_UNLOCK(GST_BASE_SINK(sink));
    while ( sink->soc.videoPaused )
    {
       bool active= true;
@@ -996,9 +997,11 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       UNLOCK(sink);
       if ( !active )
       {
+         GST_BASE_SINK_PREROLL_LOCK(GST_BASE_SINK(sink));
          return;
       }
    }
+   GST_BASE_SINK_PREROLL_LOCK(GST_BASE_SINK(sink));
    if ( !sink->flushStarted )
    {
       gint64 nanoTime;
