@@ -5511,6 +5511,18 @@ capture_start:
                sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec= currFramePTS / 1000000LL;
                sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec= currFramePTS % 1000000LL;
             }
+            if ( (sink->soc.frameRateFractionNum == 0) && (sink->soc.frameDecodeCount > 1) )
+            {
+               long long period= currFramePTS - sink->soc.prevDecodedTimestamp;
+               if ( period > 0 )
+               {
+                  double rate= 1000000.0/period;
+                  sink->soc.frameRateFractionNum= rate*1000;
+                  sink->soc.frameRateFractionDenom= 1000;
+                  sink->soc.frameRateChanged= TRUE;
+                  g_print("westeros-sink: infer rate of %f: %d/%d\n", rate, sink->soc.frameRateFractionNum, sink->soc.frameRateFractionDenom );
+               }
+            }
             sink->soc.prevDecodedTimestamp= currFramePTS;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
