@@ -116,7 +116,7 @@ static void underflowCallback( void *userData, int n );
 static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
-static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed );
+static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed, gboolean playing );
 static gboolean processEventSinkSoc( GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
@@ -1335,7 +1335,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
          }
          if ( sink->soc.clientPlaySpeed != sink->playbackRate )
          {
-            updateClientPlaySpeed(sink, sink->playbackRate);
+            updateClientPlaySpeed(sink, sink->playbackRate, TRUE);
          }
       }
 
@@ -1373,7 +1373,7 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
       }
    }
 
-   updateClientPlaySpeed(sink, 0);
+   updateClientPlaySpeed(sink, 0, FALSE);
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
    {
@@ -1542,7 +1542,7 @@ void gst_westeros_sink_soc_set_startPTS( GstWesterosSink *sink, gint64 pts )
 
    if ( sink->soc.clientPlaySpeed != sink->playbackRate )
    {
-      updateClientPlaySpeed(sink, sink->playbackRate);
+      updateClientPlaySpeed(sink, sink->playbackRate, GST_STATE(GST_ELEMENT(sink)) == GST_STATE_PLAYING );
    }
 }
 
@@ -1685,7 +1685,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
 
    if ( sink->soc.stcChannel )
    {
-      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, FALSE);
+      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, GST_STATE(GST_ELEMENT(sink)) != GST_STATE_PLAYING ? TRUE : FALSE);
       if ( rc != NEXUS_SUCCESS )
       {
          goto exit;
@@ -1706,7 +1706,7 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
  
    sink->videoStarted= TRUE;
 
-   updateClientPlaySpeed(sink, sink->playbackRate);
+   updateClientPlaySpeed(sink, sink->playbackRate, GST_STATE(GST_ELEMENT(sink)) == GST_STATE_PLAYING ? TRUE : FALSE);
 
    result= TRUE;
 
@@ -3080,7 +3080,7 @@ static long long getCurrentTimeMillis(void)
    return utcCurrentTimeMillis;
 }
 
-static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed )
+static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed, gboolean playing )
 {
    NEXUS_VideoDecoderTrickState trickState;
    NEXUS_VideoDecoderSettings settings;
@@ -3158,7 +3158,7 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
          GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
       }
 
-      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, clientPlaySpeed == 0.0 ? TRUE : FALSE);
+      rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, (clientPlaySpeed == 0.0 || !playing) ? TRUE : FALSE);
       if ( rc != NEXUS_SUCCESS )
       {
          GST_ERROR("updateClientPlaySpeed: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
@@ -3296,7 +3296,7 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
          {
             NEXUS_Error rc;
 
-            updateClientPlaySpeed( sink, 0.0 );
+            updateClientPlaySpeed( sink, 0.0, GST_STATE(GST_ELEMENT(sink)) == GST_STATE_PLAYING );
 
             if ( sink->soc.frameStepOnPreroll )
             {
