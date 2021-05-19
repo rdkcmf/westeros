@@ -1144,12 +1144,13 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
             GST_BASE_SINK_PREROLL_UNLOCK(basesink);
 
             LOCK(sink);
-            if ( sink->soc.frameInCount > sink->soc.frameDecodeCount )
+            if ( (sink->soc.frameInCount > sink->soc.frameDecodeCount) &&
+                 (sink->soc.frameOutCount - sink->soc.frameDisplayCount >= 5) )
             {
                queuedFrames= sink->soc.frameInCount - sink->soc.frameDecodeCount;
             }
             UNLOCK(sink);
-            GST_DEBUG("queuedFrames %d (in %d dec %d disp %d)\n", queuedFrames, sink->soc.frameInCount, sink->soc.frameDecodeCount, sink->soc.frameDisplayCount);
+            GST_DEBUG("queuedFrames %d (in %d out %d dec %d disp %d)\n", queuedFrames, sink->soc.frameInCount, sink->soc.frameOutCount, sink->soc.frameDecodeCount, sink->soc.frameDisplayCount);
             g_value_set_uint(value, queuedFrames);
          }
          break;
