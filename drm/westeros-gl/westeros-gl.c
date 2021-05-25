@@ -5106,17 +5106,21 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                gfxWidth= ctx->nwFirst ? ctx->nwFirst->width : modeWidth;
                gfxHeight= ctx->nwFirst ? ctx->nwFirst->height : modeWidth;
 
-               if ( dw > gfxWidth )
+               if ( dx+dw > gfxWidth )
                {
-                  int cropw= dw-gfxWidth;
+                  int cropw= (dx+dw)-gfxWidth;
                   sw -= cropw*frameWidth/rectW;
-                  dw= gfxWidth;
+                  if ( (int32_t)sw < 0 ) sw= 0;
+                  dw= gfxWidth-cropw;
+                  if ( (int32_t)dw < 0 ) dw= 0;
                }
-               if ( dh > gfxHeight )
+               if ( dy+dh > gfxHeight )
                {
-                  int croph= dh-gfxHeight;
+                  int croph= (dy+dh)-gfxHeight;
                   sh -= croph*frameHeight/rectH;
-                  dh= gfxHeight;
+                  if ( (int32_t)sh < 0 ) sh= 0;
+                  dh= gfxHeight-croph;
+                  if ( (int32_t)dh < 0 ) dh= 0;
                }
 
                if ( (gfxWidth != modeWidth) || (gfxHeight != modeHeight) )
