@@ -1040,7 +1040,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
       case PROP_ZOOM_MODE:
          {
             gint zoom= g_value_get_int(value);
-            if ( sink->soc.zoomMode != zoom )
+            if ( !sink->soc.zoomModeUser || (sink->soc.zoomMode != zoom) )
             {
                GST_DEBUG("set zoom-mode to %d", zoom);
                sink->soc.zoomMode= zoom;
@@ -5223,10 +5223,12 @@ static gpointer wstVideoOutputThread(gpointer data)
    int i, j, buffIndex, rc;
    int32_t bufferType;
    bool wasPaused= false;
+   bool havePriEvent;
 
    GST_DEBUG("wstVideoOutputThread: enter");
 
 capture_start:
+   havePriEvent= false;
    if ( sink->soc.numBuffersOut )
    {
       LOCK(sink);
@@ -5311,7 +5313,6 @@ capture_start:
 
    for( ; ; )
    {
-      bool havePriEvent= false;
       if ( sink->soc.emitFirstFrameSignal )
       {
          sink->soc.emitFirstFrameSignal= FALSE;
@@ -5372,8 +5373,9 @@ capture_start:
 
             if ( sink->soc.quitVideoOutputThread ) break;
 
-            if ( pfd.revents & POLLPRI )
+            if ( havePriEvent || (pfd.revents & POLLPRI) )
             {
+               havePriEvent= false;
                wstProcessEvents( sink );
                if ( sink->soc.needCaptureRestart )
                {
@@ -5452,8 +5454,10 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
-               if ( pfd.revents & POLLPRI )
+               if ( havePriEvent || (pfd.revents & POLLPRI) )
                {
+                  pfd.revents &= ~POLLPRI;
+                  havePriEvent= false;
                   wstProcessEvents( sink );
                   if ( sink->soc.needCaptureRestart )
                   {
@@ -5490,6 +5494,15 @@ capture_start:
               (sink->soc.outBuffers[buffIndex].buf.bytesused == 0) )
          {
             GST_DEBUG("skip empty last buffer");
+            if ( havePriEvent )
+            {
+               havePriEvent= false;
+               wstProcessEvents( sink );
+               if ( sink->soc.needCaptureRestart )
+               {
+                  break;
+               }
+            }
             continue;
          }
 
@@ -5652,14 +5665,6 @@ capture_start:
                wstSendFrameAdvanceVideoClientConnection( sink->soc.conn );
             }
             UNLOCK(sink);
-         }
-      }
-      if ( havePriEvent )
-      {
-         wstProcessEvents( sink );
-         if ( sink->soc.needCaptureRestart )
-         {
-            break;
          }
       }
    }
