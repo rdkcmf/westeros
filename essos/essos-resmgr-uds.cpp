@@ -20,6 +20,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <linux/netlink.h>
+#include <algorithm>
 
 #define ESSRMGR_SERVER_NAME "resource"
 
@@ -186,6 +187,7 @@ static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int 
 static bool essRMTransferResource( EssRMgrResourceConnection *conn, EssRMgrResourceNotify *pending );
 static void essRMInvokeNotify( EssRMgr *rm, int event, EssRMgrRequestInfo *info );
 static void* essRMNotifyThread( void *userData );
+static void essRMDestroyResourceConnection( EssRMgrResourceConnection *conn );
 
 static EssRMgrResourceServerCtx *gCtx= 0;
 
@@ -878,6 +880,8 @@ static void *essRMResourceConnectionThread( void *arg )
       }
    }
 
+   essRMDestroyResourceConnection(conn);
+
    DEBUG("essRMResourceConnectionThread: exit");
 
    return 0;
@@ -946,6 +950,11 @@ static void essRMDestroyResourceConnection( EssRMgrResourceConnection *conn )
 {
    if ( conn )
    {
+      pthread_mutex_lock( &conn->server->server->mutex );
+      std::vector<EssRMgrResourceConnection*>& connections = conn->server->connections;
+      connections.erase( std::remove(connections.begin(), connections.end(), conn), connections.end() );
+      pthread_mutex_unlock( &conn->server->server->mutex );
+
       if ( conn->socketFd >= 0 )
       {
          shutdown( conn->socketFd, SHUT_RDWR );
@@ -955,12 +964,6 @@ static void essRMDestroyResourceConnection( EssRMgrResourceConnection *conn )
       {
          close( conn->socketFd );
          conn->socketFd= -1;
-      }
-
-      if ( conn->threadStarted )
-      {
-         conn->threadStopRequested= true;
-         pthread_join( conn->threadId, NULL );
       }
 
       pthread_mutex_destroy( &conn->mutex );
@@ -997,7 +1000,6 @@ static void *essRMResoureServerThread( void *arg )
             conn= essRMCreateResourceConnection( server, fd );
             if ( conn )
             {
-               int i;
                DEBUG("created resource connection %p for fd %d", conn, fd );
                pthread_mutex_lock( &server->server->mutex );
                server->connections.push_back( conn );
@@ -1607,7 +1609,6 @@ static EssRMgrClientConnection *essRMCreateClientConnection( EssRMgr *rm )
    bool error= true;
    const char *workingDir;
    int pathNameLen, addressSize;
-   pthread_attr_t attr;
 
    conn= (EssRMgrClientConnection*)calloc( 1, sizeof(EssRMgrClientConnection));
    if ( conn )
@@ -1654,20 +1655,8 @@ static EssRMgrClientConnection *essRMCreateClientConnection( EssRMgr *rm )
          goto exit;
       }
 
-      rc= pthread_attr_init( &attr );
-      if ( rc )
-      {
-         ERROR("unable to init pthread attr: errno %d", errno);
-      }
-
-      rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
-      if ( rc )
-      {
-         ERROR("unable to set pthread attr detached: errno %d", errno);
-      }
-
       rm->conn->threadStopRequested= false;
-      rc= pthread_create( &conn->threadId, &attr, essRMClientConnectionThread, rm );
+      rc= pthread_create( &conn->threadId, NULL, essRMClientConnectionThread, rm );
       if ( rc )
       {
          ERROR("unable to start client connection thread: rc %d", rc);

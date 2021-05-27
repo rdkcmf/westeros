@@ -1824,14 +1824,15 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   sink->soc.inBuffers[buffIndex].buf.m.planes[0].bytesused= copylen;
                }
                rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.inBuffers[buffIndex].buf );
-               UNLOCK(sink);
                if ( rc < 0 )
                {
+                  UNLOCK(sink);
                   GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
                   goto exit;
                }
-               avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", "");
                sink->soc.inBuffers[buffIndex].queued= true;
+               UNLOCK(sink);
+               avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", "");
             }
          }
 
@@ -3390,7 +3391,6 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
          break;
       }
    }
-   UNLOCK(sink);
 
    if ( bufferIndex < 0 )
    {
@@ -3405,11 +3405,22 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
          buf.length= 1;
          buf.m.planes= planes;
       }
+
+      UNLOCK(sink);
       GST_BASE_SINK_PREROLL_UNLOCK(GST_BASE_SINK(sink));
       rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQBUF, &buf );
       GST_BASE_SINK_PREROLL_LOCK(GST_BASE_SINK(sink));
+      LOCK(sink);
+
       if ( rc == 0 )
       {
+         if ( !sink->soc.inBuffers )
+         {
+            UNLOCK(sink);
+            GST_WARNING("lost soc.inBuffers");
+            return -1;
+         }
+
          bufferIndex= buf.index;
          if ( sink->soc.isMultiPlane )
          {
@@ -3425,6 +3436,8 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
       sink->soc.inBuffers[bufferIndex].buf.timestamp.tv_sec= -1;
       sink->soc.inBuffers[bufferIndex].buf.timestamp.tv_usec= 0;
    }
+   UNLOCK(sink);
+
 
    return bufferIndex;
 }
@@ -5332,7 +5345,9 @@ capture_start:
       {
          if ( !wasPaused )
          {
+            LOCK(sink);
             wstSendPauseVideoClientConnection( sink->soc.conn, true);
+            UNLOCK(sink);
          }
          wasPaused= true;
 
