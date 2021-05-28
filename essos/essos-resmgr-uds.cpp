@@ -59,6 +59,7 @@ typedef struct _EssRMgrResource
    int criteriaMask;
    int requestIdOwner;
    EssRMgrResourceConnection *connOwner;
+   int state;
    int priorityOwner;
    int usageOwner;
    int pendingNtfyIdx;
@@ -145,7 +146,9 @@ typedef enum _EssRMgrValue
    EssRMgrValue_count= 0,
    EssRMgrValue_owner= 1,
    EssRMgrValue_caps= 2,
-   EssRMgrValue_policy_tie= 3,
+   EssRMgrValue_state= 3,
+   EssRMgrValue_aggregateState= 4,
+   EssRMgrValue_policy_tie= 5,
 } EssRMgrValue;
 
 typedef struct _EssRMgrRequestInfo
@@ -494,6 +497,34 @@ static void essRMDumpState( EssRMgrResourceConnection *conn, int requestId )
    essRMSendDumpStateResponse( conn, requestId, 0 );
 }
 
+static int essRMGetAggregateState( EssRMgrResourceConnection *conn )
+{
+   int avstate= EssRMgrRes_idle;
+   EssRMgrState *state= conn->server->state;
+
+   for( int i= 0; i < state->base.numVideoDecoders; ++i )
+   {
+      DEBUG("video %d state %d", i, state->base.videoDecoder[i].state);
+      if ( state->base.videoDecoder[i].state > avstate )
+      {
+         avstate= state->base.videoDecoder[i].state;
+         DEBUG("avstate %d", avstate);
+      }
+   }
+   for( int i= 0; i < state->base.numAudioDecoders; ++i )
+   {
+      DEBUG("audio %d state %d", i, state->base.audioDecoder[i].state);
+      if ( state->base.audioDecoder[i].state > avstate )
+      {
+         avstate= state->base.audioDecoder[i].state;
+         DEBUG("avstate %d", avstate);
+      }
+   }
+   DEBUG("aggregate avstate %d", avstate);
+
+   return avstate;
+}
+
 static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
 {
    EssRMgrState *state= conn->server->state;
@@ -507,6 +538,7 @@ static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
          state->base.videoDecoder[i].connOwner= 0;
          state->base.videoDecoder[i].priorityOwner= 0;
          state->base.videoDecoder[i].usageOwner= 0;
+         state->base.videoDecoder[i].state= EssRMgrRes_idle;
       }
    }
 
@@ -519,6 +551,7 @@ static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
          state->base.audioDecoder[i].connOwner= 0;
          state->base.audioDecoder[i].priorityOwner= 0;
          state->base.audioDecoder[i].usageOwner= 0;
+         state->base.audioDecoder[i].state= EssRMgrRes_idle;
       }
    }
 
@@ -531,6 +564,7 @@ static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
          state->base.frontEnd[i].connOwner= 0;
          state->base.frontEnd[i].priorityOwner= 0;
          state->base.frontEnd[i].usageOwner= 0;
+         state->base.frontEnd[i].state= EssRMgrRes_idle;
       }
    }
 }
@@ -680,6 +714,49 @@ static void *essRMResourceConnectionThread( void *arg )
                         pthread_mutex_lock( &server->state->mutex );
                         essRMSetPriorityResource( conn, requestId, type, priority );
                         pthread_mutex_unlock( &server->state->mutex );
+                     }
+                     break;
+                  case 'S':
+                     if ( mlen >= 7 )
+                     {
+                        int type= m[4];
+                        int id= getU32( &m[5] );
+                        int state= m[9];
+                        DEBUG("got set state type %d id %d state %d", type, id, state);
+                        if ( state < EssRMgrRes_max )
+                        {
+                           switch( type )
+                           {
+                              case EssRMgrResType_videoDecoder:
+                                 if ( (id < server->state->base.numVideoDecoders) &&
+                                      (conn ==  server->state->base.videoDecoder[id].connOwner) )
+                                 {
+                                    server->state->base.videoDecoder[id].state= state;
+                                 }
+                                 break;
+                              case EssRMgrResType_audioDecoder:
+                                 if ( (id < server->state->base.numAudioDecoders) &&
+                                      (conn ==  server->state->base.audioDecoder[id].connOwner) )
+                                 {
+                                    server->state->base.audioDecoder[id].state= state;
+                                 }
+                                 break;
+                              case EssRMgrResType_frontEnd:
+                                 if ( (id < server->state->base.numFrontEnds) &&
+                                      (conn ==  server->state->base.frontEnd[id].connOwner) )
+                                 {
+                                    server->state->base.frontEnd[id].state= state;
+                                 }
+                                 break;
+                              default:
+                                 ERROR("unsupported resource type: %d", type);
+                                 break;
+                           }
+                        }
+                        else
+                        {
+                           ERROR("bad state: %d", state);
+                        }
                      }
                      break;
                   case 'U':
@@ -835,6 +912,46 @@ static void *essRMResourceConnectionThread( void *arg )
                                        ERROR("unsupported resource type: %d", type);
                                        break;
                                  }
+                                 pthread_mutex_unlock( &server->state->mutex );
+                              }
+                              break;
+                           case EssRMgrValue_state:
+                              {
+                                 int type, id;
+                                 type= m[9];
+                                 id= getU32( &m[10] );
+                                 pthread_mutex_lock( &server->state->mutex );
+                                 switch( type )
+                                 {
+                                    case EssRMgrResType_videoDecoder:
+                                       if ( id < server->state->base.numVideoDecoders )
+                                       {
+                                          value1= server->state->base.videoDecoder[id].state;
+                                       }
+                                       break;
+                                    case EssRMgrResType_audioDecoder:
+                                       if ( id < server->state->base.numAudioDecoders )
+                                       {
+                                          value1= server->state->base.audioDecoder[id].state;
+                                       }
+                                       break;
+                                    case EssRMgrResType_frontEnd:
+                                       if ( id < server->state->base.numFrontEnds )
+                                       {
+                                          value1= server->state->base.frontEnd[id].state;
+                                       }
+                                       break;
+                                    default:
+                                       ERROR("unsupported resource type: %d", type);
+                                       break;
+                                 }
+                                 pthread_mutex_unlock( &server->state->mutex );
+                              }
+                              break;
+                           case EssRMgrValue_aggregateState:
+                              {
+                                 pthread_mutex_lock( &server->state->mutex );
+                                 value1= essRMGetAggregateState( conn );
                                  pthread_mutex_unlock( &server->state->mutex );
                               }
                               break;
@@ -1271,6 +1388,7 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    {
       server->state->base.videoDecoder[i].type= EssRMgrResType_videoDecoder;
       server->state->base.videoDecoder[i].criteriaMask= ESSRMGR_CRITERIA_MASK_VIDEO;
+      server->state->base.videoDecoder[i].state= EssRMgrRes_idle;
       server->state->base.videoDecoder[i].pendingNtfyIdx= -1;
    }
 
@@ -1292,6 +1410,7 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    {
       server->state->base.audioDecoder[i].type= EssRMgrResType_audioDecoder;
       server->state->base.audioDecoder[i].criteriaMask= ESSRMGR_CRITERIA_MASK_AUDIO;
+      server->state->base.audioDecoder[i].state= EssRMgrRes_idle;
       server->state->base.audioDecoder[i].pendingNtfyIdx= -1;
    }
 
@@ -1313,6 +1432,7 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    {
       server->state->base.frontEnd[i].type= EssRMgrResType_frontEnd;
       server->state->base.frontEnd[i].criteriaMask= ESSRMGR_CRITERIA_MASK_FE;
+      server->state->base.frontEnd[i].state= EssRMgrRes_idle;
       server->state->base.frontEnd[i].pendingNtfyIdx= -1;
    }
 
@@ -1832,6 +1952,62 @@ static bool essRMSendResReleaseClientConnection( EssRMgrClientConnection *conn, 
    return result;
 }
 
+static bool essRMSendResSetStateClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info, int state )
+{
+   bool result= false;
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[64];
+      int len;
+      int sentLen;
+
+      pthread_mutex_lock( &conn->mutex );
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'R';
+      mbody[len++]= 'S';
+      mbody[len++]= 0;
+      mbody[len++]= 'S';
+      mbody[len++]= (info->type&0xFF);
+      len += putU32( &mbody[len], info->assignedId );
+      mbody[len++]= (state&0xFF);
+      if( len > sizeof(mbody) )
+      {
+         ERROR("essRMSendResSetStateClientConnection: msg too big");
+      }
+      mbody[2]= (len-3);
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+         TRACE1("sentLen %d len %d", sentLen, len);
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         result= true;
+         DEBUG("sent res set state: type %d assignedId %d state %d to resource server", info->type, info->assignedId, state);
+      }
+
+      pthread_mutex_unlock( &conn->mutex );
+   }
+   return result;
+}
+
 static bool essRMSendSetPriorityClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
 {
    bool result= false;
@@ -2052,6 +2228,11 @@ static bool essRMSendGetValueClientConnection( EssRMgrClientConnection *conn, Es
             mbody[len++]= (info->type&0xFF);
             len += putU32( &mbody[len], info->assignedId );
             break;
+         case EssRMgrValue_state:
+            mbody[len++]= (info->type&0xFF);
+            len += putU32( &mbody[len], info->assignedId );
+            break;
+         case EssRMgrValue_aggregateState:
          case EssRMgrValue_policy_tie:
             break;
          default:
@@ -2277,6 +2458,54 @@ exit:
    return value;
 }
 
+bool EssRMgrGetAVState( EssRMgr *rm, int *state )
+{
+   bool result= false;
+   EssRMgrRequestInfo *info= 0;
+   int rc;
+
+   if ( rm && rm->conn )
+   {
+      info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
+      if ( !info )
+      {
+         ERROR("no memory for request");
+         goto exit;
+      }
+
+      rc= sem_init( &info->semComplete, 0, 0 );
+      if ( rc )
+      {
+         ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         goto exit;
+      }
+
+      info->waitForever= true;
+      pthread_mutex_lock( &rm->mutex );
+      info->requestId= rm->nextRequestId++;
+      rm->requests.push_back( info );
+      pthread_mutex_unlock( &rm->mutex );
+
+      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_aggregateState ) )
+      {
+         essRMWaitResponseClientConnection( rm->conn, info );
+
+         *state= info->value1;
+
+         result= true;
+      }
+   }
+
+exit:
+   if ( info )
+   {
+      sem_destroy( &info->semComplete );
+      free( info );
+   }
+
+   return result;
+}
+
 int EssRMgrResourceGetCount( EssRMgr *rm, int type )
 {
    EssRMgrRequestInfo *info= 0;
@@ -2435,6 +2664,88 @@ exit:
    {
       sem_destroy( &info->semComplete );
       free( info );
+   }
+
+   return result;
+}
+
+bool EssRMgrResourceGetState( EssRMgr *rm, int type, int id, int *state )
+{
+   bool result= false;
+   EssRMgrRequestInfo *info= 0;
+   int rc;
+
+   if ( rm && rm->conn )
+   {
+      info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
+      if ( !info )
+      {
+         ERROR("no memory for request");
+         goto exit;
+      }
+
+      rc= sem_init( &info->semComplete, 0, 0 );
+      if ( rc )
+      {
+         ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         goto exit;
+      }
+
+      info->waitForever= true;
+      info->type= type;
+      info->assignedId= id;
+      pthread_mutex_lock( &rm->mutex );
+      info->requestId= rm->nextRequestId++;
+      rm->requests.push_back( info );
+      pthread_mutex_unlock( &rm->mutex );
+
+      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_state ) )
+      {
+         essRMWaitResponseClientConnection( rm->conn, info );
+
+         if ( state )
+         {
+            *state= info->value1;
+         }
+         result= true;
+      }
+   }
+
+exit:
+   if ( info )
+   {
+      sem_destroy( &info->semComplete );
+      free( info );
+   }
+
+   return result;
+}
+
+bool EssRMgrResourceSetState( EssRMgr *rm, int type, int id, int state )
+{
+   bool result= false;
+   if ( rm && rm->conn )
+   {
+      EssRMgrRequestInfo *info= 0;
+      info= essRMFindRequestByResource( rm, type, id, false );
+      if ( info )
+      {
+         switch( state )
+         {
+            case EssRMgrRes_idle:
+            case EssRMgrRes_paused:
+            case EssRMgrRes_active:
+               result= essRMSendResSetStateClientConnection( rm->conn, info, state );
+               break;
+            default:
+               ERROR("bad state value %d", state);
+               break;
+         }
+      }
+      else
+      {
+         ERROR("no match for resource type %d id %d", type, id);
+      }
    }
 
    return result;
@@ -2808,6 +3119,7 @@ static void essRMReleaseResource( EssRMgrResourceConnection *conn, int type, int
                res[id].connOwner= 0;
                res[id].priorityOwner= 0;
                res[id].usageOwner= 0;
+               res[id].state= EssRMgrRes_idle;
 
                if ( res[id].pendingNtfyIdx >= 0 )
                {

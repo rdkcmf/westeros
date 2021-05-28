@@ -74,6 +74,7 @@ typedef struct _EssRMgrResource
    int capabilities;
    int criteriaMask;
    int requestIdOwner;
+   int state;
    int pidOwner;
    int priorityOwner;
    int usageOwner;
@@ -318,6 +319,46 @@ bool EssRMgrGetPolicyPriorityTie( EssRMgr *rm )
    return policyValue;
 }
 
+bool EssRMgrGetAVState( EssRMgr *rm, int *state )
+{
+   bool result= false;
+   int avstate= EssRMgrRes_idle;
+
+   if ( rm )
+   {
+      if ( essRMLockCtrlFileAndValidate( rm ) )
+      {
+         for( int i= 0; i < rm->state->base.numVideoDecoders; ++i )
+         {
+            DEBUG("video %d state %d", i, rm->state->base.videoDecoder[i].state);
+            if ( rm->state->base.videoDecoder[i].state > avstate )
+            {
+               avstate= rm->state->base.videoDecoder[i].state;
+               DEBUG("avstate %d", avstate);
+            }
+         }
+         for( int i= 0; i < rm->state->base.numAudioDecoders; ++i )
+         {
+            DEBUG("audio %d state %d", i, rm->state->base.videoDecoder[i].state);
+            if ( rm->state->base.audioDecoder[i].state > avstate )
+            {
+               avstate= rm->state->base.audioDecoder[i].state;
+               DEBUG("avstate %d", avstate);
+            }
+         }
+         DEBUG("aggregate avstate %d", avstate);
+         if ( state )
+         {
+            *state= avstate;
+         }
+         essRMUnlockCtrlFile( rm );
+         result= true;
+      }
+   }
+
+   return result;
+}
+
 int EssRMgrResourceGetCount( EssRMgr *rm, int type )
 {
    int count= 0;
@@ -452,6 +493,112 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
       }
    }
 
+   return result;
+}
+
+bool EssRMgrResourceGetState( EssRMgr *rm, int type, int id, int *state )
+{
+   bool result= false;
+   if ( rm )
+   {
+      if ( essRMLockCtrlFileAndValidate( rm ) )
+      {
+         switch( type )
+         {
+            case EssRMgrResType_videoDecoder:
+               if ( (id >= 0) && (id < rm->state->base.numVideoDecoders) )
+               {
+                  if ( state )
+                  {
+                     *state= rm->state->base.videoDecoder[id].state;
+                  }
+                  result= true;
+               }
+               break;
+            case EssRMgrResType_audioDecoder:
+               if ( (id >= 0) && (id < rm->state->base.numAudioDecoders) )
+               {
+                  if ( state )
+                  {
+                     *state= rm->state->base.audioDecoder[id].state;
+                  }
+                  result= true;
+               }
+               break;
+            case EssRMgrResType_frontEnd:
+               if ( (id >= 0) && (id < rm->state->base.numFrontEnds) )
+               {
+                  if ( state )
+                  {
+                     *state= rm->state->base.frontEnd[id].state;
+                  }
+                  result= true;
+               }
+               break;
+            default:
+               break;
+         }
+         essRMUnlockCtrlFile( rm );
+      }
+   }
+
+   return result;
+}
+
+bool EssRMgrResourceSetState( EssRMgr *rm, int type, int id, int state )
+{
+   bool result= false;
+   if ( rm )
+   {
+      switch( state )
+      {
+         case EssRMgrRes_idle:
+         case EssRMgrRes_paused:
+         case EssRMgrRes_active:
+            break;
+         default:
+            goto exit;
+      }
+      if ( essRMLockCtrlFileAndValidate( rm ) )
+      {
+         int maxId= 0;
+         EssRMgrResource *res= 0;
+         switch( type )
+         {
+            case EssRMgrResType_videoDecoder:
+               maxId= rm->state->base.numVideoDecoders;
+               res= rm->state->base.videoDecoder;
+               break;
+            case EssRMgrResType_audioDecoder:
+               maxId= rm->state->base.numAudioDecoders;
+               res= rm->state->base.audioDecoder;
+               break;
+            case EssRMgrResType_frontEnd:
+               maxId= rm->state->base.numFrontEnds;
+               res= rm->state->base.frontEnd;
+               break;
+            default:
+               ERROR("Bad resource type: %d", type);
+               break;
+         }
+         if ( res )
+         {
+            if ( (id >= 0) && (id < maxId) )
+            {
+               int pid= getpid();
+               if ( pid == res[id].pidOwner )
+               {
+                  res[id].state= state;
+                  rm->state->hdr.crc= getCRC32( (unsigned char *)&rm->state->base, sizeof(EssRMgrBase) );
+                  result= true;
+               }
+            }
+         }
+         essRMUnlockCtrlFile( rm );
+      }
+   }
+
+exit:
    return result;
 }
 
@@ -735,6 +882,7 @@ static void essRMInitDefaultState( EssRMgr *rm )
       rm->state->base.videoDecoder[i].type= EssRMgrResType_videoDecoder;
       rm->state->base.videoDecoder[i].criteriaMask= ESSRMGR_CRITERIA_MASK_VIDEO;
       rm->state->base.videoDecoder[i].pendingNtfyIdx= -1;
+      rm->state->base.videoDecoder[i].state= EssRMgrRes_idle;
    }
 
    int maxPending= 3*rm->state->base.numVideoDecoders;
@@ -786,6 +934,7 @@ static void essRMInitDefaultState( EssRMgr *rm )
       rm->state->base.audioDecoder[i].type= EssRMgrResType_audioDecoder;
       rm->state->base.audioDecoder[i].criteriaMask= ESSRMGR_CRITERIA_MASK_AUDIO;
       rm->state->base.audioDecoder[i].pendingNtfyIdx= -1;
+      rm->state->base.audioDecoder[i].state= EssRMgrRes_idle;
    }
 
    maxPending= 3*rm->state->base.numAudioDecoders;
@@ -837,6 +986,7 @@ static void essRMInitDefaultState( EssRMgr *rm )
       rm->state->base.frontEnd[i].type= EssRMgrResType_frontEnd;
       rm->state->base.frontEnd[i].criteriaMask= ESSRMGR_CRITERIA_MASK_FE;
       rm->state->base.frontEnd[i].pendingNtfyIdx= -1;
+      rm->state->base.frontEnd[i].state= EssRMgrRes_idle;
    }
 
    maxPending= 3*rm->state->base.numFrontEnds;
@@ -1399,6 +1549,7 @@ static void essRMValidateState( EssRMgr *rm )
             state->base.videoDecoder[i].pidOwner= 0;
             state->base.videoDecoder[i].priorityOwner= 0;
             state->base.videoDecoder[i].usageOwner= 0;
+            state->base.videoDecoder[i].state= EssRMgrRes_idle;
             updateCRC= true;
          }
       }
@@ -1416,6 +1567,7 @@ static void essRMValidateState( EssRMgr *rm )
             state->base.audioDecoder[i].pidOwner= 0;
             state->base.audioDecoder[i].priorityOwner= 0;
             state->base.audioDecoder[i].usageOwner= 0;
+            state->base.audioDecoder[i].state= EssRMgrRes_idle;
             updateCRC= true;
          }
       }
@@ -1433,6 +1585,7 @@ static void essRMValidateState( EssRMgr *rm )
             state->base.frontEnd[i].pidOwner= 0;
             state->base.frontEnd[i].priorityOwner= 0;
             state->base.frontEnd[i].usageOwner= 0;
+            state->base.frontEnd[i].state= EssRMgrRes_idle;
             updateCRC= true;
          }
       }

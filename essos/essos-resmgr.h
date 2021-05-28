@@ -77,6 +77,14 @@ typedef enum _EssRMgrFrontEndUsage
    EssRMgrFEUse_none=                (0),
 } EssRMgrFontEndUsage;
 
+typedef enum _EssRMgrResState
+{
+   EssRMgrRes_idle= 0,
+   EssRMgrRes_paused= 1,
+   EssRMgrRes_active= 2,
+   EssRMgrRes_max= 3
+} EssRMgrResState;
+
 typedef enum _EssRMgrEvent
 {
    /*
@@ -180,6 +188,13 @@ void EssRMgrDestroy( EssRMgr *rm );
 bool EssRMgrGetPolicyPriorityTie( EssRMgr *rm );
 
 /**
+ * EssRMgrGetAVState
+ *
+ * Get aggregate AV state.  Specified as value from the enum EssRMgrResState
+ */
+bool EssRMgrGetAVState( EssRMgr *rm, int *state );
+
+/**
  * EssRMgrResourceGetCount
  *
  * Get number of instances of specified resource type
@@ -199,6 +214,21 @@ bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *client, int *p
  * Get capabilities info for specified resource
  */
 bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps );
+
+/**
+ * EssRMgrResourceGetState
+ *
+ * Get state of the specified resource.  Specified as value from the enum EssRMgrResState
+ */
+bool EssRMgrResourceGetState( EssRMgr *rm, int type, int id, int *state );
+
+/**
+ * EssRMgrResourceSetState
+ *
+ * Set state of the specified resource.  Specified as value from the enum EssRMgrResState.
+ * Only the current owner can set the state.
+ */
+bool EssRMgrResourceSetState( EssRMgr *rm, int type, int id, int state );
 
 /**
  * EssRMgrRequestResource

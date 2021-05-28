@@ -591,6 +591,17 @@ static void resMgrReleaseDecoder( GstWesterosSink *sink )
    }
 }
 
+static void resMgrUpdateState( GstWesterosSink *sink, int state )
+{
+   if ( sink->rm )
+   {
+      if ( sink->resAssignedId >= 0 )
+      {
+         EssRMgrResourceSetState( sink->rm, EssRMgrResType_videoDecoder, sink->resAssignedId, state );
+      }
+   }
+}
+
 static gboolean gst_westeros_sink_backend_null_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
    gboolean result;
@@ -628,6 +639,10 @@ static gboolean gst_westeros_sink_backend_ready_to_paused( GstWesterosSink *sink
    {
       result= gst_westeros_sink_soc_ready_to_paused( sink, passToDefault );
    }
+   if ( result && sink->rm && sink->resAssignedId >= 0 )
+   {
+      resMgrUpdateState( sink, EssRMgrRes_paused );
+   }
    return result;
 }
 
@@ -647,6 +662,10 @@ static gboolean gst_westeros_sink_backend_paused_to_playing( GstWesterosSink *si
    else
    {
       result= gst_westeros_sink_soc_paused_to_playing( sink, passToDefault );
+   }
+   if ( result && sink->rm && sink->resAssignedId >= 0 )
+   {
+      resMgrUpdateState( sink, EssRMgrRes_active );
    }
    return result;
 }
@@ -668,6 +687,10 @@ static gboolean gst_westeros_sink_backend_playing_to_paused( GstWesterosSink *si
    {
       result= gst_westeros_sink_soc_playing_to_paused( sink, passToDefault );
    }
+   if ( result && sink->rm && sink->resAssignedId >= 0 )
+   {
+      resMgrUpdateState( sink, EssRMgrRes_paused );
+   }
    return result;
 }
 
@@ -687,6 +710,10 @@ static gboolean gst_westeros_sink_backend_paused_to_ready( GstWesterosSink *sink
    else
    {
       result= gst_westeros_sink_soc_paused_to_ready( sink, passToDefault );
+   }
+   if ( sink->rm && sink->resAssignedId >= 0 )
+   {
+      resMgrUpdateState( sink, EssRMgrRes_idle );
    }
    return result;
 }
