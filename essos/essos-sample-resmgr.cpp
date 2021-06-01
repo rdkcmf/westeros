@@ -79,6 +79,8 @@ static void showUsage()
    printf("  --get-count <type>\n");
    printf("  --get-owner <type> <id>\n");
    printf("  --get-caps <type> <id>\n");
+   printf("  --get-state <type> <id>\n");
+   printf("  --get-avstate\n");
    printf("  -? : show usage\n" );
    printf("\n" );   
 }
@@ -112,6 +114,10 @@ int main( int argc, const char **argv )
    bool getCaps= false;
    int getCapsType= 0;
    int getCapsId= 0;
+   bool getState= false;
+   int getStateType= 0;
+   int getStateId= 0;
+   int getAVState= false;
 
    printf("essos-sample-resmgr v1.0\n");
 
@@ -261,6 +267,22 @@ int main( int argc, const char **argv )
                getCapsId= atoi( argv[argidx] );
             }
          }
+         else if ( (len == 11) && !strncmp( argv[argidx], "--get-state", len) )
+         {
+            ++argidx;
+            if ( argidx+1 < argc )
+            {
+               getState= true;
+               getStateType= atoi( argv[argidx] );
+               ++argidx;
+               getStateId= atoi( argv[argidx] );
+            }
+         }
+         else if ( (len == 13) && !strncmp( argv[argidx], "--get-avstate", len) )
+         {
+            ++argidx;
+            getAVState= true;
+         }
          else
          {
             printf( "unknown option %s\n\n", argv[argidx] );
@@ -392,6 +414,21 @@ int main( int argc, const char **argv )
          {
             printf("  (%dx%d)\n", caps.info.video.maxWidth, caps.info.video.maxHeight );
          }
+      }
+
+      if ( getState )
+      {
+         int state= 0;
+         bool result= EssRMgrResourceGetState( rm, getStateType, getStateId, &state );
+         printf("state for resource type %d id %d: result %d state %d\n",
+                getStateType, getStateId, result, state );
+      }
+
+      if ( getAVState )
+      {
+         int state= 0;
+         bool result= EssRMgrGetAVState( rm, &state );
+         printf("AV state result %d state %d\n", result, state );
       }
    }
  
