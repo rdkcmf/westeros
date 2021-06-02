@@ -504,12 +504,12 @@ static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userDa
                break;
             case EssRMgrEvent_revoked:
                {
-                  sink->resAssignedId= -1;
                   memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
                   GST_DEBUG("releasing video decoder %d", id);
                   sink->releaseResources( sink );
                   EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, id );
                   GST_DEBUG("done releasing video decoder %d", id);
+                  sink->resAssignedId= -1;
                   if (
                        (EssRMgrGetPolicyPriorityTie( sink->rm ) == false) ||
                        (sink->resReqPrimary.resReq.priority != sink->resPriority)

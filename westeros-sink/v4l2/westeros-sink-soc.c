@@ -1843,7 +1843,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
       ++sink->soc.frameInCount;
 
-      if ( !sink->videoStarted )
+      LOCK(sink);
+      if ( !sink->videoStarted && (!sink->rm || sink->resAssignedId >= 0) )
       {
          int len;
 
@@ -1851,6 +1852,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
          if ( rc < 0 )
          {
+            UNLOCK(sink);
             GST_ERROR("streamon failed for input: rc %d errno %d", rc, errno );
             goto exit;
          }
@@ -1867,6 +1869,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             GST_ERROR("gst_westeros_sink_soc_render: gst_westeros_sink_soc_start_video failed");
          }
       }
+      UNLOCK(sink);
    }
 
 exit:
@@ -5692,7 +5695,9 @@ capture_start:
 
 exit:
 
+   LOCK(sink);
    wstSendFlushVideoClientConnection( sink->soc.conn );
+   UNLOCK(sink);
 
    GST_DEBUG("wstVideoOutputThread: exit");
 
@@ -5849,6 +5854,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
    int rc, len;
    struct v4l2_exportbuffer eb;
 
+   LOCK(sink);
    GST_DEBUG("sinkAcquireVideo: enter");
    if ( sink->rm && sink->resAssignedId >= 0 )
    {
@@ -5925,6 +5931,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
 
 exit:
    GST_DEBUG("sinkAcquireVideo: exit: %d", result);
+   UNLOCK(sink);
 
    return result;
 }

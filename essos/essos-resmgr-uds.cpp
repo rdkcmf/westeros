@@ -162,7 +162,7 @@ typedef struct _EssRMgrRequestInfo
    int value2;
    int value3;
    EssRMgr *rm;
-   EssRMgrRequest *req;
+   EssRMgrRequest req;
 } EssRMgrRequestInfo;
 
 typedef struct _EssRMgr
@@ -171,6 +171,7 @@ typedef struct _EssRMgr
    EssRMgrClientConnection *conn;
    int nextRequestId;
    std::vector<EssRMgrRequestInfo*> requests;
+   std::vector<EssRMgrRequestInfo*> notifications;
 } EssRMgr;
 
 static void essRMInitDefaultState( EssRMgrResourceServerCtx *rm );
@@ -191,6 +192,7 @@ static bool essRMTransferResource( EssRMgrResourceConnection *conn, EssRMgrResou
 static void essRMInvokeNotify( EssRMgr *rm, int event, EssRMgrRequestInfo *info );
 static void* essRMNotifyThread( void *userData );
 static void essRMDestroyResourceConnection( EssRMgrResourceConnection *conn );
+static bool essRMSemWait( sem_t *sem, bool waitForever, int retry );
 
 static EssRMgrResourceServerCtx *gCtx= 0;
 
@@ -1451,10 +1453,9 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    server->state->feCtrl.maxPoolItems= maxPending;
 }
 
-static EssRMgrRequestInfo *essRMFindRequestByRequestId( EssRMgr *rm, int requestId, bool remove )
+static EssRMgrRequestInfo *essRMFindRequestByRequestIdUnlocked( EssRMgr *rm, int requestId, bool remove )
 {
    EssRMgrRequestInfo *info= 0;
-   pthread_mutex_lock( &rm->mutex );
    for ( std::vector<EssRMgrRequestInfo*>::iterator it= rm->requests.begin(); 
           it != rm->requests.end(); ++it )
    {
@@ -1468,14 +1469,21 @@ static EssRMgrRequestInfo *essRMFindRequestByRequestId( EssRMgr *rm, int request
          break;
       }
    }
+   return info;
+}
+
+static EssRMgrRequestInfo *essRMFindRequestByRequestId( EssRMgr *rm, int requestId, bool remove )
+{
+   EssRMgrRequestInfo *info= 0;
+   pthread_mutex_lock( &rm->mutex );
+   info= essRMFindRequestByRequestIdUnlocked( rm, requestId, remove );
    pthread_mutex_unlock( &rm->mutex );
    return info;
 }
 
-static EssRMgrRequestInfo *essRMFindRequestByResource( EssRMgr *rm, int type, int assignedId, bool remove )
+static EssRMgrRequestInfo *essRMFindRequestByResourceUnlocked( EssRMgr *rm, int type, int assignedId, bool remove )
 {
    EssRMgrRequestInfo *info= 0;
-   pthread_mutex_lock( &rm->mutex );
    for ( std::vector<EssRMgrRequestInfo*>::iterator it= rm->requests.begin(); 
           it != rm->requests.end(); ++it )
    {
@@ -1490,6 +1498,14 @@ static EssRMgrRequestInfo *essRMFindRequestByResource( EssRMgr *rm, int type, in
          break;
       }
    }
+   return info;
+}
+
+static EssRMgrRequestInfo *essRMFindRequestByResource( EssRMgr *rm, int type, int assignedId, bool remove )
+{
+   EssRMgrRequestInfo *info= 0;
+   pthread_mutex_lock( &rm->mutex );
+   info= essRMFindRequestByResourceUnlocked( rm, type, assignedId, remove );
    pthread_mutex_unlock( &rm->mutex );
    return info;
 }
@@ -1579,15 +1595,16 @@ static void *essRMClientConnectionThread( void *userData )
                         int assignedCaps= getU32( &m[13] );
                         DEBUG("got res req rsp: result %d, requestId %d assignedId %d assignedCaps %X", result,
                              requestId, assignedId, assignedCaps );
-                        info= essRMFindRequestByRequestId( rm, requestId, false );
+                        pthread_mutex_lock( &rm->mutex );
+                        info= essRMFindRequestByRequestIdUnlocked( rm, requestId, false );
                         if ( info )
                         {
                            info->assignedId= assignedId;
-                           info->req->assignedId= assignedId;
-                           info->req->assignedCaps= assignedCaps;
+                           info->req.assignedId= assignedId;
+                           info->req.assignedCaps= assignedCaps;
                            if ( assignedId >= 0 )
                            {
-                              if ( info->req->asyncEnable )
+                              if ( info->req.asyncEnable )
                               {
                                  essRMInvokeNotify( rm, EssRMgrEvent_granted, info );
                               }
@@ -1601,6 +1618,7 @@ static void *essRMClientConnectionThread( void *userData )
                         {
                            ERROR("no match for requestId %d", requestId);
                         }
+                        pthread_mutex_unlock( &rm->mutex );
                      }
                      break;
                   case 'V':
@@ -1611,7 +1629,8 @@ static void *essRMClientConnectionThread( void *userData )
                         type= m[4];
                         assignedId= getU32( &m[5] );
                         DEBUG("got res revoke: type %d assignedId %d", type, assignedId);
-                        info= essRMFindRequestByResource( rm, type, assignedId, false );
+                        pthread_mutex_lock( &rm->mutex );
+                        info= essRMFindRequestByResourceUnlocked( rm, type, assignedId, false );
                         if ( info )
                         {
                            essRMInvokeNotify( rm, EssRMgrEvent_revoked, info );
@@ -1620,6 +1639,7 @@ static void *essRMClientConnectionThread( void *userData )
                         {
                            ERROR("no match for resource type %d assignedId %d", type, assignedId);
                         }
+                        pthread_mutex_unlock( &rm->mutex );
                      }
                      break;
                   case 'T':
@@ -1699,8 +1719,12 @@ static void *essRMClientConnectionThread( void *userData )
 
 static void essRMDestroyClientConnection( EssRMgrClientConnection *conn )
 {
+   std::vector<EssRMgrRequestInfo*> requests;
+   std::vector<EssRMgrRequestInfo*> notifications;
+
    if ( conn )
    {
+      pthread_mutex_lock( &conn->mutex );
       conn->addr.sun_path[0]= '\0';
 
       if ( conn->threadStarted )
@@ -1714,6 +1738,31 @@ static void essRMDestroyClientConnection( EssRMgrClientConnection *conn )
       {
          close( conn->socketFd );
          conn->socketFd= -1;
+      }
+      pthread_mutex_unlock( &conn->mutex );
+
+      pthread_mutex_lock( &conn->rm->mutex );
+      requests= std::move( conn->rm->requests );
+      notifications= std::move( conn->rm->notifications );
+      pthread_mutex_unlock( &conn->rm->mutex );
+
+      for ( std::vector<EssRMgrRequestInfo*>::iterator it= requests.begin();
+            it != requests.end(); ++it )
+      {
+         EssRMgrRequestInfo* info= (*it);
+         if ( info->waitForever )
+         {
+            sem_post( &info->semComplete );
+         }
+      }
+
+      for ( std::vector<EssRMgrRequestInfo*>::iterator it= notifications.begin();
+            it != notifications.end(); ++it )
+      {
+         EssRMgrRequestInfo* info= (*it);
+         essRMSemWait( &info->semComplete, false, 300 );
+         sem_destroy( &info->semComplete );
+         free( info );
       }
 
       pthread_mutex_destroy( &conn->mutex );
@@ -1800,31 +1849,8 @@ exit:
 
 static bool essRMWaitResponseClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
 {
-   bool result= false;
    int retry= 300;
-   int rc;
-
-   for( ; ; )
-   {
-      rc= sem_trywait( &info->semComplete );
-      if ( rc == 0 )
-      {
-         DEBUG("request completed" );
-         result= true;
-         break;
-      }
-      if ( !info->waitForever )
-      {
-         if ( --retry == 0 )
-         {
-            INFO("request timeout" );
-            break;
-         }
-      }
-      usleep( 10000 );
-   }
-
-   return result;
+   return essRMSemWait( &info->semComplete, info->waitForever, retry );
 }
 
 static bool essRMSendResRequestClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
@@ -1832,7 +1858,7 @@ static bool essRMSendResRequestClientConnection( EssRMgrClientConnection *conn, 
    bool result= false;
    if ( conn )
    {
-      EssRMgrRequest *req= info->req;
+      EssRMgrRequest *req= &info->req;
       struct msghdr msg;
       struct iovec iov[1];
       unsigned char mbody[64];
@@ -2036,7 +2062,7 @@ static bool essRMSendSetPriorityClientConnection( EssRMgrClientConnection *conn,
       mbody[len++]= 'P';
       mbody[len++]= (info->type&0xFF);
       len += putU32( &mbody[len], info->requestId );
-      len += putU32( &mbody[len], info->req->priority );
+      len += putU32( &mbody[len], info->req.priority );
       if( len > sizeof(mbody) )
       {
          ERROR("essRMSendSetPriorityClientConnection: msg too big");
@@ -2056,7 +2082,7 @@ static bool essRMSendSetPriorityClientConnection( EssRMgrClientConnection *conn,
       if ( sentLen == len )
       {
          result= true;
-         DEBUG("sent set priority: type %d requestId %d to resource server", info->type, info->req->requestId);
+         DEBUG("sent set priority: type %d requestId %d to resource server", info->type, info->req.requestId);
       }
 
       pthread_mutex_unlock( &conn->mutex );
@@ -2069,7 +2095,7 @@ static bool essRMSendSetUsageClientConnection( EssRMgrClientConnection *conn, Es
    bool result= false;
    if ( conn )
    {
-      EssRMgrRequest *req= info->req;
+      EssRMgrRequest *req= &info->req;
       struct msghdr msg;
       struct iovec iov[1];
       unsigned char mbody[64];
@@ -2124,7 +2150,7 @@ static bool essRMSendSetUsageClientConnection( EssRMgrClientConnection *conn, Es
       if ( sentLen == len )
       {
          result= true;
-         DEBUG("sent set usage: type %d requestId %d to resource server", info->type, info->req->requestId);
+         DEBUG("sent set usage: type %d requestId %d to resource server", info->type, info->req.requestId);
       }
 
       pthread_mutex_unlock( &conn->mutex );
@@ -2179,7 +2205,7 @@ static bool essRMSendCancelClientConnection( EssRMgrClientConnection *conn, EssR
       if ( sentLen == len )
       {
          result= true;
-         DEBUG("sent cancel: type %d requestId %d to resource server", info->type, info->req->requestId);
+         DEBUG("sent cancel: type %d requestId %d to resource server", info->type, info->req.requestId);
       }
 
       pthread_mutex_unlock( &conn->mutex );
@@ -2320,6 +2346,34 @@ static bool essRMSendDumpStateClientConnection( EssRMgrClientConnection *conn, E
    return result;
 }
 
+static bool essRMSemWait( sem_t *sem, bool waitForever, int retry )
+{
+   bool result= false;
+   int rc;
+
+   for( ; ; )
+   {
+      rc= sem_trywait( sem );
+      if ( rc == 0 )
+      {
+         DEBUG("request completed" );
+         result= true;
+         break;
+      }
+      if ( !waitForever )
+      {
+         if ( --retry == 0 )
+         {
+            INFO("request timeout" );
+            break;
+         }
+      }
+      usleep( 10000 );
+   }
+
+   return result;
+}
+
 bool EssRMgrInit()
 {
    bool result= false;
@@ -2404,9 +2458,11 @@ void EssRMgrDestroy( EssRMgr *rm )
    {
       if ( rm->conn )
       {
-         essRMDestroyClientConnection( rm->conn );
+         EssRMgrClientConnection *conn= rm->conn;
          rm->conn= 0;
+         essRMDestroyClientConnection( conn );
       }
+
       pthread_mutex_destroy( &rm->mutex );
       free( rm );
    }
@@ -2792,7 +2848,7 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
 
       info->type= type;
       info->requestId= req->requestId;
-      info->req= req;
+      memcpy(&info->req, req, sizeof(EssRMgrRequest));
 
       rm->requests.push_back( info );
       pthread_mutex_unlock( &rm->mutex );
@@ -2803,6 +2859,20 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
          if ( !req->asyncEnable )
          {
             result= essRMWaitResponseClientConnection( rm->conn, info );
+         }
+         if ( result )
+         {
+            pthread_mutex_lock( &rm->mutex );
+            for ( std::vector<EssRMgrRequestInfo*>::iterator it= rm->requests.begin();
+                  it != rm->requests.end(); ++it )
+            {
+               if ( (*it) == info )
+               {
+                  memcpy(req, &info->req, sizeof(EssRMgrRequest));
+                  break;
+               }
+            }
+            pthread_mutex_unlock( &rm->mutex );
          }
          info= 0;
       }
@@ -2843,6 +2913,7 @@ void EssRMgrReleaseResource( EssRMgr *rm, int type, int id )
       if ( info )
       {
          essRMSendResReleaseClientConnection( rm->conn, info );
+         sem_destroy( &info->semComplete );
          free( info );
       }
       else
@@ -2864,10 +2935,9 @@ bool EssRMgrRequestSetPriority( EssRMgr *rm, int type, int requestId, int priori
       info= essRMFindRequestByRequestId( rm, requestId, false );
       if ( info )
       {
-         if ( (info->type == type) &&
-              (info->req && (info->req->type == type)) )
+        if ( (info->type == type) && (info->req.type == type) )
          {
-            info->req->priority= priority;
+            info->req.priority= priority;
             result= essRMSendSetPriorityClientConnection( rm->conn, info );
          }
          else
@@ -2894,11 +2964,10 @@ bool EssRMgrRequestSetUsage( EssRMgr *rm, int type, int requestId, EssRMgrUsage 
       info= essRMFindRequestByRequestId( rm, requestId, false );
       if ( info )
       {
-         if ( (info->type == type) &&
-              (info->req && (info->req->type == type)) )
+         if ( (info->type == type) && (info->req.type == type) )
          {
-            info->req->usage= usage->usage;
-            info->req->info= usage->info;
+            info->req.usage= usage->usage;
+            info->req.info= usage->info;
             result= essRMSendSetUsageClientConnection( rm->conn, info );
          }
          else
@@ -2923,8 +2992,7 @@ void EssRMgrRequestCancel( EssRMgr *rm, int type, int requestId )
       info= essRMFindRequestByRequestId( rm, requestId, false );
       if ( info )
       {
-         if ( (info->type == type) &&
-              (info->req && (info->req->type == type)) )
+         if ( (info->type == type) && (info->req.type == type) )
          {
             essRMSendCancelClientConnection( rm->conn, info );
          }
@@ -3923,27 +3991,61 @@ static void essRMInvokeNotify( EssRMgr *rm, int event, EssRMgrRequestInfo *info 
 {
    int rc;
    pthread_t threadId;
+   EssRMgrRequestInfo *copy= 0;
    pthread_attr_t attr;
+
+   copy= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
+   if ( !copy )
+   {
+      ERROR("No memory for request info");
+      goto exit;
+   }
+
+   rc= sem_init( &copy->semComplete, 0, 0 );
+   if ( rc )
+   {
+      ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+      free( copy );
+      copy= 0;
+      goto exit;
+   }
+
+   memcpy(&copy->req, &info->req, sizeof(EssRMgrRequest));
 
    rc= pthread_attr_init( &attr );
    if ( rc )
    {
       ERROR("unable to init pthread attr: errno %d", errno);
+      goto exit;
    }
 
    rc= pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED);
    if ( rc )
    {
       ERROR("unable to set pthread attr detached: errno %d", errno);
+      goto exit;
    }
 
-   info->rm= rm;
-   info->value1= event;
-   rc= pthread_create( &threadId, &attr, essRMNotifyThread, info );
+   copy->rm= rm;
+   copy->value1= event;
+   rc= pthread_create( &threadId, &attr, essRMNotifyThread, copy );
    if ( rc )
    {
-      ERROR("unable to start notify thread for event %d res type %d id %d", event, info->req->type, info->req->assignedId);
+      ERROR("unable to start notify thread for event %d res type %d id %d", event, copy->req.type, copy->req.assignedId);
+      goto exit;
    }
+
+   rm->notifications.push_back( copy );
+   copy= 0;
+
+exit:
+   if ( copy )
+   {
+      sem_destroy( &copy->semComplete );
+      free( copy );
+   }
+
+   return;
 }
 
 static void* essRMNotifyThread( void *userData )
@@ -3954,8 +4056,10 @@ static void* essRMNotifyThread( void *userData )
       EssRMgr *rm= info->rm;
       int event= info->value1;
       DEBUG("calling notify callback");
-      info->req->notifyCB( rm, event, info->req->type, info->req->assignedId, info->req->notifyUserData );
+      info->req.notifyCB( rm, event, info->req.type, info->req.assignedId, info->req.notifyUserData );
       DEBUG("done calling notify callback");
+
+      sem_post( &info->semComplete );
    }
    return NULL;
 }
