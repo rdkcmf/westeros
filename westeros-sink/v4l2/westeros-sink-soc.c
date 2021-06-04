@@ -3504,6 +3504,10 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
       sink->soc.outBuffers[bufferIndex].buf= buf;
       sink->soc.outBuffers[bufferIndex].queued= false;
    }
+   else
+   {
+      GST_ERROR("failed to de-queue output buffer: rc %d errno %d", rc, errno);
+   }
 
    return bufferIndex;
 }
@@ -5507,6 +5511,12 @@ capture_start:
          buffIndex= wstGetOutputBuffer( sink );
 
          if ( sink->soc.quitVideoOutputThread ) break;
+
+         if ( buffIndex < 0 )
+         {
+            usleep( 1000 );
+            continue;
+         }
 
          if ( (sink->soc.outBuffers[buffIndex].buf.flags & V4L2_BUF_FLAG_LAST) &&
               (sink->soc.outBuffers[buffIndex].buf.bytesused == 0) )
