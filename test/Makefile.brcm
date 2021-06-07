@@ -407,7 +407,7 @@ westeros-essos:
 	automake --foreign --add-missing && \
 	rm -f configure && \
 	autoconf && \
-	./configure --prefix $(WID) && \
+	./configure --prefix $(WID) CXXFLAGS='-DUSE_ESSRMGR_UDS_IMPL' && \
 	make && make install
 
 westeros-render-nexus:

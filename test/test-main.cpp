@@ -43,6 +43,7 @@
 #include "test-touch.h"
 #include "test-simpleshell.h"
 #include "test-essos.h"
+#include "test-essos-erm.h"
 #include "test-clientapp.h"
 #include "test-repeaterapp.h"
 
@@ -315,6 +316,42 @@ TESTCASE genericTests[]=
    { "testEssosGamepadBasic",
      "Test Essos Gamepad basic flow",
      testCaseEssosGamepadBasic
+   },
+   { "testERMBasicRequestVideo",
+      "Test ERM basic request video",
+      testCaseERMBasicRequestVideo
+   },
+   { "testERMBasicRequestAudio",
+      "Test ERM basic request audio",
+      testCaseERMBasicRequestAudio
+   },
+   { "testERMBasicRequestFrontEnd",
+      "Test ERM basic request front end",
+      testCaseERMBasicRequestFrontEnd
+   },
+   { "testERMBasicRequestLoop",
+      "Test ERM basic request flow loop",
+      testCaseERMBasicRequestLoop
+   },
+   { "testERMBasicRequestAsync",
+      "Test ERM basic async request flow",
+      testCaseERMBasicRequestAsync
+   },
+   { "testERMVideoSizeConstraint",
+      "Test ERM request with size constraint flow",
+      testCaseERMVideoSizeConstraint
+   },
+   { "testERMRequesterIncreasePriority",
+      "Test ERM requester increase priority",
+      testCaseERMRequesterIncreasePriority
+   },
+   { "testERMOwnerDecreasePriority",
+      "Test ERM owner decrease priority",
+      testCaseERMOwnerDecreasePriority
+   },
+   { "testERMOwnerChangeUsage",
+      "Test ERM owner change usage",
+      testCaseERMOwnerChangeUsage
    },
    { "testRenderBasicComposition",
      "Test compositor basic composition",

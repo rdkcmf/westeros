@@ -34,6 +34,7 @@ westeros_unittest_SOURCES = ../test-main.cpp \
                             ../test-touch.cpp \
                             ../test-simpleshell.cpp \
                             ../test-essos.cpp \
+                            ../test-essos-erm.cpp \
                             ../test-clientapp.cpp \
                             ../test-repeaterapp.cpp \
                             soc-video-src.cpp \
@@ -49,6 +50,7 @@ westeros_unittest_LDFLAGS= \
    -lwesteros_compositor \
    -lwesteros_simpleshell_client \
    -lessos \
+   -lessosrmgr \
    -lwesteros-ut-em \
    -ldl -lpthread
 

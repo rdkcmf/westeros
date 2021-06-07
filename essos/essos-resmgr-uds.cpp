@@ -1742,8 +1742,8 @@ static void essRMDestroyClientConnection( EssRMgrClientConnection *conn )
       pthread_mutex_unlock( &conn->mutex );
 
       pthread_mutex_lock( &conn->rm->mutex );
-      requests= std::move( conn->rm->requests );
-      notifications= std::move( conn->rm->notifications );
+      requests.swap( conn->rm->requests );
+      notifications.swap( conn->rm->notifications );
       pthread_mutex_unlock( &conn->rm->mutex );
 
       for ( std::vector<EssRMgrRequestInfo*>::iterator it= requests.begin();
