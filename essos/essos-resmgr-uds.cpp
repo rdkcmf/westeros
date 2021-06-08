@@ -154,6 +154,8 @@ typedef enum _EssRMgrValue
 typedef struct _EssRMgrRequestInfo
 {
    sem_t semComplete;
+   sem_t semConfirm;
+   bool needConfirm;
    bool waitForever;
    int type;
    int requestId;
@@ -1588,6 +1590,7 @@ static void *essRMClientConnectionThread( void *userData )
                   case 'R':
                      if ( mlen >= 14 )
                      {
+                        bool needConfirm= false;
                         EssRMgrRequestInfo *info= 0;
                         bool result= m[4];
                         int requestId= getU32( &m[5] );
@@ -1599,6 +1602,7 @@ static void *essRMClientConnectionThread( void *userData )
                         info= essRMFindRequestByRequestIdUnlocked( rm, requestId, false );
                         if ( info )
                         {
+                           needConfirm= info->needConfirm;
                            info->assignedId= assignedId;
                            info->req.assignedId= assignedId;
                            info->req.assignedCaps= assignedCaps;
@@ -1608,17 +1612,18 @@ static void *essRMClientConnectionThread( void *userData )
                               {
                                  essRMInvokeNotify( rm, EssRMgrEvent_granted, info );
                               }
-                              else
-                              {
-                                 sem_post( &info->semComplete );
-                              }
                            }
+                           sem_post( &info->semComplete );
                         }
                         else
                         {
                            ERROR("no match for requestId %d", requestId);
                         }
                         pthread_mutex_unlock( &rm->mutex );
+                        if ( needConfirm )
+                        {
+                           essRMSemWait( &info->semConfirm, false, 3000 );
+                        }
                      }
                      break;
                   case 'V':
@@ -1760,7 +1765,7 @@ static void essRMDestroyClientConnection( EssRMgrClientConnection *conn )
             it != notifications.end(); ++it )
       {
          EssRMgrRequestInfo* info= (*it);
-         essRMSemWait( &info->semComplete, false, 300 );
+         essRMSemWait( &info->semComplete, false, 3000 );
          sem_destroy( &info->semComplete );
          free( info );
       }
@@ -1849,7 +1854,7 @@ exit:
 
 static bool essRMWaitResponseClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
 {
-   int retry= 300;
+   int retry= 3000;
    return essRMSemWait( &info->semComplete, info->waitForever, retry );
 }
 
@@ -2368,7 +2373,7 @@ static bool essRMSemWait( sem_t *sem, bool waitForever, int retry )
             break;
          }
       }
-      usleep( 10000 );
+      usleep( 1000 );
    }
 
    return result;
@@ -2843,6 +2848,14 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
          goto exit;
       }
 
+      rc= sem_init( &info->semConfirm, 0, 0 );
+      if ( rc )
+      {
+         ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         goto exit;
+      }
+      info->needConfirm= true;
+
       pthread_mutex_lock( &rm->mutex );
       req->requestId= rm->nextRequestId++;
 
@@ -2856,10 +2869,7 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
       result= essRMSendResRequestClientConnection( rm->conn, info );
       if ( result )
       {
-         if ( !req->asyncEnable )
-         {
-            result= essRMWaitResponseClientConnection( rm->conn, info );
-         }
+         result= essRMWaitResponseClientConnection( rm->conn, info );
          if ( result )
          {
             pthread_mutex_lock( &rm->mutex );
@@ -2873,6 +2883,8 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
                }
             }
             pthread_mutex_unlock( &rm->mutex );
+            info->needConfirm= false;
+            sem_post( &info->semConfirm );
          }
          info= 0;
       }
@@ -2914,6 +2926,7 @@ void EssRMgrReleaseResource( EssRMgr *rm, int type, int id )
       {
          essRMSendResReleaseClientConnection( rm->conn, info );
          sem_destroy( &info->semComplete );
+         sem_destroy( &info->semConfirm );
          free( info );
       }
       else

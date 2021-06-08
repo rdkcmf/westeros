@@ -525,7 +525,7 @@ bool testCaseERMBasicRequestLoop( EMCTX *emctx )
    ctxA.loop= 10;
    ctxA.priority= 2;
    ctxA.usage= 7;
-   ctxA.delay= 60000;
+   ctxA.delay= 120000;
    ctxA.assignedId= -1;
    ctxA.prevAssignedId= -1;
    rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
@@ -545,7 +545,7 @@ bool testCaseERMBasicRequestLoop( EMCTX *emctx )
    ctxB.loop= 10;
    ctxB.priority= 1;
    ctxB.usage= 7;
-   ctxB.delay= 60000;
+   ctxB.delay= 120000;
    ctxB.assignedId= -1;
    ctxB.prevAssignedId= -1;
    rc= pthread_create( &threadIdB, NULL, requestThread, &ctxB );
