@@ -239,6 +239,10 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       if ( sink->soc.haveColorimetry )
       {
          decParm->hdr.signal_type= (1<<29); /* present flag */
+
+         /*set default value, this is to keep up with driver hdr info synchronization*/
+         decParm->hdr.signal_type |= (5<<26) | (1<<24);
+
          /* range */
          switch( sink->soc.hdrColorimetry[0] )
          {
