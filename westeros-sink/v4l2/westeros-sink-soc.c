@@ -164,6 +164,7 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
+static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *conn );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
 static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h );
 static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, int vh );
@@ -989,6 +990,37 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
       case PROP_FRAME_STEP_ON_PREROLL:
          {
             sink->soc.frameStepOnPreroll= g_value_get_boolean(value);
+            GST_WARNING("Set frameStepOnPreroll to %d", sink->soc.frameStepOnPreroll);
+            if (sink->soc.frameStepOnPreroll)
+            {
+               GST_DEBUG("Current need preroll %d have_preroll %d",
+                          GST_BASE_SINK(sink)->need_preroll,
+                          GST_BASE_SINK(sink)->have_preroll);
+               if (sink->soc.frameOutCount && sink->soc.conn)
+               {
+                  GST_DEBUG("Frame already out, just send advance message");
+                  LOCK(sink);
+                  wstSendFrameAdvanceVideoClientConnection( sink->soc.conn );
+                  UNLOCK(sink);
+               }
+               else
+               {
+                  GstBaseSink *basesink;
+                  basesink= GST_BASE_SINK(sink);
+                  GST_BASE_SINK_PREROLL_LOCK(basesink);
+                  if ( GST_BASE_SINK(sink)->need_preroll &&
+                       GST_BASE_SINK(sink)->have_preroll )
+                  {
+                     GST_DEBUG("Already prerolled, set frameAdvanced");
+                     LOCK(sink);
+                     sink->soc.frameAdvance= TRUE;
+                     UNLOCK(sink);
+                     GST_BASE_SINK(sink)->need_preroll= FALSE;
+                     GST_BASE_SINK(sink)->have_preroll= TRUE;
+                  }
+                  GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+               }
+            }
             break;
          }
       #ifdef USE_AMLOGIC_MESON_MSYNC
@@ -2116,6 +2148,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
    sink->soc.frameHeightStream= -1;
+   sink->soc.frameAdvance= FALSE;
    sink->soc.frameRate= 0.0;
    sink->soc.frameRateFractionNum= 0;
    sink->soc.frameRateFractionDenom= 0;
@@ -5324,11 +5357,10 @@ capture_start:
          sink->soc.frameWidth= selection.r.width;
          sink->soc.frameHeight= selection.r.height;
       }
+      wstSetSessionInfo( sink );
       UNLOCK(sink);
 
       g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
-
-      wstSetSessionInfo( sink );
    }
 
    for( ; ; )
