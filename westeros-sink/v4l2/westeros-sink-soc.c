@@ -2509,6 +2509,17 @@ static void wstProcessEvents( GstWesterosSink *sink )
          fmtIn.type= bufferType;
          rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &fmtIn );
 
+         if ( (sink->soc.isMultiPlane && fmtIn.fmt.pix_mp.field == V4L2_FIELD_INTERLACED) ||
+              (!sink->soc.isMultiPlane && fmtIn.fmt.pix.field == V4L2_FIELD_INTERLACED) )
+         {
+            if ( !sink->soc.interlaced )
+            {
+               GST_DEBUG("v4l2 driver indicates content is interlaced, but caps did not : using interlaced");
+            }
+            sink->soc.interlaced= TRUE;
+         }
+         GST_DEBUG("source is interlaced: %d", sink->soc.interlaced);
+
          memset( &fmtOut, 0, sizeof(fmtOut));
          bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
          fmtOut.type= bufferType;
