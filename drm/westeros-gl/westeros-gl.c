@@ -27,6 +27,7 @@
 #include <pthread.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -4589,9 +4590,23 @@ static void *wstRefreshThread( void *arg )
    long long delay;
    long long refreshInterval= 0LL;
    long long vblankTime= 0LL;
+   const *env;
 
    DEBUG("refresh thread start");
    ctx->refreshThreadStarted= true;
+
+   env= getenv("WESTEROS_GL_REFRESH_PRIORITY");
+   if ( env )
+   {
+      int rc, priority;
+      priority= atoi( env );
+      INFO("set refresh thread priority to %d", priority);
+      rc= setpriority( PRIO_PROCESS, 0, priority );
+      if ( rc )
+      {
+         ERROR("failed to set refresh thread priority: %d errno %d", rc, errno);
+      }
+   }
 
    while( !ctx->refreshThreadStopRequested )
    {
