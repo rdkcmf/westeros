@@ -8540,6 +8540,7 @@ static void wstIVpcSurfaceSetGeometry( struct wl_client *client, struct wl_resou
          if ( surface->compositor->ctx->renderer )
          {
             WstRendererSurfaceSetGeometry( surface->compositor->ctx->renderer, surface->surface, x, y, width, height );
+            WstCompositorInvalidateScene( surface->compositor );
          }
       }
    }
@@ -8579,6 +8580,7 @@ static void wstIVpcSurfaceSetGeometryWithCrop( struct wl_client *client, struct 
             ch= (float)cropH/(float)WL_VPC_SURFACE_CROP_DENOM;
             WstRendererSurfaceSetGeometry( surface->compositor->ctx->renderer, surface->surface, x, y, width, height );
             WstRendererSurfaceSetCrop( surface->compositor->ctx->renderer, surface->surface, cx, cy, cw, ch );
+            WstCompositorInvalidateScene( surface->compositor );
          }
       }
    }
