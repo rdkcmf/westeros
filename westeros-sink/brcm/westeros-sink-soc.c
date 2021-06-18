@@ -3061,6 +3061,12 @@ static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec)
         break;
 #endif
 
+#if (NEXUS_PLATFORM_VERSION_MAJOR>19)
+      case bvideo_codec_av1:
+         nexusVideoCodec= NEXUS_VideoCodec_eAv1;
+         break;
+#endif
+
       default:                
          nexusVideoCodec= NEXUS_VideoCodec_eUnknown;
          break;
