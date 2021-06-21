@@ -4590,7 +4590,11 @@ static void *wstRefreshThread( void *arg )
    long long delay;
    long long refreshInterval= 0LL;
    long long vblankTime= 0LL;
-   const *env;
+   const char *env, *policyName;
+   int policy= SCHED_FIFO;
+   int priority= 1;
+   int rc;
+   struct sched_param schedParam;
 
    DEBUG("refresh thread start");
    ctx->refreshThreadStarted= true;
@@ -4598,14 +4602,59 @@ static void *wstRefreshThread( void *arg )
    env= getenv("WESTEROS_GL_REFRESH_PRIORITY");
    if ( env )
    {
-      int rc, priority;
-      priority= atoi( env );
-      INFO("set refresh thread priority to %d", priority);
-      rc= setpriority( PRIO_PROCESS, 0, priority );
-      if ( rc )
+      int len, c;
+      len= strlen(env);
+      if ( (len >= 3) && (env[1]==',') )
       {
-         ERROR("failed to set refresh thread priority: %d errno %d", rc, errno);
+         c= env[0];
+         switch( c )
+         {
+            case 'o':
+            case 'O':
+               policy= SCHED_OTHER;
+               break;
+            case 'f':
+            case 'F':
+            default:
+               policy= SCHED_FIFO;
+               break;
+            case 'r':
+            case 'R':
+               policy= SCHED_RR;
+               break;
+         }
+         priority= atoi(env+2);
       }
+   }
+   switch( policy )
+   {
+      case SCHED_OTHER:
+         policyName= "SCHED_OTHER";
+         break;
+      case SCHED_FIFO:
+         policyName= "SCHED_FIFO";
+         break;
+      case SCHED_RR:
+         policyName= "SCHED_RR";
+         break;
+      default:
+         policy= SCHED_FIFO;
+         policyName= "SCHED_FIFO";
+         break;
+   }
+   INFO("set refresh thread to policy %s (%d) priority %d", policyName, policy, priority);
+   if ( policy == SCHED_OTHER )
+   {
+      rc= setpriority( PRIO_PROCESS, 0, priority );
+   }
+   else
+   {
+      schedParam.sched_priority= priority;
+      rc= pthread_setschedparam( pthread_self(), policy, &schedParam );
+   }
+   if ( rc )
+   {
+      ERROR("failed to set refresh thread policy and priority: %d errno %d", rc, errno);
    }
 
    while( !ctx->refreshThreadStopRequested )
