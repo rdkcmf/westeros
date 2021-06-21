@@ -1,0 +1,103 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.25 Release Notes
+------------------------------
+
+Date: June 21, 2021
+Tag: Westeros-1.01.25
+Changes:
+
+
+* v4l2: updates:
+
+-update aml parm structures
+-update buffer margin policy for mpeg2
+-skip capture buffers with V4L2_BUF_FLAG_LAST flag set and bytesused set to 0
+
+* drm: ensure video frame widths are even
+
+* raw: release preroll lock while paused
+
+* brm: update stc freeze based on state
+
+* v4l2: adjust calculation of queued_frames
+
+* v4l2: estimate frame rate if not supplied in caps
+
+* drm: update video server frame cropping
+
+* v4l2 updates:
+
+-fix setting zoom none as a local override
+-handle multiple decoded frames being waiting to dequeue when POLLPRI is signaled
+
+* Try to address some race conditions and resource connection leak
+
+* erm, sink: add resource activity state tracking
+
+* erm: add options to sample app for resource state
+
+* Address some race conditions on resource revocation
+
+ERM:
+ - capture EssRMgrRequeset by value
+ - wait for revoke notifications complition
+
+Sink:
+ - additional locking to address some revocatoin scenarios
+
+* v4l2: check and log dequeue errors
+
+* drm: updates to video server frame cropping
+
+* Add test cases for ERM
+
+* v4l2: set some default hdr values
+
+* erm: ensure res request returns after initial request outcome
+
+* v4l2: video peek enhancements
+
+* v4l2: get interlace info from v4l2 driver
+
+* core: invalidate scene if vpc surface geometry changes
+
+* drm: add ability to adjust refresh thread priority:
+
+-use export WESTEROS_GL_REFRESH_PRIORITY=N to set priority.  Use -20 to get the most
+favourable schedulingdrm: refresh thread updates:
+
+* brcm: add support for av1 codec
+
+* drm: refresh thread updates:
+
+-use SCHED_FIFO priorty 1 by default
+-allow setting scheduling policy and priority via env var:
+export WESTEROS_GL_REFRESH_PRIORITY=P,PRI
+where P is the policy specified as a single letter:
+ O for SCHED_OTHER
+ F for SCHED_FIFO
+ R for SCHED_RR
+and PRI is a number specifying the priority:
+-20 to 19 for SCHED_OTHER
+1 to 99 for SCHED_FIFO and SCHED_RR
+
+for example:
+export WESTEROS_GL_REFRESH_PRIORITY=O,-20
+export WESTEROS_GL_REFRESH_PRIORITY=F,2
+export WESTEROS_GL_REFRESH_PRIORITY=R,1
+
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
