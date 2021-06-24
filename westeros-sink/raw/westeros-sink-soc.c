@@ -1646,7 +1646,7 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    vy= sink->soc.videoY;
    vw= sink->soc.videoWidth;
    vh= sink->soc.videoHeight;
-   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("pixelAspectRatio: %f", sink->soc.pixelAspectRatio );
+   if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("pixelAspectRatio: %f zoom-mode %d overscan-size %d", sink->soc.pixelAspectRatio, sink->soc.zoomMode, sink->soc.overscanSize );
    frameWidth= sink->soc.frameWidth;
    frameHeight= sink->soc.frameHeight;
    contentWidth= frameWidth*sink->soc.pixelAspectRatio;
@@ -1794,6 +1794,11 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
          break;
    }
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("vrect %d, %d, %d, %d", vx, vy, vw, vh);
+   if ( sink->soc.pixelAspectRatioChanged )
+   {
+      wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+      wl_display_flush(sink->display);
+   }
    sink->soc.pixelAspectRatioChanged= FALSE;
    *x= vx;
    *y= vy;
@@ -2603,6 +2608,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                              if ( (zoomMode >= ZOOM_NONE) && (zoomMode <= ZOOM_ZOOM) )
                              {
                                 sink->soc.zoomMode= zoomMode;
+                                sink->soc.pixelAspectRatioChanged= TRUE;
                              }
                           }
                           else
