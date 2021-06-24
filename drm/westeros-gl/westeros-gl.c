@@ -3628,7 +3628,8 @@ static WstGLCtx *wstInitCtx( void )
                drmver->desc_len, drmver->desc );
 
          len= strlen( drmver->name );
-         if ( (len == 5) && !strncmp( drmver->name, "meson", len ) )
+         if ( ((len == 5) && !strncmp( drmver->name, "meson", len )) ||
+              ((len == 3) && !strncmp( drmver->name, "vc4", len )) )
          {
             #ifdef USE_REFRESH_LOCK
             if ( getenv("WESTEROS_GL_USE_REFRESH_LOCK") )
@@ -3637,6 +3638,7 @@ static WstGLCtx *wstInitCtx( void )
 
                gRealGLFlush= eglGetProcAddress("glFlush");
                gRealGLFinish= eglGetProcAddress("glFinish");
+               INFO("gRealGLFlush %p gRealGLFinish %p", gRealGLFlush, gRealGLFinish);
             }
             INFO("using refresh lock: %d", g_useRefreshLock);
             #endif
