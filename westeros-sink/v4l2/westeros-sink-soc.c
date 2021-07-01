@@ -4943,8 +4943,11 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("vrect %d, %d, %d, %d", vx, vy, vw, vh);
    if ( sink->soc.pixelAspectRatioChanged )
    {
-      wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
-      wl_display_flush(sink->display);
+      if ( sink->display && sink->vpcSurface )
+      {
+         wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+         wl_display_flush(sink->display);
+      }
    }
    sink->soc.pixelAspectRatioChanged= FALSE;
    *x= vx;
