@@ -3039,9 +3039,9 @@ static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx )
 
    wl_display_flush( ctx->wldisplay );
    wl_display_dispatch_pending( ctx->wldisplay );
-
+   ctx->wlPollFd.revents= 0;
    n= poll(&ctx->wlPollFd, 1, 0);
-   if ( n >= 0 )
+   if ( n > 0 )
    {
       if ( ctx->wlPollFd.revents & POLLIN )
       {
