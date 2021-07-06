@@ -1574,10 +1574,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
                {
                   wl_vpc_surface_add_listener( sink->vpcSurface, &vpcListener, sink );
                   wl_proxy_set_queue((struct wl_proxy*)sink->vpcSurface, sink->queue);
-                  if ( (sink->windowWidth != DEFAULT_WINDOW_WIDTH) || (sink->windowHeight != DEFAULT_WINDOW_HEIGHT) )
-                  {
-                     wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
-                  }
+                  wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
                   wl_display_flush( sink->display );
                   printf("westeros-sink: ready-to-paused: done add vpcSurface listener\n");
                }

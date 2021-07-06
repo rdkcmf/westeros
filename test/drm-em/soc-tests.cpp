@@ -977,6 +977,8 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
       goto exit;
    }
 
+   g_object_set( G_OBJECT(sink), "force-aspect-ratio", TRUE, NULL );
+
    gst_bin_add_many( GST_BIN(pipeline), src, sink, NULL );
 
    if ( gst_element_link( src, sink ) != TRUE )

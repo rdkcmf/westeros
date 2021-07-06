@@ -1205,6 +1205,7 @@ void gst_westeros_sink_soc_registryHandleGlobal( GstWesterosSink *sink,
       wl_proxy_set_queue((struct wl_proxy*)sink->soc.sb, sink->queue);
 		wl_sb_add_listener(sink->soc.sb, &sbListener, sink);
 		printf("westeros-sink-soc: registry: done add sb listener\n");
+      wl_display_roundtrip_queue(sink->display,sink->queue);
    }
 }
 
@@ -1255,6 +1256,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    sink->soc.clientPlaySpeed= 1.0;
    sink->soc.stoppedForPlaySpeedChange= FALSE;
 
+   LOCK(sink);
    if ( !sink->startAfterLink && !sink->startAfterCaps )
    {
       if ( !gst_westeros_sink_soc_start_video( sink ) )
@@ -1262,6 +1264,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
          GST_ERROR("gst_westeros_sink_soc_ready_to_paused: gst_westeros_sink_soc_start_video failed");
       }
    }
+   UNLOCK(sink);
 
    return TRUE;
 }
@@ -1633,7 +1636,17 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
      
    GST_DEBUG_OBJECT(sink, "gst_westeros_sink_soc_start_video: enter");
    
-   queryPeerHandles( sink );
+   if ( sink->videoStarted )
+   {
+       GST_DEBUG_OBJECT(sink, "Video decoder already started");
+       return TRUE;
+   }
+
+   if ( !queryPeerHandles( sink ) )
+   {
+       GST_DEBUG_OBJECT(sink, "!queryPeerHandles");
+       goto exit;
+   }
 
    /* Start video decoder */
    NEXUS_SimpleVideoDecoder_GetDefaultStartSettings(&startSettings);
@@ -3184,18 +3197,18 @@ static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent
 {
    gboolean result= FALSE;
 
+   LOCK( sink );
    if ( sink->startAfterLink && !sink->videoStarted )
    {
       if ( queryPeerHandles(sink) )
       {
-         LOCK( sink );
          if ( !gst_westeros_sink_soc_start_video( sink ) )
          {
             GST_ERROR("prerollSinkSoc: gst_westeros_sink_soc_start_video failed");
          }
-         UNLOCK( sink );
       }
    }
+   UNLOCK( sink );
 
    switch (GST_EVENT_TYPE(event))
    {

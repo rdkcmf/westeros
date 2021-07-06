@@ -254,6 +254,7 @@ static GstCaps *emVideoSrcGetCaps(GstBaseSrc *baseSrc, GstCaps *filter)
                               "width", G_TYPE_INT, width,
                               "height", G_TYPE_INT, height,
                               "framerate", GST_TYPE_FRACTION, rate_num, rate_denom,
+                              "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
                                NULL );
    if ( caps )
    {

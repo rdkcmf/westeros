@@ -483,6 +483,7 @@ void videoSrcSetFrameSize( GstElement *element, int width, int height )
    caps= gst_caps_new_simple( "video/x-brcm-avd",
                               "width", G_TYPE_INT, width,
                               "height", G_TYPE_INT, height,
+                              "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
                                NULL );
    if ( caps )
    {
