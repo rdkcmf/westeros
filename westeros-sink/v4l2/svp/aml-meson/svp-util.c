@@ -29,6 +29,7 @@ enum vdec_dw_mode
    VDEC_DW_AFBC_x2_1_4_DW = 3,
    VDEC_DW_AFBC_1_2_DW = 4,
    VDEC_DW_NO_AFBC = 16,
+   VDEC_DW_AFBC_AUTO_1_2 = 0x100,
 };
 
 #define V4L2_CONFIG_PARM_DECODE_CFGINFO (1 << 0)
@@ -185,14 +186,7 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          }
          frameWidth= sink->soc.frameWidthStream;
          frameHeight= sink->soc.frameHeightStream;
-         if ( (frameWidth > 1920) || (frameHeight > 1080) )
-         {
-            decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_2_DW;
-         }
-         else
-         {
-            decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_1_DW;
-         }
+         decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_2;
          GST_DEBUG("format %s size %dx%d dw mode %d",
                     fmt, frameWidth, frameHeight, decParm->cfg.double_write_mode);
          break;
