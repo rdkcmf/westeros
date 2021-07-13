@@ -2067,7 +2067,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
 
 static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText )
 {
-   GError *error= g_error_new(GST_STREAM_ERROR, errorCode, errorText);
+   GError *error= g_error_new_literal(GST_STREAM_ERROR, errorCode, errorText);
    if ( error )
    {
       GstElement *parent= GST_ELEMENT_PARENT(GST_ELEMENT(sink));
@@ -2086,7 +2086,7 @@ static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *
    }
    else
    {
-      GST_ERROR("Error: g_error_new failed for errorCode %d errorText (%s)", errorCode, errorText );
+      GST_ERROR("Error: g_error_new_literal failed for errorCode %d errorText (%s)", errorCode, errorText );
    }
 }
 
