@@ -223,6 +223,7 @@ typedef struct _VideoFrameManager
    long long frameTimeCurrent;
    long long adjust;
    long long displayedFrameTime;
+   long long expireLimit;
    int dropFrameCount;
    int dropFrameCountReported;
    bool underflowDetected;
@@ -895,7 +896,7 @@ static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t ha
          rc= ioctl( ctx->drmFd, DRM_IOCTL_GEM_CLOSE, &close );
          if ( rc )
          {
-            ERROR("DRM_IOCTL_GEM_CLOSE failed: handle0 %u rc %d", handle0, rc);
+            ERROR("DRM_IOCTL_GEM_CLOSE failed: handle0 %u rc %d errno %d", handle0, rc, errno);
          }
          if ( handle1 && (handle1 != handle0) )
          {
@@ -905,7 +906,7 @@ static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t ha
             rc= ioctl( ctx->drmFd, DRM_IOCTL_GEM_CLOSE, &close );
             if ( rc )
             {
-               ERROR("DRM_IOCTL_GEM_CLOSE failed: handle1 %u rc %d", handle1, rc);
+               ERROR("DRM_IOCTL_GEM_CLOSE failed: handle1 %u rc %d errno %d", handle1, rc, errno);
             }
          }
       }
@@ -1005,17 +1006,23 @@ static void wstVideoServerFlush( VideoServerConnection *conn )
 {
    int rc;
    int len;
+   int expireLimit= 0;
 
    DEBUG("wstVideoServerFlush: enter");
 
    if ( conn->videoPlane->vfm )
    {
+      expireLimit= conn->videoPlane->vfm->expireLimit;
       wstDestroyVideoFrameManager( conn->videoPlane->vfm );
       conn->videoPlane->vfm= 0;
    }
 
    conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
-   if ( !conn->videoPlane->vfm )
+   if ( conn->videoPlane->vfm )
+   {
+      conn->videoPlane->vfm->expireLimit= expireLimit;
+   }
+   else
    {
       ERROR("Failed to create a new vfm");
    }
@@ -1669,6 +1676,17 @@ static void *wstVideoServerConnectionThread( void *arg )
                               if ( gCtx->autoFRMModeEnabled && conn->videoPlane->frameRateMatchingPlane )
                               {
                                  wstSelectRate( gCtx, num, denom );
+                              }
+                              if ( conn->videoPlane->vfm )
+                              {
+                                 int rate;
+                                 VideoFrameManager *vfm= conn->videoPlane->vfm;
+                                 vfm->expireLimit= 0;
+                                 rate= conn->videoPlane->frameRateNum / conn->videoPlane->frameRateDenom;
+                                 if ( rate < 10 )
+                                 {
+                                    vfm->expireLimit= 1000000LL;
+                                 }
                               }
                            }
                            pthread_mutex_unlock( &gMutex );
@@ -2938,6 +2956,11 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
 {
    VideoFrame *f= 0;
+   long long expireLimit= EXPIRELIMIT;
+   if ( vfm->expireLimit )
+   {
+      expireLimit= vfm->expireLimit;
+   }
    #ifdef WESTEROS_GL_AVSYNC
    if ( vfm->sync )
    {
@@ -2952,7 +2975,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
             f->canExpire= !vfm->frameAdvance;
             vfm->flipTimeCurrent= vfm->vblankTime;
          }
-         if ( f->canExpire && (vfm->vblankTime - vfm->flipTimeCurrent) > EXPIRELIMIT )
+         if ( f->canExpire && (vfm->vblankTime - vfm->flipTimeCurrent) > expireLimit )
          {
             bool underflow= false;
             if  ( vfm->queueSize <= 1 )
@@ -2963,7 +2986,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
             else
             {
                long long frameGap= vfm->queue[1].frameTime - vfm->queue[0].frameTime;
-               if ( frameGap > EXPIRELIMIT )
+               if ( frameGap > expireLimit )
                {
                   DEBUG("underflow: frame expired, queue size %d gap %lld us", vfm->queueSize, frameGap );
                   underflow= true;
@@ -3011,17 +3034,17 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
             if ( US_TO_MS(vfm->vblankTime+vfm->vblankInterval) >= US_TO_MS(flipTime) || vfm->frameAdvance )
             {
                if (
-                    ((i == 0) && fCheck->canExpire && (US_TO_MS(flipTime+EXPIRELIMIT) < US_TO_MS(vfm->vblankTime))) ||
+                    ((i == 0) && fCheck->canExpire && (US_TO_MS(flipTime+expireLimit) < US_TO_MS(vfm->vblankTime))) ||
                     ((i > 0) && (US_TO_MS(fCheck->frameTime) < US_TO_MS(vfm->frameTimeCurrent+vfm->vblankInterval)))
                   )
                {
-                  if ( i > 0 )
+                  if ( fCheck->bufferId != vfm->bufferIdCurrent )
                   {
                      FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
                      vfm->dropFrameCount += 1;
+                     wstFreeVideoFrameResources( fCheck );
+                     wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
                   }
-                  wstFreeVideoFrameResources( fCheck );
-                  wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
                   if ( vfm->queueSize > i+1 )
                   {
                      memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-(i+1))*sizeof(VideoFrame) );
@@ -3322,8 +3345,8 @@ static bool wstAcquirePlaneProperties( WstGLCtx *ctx, WstOverlayPlane *plane )
             plane->planePropRes[i]= drmModeGetProperty( ctx->drmFd, plane->planeProps->props[i] );
             if ( plane->planePropRes[i] )
             {
-               DEBUG("plane %d  property %d name (%s) value (%lld)",
-                     plane->plane->plane_id, plane->planeProps->props[i], plane->planePropRes[i]->name, plane->planeProps->prop_values[i] );
+               DEBUG("plane %d  property %d name (%s) value (%lld) flags(%x)",
+                     plane->plane->plane_id, plane->planeProps->props[i], plane->planePropRes[i]->name, plane->planeProps->prop_values[i], plane->planePropRes[i]->flags );
                for( j= 0; j < plane->planePropRes[i]->count_enums; ++j )
                {
                   DEBUG("  enum name (%s) value %llu", plane->planePropRes[i]->enums[j].name, plane->planePropRes[i]->enums[j].value );
@@ -4396,6 +4419,7 @@ static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom )
             }
          }
       }
+
       if ( (miMatch >= 0) && (ctx->modeInfo->vrefresh != ctx->conn->modes[miMatch].vrefresh) )
       {
          ctx->modeNext= ctx->conn->modes[miMatch];

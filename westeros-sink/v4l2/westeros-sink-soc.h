@@ -164,6 +164,8 @@ struct _GstWesterosSinkSoc
    int frameOutCount;
    int frameDecodeCount;
    int frameDisplayCount;
+   int decoderLastFrame;
+   int decoderEOS;
    uint32_t numDropped;
    uint32_t inputFormat;
    uint32_t outputFormat;
@@ -212,6 +214,7 @@ struct _GstWesterosSinkSoc
    gboolean videoPlaying;
    gboolean videoPaused;
    gboolean hasEvents;
+   gboolean hasEOSEvents;
    gboolean needCaptureRestart;
    gboolean emitFirstFrameSignal;
    gboolean emitUnderflowSignal;

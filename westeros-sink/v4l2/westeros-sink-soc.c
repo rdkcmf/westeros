@@ -784,6 +784,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoStartTime= 0;
    sink->soc.frameDecodeCount= 0;
    sink->soc.frameDisplayCount= 0;
+   sink->soc.decoderLastFrame= 0;
+   sink->soc.decoderEOS= 0;
    sink->soc.numDropped= 0;
    sink->soc.inputFormat= 0;
    sink->soc.outputFormat= WL_SB_FORMAT_NV12;
@@ -830,6 +832,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoPlaying= FALSE;
    sink->soc.videoPaused= FALSE;
    sink->soc.hasEvents= FALSE;
+   sink->soc.hasEOSEvents= FALSE;
    sink->soc.needCaptureRestart= FALSE;
    sink->soc.emitFirstFrameSignal= FALSE;
    sink->soc.emitUnderflowSignal= FALSE;
@@ -1922,6 +1925,8 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.frameDisplayCount= 0;
+   sink->soc.decoderLastFrame= 0;
+   sink->soc.decoderEOS= 0;
    sink->soc.videoStartTime= 0;
    wstFlushPixelAspectRatio( sink, false );
    #ifdef USE_GST_AFD
@@ -1942,6 +1947,8 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    sink->soc.frameDisplayCount= 0;
    sink->soc.numDropped= 0;
    sink->soc.frameDisplayCount= 0;
+   sink->soc.decoderLastFrame= 0;
+   sink->soc.decoderEOS= 0;
 
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_STREAMON, &sink->soc.fmtIn.type );
    if ( rc < 0 )
@@ -1989,6 +1996,25 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
    {
       g_print("westeros-sink: EOS detected\n");
       gst_westeros_sink_eos_detected( sink );
+      return;
+   }
+   {
+      int rc;
+      struct v4l2_decoder_cmd dcmd;
+
+      memset( &dcmd, 0, sizeof(dcmd));
+
+      GST_DEBUG("got eos: issuing decoder stop");
+      dcmd.cmd= V4L2_DEC_CMD_STOP;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DECODER_CMD, &dcmd );
+      if ( rc )
+      {
+         GST_DEBUG("VIDIOC_DECODER_CMD V4L2_DEC_CMD_STOP rc %d errno %d",rc, errno);
+      }
+      if ( !sink->soc.hasEOSEvents )
+      {
+         sink->soc.decoderEOS= 1;
+      }
    }
 }
 
@@ -2456,7 +2482,6 @@ static void wstStartEvents( GstWesterosSink *sink )
    struct v4l2_event_subscription evtsub;
 
    memset( &evtsub, 0, sizeof(evtsub));
-
    evtsub.type= V4L2_EVENT_SOURCE_CHANGE;
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_SUBSCRIBE_EVENT, &evtsub );
    if ( rc == 0 )
@@ -2466,6 +2491,18 @@ static void wstStartEvents( GstWesterosSink *sink )
    else
    {
       GST_ERROR("wstStartEvents: event subscribe failed rc %d (errno %d)", rc, errno);
+   }
+
+   memset( &evtsub, 0, sizeof(evtsub));
+   evtsub.type= V4L2_EVENT_EOS;
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_SUBSCRIBE_EVENT, &evtsub );
+   if ( rc == 0 )
+   {
+      sink->soc.hasEOSEvents= TRUE;
+   }
+   else
+   {
+      GST_ERROR("wstStartEvents: event subcribe for eos failed rc %d (errno %d)", rc, errno );
    }
 }
 
@@ -2567,6 +2604,11 @@ static void wstProcessEvents( GstWesterosSink *sink )
             sink->soc.prevFrame2Fd= -1;
             sink->soc.needCaptureRestart= TRUE;
          }
+      }
+      else if ( event.type == V4L2_EVENT_EOS )
+      {
+         g_print("westeros-sink: v4l2 eos event\n");
+         sink->soc.decoderEOS= 1;
       }
    }
    UNLOCK(sink);
@@ -3528,6 +3570,10 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
    struct v4l2_buffer buf;
    struct v4l2_plane planes[WST_MAX_PLANES];
 
+   if ( sink->soc.decoderLastFrame )
+   {
+      goto exit;
+   }
    memset( &buf, 0, sizeof(buf));
    buf.type= sink->soc.fmtOut.type;
    buf.memory= sink->soc.outputMemMode;
@@ -3551,8 +3597,14 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
    else
    {
       GST_ERROR("failed to de-queue output buffer: rc %d errno %d", rc, errno);
+      if ( errno == EPIPE )
+      {
+         /* Decoding is done: no more capture buffers can be dequeued */
+         sink->soc.decoderLastFrame= 1;
+      }
    }
 
+exit:
    return bufferIndex;
 }
 
@@ -4052,8 +4104,8 @@ static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn )
 
       if ( sentLen == len )
       {
-         GST_LOG("sent frame rate to video server");
-         FRAME("sent frame rate to video server");
+         GST_LOG("sent frame rate to video server: %d/%d", sink->soc.frameRateFractionNum, sink->soc.frameRateFractionDenom);
+         FRAME("sent frame rate to video server: %d/%d", sink->soc.frameRateFractionNum, sink->soc.frameRateFractionDenom);
       }
    }
 }
@@ -4148,7 +4200,7 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
    #ifdef USE_AMLOGIC_MESON
    if ( sink->soc.conn )
    {
-      GstElement *audioSink;
+      GstElement *audioSink= 0;
       GstElement *element= GST_ELEMENT(sink);
       GstClock *clock= GST_ELEMENT_CLOCK(element);
       int syncTypePrev= sink->soc.syncType;
@@ -4163,7 +4215,10 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       {
          sink->soc.syncType= 0;
          sink->soc.sessionId= INVALID_SESSION_ID;
-         audioSink= wstFindAudioSink( sink );
+         if ( sink->segment.applied_rate == 1.0 )
+         {
+            audioSink= wstFindAudioSink( sink );
+         }
          if ( audioSink )
          {
             GstClock* amlclock= gst_aml_hal_asink_get_clock( audioSink );
@@ -5381,6 +5436,15 @@ capture_start:
       UNLOCK(sink);
 
       g_print("westeros-sink: frame size %dx%d\n", sink->soc.frameWidth, sink->soc.frameHeight);
+
+      if ( sink->segment.applied_rate != 1.0 )
+      {
+         GST_DEBUG("applied rate %f : force calculation of framerate", sink->segment.applied_rate);
+         sink->soc.frameRate= 0.0;
+         sink->soc.frameRateFractionNum= 0;
+         sink->soc.frameRateFractionDenom= 1;
+         sink->soc.frameRateChanged= TRUE;
+      }
    }
 
    for( ; ; )
@@ -5542,7 +5606,7 @@ capture_start:
                {
                   gint64 now= g_get_monotonic_time();
                   float frameRate= (sink->soc.frameRate != 0.0 ? sink->soc.frameRate : 30.0);
-                  float frameDelay= sink->soc.frameInCount / sink->soc.frameRate;
+                  float frameDelay= sink->soc.frameInCount / frameRate;
                   if ( (frameDelay > 1.0) && (now-sink->soc.videoStartTime > 3000000LL) )
                   {
                      sink->soc.decodeError= TRUE;
@@ -5770,6 +5834,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
 {
    GstWesterosSink *sink= (GstWesterosSink*)data;
    int outputFrameCount, count, eosCountDown;
+   int decoderEOS, decodeCount, displayCount;
    bool videoPlaying;
    bool eosEventSeen;
    double frameRate;
@@ -5789,11 +5854,14 @@ static gpointer wstEOSDetectionThread(gpointer data)
       {
          LOCK(sink)
          count= sink->soc.frameOutCount;
+         decodeCount= sink->soc.frameDecodeCount;
+         displayCount= sink->soc.frameDisplayCount + sink->soc.numDropped;
+         decoderEOS= sink->soc.decoderEOS;
          videoPlaying= sink->soc.videoPlaying;
          eosEventSeen= sink->eosEventSeen;
          UNLOCK(sink)
 
-         if ( videoPlaying && eosEventSeen && (outputFrameCount == count) )
+         if ( videoPlaying && eosEventSeen && decoderEOS && (decodeCount == displayCount) && (outputFrameCount == count) )
          {
             --eosCountDown;
             if ( eosCountDown == 0 )
@@ -6482,6 +6550,7 @@ static int ioctl_wrapper( int fd, int request, void* arg )
          case VIDIOC_G_SELECTION: req= "VIDIOC_G_SELECTION"; break;
          case VIDIOC_SUBSCRIBE_EVENT: req= "VIDIOC_SUBSCRIBE_EVENT"; break;
          case VIDIOC_UNSUBSCRIBE_EVENT: req= "VIDIOC_UNSUBSCRIBE_EVENT"; break;
+         case VIDIOC_DECODER_CMD: req= "VIDIOC_DECODER_CMD"; break;
          default: req= "NA"; break;
       }
       g_print("westerossink-ioctl: ioct( %d, %x ( %s ) )\n", fd, request, req );
@@ -6590,6 +6659,16 @@ static int ioctl_wrapper( int fd, int request, void* arg )
       {
          int *type= (int*)arg;
          g_print("westerossink-ioctl: : type %d\n", *type);
+      }
+      else if ( request == (int)VIDIOC_SUBSCRIBE_EVENT )
+      {
+         struct v4l2_event_subscription *evtsub= (struct v4l2_event_subscription*)arg;
+         g_print("westerossink-ioctl: type %d\n", evtsub->type);
+      }
+      else if ( request == (int)VIDIOC_DECODER_CMD )
+      {
+         struct v4l2_decoder_cmd *dcmd= (struct v4l2_decoder_cmd*)arg;
+         g_print("westerossink-ioctl: cmd %d\n", dcmd->cmd);
       }
    }
 
