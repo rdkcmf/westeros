@@ -4369,33 +4369,17 @@ static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom )
       static bool policiesSet= false;
       static bool policyTruncate= false;
 
-      if ( !policiesSet )
-      {
-         const char *env;
-         env= getenv("WESTEROS_GL_FRM_TRUNCATE");
-         if ( env && atoi(env) )
-         {
-            policyTruncate= true;
-         }
-         policiesSet= true;
-      }
-
-      if ( rateDenom <= 0 ) rateDenom= 1;
-      if ( policyTruncate )
-      {
-         targetRate= rateNum  / rateDenom;
-      }
-      else
-      {
-         targetRate= (rateNum + rateDenom-1) / rateDenom;
-      }
-
+      #ifdef USE_AMLOGIC_MESON
       if ( ctx->conn && (ctx->conn->count_modes > 1) )
       {
-         int i;
+         int i, checkRate, targetRate2;
          drmModeModeInfo *modeCheck;
 
-         DEBUG("wstSelectRate: target %d : current mode: %dx%dx%d", targetRate,
+         if ( rateDenom <= 0 ) rateDenom= 1;
+         targetRate= rateNum * 100  / rateDenom;
+         targetRate2= rateNum * 200  / rateDenom;
+
+         DEBUG("wstSelectRate: target %d (%d) : current mode: %dx%dx%d", targetRate, targetRate2,
                 ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh );
 
          for( i= 0; i < ctx->conn->count_modes; ++i )
@@ -4405,16 +4389,82 @@ static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom )
             if ( (modeCheck->hdisplay == ctx->modeInfo->hdisplay) &&
                  (modeCheck->vdisplay == ctx->modeInfo->vdisplay) )
             {
-               DEBUG("wstSelectRate: check mode %d of %d: %dx%dx%d", i, ctx->conn->count_modes,
-                     modeCheck->hdisplay, modeCheck->vdisplay, modeCheck->vrefresh );
-
-               if ( modeCheck->vrefresh % targetRate == 0 )
+               switch( modeCheck->vrefresh )
+               {
+                  case 47:
+                     checkRate= 4795;
+                     break;
+                  case 59:
+                     checkRate= 5994;
+                     break;
+                  default:
+                     checkRate= modeCheck->vrefresh*100;
+                     break;
+               }
+               DEBUG("wstSelectRate: check mode %d of %d: %dx%dx%d (%d)", i, ctx->conn->count_modes,
+                     modeCheck->hdisplay, modeCheck->vdisplay, modeCheck->vrefresh, checkRate );
+               if ( (targetRate == checkRate) || (targetRate2 == checkRate) )
                {
                   if ( (miMatch >= 0) && (ctx->conn->modes[miMatch].vrefresh > modeCheck->vrefresh) )
                   {
                      continue;
                   }
                   miMatch= i;
+               }
+            }
+         }
+      }
+      #endif
+
+      if ( miMatch < 0 )
+      {
+         if ( !policiesSet )
+         {
+            const char *env;
+            env= getenv("WESTEROS_GL_FRM_TRUNCATE");
+            if ( env && atoi(env) )
+            {
+               policyTruncate= true;
+            }
+            policiesSet= true;
+         }
+
+         if ( rateDenom <= 0 ) rateDenom= 1;
+         if ( policyTruncate )
+         {
+            targetRate= rateNum  / rateDenom;
+         }
+         else
+         {
+            targetRate= (rateNum + rateDenom-1) / rateDenom;
+         }
+
+         if ( ctx->conn && (ctx->conn->count_modes > 1) )
+         {
+            int i;
+            drmModeModeInfo *modeCheck;
+
+            DEBUG("wstSelectRate: target %d : current mode: %dx%dx%d", targetRate,
+                   ctx->modeInfo->hdisplay, ctx->modeInfo->vdisplay, ctx->modeInfo->vrefresh );
+
+            for( i= 0; i < ctx->conn->count_modes; ++i )
+            {
+               modeCheck= &ctx->conn->modes[i];
+
+               if ( (modeCheck->hdisplay == ctx->modeInfo->hdisplay) &&
+                    (modeCheck->vdisplay == ctx->modeInfo->vdisplay) )
+               {
+                  DEBUG("wstSelectRate: check mode %d of %d: %dx%dx%d", i, ctx->conn->count_modes,
+                        modeCheck->hdisplay, modeCheck->vdisplay, modeCheck->vrefresh );
+
+                  if ( modeCheck->vrefresh % targetRate == 0 )
+                  {
+                     if ( (miMatch >= 0) && (ctx->conn->modes[miMatch].vrefresh > modeCheck->vrefresh) )
+                     {
+                        continue;
+                     }
+                     miMatch= i;
+                  }
                }
             }
          }
