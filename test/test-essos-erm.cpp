@@ -36,6 +36,7 @@ video: hardware,limitedResolution(640,480),limitedQuality\n \
 video: software,limitedPerformance\n \
 audio: none\n \
 frontend: none\n \
+svpa: none\n \
 ";
 
 static bool initERM( EMCTX *emctx )
@@ -112,6 +113,7 @@ static void notify( EssRMgr *rm, int event, int type, int id, void* userData )
       case EssRMgrResType_videoDecoder:
       case EssRMgrResType_audioDecoder:
       case EssRMgrResType_frontEnd:
+      case EssRMgrResType_svpAllocator:
          switch( event )
          {
             case EssRMgrEvent_granted:
@@ -452,6 +454,95 @@ bool testCaseERMBasicRequestFrontEnd( EMCTX *emctx )
    ctxB.emctx= emctx;
    ctxB.name= "B";
    ctxB.type= EssRMgrResType_frontEnd;
+   ctxB.async= true;
+   ctxB.loop= 1;
+   ctxB.priority= 1;
+   ctxB.usage= 7;
+   ctxB.delay= 60000;
+   ctxB.assignedId= -1;
+   ctxB.prevAssignedId= -1;
+   rc= pthread_create( &threadIdB, NULL, requestThread, &ctxB );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   pthread_join( threadIdA, NULL );
+   pthread_join( threadIdB, NULL );
+
+   if ( ctxA.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for A: expected 1 actual %d", ctxA.grantCount );
+      error= true;
+   }
+   if ( ctxA.revokeCount != 1 )
+   {
+      EMERROR("Unexpected revoke count for A: expected 1 actual %d", ctxA.revokeCount );
+      error= true;
+   }
+   if ( ctxB.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for B: expected 1 actual %d", ctxB.grantCount );
+      error= true;
+   }
+   if ( ctxB.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for B: expected 0 actual %d", ctxB.revokeCount );
+      error= true;
+   }
+   if ( error ) goto exit;
+
+   testResult= true;
+
+exit:
+   termERM( emctx );
+
+   return testResult;
+}
+
+bool testCaseERMBasicRequestSVPAllocator( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   bool error= false;
+   int rc;
+   pthread_t threadIdA= 0;
+   pthread_t threadIdB= 0;
+   TestCtx ctxA;
+   TestCtx ctxB;
+
+   result= initERM( emctx );
+   if ( !result )
+   {
+      EMERROR("initERM failed");
+      goto exit;
+   }
+
+   memset( &ctxA, 0, sizeof(ctxA) );
+   ctxA.emctx= emctx;
+   ctxA.name= "A";
+   ctxA.type= EssRMgrResType_svpAllocator;
+   ctxA.async= true;
+   ctxA.loop= 1;
+   ctxA.priority= 2;
+   ctxA.usage= 7;
+   ctxA.delay= 60000;
+   ctxA.assignedId= -1;
+   ctxA.prevAssignedId= -1;
+   rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   usleep( 10000 );
+
+   memset( &ctxB, 0, sizeof(ctxA) );
+   ctxB.emctx= emctx;
+   ctxB.name= "B";
+   ctxB.type= EssRMgrResType_svpAllocator;
    ctxB.async= true;
    ctxB.loop= 1;
    ctxB.priority= 1;

@@ -24,6 +24,7 @@
 bool testCaseERMBasicRequestVideo( EMCTX *emctx );
 bool testCaseERMBasicRequestAudio( EMCTX *emctx );
 bool testCaseERMBasicRequestFrontEnd( EMCTX *emctx );
+bool testCaseERMBasicRequestSVPAllocator( EMCTX *emctx );
 bool testCaseERMBasicRequestLoop( EMCTX *emctx );
 bool testCaseERMBasicRequestAsync( EMCTX *emctx );
 bool testCaseERMVideoSizeConstraint( EMCTX *emctx );

@@ -329,6 +329,10 @@ TESTCASE genericTests[]=
       "Test ERM basic request front end",
       testCaseERMBasicRequestFrontEnd
    },
+   { "testERMBasicRequestSVPAllocator",
+      "Test ERM basic request svp allocator",
+      testCaseERMBasicRequestSVPAllocator
+   },
    { "testERMBasicRequestLoop",
       "Test ERM basic request flow loop",
       testCaseERMBasicRequestLoop

@@ -34,7 +34,8 @@ typedef enum _EssRMgrResType
 {
    EssRMgrResType_videoDecoder,
    EssRMgrResType_audioDecoder,
-   EssRMgrResType_frontEnd
+   EssRMgrResType_frontEnd,
+   EssRMgrResType_svpAllocator
 } EssRMgrResType;
 
 typedef enum _EssRMgrVideoDecoderCaps
@@ -69,13 +70,23 @@ typedef enum _EssRMgrAudioUsage
 
 typedef enum _EssRMgrFrontEndCaps
 {
-   EssRMgrFECap_none=                (0),
+   EssRMgrFECap_none=                 (0),
 } EssRMgrFrontEndCaps;
 
 typedef enum _EssRMgrFrontEndUsage
 {
-   EssRMgrFEUse_none=                (0),
-} EssRMgrFontEndUsage;
+   EssRMgrFEUse_none=                 (0),
+} EssRMgrFrontEndUsage;
+
+typedef enum _EssRMgrSVPAllocCaps
+{
+   EssRMgrSVPACap_none=               (0),
+} EssRMgrSVPAllocCaps;
+
+typedef enum _EssRMgrSVPAllocUsage
+{
+   EssRMgrSVPAUse_none=               (0),
+} EssRMgrSVPAllocUsage;
 
 typedef enum _EssRMgrResState
 {
@@ -116,11 +127,16 @@ typedef struct _EssRMgrFEInfo
 {
 } EssRMgrFEInfo;
 
+typedef struct _EssRMgrSVPAInfo
+{
+} EssRMgrSVPAInfo;
+
 typedef union EssRMgrUsageInfo
 {
    EssRMgrVideoInfo video;
    EssRMgrAudioInfo audio;
    EssRMgrFEInfo frontEnd;
+   EssRMgrSVPAInfo svpAllocator;
 } EssRMgrUsageInfo;
 
 typedef struct _EssRMgrRequest

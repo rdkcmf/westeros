@@ -75,6 +75,8 @@ typedef struct _EssRMgrBase
    EssRMgrResource audioDecoder[ESSRMGR_MAX_ITEMS];
    int numFrontEnds;
    EssRMgrResource frontEnd[ESSRMGR_MAX_ITEMS];
+   int numSVPAllocators;
+   EssRMgrResource svpAlloc[ESSRMGR_MAX_ITEMS];
 } EssRMgrBase;
 
 typedef struct _EssRMgrResourceControl
@@ -91,6 +93,7 @@ typedef struct _EssRMgrState
    EssRMgrResourceControl vidCtrl;
    EssRMgrResourceControl audCtrl;
    EssRMgrResourceControl feCtrl;
+   EssRMgrResourceControl svpaCtrl;
 } EssRMgrState;
 
 typedef struct _EssRMgrResourceConnection
@@ -498,6 +501,15 @@ static void essRMDumpState( EssRMgrResourceConnection *conn, int requestId )
                state->base.frontEnd[i].priorityOwner );
       essRMSendDumpStateResponse( conn, requestId, msg );
    }
+   for( int i= 0; i < state->base.numSVPAllocators; ++i )
+   {
+      snprintf(msg, sizeof(msg), "svpa: %d caps %X owner %d priority %d\n",
+               i,
+               state->base.svpAlloc[i].capabilities,
+               (state->base.svpAlloc[i].connOwner  ? state->base.svpAlloc[i].connOwner->clientId : 0),
+               state->base.frontEnd[i].priorityOwner );
+      essRMSendDumpStateResponse( conn, requestId, msg );
+   }
    essRMSendDumpStateResponse( conn, requestId, 0 );
 }
 
@@ -569,6 +581,19 @@ static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
          state->base.frontEnd[i].priorityOwner= 0;
          state->base.frontEnd[i].usageOwner= 0;
          state->base.frontEnd[i].state= EssRMgrRes_idle;
+      }
+   }
+
+   for( int i= 0; i < state->base.numSVPAllocators; ++i )
+   {
+      if ( state->base.svpAlloc[i].connOwner == conn )
+      {
+         DEBUG("removing dead owner conn %p svpa %d", conn, i );
+         state->base.svpAlloc[i].requestIdOwner= -1;
+         state->base.svpAlloc[i].connOwner= 0;
+         state->base.svpAlloc[i].priorityOwner= 0;
+         state->base.svpAlloc[i].usageOwner= 0;
+         state->base.svpAlloc[i].state= EssRMgrRes_idle;
       }
    }
 }
@@ -677,6 +702,7 @@ static void *essRMResourceConnectionThread( void *arg )
                               break;
                            case EssRMgrResType_audioDecoder:
                            case EssRMgrResType_frontEnd:
+                           case EssRMgrResType_svpAllocator:
                               result= essRMRequestResource( conn, &req );
                               break;
                            default:
@@ -699,6 +725,7 @@ static void *essRMResourceConnectionThread( void *arg )
                            case EssRMgrResType_videoDecoder:
                            case EssRMgrResType_audioDecoder:
                            case EssRMgrResType_frontEnd:
+                           case EssRMgrResType_svpAllocator:
                               essRMReleaseResource( conn, type, assignedId );
                               break;
                            default:
@@ -752,6 +779,13 @@ static void *essRMResourceConnectionThread( void *arg )
                                     server->state->base.frontEnd[id].state= state;
                                  }
                                  break;
+                              case EssRMgrResType_svpAllocator:
+                                 if ( (id < server->state->base.numSVPAllocators) &&
+                                      (conn ==  server->state->base.svpAlloc[id].connOwner) )
+                                 {
+                                    server->state->base.svpAlloc[id].state= state;
+                                 }
+                                 break;
                               default:
                                  ERROR("unsupported resource type: %d", type);
                                  break;
@@ -786,6 +820,7 @@ static void *essRMResourceConnectionThread( void *arg )
                               break;
                            case EssRMgrResType_audioDecoder:
                            case EssRMgrResType_frontEnd:
+                           case EssRMgrResType_svpAllocator:
                               essRMSetUsageResource( conn, requestId, type, &usage );
                               break;
                            default:
@@ -832,6 +867,9 @@ static void *essRMResourceConnectionThread( void *arg )
                                     case EssRMgrResType_frontEnd:
                                        value1= server->state->base.numFrontEnds;
                                        break;
+                                    case EssRMgrResType_svpAllocator:
+                                       value1= server->state->base.numSVPAllocators;
+                                       break;
                                     default:
                                        ERROR("unsupported resource type: %d", type);
                                        break;
@@ -877,6 +915,16 @@ static void *essRMResourceConnectionThread( void *arg )
                                           }
                                        }
                                        break;
+                                    case EssRMgrResType_svpAllocator:
+                                       if ( id < server->state->base.numSVPAllocators )
+                                       {
+                                          if ( server->state->base.svpAlloc[id].connOwner )
+                                          {
+                                             value1= server->state->base.svpAlloc[id].connOwner->clientId;
+                                             value2= server->state->base.svpAlloc[id].priorityOwner;
+                                          }
+                                       }
+                                       break;
                                     default:
                                        ERROR("unsupported resource type: %d", type);
                                        break;
@@ -912,6 +960,12 @@ static void *essRMResourceConnectionThread( void *arg )
                                           value1= server->state->base.frontEnd[id].capabilities;
                                        }
                                        break;
+                                    case EssRMgrResType_svpAllocator:
+                                       if ( id < server->state->base.numSVPAllocators )
+                                       {
+                                          value1= server->state->base.svpAlloc[id].capabilities;
+                                       }
+                                       break;
                                     default:
                                        ERROR("unsupported resource type: %d", type);
                                        break;
@@ -943,6 +997,12 @@ static void *essRMResourceConnectionThread( void *arg )
                                        if ( id < server->state->base.numFrontEnds )
                                        {
                                           value1= server->state->base.frontEnd[id].state;
+                                       }
+                                       break;
+                                    case EssRMgrResType_svpAllocator:
+                                       if ( id < server->state->base.numSVPAllocators )
+                                       {
+                                          value1= server->state->base.svpAlloc[id].state;
                                        }
                                        break;
                                     default:
@@ -1386,6 +1446,13 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
          server->state->base.frontEnd[i].connOwner= 0;
          server->state->base.frontEnd[i].capabilities= EssRMgrFECap_none;
       }
+      server->state->base.numSVPAllocators= ESSRMGR_MAX_ITEMS;
+      for( int i= 0; i < ESSRMGR_MAX_ITEMS; ++i )
+      {
+         server->state->base.svpAlloc[i].requestIdOwner= 0;
+         server->state->base.svpAlloc[i].connOwner= 0;
+         server->state->base.svpAlloc[i].capabilities= EssRMgrSVPACap_none;
+      }
    }
 
    for( int i= 0; i < server->state->base.numVideoDecoders; ++i )
@@ -1450,6 +1517,26 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
       pending->next= ((i+1 < maxPending) ? i+1 : -1);
       pending->prev= ((i > 0) ? i-1 : -1);
       DEBUG("fe pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
+   }
+
+   for( int i= 0; i < server->state->base.numSVPAllocators; ++i )
+   {
+      server->state->base.svpAlloc[i].type= EssRMgrResType_svpAllocator;
+      server->state->base.svpAlloc[i].criteriaMask= ESSRMGR_CRITERIA_MASK_SVPA;
+      server->state->base.svpAlloc[i].state= EssRMgrRes_idle;
+      server->state->base.svpAlloc[i].pendingNtfyIdx= -1;
+   }
+
+   maxPending= 3*server->state->base.numSVPAllocators;
+   DEBUG("svpa pendingPool: max pending %d", maxPending);
+   for( int i= 0; i < maxPending; ++i )
+   {
+      EssRMgrResourceNotify *pending= &server->state->svpaCtrl.pending[i];
+      pending->type= EssRMgrResType_svpAllocator;
+      pending->self= i;
+      pending->next= ((i+1 < maxPending) ? i+1 : -1);
+      pending->prev= ((i > 0) ? i-1 : -1);
+      DEBUG("svpa pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
    }
    server->state->feCtrl.pendingPoolIdx= 0;
    server->state->feCtrl.maxPoolItems= maxPending;
@@ -2710,6 +2797,7 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
                   break;
                case EssRMgrResType_audioDecoder:
                case EssRMgrResType_frontEnd:
+               case EssRMgrResType_svpAllocator:
                   break;
                default:
                   ERROR("Bad resource type: %d", type);
@@ -3087,6 +3175,9 @@ static bool essRMRequestResource( EssRMgrResourceConnection *conn, EssRMgrReques
          case EssRMgrResType_frontEnd:
             res= server->state->base.frontEnd;
             break;
+         case EssRMgrResType_svpAllocator:
+            res= server->state->base.svpAlloc;
+            break;
          default:
             ERROR("Bad resource type: %d", req->type);
             break;
@@ -3185,6 +3276,11 @@ static void essRMReleaseResource( EssRMgrResourceConnection *conn, int type, int
             res= server->state->base.frontEnd;
             ctrl= &server->state->feCtrl;
             break;
+         case EssRMgrResType_svpAllocator:
+            maxId= server->state->base.numSVPAllocators;
+            res= server->state->base.svpAlloc;
+            ctrl= &server->state->svpaCtrl;
+            break;
          default:
             ERROR("Bad resource type: %d", type);
             break;
@@ -3253,6 +3349,11 @@ static bool essRMSetPriorityResource( EssRMgrResourceConnection *conn, int reque
             maxId= server->state->base.numFrontEnds;
             res= server->state->base.frontEnd;
             ctrl= &server->state->feCtrl;
+            break;
+         case EssRMgrResType_svpAllocator:
+            maxId= server->state->base.numSVPAllocators;
+            res= server->state->base.svpAlloc;
+            ctrl= &server->state->svpaCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -3374,6 +3475,11 @@ static bool essRMSetUsageResource( EssRMgrResourceConnection *conn, int requestI
             maxId= server->state->base.numFrontEnds;
             res= server->state->base.frontEnd;
             ctrl= &server->state->feCtrl;
+            break;
+         case EssRMgrResType_svpAllocator:
+            maxId= server->state->base.numSVPAllocators;
+            res= server->state->base.svpAlloc;
+            ctrl= &server->state->svpaCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -3497,6 +3603,11 @@ static int essRMFindSuitableResource( EssRMgrResourceConnection *conn, int type,
             maxId= server->state->base.numFrontEnds;
             res= server->state->base.frontEnd;
             ctrl= &server->state->feCtrl;
+            break;
+         case EssRMgrResType_svpAllocator:
+            maxId= server->state->base.numSVPAllocators;
+            res= server->state->base.svpAlloc;
+            ctrl= &server->state->svpaCtrl;
             break;
          default:
             ERROR("Bad resource type: %d", type);
@@ -3686,6 +3797,11 @@ static void essRMCancelRequestResource( EssRMgrResourceConnection *conn, int req
                res= server->state->base.frontEnd;
                ctrl= &server->state->feCtrl;
                break;
+            case EssRMgrResType_svpAllocator:
+               maxId= server->state->base.numSVPAllocators;
+               res= server->state->base.svpAlloc;
+               ctrl= &server->state->svpaCtrl;
+               break;
             default:
                ERROR("Bad resource type: %d", type);
                break;
@@ -3742,6 +3858,9 @@ static EssRMgrResourceNotify* essRMGetPendingPoolItem( EssRMgrResourceConnection
       case EssRMgrResType_frontEnd:
          ctrl= &conn->server->state->feCtrl;
          break;
+      case EssRMgrResType_svpAllocator:
+         ctrl= &conn->server->state->svpaCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", type);
          break;
@@ -3779,6 +3898,9 @@ static void essRMPutPendingPoolItem( EssRMgrResourceConnection *conn, EssRMgrRes
       case EssRMgrResType_frontEnd:
          ctrl= &conn->server->state->feCtrl;
          break;
+      case EssRMgrResType_svpAllocator:
+         ctrl= &conn->server->state->svpaCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", notify->type);
          break;
@@ -3814,6 +3936,10 @@ static void essRMInsertPendingByPriority( EssRMgrResourceConnection *conn, int i
       case EssRMgrResType_frontEnd:
          res= conn->server->state->base.frontEnd;
          ctrl= &conn->server->state->feCtrl;
+         break;
+      case EssRMgrResType_svpAllocator:
+         res= conn->server->state->base.svpAlloc;
+         ctrl= &conn->server->state->svpaCtrl;
          break;
       default:
          ERROR("Bad resource type: %d", item->type);
@@ -3871,6 +3997,10 @@ static void essRMRemovePending( EssRMgrResourceConnection *conn, int id, EssRMgr
          res= conn->server->state->base.frontEnd;
          ctrl= &conn->server->state->feCtrl;
          break;
+      case EssRMgrResType_svpAllocator:
+         res= conn->server->state->base.svpAlloc;
+         ctrl= &conn->server->state->svpaCtrl;
+         break;
       default:
          ERROR("Bad resource type: %d", item->type);
          break;
@@ -3910,6 +4040,10 @@ static bool essRMAssignResource( EssRMgrResourceConnection *conn, int id, EssRMg
          res= conn->server->state->base.frontEnd;
          typeName= "frontend";
          break;
+      case EssRMgrResType_svpAllocator:
+         res= conn->server->state->base.svpAlloc;
+         typeName= "svpa";
+         break;
       default:
          ERROR("Bad resource type: %d", req->type);
          break;
@@ -3943,6 +4077,9 @@ static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int 
          break;
       case EssRMgrResType_frontEnd:
          res= conn->server->state->base.frontEnd;
+         break;
+      case EssRMgrResType_svpAllocator:
+         res= conn->server->state->base.svpAlloc;
          break;
       default:
          ERROR("Bad resource type: %d", type);
@@ -4090,6 +4227,7 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
    int videoIndex= 0;
    int audioIndex= 0;
    int feIndex= 0;
+   int svpaIndex= 0;
    int maxWidth, maxHeight;
 
    configFileName= getenv("ESSRMGR_CONFIG_FILE");
@@ -4416,6 +4554,56 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
                }
             }
          }
+         else
+         if ( (i == 4) && !strncmp( work, "svpa", i ) )
+         {
+            i= 0;
+            haveIdentifier= false;
+            capabilities= 0;
+            for( ; ; )
+            {
+               c= fgetc(pFile);
+               if ( (c == ' ') || (c == '\t') || (c == ',') || (c == '(') || (c == '\n') || (c == EOF) )
+               {
+                  if ( i > 0 )
+                  {
+                     work[i]= '\0';
+                     haveIdentifier= true;
+                  }
+               }
+               else
+               {
+                  if ( i < ESSRMGR_MAX_NAMELEN )
+                  {
+                     work[i++]= c;
+                  }
+                  else
+                  {
+                     truncation= true;
+                  }
+               }
+               if ( haveIdentifier )
+               {
+                  if ( (i == 4) && !strncmp( work, "none", i ) )
+                  {
+                     capabilities |= EssRMgrSVPACap_none;
+                  }
+                  else
+                  {
+                     WARNING("unknown attribute: (%s)", work );
+                  }
+                  i= 0;
+                  haveIdentifier= false;
+               }
+               if ( (c == '\n') || (c == EOF) )
+               {
+                  INFO("adding svpa %d caps %lX", svpaIndex, capabilities);
+                  server->state->base.svpAlloc[svpaIndex].capabilities= capabilities;
+                  ++svpaIndex;
+                  break;
+               }
+            }
+         }
          i= 0;
          haveIdentifier= false;
          if ( truncation )
@@ -4429,11 +4617,13 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
    server->state->base.numVideoDecoders= videoIndex;
    server->state->base.numAudioDecoders= audioIndex;
    server->state->base.numFrontEnds= feIndex;
+   server->state->base.numSVPAllocators= svpaIndex;
 
-   INFO("config file defines %d video decoders %d audio decoders %d frontends",
+   INFO("config file defines %d video decoders %d audio decoders %d frontends %d svpa",
         server->state->base.numVideoDecoders,
         server->state->base.numAudioDecoders,
-        server->state->base.numFrontEnds);
+        server->state->base.numFrontEnds,
+        server->state->base.numSVPAllocators);
 
    result= true;
 
