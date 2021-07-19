@@ -336,6 +336,7 @@ typedef struct _WstGLCtx
    bool useVideoServer;
    bool usePlanes;
    bool useGBMModifiers;
+   bool useZPos;
    bool haveAtomic;
    bool haveNativeFence;
    bool graphicsPreferPrimary;
@@ -3669,6 +3670,11 @@ static WstGLCtx *wstInitCtx( void )
             wstInitUEvent( ctx );
             #endif
          }
+         if ( (len == 3) && !strncmp( drmver->name, "vc4", len ) )
+         {
+            ctx->useZPos= true;
+            INFO("using zpos");
+         }
 
          drmFreeVersion( drmver );
       }
@@ -3882,6 +3888,10 @@ static WstGLCtx *wstInitCtx( void )
                               else if ( (len == 4) && !strncmp( prop->name, "zpos", len) )
                               {
                                  zpos= props->prop_values[j];
+                                 if ( prop->flags & DRM_MODE_PROP_IMMUTABLE )
+                                 {
+                                    ctx->useZPos= false;
+                                 }
                               }
                            }
                         }
@@ -3934,7 +3944,22 @@ static WstGLCtx *wstInitCtx( void )
                         newPlane->plane= plane;
                         newPlane->supportsVideo= isVideo;
                         newPlane->supportsGraphics= isGraphics;
-                        newPlane->zOrder= n + zpos*16+((isVideo && !isGraphics) ? 0 : 256);
+                        if ( ctx->useZPos )
+                        {
+                           newPlane->zOrder= n;
+                           if ( isPrimary )
+                           {
+                              newPlane->zOrder += planeRes->count_planes;
+                           }
+                           else if ( isGraphics && !isVideo )
+                           {
+                              newPlane->zOrder += planeRes->count_planes*2;
+                           }
+                        }
+                        else
+                        {
+                           newPlane->zOrder= n + zpos*16+((isVideo && !isGraphics) ? 0 : 256);
+                        }
                         newPlane->inUse= false;
                         newPlane->crtc_id= ctx->enc->crtc_id;
                         for( i= 0; i < ACTIVE_FRAMES; ++i )
@@ -5161,6 +5186,12 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                   wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
                                         nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
                                         "IN_FENCE_FD", -1 );
+                  if ( ctx->useZPos )
+                  {
+                     wstAtomicAddProperty( ctx, req, nw->windowPlane->plane->plane_id,
+                                           nw->windowPlane->planeProps->count_props, nw->windowPlane->planePropRes,
+                                           "zpos", nw->windowPlane->zOrder );
+                  }
                }
             }
          }
@@ -5334,6 +5365,12 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                   wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
                                         iter->planeProps->count_props, iter->planePropRes,
                                         "IN_FENCE_FD", -1 );
+                  if ( ctx->useZPos )
+                  {
+                     wstAtomicAddProperty( ctx, req, iter->plane->plane_id,
+                                           iter->planeProps->count_props, iter->planePropRes,
+                                           "zpos", iter->zOrder );
+                  }
 
                   FRAME("commit frame %d buffer %d", iter->videoFrame[FRAME_CURR].frameNumber, iter->videoFrame[FRAME_CURR].bufferId);
                   avProgLog( iter->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", "");
