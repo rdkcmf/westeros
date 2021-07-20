@@ -165,6 +165,7 @@ static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
 static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h );
 static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, int vh );
@@ -2119,6 +2120,10 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
          wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
          wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
          wl_surface_commit( sink->surface );
+      }
+      if ( sink->soc.videoPaused )
+      {
+         wstSendRectVideoClientConnection(sink->soc.conn);
       }
    }
 }
@@ -5474,6 +5479,11 @@ capture_start:
             UNLOCK(sink);
          }
          wasPaused= true;
+         if ( sink->windowChange )
+         {
+            sink->windowChange= false;
+            gst_westeros_sink_soc_update_video_position( sink );
+         }
 
          if ( sink->soc.pauseException )
          {

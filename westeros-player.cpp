@@ -22,6 +22,9 @@
 #include <string.h>
 #include <signal.h>
 #include <gst/gst.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "wayland-client.h"
 
@@ -45,6 +48,7 @@ typedef struct _AppCtx
    bool useLowDelay;
    int latencyTarget;
    bool useSecureVideo;
+   bool useRawSink;
    gfloat rate;
    gfloat zorder;
    bool needToAddStateTimer;
@@ -57,6 +61,8 @@ typedef struct _AppCtx
    int outputWidth;
    int outputHeight;
 } AppCtx;
+
+static AppCtx *g_ctx= 0;
 
 static void showUsage()
 {
@@ -207,6 +213,7 @@ gboolean stateChangeTimerTimeout( gpointer userData )
             {
                g_print("Error: unable to set rate\n");
                g_main_loop_quit( ctx->loop );
+               g_ctx= 0;
             }
             else
             {
@@ -216,6 +223,7 @@ gboolean stateChangeTimerTimeout( gpointer userData )
                {
                   g_print("Error: unable to move to PLAYING\n");
                   g_main_loop_quit( ctx->loop );
+                  g_ctx= 0;
                }
             }
             goto exit;
@@ -246,6 +254,7 @@ gboolean stateChangeTimerTimeout( gpointer userData )
                {
                   g_print("Error: unable to move to PLAYING\n");
                   g_main_loop_quit( ctx->loop );
+                  g_ctx= 0;
                }
                goto exit;
             }
@@ -297,11 +306,13 @@ static gboolean busCallback(GstBus *bus, GstMessage *message, gpointer data)
             g_error_free(error);
             g_free(debug);
             g_main_loop_quit( ctx->loop );
+            g_ctx= 0;
          }
          break;
      case GST_MESSAGE_EOS:
          g_print( "EOS ctx %p\n", ctx );
          g_main_loop_quit( ctx->loop );
+         g_ctx= 0;
          break;
      default:
          break;
@@ -340,11 +351,23 @@ bool createPipeline( AppCtx *ctx )
    }
    gst_object_ref( ctx->player );
 
-   ctx->westerossink= gst_element_factory_make( "westerossink", "vsink" );
-   if ( !ctx->westerossink )
+   if ( ctx->useRawSink )
    {
-      printf("Error: unable to create westerossink instance\n" );
-      goto exit;
+      ctx->westerossink= gst_element_factory_make( "westerosrawsink", "vsink" );
+      if ( !ctx->westerossink )
+      {
+         printf("Error: unable to create westerosrawsink instance\n" );
+         goto exit;
+      }
+   }
+   else
+   {
+      ctx->westerossink= gst_element_factory_make( "westerossink", "vsink" );
+      if ( !ctx->westerossink )
+      {
+         printf("Error: unable to create westerossink instance\n" );
+         goto exit;
+      }
    }
    gst_object_ref( ctx->westerossink );
 
@@ -433,8 +456,6 @@ void destroyPipeline( AppCtx *ctx )
    }
 }
 
-static AppCtx *g_ctx= 0;
-
 static void signalHandler(int signum)
 {
    printf("signalHandler: signum %d\n", signum);
@@ -473,6 +494,7 @@ int main( int argc, char **argv )
    bool useSecureVideo= false;
    bool stepVideo= false;
    bool videoPeek= false;
+   bool useRawSink= false;
    gfloat rate= 1.0f;
    gfloat zorder= 0.0f;
    const char *videoRect= 0;
@@ -552,6 +574,9 @@ int main( int argc, char **argv )
                   }
                }
                break;
+            case 'a':
+               useRawSink= true;
+               break;
             case '?':
                showUsage();
                goto exit;
@@ -596,6 +621,7 @@ int main( int argc, char **argv )
    ctx->useLowDelay= useLowDelay;
    ctx->latencyTarget= latencyTarget;
    ctx->useSecureVideo= useSecureVideo;
+   ctx->useRawSink= useRawSink;
    ctx->videoRectOverride= videoRect;
    ctx->stepVideo= stepVideo;
    ctx->videoPeek= videoPeek;
@@ -657,7 +683,38 @@ int main( int argc, char **argv )
 
             g_ctx= ctx;
 
-            g_main_loop_run( ctx->loop );
+            while( g_ctx )
+            {
+               struct stat finfo;
+               if ( stat( "/tmp/wp-pause", &finfo ) == 0 )
+               {
+                  remove( "/tmp/wp-pause" );
+                  gst_element_set_state(ctx->pipeline, GST_STATE_PAUSED);
+               }
+               else if ( stat( "/tmp/wp-play", &finfo ) == 0 )
+               {
+                  remove( "/tmp/wp-play" );
+                  gst_element_set_state(ctx->pipeline, GST_STATE_PLAYING);
+               }
+               else if ( stat( "/tmp/wp-zoom", &finfo ) == 0 )
+               {
+                  static bool full= true;
+                  char work[32];
+                  remove( "/tmp/wp-zoom" );
+                  if ( full )
+                  {
+                     sprintf( work, "%d,%d,%d,%d", 200, 200, 640, 360 );
+                  }
+                  else
+                  {
+                     sprintf( work, "%d,%d,%d,%d", 0, 0, ctx->outputWidth, ctx->outputHeight );
+                  }
+                  full= !full;
+                  g_object_set(G_OBJECT(ctx->westerossink), "window-set", work, NULL );
+               }
+               usleep( 10000 );
+               g_main_context_iteration( NULL, FALSE );
+            }
          }
 
          if ( ctx->timerId )

@@ -111,6 +111,7 @@ static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bo
 static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSetSessionInfo( GstWesterosSink *sink );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, bool pause );
 static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn );
 static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *conn );
@@ -804,6 +805,7 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
       sink->soc.updateSession= TRUE;
    }
    UNLOCK( sink );
+   wstSendPauseVideoClientConnection( sink->soc.conn, false );
 
    return TRUE;
 }
@@ -814,6 +816,8 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
    sink->soc.videoPlaying= FALSE;
    sink->soc.videoPaused= TRUE;
    UNLOCK( sink );
+
+   wstSendPauseVideoClientConnection( sink->soc.conn, true );
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
    {
@@ -1377,15 +1381,6 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                }
                if ( sink->soc.conn )
                {
-                  if ( sink->windowChange )
-                  {
-                     sink->windowChange= false;
-                     gst_westeros_sink_soc_update_video_position( sink );
-                     if ( !sink->soc.captureEnabled )
-                     {
-                        wstSendRectVideoClientConnection(sink->soc.conn);
-                     }
-                  }
                   if ( sink->soc.showChanged )
                   {
                      sink->soc.showChanged= FALSE;
@@ -1558,6 +1553,10 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
          wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
          wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
          wl_surface_commit( sink->surface );
+      }
+      if ( sink->soc.videoPaused )
+      {
+         wstSendRectVideoClientConnection(sink->soc.conn);
       }
    }
 }
@@ -2378,6 +2377,50 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
    }
 }
 
+static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, bool pause )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[7];
+      int len;
+      int sentLen;
+
+      LOCK_CONN( conn );
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 2;
+      mbody[len++]= 'P';
+      mbody[len++]= (pause ? 1 : 0);
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent pause %d to video server", pause);
+         FRAME("sent pause %d to video server", pause);
+      }
+      UNLOCK_CONN( conn );
+   }
+}
+
 static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn )
 {
    if ( conn )
@@ -2873,6 +2916,12 @@ static gpointer wstEOSDetectionThread(gpointer data)
          videoPlaying= sink->soc.videoPlaying;
          eosEventSeen= sink->eosEventSeen;
          UNLOCK(sink)
+
+         if ( sink->windowChange )
+         {
+            sink->windowChange= false;
+            gst_westeros_sink_soc_update_video_position( sink );
+         }
 
          if ( videoPlaying && eosEventSeen && (outputFrameCount == count) )
          {

@@ -2903,6 +2903,16 @@ static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, i
       VideoFrame *vf= &vfm->queue[i];
       wstSetVideoFrameRect( vf, rectX, rectY, rectW, rectH, NULL, NULL );
    }
+   if ( vfm->paused )
+   {
+      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectX= rectX;
+      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectY= rectY;
+      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectW= rectW;
+      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectH= rectH;
+      gCtx->forceDirty= true;
+      vfm->conn->videoPlane->dirty= true;
+      vfm->conn->videoPlane->readyToFlip= true;
+   }
 }
 
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f )
@@ -5207,37 +5217,51 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
       {
          if ( iter->dirty && iter->readyToFlip )
          {
-            if ( iter->videoFrame[FRAME_NEXT].fbId )
+            if ( iter->videoFrame[FRAME_NEXT].fbId ||
+                 (iter->vfm->paused && (iter->videoFrame[FRAME_CURR].fbId > 0)) )
             {
-               uint32_t fbId= iter->videoFrame[FRAME_NEXT].fbId;
-               uint32_t handle0= iter->videoFrame[FRAME_NEXT].handle0;
-               uint32_t handle1= iter->videoFrame[FRAME_NEXT].handle1;
-               int fd0= iter->videoFrame[FRAME_NEXT].fd0;
-               int fd1= iter->videoFrame[FRAME_NEXT].fd1;
-               int fd2= iter->videoFrame[FRAME_NEXT].fd2;
-               uint32_t frameWidth= iter->videoFrame[FRAME_NEXT].frameWidthVisible;
-               uint32_t frameHeight= iter->videoFrame[FRAME_NEXT].frameHeightVisible;
-               int rectX= iter->videoFrame[FRAME_NEXT].rectX;
-               int rectY= iter->videoFrame[FRAME_NEXT].rectY;
-               int rectW= iter->videoFrame[FRAME_NEXT].rectW;
-               int rectH= iter->videoFrame[FRAME_NEXT].rectH;
-               int bufferId= iter->videoFrame[FRAME_NEXT].bufferId;
+               uint32_t fbId, frameWidth, frameHeight;
+               int rectX, rectY, rectW, rectH;
+               int bufferId;
                uint32_t sx, sy, sw, sh, dx, dy, dw, dh;
                int modeWidth, modeHeight, gfxWidth, gfxHeight;
 
-               iter->videoFrame[FRAME_FREE]= iter->videoFrame[FRAME_PREV];
-               iter->videoFrame[FRAME_PREV]= iter->videoFrame[FRAME_CURR];
-               iter->videoFrame[FRAME_CURR]= iter->videoFrame[FRAME_NEXT];
+               if ( iter->videoFrame[FRAME_NEXT].fbId )
+               {
+                  fbId= iter->videoFrame[FRAME_NEXT].fbId;
+                  frameWidth= iter->videoFrame[FRAME_NEXT].frameWidthVisible;
+                  frameHeight= iter->videoFrame[FRAME_NEXT].frameHeightVisible;
+                  rectX= iter->videoFrame[FRAME_NEXT].rectX;
+                  rectY= iter->videoFrame[FRAME_NEXT].rectY;
+                  rectW= iter->videoFrame[FRAME_NEXT].rectW;
+                  rectH= iter->videoFrame[FRAME_NEXT].rectH;
+                  bufferId= iter->videoFrame[FRAME_NEXT].bufferId;
 
-               iter->videoFrame[FRAME_NEXT].fbId= 0;
-               iter->videoFrame[FRAME_NEXT].handle0= 0;
-               iter->videoFrame[FRAME_NEXT].handle1= 0;
-               iter->videoFrame[FRAME_NEXT].fd0= -1;
-               iter->videoFrame[FRAME_NEXT].fd1= -1;
-               iter->videoFrame[FRAME_NEXT].fd2= -1;
-               iter->videoFrame[FRAME_NEXT].hide= false;
-               iter->videoFrame[FRAME_NEXT].hidden= false;
-               iter->videoFrame[FRAME_NEXT].vf= 0;
+                  iter->videoFrame[FRAME_FREE]= iter->videoFrame[FRAME_PREV];
+                  iter->videoFrame[FRAME_PREV]= iter->videoFrame[FRAME_CURR];
+                  iter->videoFrame[FRAME_CURR]= iter->videoFrame[FRAME_NEXT];
+
+                  iter->videoFrame[FRAME_NEXT].fbId= 0;
+                  iter->videoFrame[FRAME_NEXT].handle0= 0;
+                  iter->videoFrame[FRAME_NEXT].handle1= 0;
+                  iter->videoFrame[FRAME_NEXT].fd0= -1;
+                  iter->videoFrame[FRAME_NEXT].fd1= -1;
+                  iter->videoFrame[FRAME_NEXT].fd2= -1;
+                  iter->videoFrame[FRAME_NEXT].hide= false;
+                  iter->videoFrame[FRAME_NEXT].hidden= false;
+                  iter->videoFrame[FRAME_NEXT].vf= 0;
+               }
+               else
+               {
+                  fbId= iter->videoFrame[FRAME_CURR].fbId;
+                  frameWidth= iter->videoFrame[FRAME_CURR].frameWidthVisible;
+                  frameHeight= iter->videoFrame[FRAME_CURR].frameHeightVisible;
+                  rectX= iter->videoFrame[FRAME_CURR].rectX;
+                  rectY= iter->videoFrame[FRAME_CURR].rectY;
+                  rectW= iter->videoFrame[FRAME_CURR].rectW;
+                  rectH= iter->videoFrame[FRAME_CURR].rectH;
+                  bufferId= iter->videoFrame[FRAME_CURR].bufferId;
+               }
 
                iter->plane->crtc_id= ctx->overlayPlanes.primary->crtc_id;
 
