@@ -164,6 +164,7 @@ libwesteros_compositor_la_include_HEADERS = \
    westeros-version.h \
    westeros-render.h \
    protocol/vpc-client-protocol.h
+libwesteros_compositor_la_DEPENDENCIES =
 libwesteros_compositor_la_includedir = $(includedir)
 libwesteros_compositor_la_CXXFLAGS = $(AM_CXXFLAGS) -I$(srcdir)/protocol
 libwesteros_compositor_la_LDFLAGS= \
@@ -195,12 +196,14 @@ libwesteros_compositor_la_LDFLAGS += -lwesteros_simplebuffer_server
 endif
 
 if ENABLE_WESTEROS_LDBPROTOCOL
+libwesteros_compositor_la_DEPENDENCIES += libwesteros_linux_dmabuf_server.la
 libwesteros_compositor_la_LDFLAGS += -lwesteros_linux_dmabuf_server
 endif
 
 ## --- Renderer: OpenGL -------
 libwesteros_render_gl_la_SOURCES = westeros-render-gl.cpp
 libwesteros_render_gl_la_includedir = $(includedir)
+libwesteros_render_gl_la_DEPENDENCIES =
 if !ENABLE_PLATFORM_EMBEDDED
 libwesteros_render_gl_la_LDFLAGS= $(WSTEGL_LIBS) -lEGL -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
 else
@@ -210,11 +213,13 @@ if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_gl_la_LDFLAGS += -lwesteros_simplebuffer_server
 endif
 if ENABLE_WESTEROS_LDBPROTOCOL
+libwesteros_render_gl_la_DEPENDENCIES += libwesteros_linux_dmabuf_server.la
 libwesteros_render_gl_la_LDFLAGS += -lwesteros_linux_dmabuf_server
 endif
 
 ## --- Renderer: Embedded -------
 libwesteros_render_embedded_la_SOURCES = westeros-render-embedded.cpp
+libwesteros_render_embedded_la_DEPENDENCIES =
 libwesteros_render_embedded_la_includedir = $(includedir)
 if !ENABLE_PLATFORM_EMBEDDED
 libwesteros_render_embedded_la_LDFLAGS= -lEGL -lglut -lGL -lGLEW $(WAYLAND_SERVER_LIBS)
@@ -225,6 +230,7 @@ if ENABLE_WESTEROS_SBPROTOCOL
 libwesteros_render_embedded_la_LDFLAGS += -lwesteros_simplebuffer_server
 endif
 if ENABLE_WESTEROS_LDBPROTOCOL
+libwesteros_render_embedded_la_DEPENDENCIES += libwesteros_linux_dmabuf_server.la
 libwesteros_render_embedded_la_LDFLAGS += -lwesteros_linux_dmabuf_server
 endif
 
