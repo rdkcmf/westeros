@@ -5449,6 +5449,7 @@ capture_start:
          sink->soc.frameRateFractionNum= 0;
          sink->soc.frameRateFractionDenom= 1;
          sink->soc.frameRateChanged= TRUE;
+         sink->queryPositionFromPeer= FALSE;
       }
    }
 
