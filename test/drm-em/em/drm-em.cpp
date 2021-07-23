@@ -4056,6 +4056,24 @@ int drmModeCreatePropertyBlob( int fd, const void *data, size_t size, uint32_t *
    return rc;
 }
 
+int drmModeDestroyPropertyBlob(int fd, uint32_t id)
+{
+   int rc= -1;
+   EMDevice *dev= 0;
+
+   TRACE1("drmModeDestroyPropertyBlob");
+   dev= EMDrmGetDevice(fd);
+   if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
+   {
+      if ( id <= dev->dev.drm.nextId )
+      {
+         rc= 0;
+      }
+   }
+
+   return rc;
+}
+
 int drmModeAtomicCommit( int fd, drmModeAtomicReqPtr req, uint32_t flags, void *user_data )
 {
    int rc= -1;

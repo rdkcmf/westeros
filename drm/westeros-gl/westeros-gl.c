@@ -4935,6 +4935,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
    int rc;
    drmModeAtomicReq *req;
    uint32_t flags= 0;
+   uint32_t blobId= 0;
    struct gbm_surface* gs;
    struct gbm_bo *bo;
    uint32_t handle, stride;
@@ -4992,8 +4993,6 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
    else
    if ( !ctx->modeSet )
    {
-      uint32_t blobId= 0;
-
       flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
       wstAtomicAddProperty( ctx, req, ctx->conn->connector_id,
                             ctx->connectorProps->count_props, ctx->connectorPropRes,
@@ -5437,6 +5436,14 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
 exit:
 
    TRACE3("wstSwapDRMBuffersAtomic: atomic stop");
+   if ( blobId )
+   {
+      rc= drmModeDestroyPropertyBlob(ctx->drmFd, blobId);
+      if ( rc )
+      {
+         ERROR("drmModeDestroyPropertyBlob failed: rc %d errno %d", rc, errno );
+      }
+   }
    if ( req )
    {
       drmModeAtomicFree( req );
