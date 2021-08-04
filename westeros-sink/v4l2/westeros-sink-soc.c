@@ -2538,8 +2538,8 @@ static void wstProcessEvents( GstWesterosSink *sink )
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQEVENT, &event );
    if ( rc == 0 )
    {
-      if ( (event.type & V4L2_EVENT_SOURCE_CHANGE) &&
-           (event.u.src_change.changes == V4L2_EVENT_SRC_CH_RESOLUTION) )
+      if ( (event.type == V4L2_EVENT_SOURCE_CHANGE) &&
+           (event.u.src_change.changes & V4L2_EVENT_SRC_CH_RESOLUTION) )
       {
          struct v4l2_format fmtIn, fmtOut;
          int32_t bufferType;
@@ -2610,7 +2610,7 @@ static void wstProcessEvents( GstWesterosSink *sink )
             sink->soc.needCaptureRestart= TRUE;
          }
       }
-      if ( event.type & V4L2_EVENT_EOS )
+      else if ( event.type == V4L2_EVENT_EOS )
       {
          g_print("westeros-sink: v4l2 eos event\n");
          sink->soc.decoderEOS= 1;
