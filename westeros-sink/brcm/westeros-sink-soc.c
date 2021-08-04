@@ -1778,10 +1778,11 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
             shutdown( fd, SHUT_RDWR );
          }
       }
-      UNLOCK( sink );
-      g_thread_join( sink->soc.captureThread );
-      LOCK( sink );
+      GThread *captureThread= sink->soc.captureThread;
       sink->soc.captureThread= NULL;
+      UNLOCK( sink );
+      g_thread_join( captureThread );
+      LOCK( sink );
    }
 
    if ( sink->soc.sb )
