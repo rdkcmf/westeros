@@ -2671,12 +2671,13 @@ static void updateVideoStatus( GstWesterosSink *sink )
       else if ( !flushStarted )
       {
          LOCK( sink );
-         if ( (videoStatus.firstPtsPassed || videoStatus.numDecoded > sink->soc.numDecoded) && (sink->currentPTS/2 != videoStatus.pts) )
+         if ( (videoStatus.firstPtsPassed && videoStatus.numDecoded > sink->soc.numDecoded) && (sink->currentPTS/2 != videoStatus.pts) )
          {
             if (sink->soc.frameCount == 0)
             {
                emitFirstFrame= TRUE;
             }
+            sink->soc.numDecoded= videoStatus.numDecoded;
             sink->soc.frameCount++;
          }
          UNLOCK( sink );
