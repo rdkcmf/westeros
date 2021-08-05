@@ -1557,6 +1557,10 @@ static bool essRMReadConfigFile( EssRMgr *rm )
    result= true;
 
 exit:
+   if ( pFile )
+   {
+      fclose( pFile );
+   }
    return result;
 }
 

@@ -4628,6 +4628,10 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
    result= true;
 
 exit:
+   if ( pFile )
+   {
+      fclose( pFile );
+   }
    return result;
 }
 
