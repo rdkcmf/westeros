@@ -1999,6 +1999,13 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
       gst_westeros_sink_eos_detected( sink );
       return;
    }
+   GST_DEBUG("hasEOSEvents %d frameInCount %d", sink->soc.hasEOSEvents, sink->soc.frameInCount);
+   if ( !sink->soc.hasEOSEvents || (sink->soc.frameInCount <= 2) )
+   {
+      GST_DEBUG("set decoderEOS");
+      sink->soc.decoderEOS= 1;
+   }
+   else
    {
       int rc;
       struct v4l2_decoder_cmd dcmd;
@@ -2011,10 +2018,6 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
       if ( rc )
       {
          GST_DEBUG("VIDIOC_DECODER_CMD V4L2_DEC_CMD_STOP rc %d errno %d",rc, errno);
-      }
-      if ( !sink->soc.hasEOSEvents )
-      {
-         sink->soc.decoderEOS= 1;
       }
    }
 }
