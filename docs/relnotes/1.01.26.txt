@@ -1,0 +1,76 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.26 Release Notes
+------------------------------
+
+Date: Aug 9, 2021
+Tag: Westeros-1.01.26
+Changes:
+
+
+* drm: allow refresh lock on rpi
+
+* raw: update vpc geometry on aspect/zoom changes
+
+* v4l2, raw: fix crash without compositor connection
+
+* sink: brcm: fix race condition for start video
+
+* essos: avoid unnecessary dispatch call
+
+* v4l2: add support for auto dw mode
+
+* sink: brcm,v4l2: use g_error_new_literal instead of g_error_new
+
+* drm, v4l2 updates:
+
+-use v4l2 decoder stop command and eos events
+-adjust underflow detection when applied_rate is not 1.0
+-ensure vmaster mode used when applied_rate is not 1.0
+
+* drm: auto frm updates:
+
+-for Amlogic SOC interpret modes rate 47 as 47.95 and 59 as 59.94
+
+* drm: updates for rpi:
+
+-ensure primary plane is used for graphics
+-use zpos to place primary plane above video
+
+* drm, v4l2, raw: support altering video rect while paused
+
+* core: update dependencies for linux dmabuf protocol
+
+* v4l2: force local position reporting if applied_rate is not 1.0
+
+* drm: fix mode resoure blob leak
+
+* v4l2: use bit masking to check for event types
+
+* brcm: fix capture thread join race condition
+
+* v4l2: use bitmasking to check source change type
+
+-correct previous change 'v4l2: use bit masking to check for event types' which
+incorreclty used bitmasking on event types
+
+* brcm: fix early spurious first frame signal while paused
+
+* erm: add missing file close reading config
+
+* v4l2: don't issue decoder stop with no queued frame data
+
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
