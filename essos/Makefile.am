@@ -32,6 +32,10 @@ bin_PROGRAMS += essos-sample-resmgr
 BUILT_SOURCES += libessosrmgr.la
 endif
 
+pcfiles = essos.pc
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = $(pcfiles)
+
 libessos_la_SOURCES = essos.cpp
 libessos_la_include_HEADERS = essos.h essos-app.h essos-system.h essos-game.h
 libessos_la_includedir = $(includedir)
@@ -60,12 +64,8 @@ if HAVE_EGL
 libessos_la_CXXFLAGS += ${EGL_CFLAGS}
 endif
 
-if NO_WESTEROS
-libessos_la_CXXFLAGS += $(WESTEROS_CFLAGS)
-else
-libessos_la_CXXFLAGS += -DHAVE_WESTEROS $(WESTEROS_CFLAGS)
-libessos_la_LDFLAGS += -lwesteros_gl -lwesteros_simpleshell_client
-endif
+libessos_la_CXXFLAGS += $(LIB_ESSOS_EXTRA_CFLAGS) $(WESTEROS_CFLAGS)
+libessos_la_LDFLAGS += $(LIB_ESSOS_EXTRA_LIBS)
 
 essos_sample_SOURCES = essos-sample.cpp
 essos_sample_CXXFLAGS = ${AM_CXXFLAGS}
@@ -77,6 +77,9 @@ essos_sample_LDFLAGS = $(AM_FLAGS) -lessos -lGLESv2
 essos_sample_resmgr_SOURCES = essos-sample-resmgr.cpp
 essos_sample_resmgr_CXXFLAGS = ${AM_CXXFLAGS}
 essos_sample_resmgr_LDFLAGS = $(AM_FLAGS) -lessosrmgr
+
+DISTCLEANFILES = $(pcinfiles:.in=)
+EXTRA_DIST = $(pcinfiles)
 
 ## IPK Generation Support
 IPK_GEN_PATH = $(abs_top_builddir)/ipk

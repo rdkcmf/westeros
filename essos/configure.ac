@@ -40,6 +40,7 @@ AC_CHECK_HEADERS([stdlib.h string.h unistd.h])
 # Checks for typedefs, structures, and compiler characteristics.
 AC_TYPE_SIZE_T
 AC_HEADER_STDBOOL
+AX_PTHREAD
 
 # Checks for library functions.
 #Add the subdirectories to be considered for building.
@@ -80,7 +81,16 @@ AC_ARG_ENABLE([essosresmgrfree],
    esac],[essosresmgrfree=false])
 AM_CONDITIONAL([NO_RESMGR], [test x$essosresmgrfree = xtrue])
 
-AC_CONFIG_FILES([Makefile])
+LIB_ESSOS_EXTRA_CFLAG=""
+LIB_ESSOS_EXTRA_LIBS=""
+if test "x$essoswesterosfree" != xtrue; then
+  LIB_ESSOS_EXTRA_CFLAGS="-DHAVE_WESTEROS"
+  LIB_ESSOS_EXTRA_LIBS="-lwesteros_gl -lwesteros_simpleshell_client"
+fi
+AC_SUBST(LIB_ESSOS_EXTRA_CFLAGS)
+AC_SUBST(LIB_ESSOS_EXTRA_LIBS)
+
+AC_CONFIG_FILES([Makefile essos.pc])
 AC_SUBST(HAVE_EGL)
 AC_SUBST(HAVE_WAYLAND)
 AC_SUBST(HAVE_WAYLAND_EGL)
