@@ -24,7 +24,7 @@
 #define ESSRMGR_MAGIC (((('E')&0xFF) << 24)|((('S')&0xFF) << 16)|((('R')&0xFF) << 8)|(('M')&0xFF))
 #define ESSRMGR_VERSION (0x010000)
 
-#define ESSRMGR_FILE_SIZE (2*ESSRMGR_MAX_ITEMS*2048)
+#define ESSRMGR_FILE_SIZE (3*ESSRMGR_MAX_ITEMS*2048)
 
 typedef struct _EssRMgrUserNotify
 {
