@@ -1929,6 +1929,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.decoderLastFrame= 0;
    sink->soc.decoderEOS= 0;
    sink->soc.videoStartTime= 0;
+   sink->soc.prerollBuffer= 0;
    wstFlushPixelAspectRatio( sink, false );
    #ifdef USE_GST_AFD
    wstFlushAFDInfo( sink, false );
