@@ -71,6 +71,15 @@ AC_ARG_ENABLE([essoswesterosfree],
    esac],[essoswesterosfree=false])
 AM_CONDITIONAL([NO_WESTEROS], [test x$essoswesterosfree = xtrue])
 
+AC_ARG_ENABLE([essosresmgrfree],
+  [ --enable-essosresmgrfree   Build Essos without resmgr],
+  [ case "${enableval}" in
+    yes) essosresmgrfree=true ;;
+    no)  essosresmgrfree=false ;;
+    *) AC_MSG_ERROR([bad value ${enableval} for --enable-essosresmgrfree]) ;;
+   esac],[essosresmgrfree=false])
+AM_CONDITIONAL([NO_RESMGR], [test x$essosresmgrfree = xtrue])
+
 AC_CONFIG_FILES([Makefile])
 AC_SUBST(HAVE_EGL)
 AC_SUBST(HAVE_WAYLAND)

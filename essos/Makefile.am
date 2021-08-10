@@ -20,11 +20,17 @@
 AUTOMAKE_OPTIONS = subdir-objects
 ACLOCAL_AMFLAGS = -I .
 
-lib_LTLIBRARIES = libessos.la libessosrmgr.la
+lib_LTLIBRARIES = libessos.la
 
-bin_PROGRAMS = essos-sample essos-sample-resmgr
+bin_PROGRAMS = essos-sample
 
-BUILT_SOURCES= libessos.la libessosrmgr.la
+BUILT_SOURCES= libessos.la
+
+if !NO_RESMGR
+lib_LTLIBRARIES += libessosrmgr.la
+bin_PROGRAMS += essos-sample-resmgr
+BUILT_SOURCES += libessosrmgr.la
+endif
 
 libessos_la_SOURCES = essos.cpp
 libessos_la_include_HEADERS = essos.h essos-app.h essos-system.h essos-game.h
