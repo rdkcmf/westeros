@@ -5849,7 +5849,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
 {
    GstWesterosSink *sink= (GstWesterosSink*)data;
    int outputFrameCount, count, eosCountDown;
-   int decoderEOS, decodeCount, displayCount;
+   int decoderEOS, displayCount;
    bool videoPlaying;
    bool eosEventSeen;
    double frameRate;
@@ -5869,14 +5869,13 @@ static gpointer wstEOSDetectionThread(gpointer data)
       {
          LOCK(sink)
          count= sink->soc.frameOutCount;
-         decodeCount= sink->soc.frameDecodeCount;
          displayCount= sink->soc.frameDisplayCount + sink->soc.numDropped;
          decoderEOS= sink->soc.decoderEOS;
          videoPlaying= sink->soc.videoPlaying;
          eosEventSeen= sink->eosEventSeen;
          UNLOCK(sink)
 
-         if ( videoPlaying && eosEventSeen && decoderEOS && (decodeCount == displayCount) && (outputFrameCount == count) )
+         if ( videoPlaying && eosEventSeen && decoderEOS && (count == displayCount) && (outputFrameCount == count) )
          {
             --eosCountDown;
             if ( eosCountDown == 0 )
