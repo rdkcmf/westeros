@@ -2537,87 +2537,98 @@ static void wstProcessEvents( GstWesterosSink *sink )
 
    LOCK(sink);
 
-   memset( &event, 0, sizeof(event));
-
-   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQEVENT, &event );
-   if ( rc == 0 )
+   for( ; ; )
    {
-      if ( (event.type == V4L2_EVENT_SOURCE_CHANGE) &&
-           (event.u.src_change.changes & V4L2_EVENT_SRC_CH_RESOLUTION) )
+      memset( &event, 0, sizeof(event));
+
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQEVENT, &event );
+      if ( rc == 0 )
       {
-         struct v4l2_format fmtIn, fmtOut;
-         int32_t bufferType;
-
-         avProgLog( 0, 0, "DtoS", "source change start");
-         g_print("westeros-sink: source change event\n");
-         memset( &fmtIn, 0, sizeof(fmtIn));
-         bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
-         fmtIn.type= bufferType;
-         rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &fmtIn );
-
-         if ( (sink->soc.isMultiPlane && fmtIn.fmt.pix_mp.field == V4L2_FIELD_INTERLACED) ||
-              (!sink->soc.isMultiPlane && fmtIn.fmt.pix.field == V4L2_FIELD_INTERLACED) )
+         if ( (event.type == V4L2_EVENT_SOURCE_CHANGE) &&
+              (event.u.src_change.changes & V4L2_EVENT_SRC_CH_RESOLUTION) )
          {
-            if ( !sink->soc.interlaced )
+            struct v4l2_format fmtIn, fmtOut;
+            int32_t bufferType;
+
+            avProgLog( 0, 0, "DtoS", "source change start");
+            g_print("westeros-sink: source change event\n");
+            memset( &fmtIn, 0, sizeof(fmtIn));
+            bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
+            fmtIn.type= bufferType;
+            rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &fmtIn );
+
+            if ( (sink->soc.isMultiPlane && fmtIn.fmt.pix_mp.field == V4L2_FIELD_INTERLACED) ||
+                 (!sink->soc.isMultiPlane && fmtIn.fmt.pix.field == V4L2_FIELD_INTERLACED) )
             {
-               GST_DEBUG("v4l2 driver indicates content is interlaced, but caps did not : using interlaced");
+               if ( !sink->soc.interlaced )
+               {
+                  GST_DEBUG("v4l2 driver indicates content is interlaced, but caps did not : using interlaced");
+               }
+               sink->soc.interlaced= TRUE;
             }
-            sink->soc.interlaced= TRUE;
+            GST_DEBUG("source is interlaced: %d", sink->soc.interlaced);
+
+            memset( &fmtOut, 0, sizeof(fmtOut));
+            bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
+            fmtOut.type= bufferType;
+            rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &fmtOut );
+
+            if ( (sink->soc.numBuffersOut == 0) ||
+                 (sink->soc.isMultiPlane &&
+                   ( (fmtOut.fmt.pix_mp.width != sink->soc.fmtOut.fmt.pix_mp.width) ||
+                     (fmtOut.fmt.pix_mp.height != sink->soc.fmtOut.fmt.pix_mp.height) ) ) ||
+                 (!sink->soc.isMultiPlane &&
+                   ( (fmtOut.fmt.pix.width != sink->soc.fmtOut.fmt.pix.width) ||
+                     (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) ||
+                 (sink->soc.frameOutCount > 0) )
+            {
+               int vx, vy, vw, vh;
+               wstTearDownOutputBuffers( sink );
+
+               if ( sink->soc.isMultiPlane )
+               {
+                  sink->soc.frameWidth= fmtOut.fmt.pix_mp.width;
+                  sink->soc.frameHeight= fmtOut.fmt.pix_mp.height;
+               }
+               else
+               {
+                  sink->soc.frameWidth= fmtOut.fmt.pix.width;
+                  sink->soc.frameHeight= fmtOut.fmt.pix.height;
+               }
+               #ifdef WESTEROS_SINK_SVP
+               wstSVPSetInputMemMode( sink, sink->soc.inputMemMode );
+               #endif
+               wstSetupOutput( sink );
+
+               if ( sink->soc.havePixelAspectRatio )
+               {
+                  sink->soc.pixelAspectRatioChanged= TRUE;
+                  sink->soc.pixelAspectRatio= wstPopPixelAspectRatio( sink );
+               }
+               if ( needBounds(sink) && sink->vpcSurface )
+               {
+                   wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
+                   wstSetTextureCrop( sink, vx, vy, vw, vh );
+               }
+               sink->soc.nextFrameFd= -1;
+               sink->soc.prevFrame1Fd= -1;
+               sink->soc.prevFrame2Fd= -1;
+               sink->soc.needCaptureRestart= TRUE;
+            }
          }
-         GST_DEBUG("source is interlaced: %d", sink->soc.interlaced);
-
-         memset( &fmtOut, 0, sizeof(fmtOut));
-         bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
-         fmtOut.type= bufferType;
-         rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_FMT, &fmtOut );
-
-         if ( (sink->soc.numBuffersOut == 0) ||
-              (sink->soc.isMultiPlane &&
-                ( (fmtOut.fmt.pix_mp.width != sink->soc.fmtOut.fmt.pix_mp.width) ||
-                  (fmtOut.fmt.pix_mp.height != sink->soc.fmtOut.fmt.pix_mp.height) ) ) ||
-              (!sink->soc.isMultiPlane &&
-                ( (fmtOut.fmt.pix.width != sink->soc.fmtOut.fmt.pix.width) ||
-                  (fmtOut.fmt.pix.height != sink->soc.fmtOut.fmt.pix.height) ) ) ||
-              (sink->soc.frameOutCount > 0) )
+         else if ( event.type == V4L2_EVENT_EOS )
          {
-            int vx, vy, vw, vh;
-            wstTearDownOutputBuffers( sink );
-
-            if ( sink->soc.isMultiPlane )
-            {
-               sink->soc.frameWidth= fmtOut.fmt.pix_mp.width;
-               sink->soc.frameHeight= fmtOut.fmt.pix_mp.height;
-            }
-            else
-            {
-               sink->soc.frameWidth= fmtOut.fmt.pix.width;
-               sink->soc.frameHeight= fmtOut.fmt.pix.height;
-            }
-            #ifdef WESTEROS_SINK_SVP
-            wstSVPSetInputMemMode( sink, sink->soc.inputMemMode );
-            #endif
-            wstSetupOutput( sink );
-
-            if ( sink->soc.havePixelAspectRatio )
-            {
-               sink->soc.pixelAspectRatioChanged= TRUE;
-               sink->soc.pixelAspectRatio= wstPopPixelAspectRatio( sink );
-            }
-            if ( needBounds(sink) && sink->vpcSurface )
-            {
-                wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
-                wstSetTextureCrop( sink, vx, vy, vw, vh );
-            }
-            sink->soc.nextFrameFd= -1;
-            sink->soc.prevFrame1Fd= -1;
-            sink->soc.prevFrame2Fd= -1;
-            sink->soc.needCaptureRestart= TRUE;
+            g_print("westeros-sink: v4l2 eos event\n");
+            sink->soc.decoderEOS= 1;
+         }
+         if ( event.pending < 1 )
+         {
+            break;
          }
       }
-      else if ( event.type == V4L2_EVENT_EOS )
+      else
       {
-         g_print("westeros-sink: v4l2 eos event\n");
-         sink->soc.decoderEOS= 1;
+         break;
       }
    }
    UNLOCK(sink);
@@ -5408,6 +5419,8 @@ capture_start:
          goto exit;
       }
 
+      sink->soc.decoderLastFrame= 0;
+
       bufferType= sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :V4L2_BUF_TYPE_VIDEO_CAPTURE;
       memset( &selection, 0, sizeof(selection) );
       selection.type= bufferType;
@@ -5526,7 +5539,9 @@ capture_start:
 
             if ( sink->soc.quitVideoOutputThread ) break;
 
-            if ( havePriEvent || (pfd.revents & POLLPRI) )
+            /* check events if streaming is starting or we have reached last frame */
+            if ( (!sink->soc.numBuffersOut || sink->soc.decoderLastFrame) &&
+                 (havePriEvent || (pfd.revents & POLLPRI)) )
             {
                havePriEvent= false;
                wstProcessEvents( sink );
@@ -5607,7 +5622,9 @@ capture_start:
 
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
-               if ( havePriEvent || (pfd.revents & POLLPRI) )
+               /* check events if streaming is starting or we have reached last frame */
+               if ( (!sink->soc.numBuffersOut || sink->soc.decoderLastFrame) &&
+                    (havePriEvent || (pfd.revents & POLLPRI)) )
                {
                   pfd.revents &= ~POLLPRI;
                   havePriEvent= false;
@@ -5652,7 +5669,9 @@ capture_start:
          if ( (sink->soc.outBuffers[buffIndex].buf.flags & V4L2_BUF_FLAG_LAST) &&
               (sink->soc.outBuffers[buffIndex].buf.bytesused == 0) )
          {
+            /* last frame has been indicated. */
             GST_DEBUG("skip empty last buffer");
+            sink->soc.decoderLastFrame= 1;
             if ( havePriEvent )
             {
                havePriEvent= false;
@@ -6795,7 +6814,11 @@ static int ioctl_wrapper( int fd, int request, void* arg )
          else if ( request == (int)VIDIOC_DQEVENT )
          {
             struct v4l2_event *event= (struct v4l2_event*)arg;
-            g_print("westerossink-ioctl: event: type %d\n", event->type);
+            g_print("westerossink-ioctl: event: type %d pending %d\n", event->type, event->pending);
+            if ( event->type == V4L2_EVENT_SOURCE_CHANGE )
+            {
+               g_print("westerossink-ioctl: changes %X\n", event->u.src_change.changes );
+            }
          }
       }
    }
