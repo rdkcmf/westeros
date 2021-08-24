@@ -81,6 +81,7 @@ struct _GstWesterosSinkSoc
    guint32 numDecoded;
    guint32 numDropped;
    guint32 numDroppedOutOfSegment;
+   gboolean firstPtsPassedCallbackCalled;
    gboolean ignoreDiscontinuity;
    gboolean checkForEOS;
    gboolean emitEOS;

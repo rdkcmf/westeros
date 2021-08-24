@@ -680,6 +680,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
+   sink->soc.firstPtsPassedCallbackCalled= FALSE;
    sink->soc.noFrameCount= 0;
    sink->soc.ignoreDiscontinuity= FALSE;
    sink->soc.checkForEOS= FALSE;
@@ -1582,6 +1583,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
+   sink->soc.firstPtsPassedCallbackCalled= FALSE;
    sink->soc.ignoreDiscontinuity= TRUE;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
@@ -1824,6 +1826,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
+   sink->soc.firstPtsPassedCallbackCalled= FALSE;
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
@@ -2622,8 +2625,9 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->soc.noFrameCount= 0;
             sink->soc.presentationStarted= TRUE;
 
-            if ( ((videoStatus.numDisplayDrops-sink->soc.numDroppedOutOfSegment) > sink->soc.numDropped) ||
-                 (((videoStatus.numDecoded % QOS_INTERVAL) == 0) && videoStatus.numDecoded) )
+            if ( (sink->soc.firstPtsPassedCallbackCalled  == TRUE) &&
+                 (((videoStatus.numDisplayDrops-sink->soc.numDroppedOutOfSegment) > sink->soc.numDropped) ||
+                  (((videoStatus.numDecoded % QOS_INTERVAL) == 0) && videoStatus.numDecoded)) )
             {
                sink->soc.numDropped= videoStatus.numDisplayDrops-sink->soc.numDroppedOutOfSegment;
 
@@ -2946,6 +2950,7 @@ static void firstPtsPassedCallback( void *userData, int n )
    {
       sink->soc.presentationStarted= TRUE;
    }
+   sink->soc.firstPtsPassedCallbackCalled= TRUE;
 }
 
 static void underflowCallback( void *userData, int n )
