@@ -808,8 +808,7 @@ static void timeCodeAdd( GstWesterosSink *sink, guint64 pts, guint hours, guint 
    {
       goto exit;
    }
-   firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
-   position= sink->positionSegmentStart + pts - firstNano;
+   position= pts / (GST_SECOND/90000LL);
    if ( sink->timeCodeCount )
    {
       for( i= 0; i < sink->timeCodeCount; ++i )
@@ -820,6 +819,7 @@ static void timeCodeAdd( GstWesterosSink *sink, guint64 pts, guint hours, guint 
          {
             if ( position < sink->timeCodes[i].position )
             {
+               GST_DEBUG("update time code: PTS %lld : %d:%d:%d : count %d capacity %d", position, hours, minutes, seconds, sink->timeCodeCount, sink->timeCodeCapacity);
                sink->timeCodes[i].position= position;
             }
             goto exit;
@@ -848,7 +848,7 @@ static void timeCodeAdd( GstWesterosSink *sink, guint64 pts, guint hours, guint 
    }
 
    i= sink->timeCodeCount++;
-   GST_DEBUG("add time code: position %lld : %d:%d:%d : count %d capacity %d", position, hours, minutes, seconds, sink->timeCodeCount, sink->timeCodeCapacity);
+   GST_DEBUG("add time code: PTS %lld : %d:%d:%d : count %d capacity %d", position, hours, minutes, seconds, sink->timeCodeCount, sink->timeCodeCapacity);
    sink->timeCodes[i].hours= hours;
    sink->timeCodes[i].minutes= minutes;
    sink->timeCodes[i].seconds= seconds;
@@ -884,6 +884,7 @@ static void timeCodePresent( GstWesterosSink *sink, guint64 position, guint sign
    int i;
    bool found= false;
    guint hours, minutes, seconds;
+   position= sink->currentPTS;
    for( i= 0; i < sink->timeCodeCount; ++i )
    {
       if ( sink->timeCodes[i].position == position )
@@ -907,6 +908,7 @@ static void timeCodePresent( GstWesterosSink *sink, guint64 position, guint sign
       sink->timeCodeActive.seconds= seconds;
       UNLOCK(sink);
 
+      GST_DEBUG("emit time code signal: (%d:%d:%d) PTS %lld", hours, minutes, seconds, position);
       g_signal_emit( G_OBJECT(sink),
                      signal,
                      0,

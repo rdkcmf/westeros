@@ -4423,7 +4423,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                               gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
                               sink->position= sink->positionSegmentStart + currentNano - firstNano;
                               sink->currentPTS= currentNano / (GST_SECOND/90000LL);
-                              GST_LOG("receive frameTime: %lld position %lld", currentNano, sink->position);
+                              GST_DEBUG("receive frameTime: %lld position %lld PTS %lld", currentNano, sink->position, sink->currentPTS);
                               if (sink->soc.frameDisplayCount == 0)
                               {
                                   sink->soc.emitFirstFrameSignal= TRUE;
