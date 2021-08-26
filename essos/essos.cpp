@@ -3124,6 +3124,12 @@ static bool essPlatformInitDirect( EssCtx *ctx )
       }
       DEBUG("essPlatformInitDirect: glCtx %p", ctx->glCtx);
 
+      if ( getenv("ESSOS_DIRECT_NO_EVENT_LOOP_THROTTLE") )
+      {
+         INFO("essos no event loop throttle for direct");
+         ctx->eventLoopPeriodMS= 0;
+      }
+
       {
          void *module= dlopen( "libwesteros_gl.so.0.0.0", RTLD_NOW );
          if ( module )
