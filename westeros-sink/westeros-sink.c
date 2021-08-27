@@ -803,7 +803,7 @@ static void timeCodeAdd( GstWesterosSink *sink, guint64 pts, guint hours, guint 
    if (
         (hours < sink->timeCodeActive.hours) ||
         ((hours == sink->timeCodeActive.hours) && (minutes < sink->timeCodeActive.minutes)) ||
-        ((hours == sink->timeCodeActive.hours) && (minutes == sink->timeCodeActive.minutes) && (seconds < sink->timeCodeActive.seconds))
+        ((hours == sink->timeCodeActive.hours) && (minutes == sink->timeCodeActive.minutes) && (seconds <= sink->timeCodeActive.seconds))
       )
    {
       goto exit;

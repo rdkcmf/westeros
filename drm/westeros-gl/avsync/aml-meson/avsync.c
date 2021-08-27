@@ -139,13 +139,15 @@ void *sync_free_frame( struct vframe *vf )
             avProgLog( fCheck->frameTime*1000LL, 0, "WtoD", "drop");
             fCheck->vf= 0;
             vfm->dropFrameCount += 1;
-            wstFreeVideoFrameResources( fCheck );
-            wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
+            wstOffloadFreeVideoFrameResources( fCheck );
+            wstOffloadSendBufferRelease( vfm->conn, fCheck->bufferId );
+            pthread_mutex_lock( &vfm->mutex);
             if ( i+1 < vfm->queueSize )
             {
                memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-i-1)*sizeof(VideoFrame) );
             }
             --vfm->queueSize;
+            pthread_mutex_unlock( &vfm->mutex);
          }
          else
          {
@@ -159,7 +161,7 @@ void *sync_free_frame( struct vframe *vf )
    }
    if ( vf )
    {
-      free( vf );
+      wstOffloadFreeVf( vf );
    }
 }
 
@@ -242,8 +244,10 @@ static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm )
                   {
                      ERROR("bad sync pop: item %d", i);
                   }
+                  pthread_mutex_lock( &vfm->mutex);
                   memmove( &vfm->queue[0], &vfm->queue[1], (vfm->queueSize-1)*sizeof(VideoFrame) );
                   --vfm->queueSize;
+                  pthread_mutex_unlock( &vfm->mutex);
                }
                f= &vfm->queue[0];
                break;

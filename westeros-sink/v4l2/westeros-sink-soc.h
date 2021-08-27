@@ -200,8 +200,10 @@ struct _GstWesterosSinkSoc
    int bufferCohort;
    uint32_t minBuffersIn;
    uint32_t minBuffersOut;
+   int inQueuedCount;
    int numBuffersIn;
    WstBufferInfo *inBuffers;
+   int outQueuedCount;
    int numBuffersOut;
    int bufferIdOutBase;
    WstBufferInfo *outBuffers;

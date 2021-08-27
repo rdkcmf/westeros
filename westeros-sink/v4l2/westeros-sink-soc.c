@@ -287,6 +287,28 @@ static void avProgTerm()
    }
 }
 
+static char *wstInFullness( GstWesterosSink *sink )
+{
+   static char desc[64];
+   if ( gAvProgOut )
+   {
+      sprintf(desc,"(%d of %d)", sink->soc.inQueuedCount, sink->soc.numBuffersIn );
+      return desc;
+   }
+   return NULL;
+}
+
+static char *wstOutFullness( GstWesterosSink *sink )
+{
+   static char desc[64];
+   if ( gAvProgOut )
+   {
+      sprintf(desc,"(%d of %d)", sink->soc.outQueuedCount, sink->soc.numBuffersOut );
+      return desc;
+   }
+   return NULL;
+}
+
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
    WESTEROS_UNUSED(wl_sb);
@@ -817,10 +839,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.sessionId= 0;
    #endif
    sink->soc.bufferCohort= 0;
+   sink->soc.inQueuedCount= 0;
    sink->soc.minBuffersIn= 0;
    sink->soc.minBuffersOut= 0;
    sink->soc.numBuffersIn= 0;
    sink->soc.inBuffers= 0;
+   sink->soc.outQueuedCount= 0;
    sink->soc.numBuffersOut= 0;
    sink->soc.bufferIdOutBase= 0;
    sink->soc.outBuffers= 0;
@@ -1793,7 +1817,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
             goto exit;
          }
-         avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", "");
+         ++sink->soc.inQueuedCount;
+         avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", wstInFullness(sink));
          sink->soc.inBuffers[buffIndex].queued= true;
          sink->soc.inBuffers[buffIndex].gstbuf= gst_buffer_ref(buffer);
       }
@@ -1866,9 +1891,10 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   GST_ERROR("gst_westeros_sink_soc_render: queuing input buffer failed: rc %d errno %d", rc, errno );
                   goto exit;
                }
+               ++sink->soc.inQueuedCount;
                sink->soc.inBuffers[buffIndex].queued= true;
                UNLOCK(sink);
-               avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", "");
+               avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", wstInFullness(sink));
             }
          }
 
@@ -3538,6 +3564,7 @@ static int wstGetInputBuffer( GstWesterosSink *sink )
          }
          sink->soc.inBuffers[bufferIndex].buf= buf;
          sink->soc.inBuffers[bufferIndex].queued= false;
+         --sink->soc.inQueuedCount;
       }
    }
    if ( bufferIndex >= 0 )
@@ -3613,6 +3640,7 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
       }
       sink->soc.outBuffers[bufferIndex].buf= buf;
       sink->soc.outBuffers[bufferIndex].queued= false;
+      --sink->soc.outQueuedCount;
    }
    else
    {
@@ -3685,6 +3713,7 @@ static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex )
       }
       else
       {
+         ++sink->soc.outQueuedCount;
          sink->soc.outBuffers[buffIndex].queued= true;
       }
    }
@@ -5407,6 +5436,7 @@ capture_start:
             postDecodeError( sink, "output enqueue error" );
             goto exit;
          }
+         ++sink->soc.outQueuedCount;
          sink->soc.outBuffers[i].queued= true;
       }
 
@@ -5717,7 +5747,7 @@ capture_start:
             sink->soc.prevDecodedTimestamp= currFramePTS;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
-            avProgLog( frameTime, 0, "DtoS", "");
+            avProgLog( frameTime, 0, "DtoS", wstOutFullness(sink));
 
             wstUpdatePixelAspectRatio( sink );
             #ifdef USE_GST_AFD

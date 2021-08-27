@@ -25,6 +25,7 @@
 #include <memory.h>
 #include <poll.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
@@ -212,6 +213,7 @@ typedef struct _VideoFrameManager
    int queueSize;
    int queueCapacity;
    VideoFrame *queue;
+   pthread_mutex_t mutex;
    bool paused;
    bool frameAdvance;
    long long vblankTime;
@@ -298,9 +300,9 @@ typedef struct _NativeWindowItem
    EGLSurface surface;
    WstOverlayPlane *windowPlane;
    uint32_t fbId;
+   uint32_t prevFbId;
    struct gbm_bo *bo;
    struct gbm_bo *prevBo;
-   uint32_t prevFbId;
    int width;
    int height;
    bool dirty;
@@ -310,6 +312,36 @@ typedef struct _NativeWindowItem
    pthread_cond_t condRefresh;
    #endif
 } NativeWindowItem;
+
+typedef enum WST_OFFLOAD_MSG
+{
+   WST_OLM_UNKNOWN= 0,
+   WST_OLM_BUFF_RELEASE= 1,
+   WST_OLM_STATUS_UPDATE= 2,
+   WST_OLM_SENT_UNDERFLOW= 3,
+   WST_OLM_FD_HANDLE_CLOSE= 4,
+   WST_OLM_FREE_VF_BUFF= 5,
+   WST_OLM_MAX_MSGS,
+} WST_OFFLOAD_MSG;
+
+typedef struct _WstOffloadMsg
+{
+   uint32_t msgType;
+   void *param_pvoid;
+   long long param_long_long;
+   int param_int;
+} WstOffloadMsg;
+
+#define OFFLOAD_QUEUE_CAPACITY (64)
+
+typedef struct _WstOffloadMsgQ
+{
+   WstOffloadMsg msg[OFFLOAD_QUEUE_CAPACITY];
+   int readIdx;
+   int writeIdx;
+   pthread_mutex_t mutex;
+   sem_t sem;
+} WstOffloadMsgQ;
 
 typedef struct _WstGLCtx
 {
@@ -365,6 +397,10 @@ typedef struct _WstGLCtx
    pthread_t refreshThreadId;
    bool refreshThreadStarted;
    bool refreshThreadStopRequested;
+   pthread_t offloadThreadId;
+   bool offloadThreadStarted;
+   bool offloadThreadStopRequested;
+   WstOffloadMsgQ offloadMsgQ;
    bool autoFRMModeEnabled;
    int zoomMode;
 } WstGLCtx;
@@ -382,6 +418,15 @@ typedef struct _WstGLSizeCBInfo
 static void wstLog( int level, const char *fmt, ... );
 static void wstFrameLog( const char *fmt, ... );
 static void avProgLog( long long nanoTime, int syncGroup, const char *edge, const char *desc );
+static void wstStartOffloadMsgThread( WstGLCtx *ctx );
+static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long para_ll, int para_int);
+static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int bufferId );
+static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
+static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime);
+static void wstOffloadFreeVideoFrameResources(VideoFrame *f );
+static void wstOffloadCloseFileHande( int fd );
+static void wstOffloadFreeVf( void *vf );
+static void wstUpdateResources( int type, bool add, long long v, int line );
 static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *conn );
 static void wstDestroyVideoFrameManager( VideoFrameManager *vfm );
 static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
@@ -392,11 +437,12 @@ static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause );
 static void wstVideoFrameManagerFrameAdvance( VideoFrameManager *vfm );
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
 static void wstDestroyDisplayServerConnection( DisplayServerConnection *conn );
+static void wstClosePrimeFDHandles( WstGLCtx *ctx, uint32_t handle0, uint32_t handle1, int line );
 static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rectW, int rectH, uint32_t *skipX, uint32_t *skipY );
 static void wstFreeVideoFrameResources( VideoFrame *f );
 static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bufferId );
-static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
-static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrameManager *vfm );
+static void wstVideoServerSendStatus( VideoServerConnection *conn, long long displayedFrameTime, int dropFrameCount );
+static void wstVideoServerSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime );
 static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMode );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
@@ -405,6 +451,7 @@ static void wstSelectRate( WstGLCtx *ctx, int rateNum, int rateDenom );
 static void wstStartRefreshThread( WstGLCtx *ctx );
 static void wstSwapDRMBuffers( WstGLCtx *ctx );
 static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx );
+
 
 static PFNEGLGETPLATFORMDISPLAYEXTPROC gRealEGLGetPlatformDisplay= 0;
 static PREALEGLGETDISPLAY gRealEGLGetDisplay= 0;
@@ -562,6 +609,86 @@ static void avProgTerm()
          fclose( gAvProgOut );
       }
       gAvProgOut= 0;
+   }
+}
+
+static char *wstDispFullness( VideoFrameManager *vfm )
+{
+   static char desc[64];
+   if ( gAvProgOut )
+   {
+      sprintf( desc, "(%d)", vfm->queueSize );
+      return desc;
+   }
+   return NULL;
+}
+
+static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int bufferId )
+{
+   TRACE1("OLM: release buffer %d to client", bufferId);
+   wstOffloadMsgPush(WST_OLM_BUFF_RELEASE, conn, 0, bufferId);
+}
+
+static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm )
+{
+   TRACE1("OLM: status update frameTime %lld dropCount %d", vfm->displayedFrameTime, vfm->dropFrameCount);
+   wstOffloadMsgPush(WST_OLM_STATUS_UPDATE, conn, vfm->displayedFrameTime, vfm->dropFrameCount);
+   vfm->dropFrameCountReported = vfm->dropFrameCount;
+}
+
+static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime)
+{
+   TRACE1("OLM: send underflow @time %lld", displayedFrameTime);
+   wstOffloadMsgPush(WST_OLM_SENT_UNDERFLOW, conn, displayedFrameTime, 0);
+}
+
+static void wstOffloadCloseFileHande(int fd )
+{
+   TRACE1("OLM: close buff file handle %d", fd);
+   wstOffloadMsgPush(WST_OLM_FD_HANDLE_CLOSE, NULL, 0, fd);
+}
+
+static void wstOffloadFreeVf( void *vf )
+{
+   TRACE1("OLM: close vf handle %p", vf);
+   wstOffloadMsgPush(WST_OLM_FREE_VF_BUFF, vf, 0, 0);
+}
+
+static void wstOffloadFreeVideoFrameResources(VideoFrame *f )
+{
+   if ( f )
+   {
+      if ( f->vf )
+      {
+         FRAME("freeing sync vf %p", f->vf);
+         wstOffloadFreeVf( f->vf );
+         f->vf= 0;
+      }
+      if ( f->fbId )
+      {
+         wstUpdateResources( WSTRES_FB_VIDEO, false, f->fbId, __LINE__);
+         drmModeRmFB( gCtx->drmFd, f->fbId );
+         f->fbId= 0;
+         wstClosePrimeFDHandles( gCtx, f->handle0, f->handle1, __LINE__ );
+         f->handle0= 0;
+         f->handle1= 0;
+      }
+      if ( f->fd0 >= 0 )
+      {
+         wstUpdateResources( WSTRES_FD_VIDEO, false, f->fd0, __LINE__);
+         wstOffloadCloseFileHande( f->fd0 );
+         f->fd0= -1;
+         if ( f->fd1 >= 0 )
+         {
+            wstOffloadCloseFileHande( f->fd1 );
+            f->fd1= -1;
+         }
+         if ( f->fd2 >= 0 )
+         {
+            wstOffloadCloseFileHande( f->fd2 );
+            f->fd2= -1;
+         }
+      }
    }
 }
 
@@ -1140,7 +1267,7 @@ static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bu
    pthread_mutex_unlock( &conn->mutex );
 }
 
-static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm )
+static void wstVideoServerSendStatus( VideoServerConnection *conn, long long displayedFrameTime, int dropFrameCount )
 {
    struct msghdr msg;
    struct iovec iov[1];
@@ -1163,8 +1290,8 @@ static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameMan
    mbody[len++]= 'S';
    mbody[len++]= 13;
    mbody[len++]= 'S';
-   len += wstPutS64( &mbody[len], vfm->displayedFrameTime );
-   len += wstPutU32( &mbody[len], vfm->dropFrameCount );
+   len += wstPutS64( &mbody[len], displayedFrameTime );
+   len += wstPutU32( &mbody[len], dropFrameCount );
 
    iov[0].iov_base= (char*)mbody;
    iov[0].iov_len= len;
@@ -1177,14 +1304,13 @@ static void wstVideoServerSendStatus( VideoServerConnection *conn, VideoFrameMan
 
    if ( sentLen == len )
    {
-      FRAME("send status: frameTime %lld dropCount %d to client", vfm->displayedFrameTime, vfm->dropFrameCount);
-      vfm->dropFrameCountReported= vfm->dropFrameCount;
+      FRAME("send status: frameTime %lld dropCount %d to client", displayedFrameTime, dropFrameCount);
    }
 
    pthread_mutex_unlock( &conn->mutex );
 }
 
-static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrameManager *vfm )
+static void wstVideoServerSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime )
 {
    struct msghdr msg;
    struct iovec iov[1];
@@ -1207,7 +1333,7 @@ static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrame
    mbody[len++]= 'S';
    mbody[len++]= 9;
    mbody[len++]= 'U';
-   len += wstPutS64( &mbody[len], vfm->displayedFrameTime );
+   len += wstPutS64( &mbody[len], displayedFrameTime );
 
    iov[0].iov_base= (char*)mbody;
    iov[0].iov_len= len;
@@ -1220,7 +1346,7 @@ static void wstVideoServerSendUnderflow( VideoServerConnection *conn, VideoFrame
 
    if ( sentLen == len )
    {
-      FRAME("send underflow: frameTime %lld to client", vfm->displayedFrameTime);
+      FRAME("send underflow: frameTime %lld to client", displayedFrameTime);
    }
 
    pthread_mutex_unlock( &conn->mutex );
@@ -1516,7 +1642,6 @@ static void *wstVideoServerConnectionThread( void *arg )
                                                );
                               if ( !rc )
                               {
-                                 pthread_mutex_lock( &gMutex );
                                  wstUpdateResources( WSTRES_FB_VIDEO, true, fbId, __LINE__);
                                  videoFrame.hide= false;
                                  videoFrame.fbId= fbId;
@@ -1533,7 +1658,6 @@ static void *wstVideoServerConnectionThread( void *arg )
                                  videoFrame.canExpire= true;
                                  conn->videoPlane->hidden= false;
                                  wstVideoFrameManagerPushFrame( conn->videoPlane->vfm, &videoFrame );
-                                 pthread_mutex_unlock( &gMutex );
                               }
                               else
                               {
@@ -1645,7 +1769,6 @@ static void *wstVideoServerConnectionThread( void *arg )
                         break;
                     case 'W':
                         {
-                           pthread_mutex_lock( &gMutex );
                            rectX= (int)wstGetU32( m+1 );
                            rectY= (int)wstGetU32( m+5 );
                            rectW= (int)wstGetU32( m+9 );
@@ -1654,7 +1777,6 @@ static void *wstVideoServerConnectionThread( void *arg )
                                   conn->videoPlane->plane->plane_id,
                                   rectX, rectY, rectW, rectH);
                            wstVideoFrameManagerUpdateRect( conn->videoPlane->vfm, rectX, rectY, rectW, rectH );
-                           pthread_mutex_unlock( &gMutex );
                         }
                         break;
                      case 'R':
@@ -2830,6 +2952,7 @@ static void wstDestroyVideoFrameManager( VideoFrameManager *vfm )
       if ( vfm->queue )
       {
          int i;
+         pthread_mutex_lock( &vfm->mutex);
          for( i= 0; i < vfm->queueSize; ++i )
          {
             if ( vfm->bufferIdCurrent != vfm->queue[i].bufferId )
@@ -2838,8 +2961,14 @@ static void wstDestroyVideoFrameManager( VideoFrameManager *vfm )
                wstVideoServerSendBufferRelease( vfm->conn, vfm->queue[i].bufferId );
             }
          }
+         vfm->queueSize= 0;
          free( vfm->queue );
+         vfm->queue= 0;
+         vfm->bufferIdCurrent= -1;
+         vfm->queueCapacity= 0;
+         pthread_mutex_unlock( &vfm->mutex);
       }
+      pthread_mutex_destroy( &vfm->mutex);
       free( vfm );
    }
 }
@@ -2863,6 +2992,7 @@ static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *con
          goto exit;
       }
 
+      pthread_mutex_init( &vfm->mutex, 0);
       vfm->queueCapacity= VFM_QUEUE_CAPACITY;
       vfm->queueSize= 0;
       vfm->bufferIdCurrent= -1;
@@ -2898,6 +3028,7 @@ static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type )
 static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH )
 {
    int i;
+   pthread_mutex_lock( &vfm->mutex);
    for( i= 0; i < vfm->queueSize; ++i )
    {
       VideoFrame *vf= &vfm->queue[i];
@@ -2913,17 +3044,21 @@ static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, i
       vfm->conn->videoPlane->dirty= true;
       vfm->conn->videoPlane->readyToFlip= true;
    }
+   pthread_mutex_unlock( &vfm->mutex);
 }
 
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f )
 {
    if ( vfm->queueSize+1 > vfm->queueCapacity )
    {
+      int orgCapacity= vfm->queueCapacity;
       int newCapacity= 2*vfm->queueCapacity+1;
       VideoFrame *newQueue= (VideoFrame*)calloc( newCapacity, sizeof(VideoFrame) );
       if ( newQueue )
       {
          int i;
+         VideoFrame *toFree= vfm->queue;
+         pthread_mutex_lock( &vfm->mutex);
          memcpy( newQueue, vfm->queue, vfm->queueSize*sizeof(VideoFrame) );
          for( i= vfm->queueSize; i < newCapacity; ++i )
          {
@@ -2932,10 +3067,11 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
             newQueue[i].fd2= -1;
             newQueue[i].bufferId= -1;
          }
-         FRAME("vfm expand queue capacity from %d to %d", vfm->queueCapacity, newCapacity);
-         free( vfm->queue );
          vfm->queue= newQueue;
          vfm->queueCapacity= newCapacity;
+         pthread_mutex_unlock( &vfm->mutex);
+         FRAME("vfm expand queue capacity from %d to %d", orgCapacity, newCapacity);
+         free( toFree );
       }
       else
       {
@@ -2959,7 +3095,9 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
    }
    #endif
 
+   pthread_mutex_lock( &vfm->mutex);
    vfm->queue[vfm->queueSize++]= *f;
+   pthread_mutex_unlock( &vfm->mutex);
 }
 
 #define EXPIRELIMIT (83000)
@@ -3053,23 +3191,27 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                   {
                      FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
                      vfm->dropFrameCount += 1;
-                     wstFreeVideoFrameResources( fCheck );
-                     wstVideoServerSendBufferRelease( vfm->conn, fCheck->bufferId );
+                     wstOffloadFreeVideoFrameResources( fCheck );
+                     wstOffloadSendBufferRelease(vfm->conn, fCheck->bufferId );
                   }
+                  pthread_mutex_lock( &vfm->mutex);
                   if ( vfm->queueSize > i+1 )
                   {
                      memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-(i+1))*sizeof(VideoFrame) );
                   }
                   --vfm->queueSize;
+                  pthread_mutex_unlock( &vfm->mutex);
                   f= 0;
                   continue;
                }
                if ( i > 0 )
                {
+                  pthread_mutex_lock( &vfm->mutex);
                   memmove( &vfm->queue[0], &vfm->queue[1], (vfm->queueSize-1)*sizeof(VideoFrame) );
                   --vfm->queueSize;
-                  i= 0;
                   f= &vfm->queue[0];
+                  pthread_mutex_unlock( &vfm->mutex);
+                  i= 0;
                }
                else
                {
@@ -4027,6 +4169,7 @@ static WstGLCtx *wstInitCtx( void )
          }
 
          INFO( "wstInitCtx; found %d overlay planes", ctx->overlayPlanes.totalCount );
+         INFO( "using refresh lock when there is video" );
 
          if (
               haveVideoPlanes &&
@@ -4077,6 +4220,7 @@ static WstGLCtx *wstInitCtx( void )
 
       if ( ctx->isMaster )
       {
+         wstStartOffloadMsgThread(ctx);
          wstStartRefreshThread(ctx);
       }
    }
@@ -4091,7 +4235,9 @@ exit:
 
    if ( error )
    {
+      pthread_mutex_lock( &gMutex );
       wstTermCtx(ctx);
+      pthread_mutex_unlock( &gMutex );
       ctx= 0;
    }
 
@@ -4120,12 +4266,20 @@ static void wstTermCtx( WstGLCtx *ctx )
          ctx->refreshThreadStopRequested= true;
          pthread_join( ctx->refreshThreadId, NULL );
       }
+
+      if ( ctx->offloadThreadStarted )
+      {
+         ctx->offloadThreadStopRequested= true;
+         sem_post( &ctx->offloadMsgQ.sem);
+         pthread_join( ctx->offloadThreadId, NULL );
+      }
       pthread_mutex_lock( &gMutex );
 
       #ifdef USE_UEVENT_HOTPLUG
       if ( ctx->ueventFd >= 0 )
       {
          close( ctx->ueventFd );
+         ctx->ueventFd = -1;
       }
       #endif
 
@@ -4574,7 +4728,7 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
             {
                iter->vfm->underflowDetected= false;
                iter->vfm->underflowReported= true;
-               wstVideoServerSendUnderflow( iter->conn, iter->vfm );
+               wstOffloadSendUnderflow( iter->conn, iter->vfm->displayedFrameTime );
             }
             if ( iter->vfm->dropFrameCount != iter->vfm->dropFrameCountReported )
             {
@@ -4582,13 +4736,14 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
             }
             if ( sendStatus )
             {
-               wstVideoServerSendStatus( iter->conn, iter->vfm );
+               wstOffloadSendStatus( iter->conn, iter->vfm );
             }
          }
          iter= iter->next;
       }
    }
    pthread_mutex_unlock( &ctx->mutex );
+   TRACE3("wstCheckPlanes: dirty %d", dirty);
 
    return dirty;
 }
@@ -4630,16 +4785,16 @@ static void wstReleasePreviousBuffers( WstGLCtx *ctx )
             if ( iter->videoFrame[FRAME_FREE].fd0 >= 0 )
             {
                wstUpdateResources( WSTRES_FD_VIDEO, false, iter->videoFrame[FRAME_FREE].fd0, __LINE__);
-               close( iter->videoFrame[FRAME_FREE].fd0 );
+               wstOffloadCloseFileHande( iter->videoFrame[FRAME_FREE].fd0 );
                iter->videoFrame[FRAME_FREE].fd0= -1;
                if ( iter->videoFrame[FRAME_FREE].fd1 >= 0 )
                {
-                  close( iter->videoFrame[FRAME_FREE].fd1 );
+                  wstOffloadCloseFileHande( iter->videoFrame[FRAME_FREE].fd1 );
                   iter->videoFrame[FRAME_FREE].fd1= -1;
                }
                if ( iter->videoFrame[FRAME_FREE].fd2 >= 0 )
                {
-                  close( iter->videoFrame[FRAME_FREE].fd2 );
+                  wstOffloadCloseFileHande( iter->videoFrame[FRAME_FREE].fd2 );
                   iter->videoFrame[FRAME_FREE].fd2= -1;
                }
             }
@@ -4647,13 +4802,13 @@ static void wstReleasePreviousBuffers( WstGLCtx *ctx )
 
          if ( iter->videoFrame[FRAME_FREE].vf )
          {
-            free( iter->videoFrame[FRAME_FREE].vf );
+            wstOffloadFreeVf( iter->videoFrame[FRAME_FREE].vf );
             iter->videoFrame[FRAME_FREE].vf= 0;
          }
 
          if ( iter->videoFrame[FRAME_FREE].bufferId != -1 )
          {
-            wstVideoServerSendBufferRelease( iter->conn, iter->videoFrame[FRAME_FREE].bufferId );
+            wstOffloadSendBufferRelease( iter->conn, iter->videoFrame[FRAME_FREE].bufferId );
             iter->videoFrame[FRAME_FREE].bufferId= -1;
          }
 
@@ -4809,14 +4964,22 @@ static void *wstRefreshThread( void *arg )
          pthread_mutex_unlock( &gMutex );
       }
 
-      #ifdef USE_UEVENT_HOTPLUG
-      wstProcessUEvent( ctx );
-      #endif
+      if (
+            (ctx->offloadMsgQ.writeIdx != ctx->offloadMsgQ.readIdx && ctx->offloadThreadStarted)
+            #ifdef USE_UEVENT_HOTPLUG
+            || ctx->ueventFd >= 0
+            #endif
+         )
+      {
+         TRACE3("have offload work w_idx %d r_idx %d", ctx->offloadMsgQ.writeIdx, ctx->offloadMsgQ.readIdx);
+         sem_post(&ctx->offloadMsgQ.sem);
+      }
 
       if ( ctx->modeSet && ctx->useVBlank )
       {
          int rc;
 
+         FRAME("done procees blank time %lld wait new blank", vblankTime);
          rc= drmWaitVBlank( ctx->drmFd, &vbl );
          if ( !rc )
          {
@@ -4852,6 +5015,162 @@ static void wstStartRefreshThread( WstGLCtx *ctx )
    if ( rc )
    {
       ERROR("unable to start refresh thread: rc %d errno %d", rc, errno);
+   }
+}
+
+static void *wstOffloadThread( void *arg )
+{
+   WstGLCtx *ctx= (WstGLCtx*)arg;
+   WstOffloadMsgQ *pMsgQ;
+   WstOffloadMsg *pCur;
+   int msgType;
+   VideoServerConnection *conn;
+   long long param_long_long;
+   int param_int;
+   void *param_pvoid;
+   int rc;
+   int fullness;
+
+   pMsgQ= &ctx->offloadMsgQ;
+   DEBUG("offload thread started");
+
+   ctx->offloadThreadStarted= true;
+   while ( !ctx->offloadThreadStopRequested )
+   {
+      rc= sem_wait(&pMsgQ->sem);
+      if (rc)
+      {
+         ERROR("Offload thread semaphore wait failed: rc %d errno %d", rc, errno);
+      }
+
+      for ( ; ; )
+      {
+         if (ctx->offloadThreadStopRequested)
+         {
+            break;
+         }
+         fullness= pMsgQ->writeIdx - pMsgQ->readIdx;
+         if (fullness < 0)
+         {
+            fullness += OFFLOAD_QUEUE_CAPACITY;
+         }
+         if (fullness == 0)
+         {
+            TRACE1("Empty queue now index %d", pMsgQ->writeIdx);
+            break;
+         }
+         pthread_mutex_lock( &pMsgQ->mutex);
+         pCur= &pMsgQ->msg[pMsgQ->readIdx];
+         msgType= pCur->msgType;
+         param_pvoid= pCur->param_pvoid;
+         param_long_long= pCur->param_long_long;
+         param_int= pCur->param_int;
+         pthread_mutex_unlock( &pMsgQ->mutex);
+
+         switch (msgType)
+         {
+            case WST_OLM_BUFF_RELEASE:
+               conn= (VideoServerConnection*)param_pvoid;
+               wstVideoServerSendBufferRelease(conn, param_int);
+               break;
+            case WST_OLM_STATUS_UPDATE:
+               conn= (VideoServerConnection*)param_pvoid;
+               wstVideoServerSendStatus(conn, param_long_long, param_int);
+               break;
+            case WST_OLM_SENT_UNDERFLOW:
+               conn= (VideoServerConnection*)param_pvoid;
+               wstVideoServerSendUnderflow(conn, param_long_long);
+               break;
+            case WST_OLM_FD_HANDLE_CLOSE:
+               close(param_int);
+               break;
+            case WST_OLM_FREE_VF_BUFF:
+               free(param_pvoid);
+               break;
+            default:
+               ERROR("unknown msg type %d", msgType);
+               break;
+         }
+         TRACE1("OLM: process msg %d, lpar %lld, par %d", msgType, param_long_long, param_int);
+         pMsgQ->readIdx++;
+         if (pMsgQ->readIdx >= OFFLOAD_QUEUE_CAPACITY)
+         {
+            pMsgQ->readIdx= 0;
+         }
+      }
+      #ifdef USE_UEVENT_HOTPLUG
+      wstProcessUEvent( ctx );
+      #endif
+   }
+   ctx->offloadThreadStarted= false;
+   DEBUG("offload thread exit");
+   return NULL;
+}
+
+static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long para_ll, int para_int)
+{
+   WstOffloadMsgQ *pMsgQ;
+   WstOffloadMsg *pCur;
+   int fullness;
+   if (!gCtx)
+   {
+       ERROR("context not initialized");
+       return;
+   }
+   if (!gCtx->offloadThreadStarted)
+   {
+       ERROR("offload service thread not initialized");
+       return;
+   }
+   pMsgQ= &gCtx->offloadMsgQ;
+   pthread_mutex_lock( &pMsgQ->mutex);
+   fullness= pMsgQ->writeIdx - pMsgQ->readIdx;
+   if (fullness < 0)
+   {
+      fullness += OFFLOAD_QUEUE_CAPACITY;
+   }
+   if (fullness >= OFFLOAD_QUEUE_CAPACITY - 1)
+   {
+      ERROR("offload Message queue nospace please enlarge OFFLOAD_QUEUE_CAPACITY %d fullness %d", OFFLOAD_QUEUE_CAPACITY, fullness);
+       pthread_mutex_unlock( &pMsgQ->mutex);
+       return;
+   }
+   pCur= &pMsgQ->msg[pMsgQ->writeIdx];
+   pCur->msgType= type;
+   pCur->param_pvoid= param_pv;
+   pCur->param_long_long= para_ll;
+   pCur->param_int= para_int;
+   pMsgQ->writeIdx++;
+   if (pMsgQ->writeIdx >= OFFLOAD_QUEUE_CAPACITY)
+   {
+      pMsgQ->writeIdx= 0;
+   }
+   pthread_mutex_unlock( &pMsgQ->mutex);
+   TRACE3("OLM: add: type %d, par_pv %p par_ll %lld, par_int %d", type, param_pv, para_ll, para_int);
+}
+
+static void wstStartOffloadMsgThread( WstGLCtx *ctx )
+{
+   int rc;
+   WstOffloadMsgQ *pMsgQ;
+
+   pMsgQ= &ctx->offloadMsgQ;
+   pMsgQ->readIdx= 0;
+   pMsgQ->writeIdx= 0;
+   pthread_mutex_init( &pMsgQ->mutex, 0);
+   rc= sem_init(&pMsgQ->sem, 0, 0);
+   if (rc)
+   {
+      ERROR("offload thread semaphore init failed: rc %d errno %d", rc, errno);
+     return;
+   }
+
+   DEBUG("starting offloadMsg thread");
+   rc= pthread_create( &ctx->offloadThreadId, NULL, wstOffloadThread, ctx);
+   if ( rc )
+   {
+      ERROR("unable to start offload thread: rc %d errno %d", rc, errno);
+      return;
    }
 }
 
@@ -4920,7 +5239,7 @@ static void wstSwapWaitFence( WstGLCtx *ctx )
          else if ( rc <= 0 )
          {
             if ( rc == 0 ) errno= ETIME;
-            ERROR("drmModeAtomicCommit: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
+            ERROR("wstSwapWaitFence: wait out fence failed: fd %d errno %d", ctx->nativeOutputFenceFd, errno);
          }
          break;
       }
@@ -5396,7 +5715,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                   }
 
                   FRAME("commit frame %d buffer %d", iter->videoFrame[FRAME_CURR].frameNumber, iter->videoFrame[FRAME_CURR].bufferId);
-                  avProgLog( iter->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", "");
+                  avProgLog( iter->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", wstDispFullness(iter->vfm));
                }
             }
          }
@@ -6131,6 +6450,7 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
       }
       #endif
       #ifdef USE_REFRESH_LOCK
+      #if 0
       if ( g_useRefreshLock )
       {
          nwIter= 0;
@@ -6162,6 +6482,62 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
             pthread_mutex_unlock( &nwIter->mutexRefresh );
          }
       }
+      #endif
+      #if 1
+      if ( g_useRefreshLock )
+      {
+         bool haveVideo= false;
+         nwIter= 0;
+         if ( gCtx && gCtx->isMaster )
+         {
+            nwIter= gCtx->nwFirst;
+            while( nwIter )
+            {
+               if ( nwIter->surface == surface )
+               {
+                  break;
+               }
+               nwIter= nwIter->next;
+           }
+         }
+         if ( nwIter )
+         {
+            pthread_mutex_lock( &gCtx->mutex );
+            if ( gCtx->overlayPlanes.usedCount )
+            {
+               WstOverlayPlane *iter= gCtx->overlayPlanes.usedHead;
+               while( iter )
+               {
+                  if ( iter->vfm )
+                  {
+                     haveVideo= true;
+                     break;
+                  }
+                  iter= iter->next;
+               }
+            }
+            pthread_mutex_unlock( &gCtx->mutex );
+            if ( haveVideo )
+            {
+               if ( gRealGLFlush ) gRealGLFlush();
+               if ( gRealGLFinish ) gRealGLFinish();
+               pthread_mutex_lock( &nwIter->mutexRefresh );
+               pthread_cond_wait( &nwIter->condRefresh, &nwIter->mutexRefresh );
+            }
+         }
+         result= gRealEGLSwapBuffers( dpy, surface );
+         if ( nwIter )
+         {
+            TRACE3("mark nw %p dirty", nwIter);
+            gCtx->dirty= true;
+            nwIter->dirty= true;
+            if ( haveVideo )
+            {
+               pthread_mutex_unlock( &nwIter->mutexRefresh );
+            }
+         }
+      }
+      #endif
       else
       {
       #endif
