@@ -1205,7 +1205,7 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
 
             LOCK(sink);
             if ( (sink->soc.frameInCount > sink->soc.frameDecodeCount) &&
-                 (sink->soc.frameOutCount - sink->soc.frameDisplayCount >= 5) )
+                 (sink->soc.frameOutCount - sink->soc.frameDisplayCount >= 1) )
             {
                queuedFrames= sink->soc.frameInCount - sink->soc.frameDecodeCount;
             }
