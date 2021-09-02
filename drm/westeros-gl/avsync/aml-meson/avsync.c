@@ -141,13 +141,11 @@ void *sync_free_frame( struct vframe *vf )
             vfm->dropFrameCount += 1;
             wstOffloadFreeVideoFrameResources( fCheck );
             wstOffloadSendBufferRelease( vfm->conn, fCheck->bufferId );
-            pthread_mutex_lock( &vfm->mutex);
             if ( i+1 < vfm->queueSize )
             {
                memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-i-1)*sizeof(VideoFrame) );
             }
             --vfm->queueSize;
-            pthread_mutex_unlock( &vfm->mutex);
          }
          else
          {
@@ -229,6 +227,7 @@ static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm )
          vfm->vblankIntervalPrev= vfm->vblankInterval;
       }
 
+      pthread_mutex_lock( &vfm->mutex);
       vf= av_sync_pop_frame( vfm->sync );
       if ( vf )
       {
@@ -244,10 +243,8 @@ static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm )
                   {
                      ERROR("bad sync pop: item %d", i);
                   }
-                  pthread_mutex_lock( &vfm->mutex);
                   memmove( &vfm->queue[0], &vfm->queue[1], (vfm->queueSize-1)*sizeof(VideoFrame) );
                   --vfm->queueSize;
-                  pthread_mutex_unlock( &vfm->mutex);
                }
                f= &vfm->queue[0];
                break;
@@ -258,6 +255,7 @@ static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm )
             ERROR("Unable to identify sync popped frame: pts %d", vf->pts);
          }
       }
+      pthread_mutex_unlock( &vfm->mutex);
    }
    return f;
 }

@@ -3083,6 +3083,7 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
 
    FRAME("vfm push frame %d bufferId %d", f->frameNumber, f->bufferId);
 
+   pthread_mutex_lock( &vfm->mutex);
    #ifdef WESTEROS_GL_AVSYNC
    if ( !vfm->syncInit )
    {
@@ -3095,7 +3096,6 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
    }
    #endif
 
-   pthread_mutex_lock( &vfm->mutex);
    vfm->queue[vfm->queueSize++]= *f;
    pthread_mutex_unlock( &vfm->mutex);
 }
