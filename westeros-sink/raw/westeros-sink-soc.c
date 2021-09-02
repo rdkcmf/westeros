@@ -226,6 +226,26 @@ static struct wl_buffer_listener wl_buffer_listener=
    buffer_release
 };
 
+static bool wstApproxEqual( double v1, double v2 )
+{
+   bool result= false;
+   if ( v1 >= v2 )
+   {
+      if ( (v1-v2) < 0.001 )
+      {
+         result= true;
+      }
+   }
+   else
+   {
+      if ( (v2-v1) < 0.001 )
+      {
+         result= true;
+      }
+   }
+   return result;
+}
+
 #ifdef USE_GST_AFD
 static void wstSetAFDInfo( GstWesterosSink *sink, GstBuffer *buffer )
 {
@@ -1698,6 +1718,12 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
          break;
       case ZOOM_16_9_STRETCH:
          {
+            if ( wstApproxEqual(arf, ard) && wstApproxEqual(arf, 1.777) )
+            {
+               /* For 16:9 content on a 16:9 display, stretch as though 4:3 */
+               hfactor= 4.0/3.0;
+               if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("stretch apply vfactor %f hfactor %f", vfactor, hfactor);
+            }
             vh= sink->soc.videoHeight * (1.0+(2.0*sink->soc.overscanSize/100.0));
             vw= vh*16/9;
             vx= vx+(sink->soc.videoWidth-vw)/2;
@@ -1720,18 +1746,18 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
                                                                 sink->soc.afdActive.isLetterbox, sink->soc.afdActive.d1, sink->soc.afdActive.d2 );
             switch ( sink->soc.afdActive.afd )
             {
-               case GST_VIDEO_AFD_4_3_FULL_16_9_FULL:
+               case GST_VIDEO_AFD_4_3_FULL_16_9_FULL: /* AFD 8 (1000) */
                   /* 16:9 and 4:3 content are full frame */
                   break;
-               case GST_VIDEO_AFD_14_9_LETTER_14_9_PILLAR:
+               case GST_VIDEO_AFD_14_9_LETTER_14_9_PILLAR: /* AFD 11 (1011) */
                   /* 4:3 contains 14:9 letterbox vertically centered */
                   /* 16:9 contains 14:9 pillarbox horizontally centered */
                   break;
-               case GST_VIDEO_AFD_4_3_FULL_14_9_CENTER:
+               case GST_VIDEO_AFD_4_3_FULL_14_9_CENTER: /* AFD 13 (1101) */
                   /* 4:3 content is full frame */
                   /* 16:9 contains 4:3 pillarbox */
                   break;
-               case GST_VIDEO_AFD_GREATER_THAN_16_9:
+               case GST_VIDEO_AFD_GREATER_THAN_16_9: /* AFD 4 (0100) */
                   /* 4:3 contains letterbox image with aspect ratio > 16:9 vertically centered */
                   /* 16:9 contains letterbox image with aspect ratio > 16:9 */
                   /* should be accompanied by bar data */
@@ -1748,7 +1774,7 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
                      }
                   }
                   break;
-               case GST_VIDEO_AFD_4_3_FULL_4_3_PILLAR:
+               case GST_VIDEO_AFD_4_3_FULL_4_3_PILLAR: /* AFD 9 (1001) */
                   /* 4:3 content is full frame */
                   /* 16:9 content is 4:3 roi horizontally centered */
                   if ( arf > (4.0/3.0) )
@@ -1758,9 +1784,9 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
                      arf= ard;
                   }
                   break;
-               case GST_VIDEO_AFD_16_9_LETTER_16_9_FULL:
-               case GST_VIDEO_AFD_16_9_LETTER_14_9_CENTER:
-               case GST_VIDEO_AFD_16_9_LETTER_4_3_CENTER:
+               case GST_VIDEO_AFD_16_9_LETTER_16_9_FULL: /* AFD 10 (1010) */
+               case GST_VIDEO_AFD_16_9_LETTER_14_9_CENTER: /* AFD 14 (1110) */
+               case GST_VIDEO_AFD_16_9_LETTER_4_3_CENTER: /* AFD 15 (1111) */
                   /* 4:3 content has 16:9 letterbox roi vertically centered */
                   /* 16:9 content is full frame 16:9 */
                   if ( arf < (16.0/9.0) )
@@ -1777,6 +1803,13 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
 
             if ( arf >= ard )
             {
+               if ( wstApproxEqual(arf, ard) && wstApproxEqual( arf, 1.777) )
+               {
+                  /* For 16:9 content on a 16:9 display, enlarge as though 4:3 */
+                  vfactor= 4.0/3.0;
+                  hfactor= 1.0;
+                  if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("zoom apply vfactor %f hfactor %f", vfactor, hfactor);
+               }
                vh= sink->soc.videoHeight * vfactor * (1.0+(2.0*sink->soc.overscanSize/100.0));
                vw= (roiw * vh) * hfactor / roih;
                vx= vx+(sink->soc.videoWidth-vw)/2;
