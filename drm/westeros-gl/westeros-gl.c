@@ -315,7 +315,7 @@ typedef struct _NativeWindowItem
 
 typedef enum WST_OFFLOAD_MSG
 {
-   WST_OLM_UNKNOWN= 0,
+   WST_OLM_NONE= 0,
    WST_OLM_BUFF_RELEASE= 1,
    WST_OLM_STATUS_UPDATE= 2,
    WST_OLM_SENT_UNDERFLOW= 3,
@@ -419,7 +419,9 @@ static void wstLog( int level, const char *fmt, ... );
 static void wstFrameLog( const char *fmt, ... );
 static void avProgLog( long long nanoTime, int syncGroup, const char *edge, const char *desc );
 static void wstStartOffloadMsgThread( WstGLCtx *ctx );
-static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long para_ll, int para_int);
+static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long param_ll, int param_int);
+static void wstOffloadFlushConn( VideoServerConnection *conn );
+static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int);
 static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int bufferId );
 static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
 static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime);
@@ -1959,6 +1961,8 @@ static void wstDestroyVideoServerConnection( VideoServerConnection *conn )
 {
    if ( conn )
    {
+      wstOffloadFlushConn( conn );
+
       if ( conn->socketFd >= 0 )
       {
          shutdown( conn->socketFd, SHUT_RDWR );
@@ -5067,30 +5071,8 @@ static void *wstOffloadThread( void *arg )
          param_int= pCur->param_int;
          pthread_mutex_unlock( &pMsgQ->mutex);
 
-         switch (msgType)
-         {
-            case WST_OLM_BUFF_RELEASE:
-               conn= (VideoServerConnection*)param_pvoid;
-               wstVideoServerSendBufferRelease(conn, param_int);
-               break;
-            case WST_OLM_STATUS_UPDATE:
-               conn= (VideoServerConnection*)param_pvoid;
-               wstVideoServerSendStatus(conn, param_long_long, param_int);
-               break;
-            case WST_OLM_SENT_UNDERFLOW:
-               conn= (VideoServerConnection*)param_pvoid;
-               wstVideoServerSendUnderflow(conn, param_long_long);
-               break;
-            case WST_OLM_FD_HANDLE_CLOSE:
-               close(param_int);
-               break;
-            case WST_OLM_FREE_VF_BUFF:
-               free(param_pvoid);
-               break;
-            default:
-               ERROR("unknown msg type %d", msgType);
-               break;
-         }
+         wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int );
+
          TRACE1("OLM: process msg %d, lpar %lld, par %d", msgType, param_long_long, param_int);
          pMsgQ->readIdx++;
          if (pMsgQ->readIdx >= OFFLOAD_QUEUE_CAPACITY)
@@ -5107,7 +5089,93 @@ static void *wstOffloadThread( void *arg )
    return NULL;
 }
 
-static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long para_ll, int para_int)
+static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long param_ll, int param_int)
+{
+   VideoServerConnection *conn;
+   switch (msgType)
+   {
+      case WST_OLM_NONE:
+         /* Nothing to do */
+         break;
+      case WST_OLM_BUFF_RELEASE:
+         conn= (VideoServerConnection*)param_pv;
+         wstVideoServerSendBufferRelease(conn, param_int);
+         break;
+      case WST_OLM_STATUS_UPDATE:
+         conn= (VideoServerConnection*)param_pv;
+         wstVideoServerSendStatus(conn, param_ll, param_int);
+         break;
+      case WST_OLM_SENT_UNDERFLOW:
+         conn= (VideoServerConnection*)param_pv;
+         wstVideoServerSendUnderflow(conn, param_ll);
+         break;
+      case WST_OLM_FD_HANDLE_CLOSE:
+         close(param_int);
+         break;
+      case WST_OLM_FREE_VF_BUFF:
+         free(param_pv);
+         break;
+      default:
+         ERROR("unknown msg type %d", msgType);
+         break;
+   }
+}
+
+static void wstOffloadFlushConn( VideoServerConnection *conn )
+{
+   WstOffloadMsgQ *pMsgQ;
+   WstOffloadMsg *pCur;
+   int readIdx, fullness;
+   int msgType;
+   long long param_long_long;
+   int param_int;
+   void *param_pvoid;
+
+   DEBUG("wstOffloadFlushConn: begin: conn %p",conn);
+   pMsgQ= &gCtx->offloadMsgQ;
+   pthread_mutex_lock( &pMsgQ->mutex);
+   readIdx= pMsgQ->readIdx;
+   for( ; ; )
+   {
+      fullness= pMsgQ->writeIdx - readIdx;
+      if (fullness < 0)
+      {
+         fullness += OFFLOAD_QUEUE_CAPACITY;
+      }
+      if (fullness == 0)
+      {
+         break;
+      }
+      pCur= &pMsgQ->msg[readIdx];
+      msgType= pCur->msgType;
+      param_pvoid= pCur->param_pvoid;
+      param_long_long= pCur->param_long_long;
+      param_int= pCur->param_int;
+      switch (msgType)
+      {
+         case WST_OLM_BUFF_RELEASE:
+         case WST_OLM_STATUS_UPDATE:
+         case WST_OLM_SENT_UNDERFLOW:
+            if ( conn == (VideoServerConnection *)param_pvoid )
+            {
+               wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int );
+               pCur->msgType= WST_OLM_NONE;
+            }
+            break;
+         default:
+            break;
+      }
+      readIdx++;
+      if (readIdx >= OFFLOAD_QUEUE_CAPACITY)
+      {
+         readIdx= 0;
+      }
+   }
+   pthread_mutex_unlock( &pMsgQ->mutex);
+   DEBUG("wstOffloadFlushConn: end: conn %p",conn);
+}
+
+static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int)
 {
    WstOffloadMsgQ *pMsgQ;
    WstOffloadMsg *pCur;
@@ -5138,15 +5206,15 @@ static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long para_ll, 
    pCur= &pMsgQ->msg[pMsgQ->writeIdx];
    pCur->msgType= type;
    pCur->param_pvoid= param_pv;
-   pCur->param_long_long= para_ll;
-   pCur->param_int= para_int;
+   pCur->param_long_long= param_ll;
+   pCur->param_int= param_int;
    pMsgQ->writeIdx++;
    if (pMsgQ->writeIdx >= OFFLOAD_QUEUE_CAPACITY)
    {
       pMsgQ->writeIdx= 0;
    }
    pthread_mutex_unlock( &pMsgQ->mutex);
-   TRACE3("OLM: add: type %d, par_pv %p par_ll %lld, par_int %d", type, param_pv, para_ll, para_int);
+   TRACE3("OLM: add: type %d, par_pv %p par_ll %lld, par_int %d", type, param_pv, param_ll, param_int);
 }
 
 static void wstStartOffloadMsgThread( WstGLCtx *ctx )
