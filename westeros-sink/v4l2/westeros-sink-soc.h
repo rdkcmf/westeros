@@ -164,6 +164,7 @@ struct _GstWesterosSinkSoc
    int frameOutCount;
    int frameDecodeCount;
    int frameDisplayCount;
+   gboolean expectNoLastFrame;
    int decoderLastFrame;
    int decoderEOS;
    uint32_t numDropped;

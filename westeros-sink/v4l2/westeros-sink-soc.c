@@ -827,6 +827,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.videoStartTime= 0;
    sink->soc.frameDecodeCount= 0;
    sink->soc.frameDisplayCount= 0;
+   sink->soc.expectNoLastFrame= FALSE;
    sink->soc.decoderLastFrame= 0;
    sink->soc.decoderEOS= 0;
    sink->soc.numDropped= 0;
@@ -1943,6 +1944,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
          if ( (len == 13) && !strncmp( (char*)sink->soc.caps.driver, "bcm2835-codec", len) )
          {
             GST_DEBUG("Setup output prior to source change for (%s)", sink->soc.caps.driver);
+            sink->soc.expectNoLastFrame= TRUE;
             wstSetupOutput( sink );
          }
 
@@ -5603,7 +5605,7 @@ capture_start:
             if ( sink->soc.quitVideoOutputThread ) break;
 
             /* check events if streaming is starting or we have reached last frame */
-            if ( (!sink->soc.numBuffersOut || sink->soc.decoderLastFrame) &&
+            if ( (!sink->soc.numBuffersOut || (sink->soc.decoderLastFrame || sink->soc.expectNoLastFrame)) &&
                  (havePriEvent || (pfd.revents & POLLPRI)) )
             {
                havePriEvent= false;
@@ -5686,7 +5688,7 @@ capture_start:
             if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
             {
                /* check events if streaming is starting or we have reached last frame */
-               if ( (!sink->soc.numBuffersOut || sink->soc.decoderLastFrame) &&
+               if ( (!sink->soc.numBuffersOut || (sink->soc.decoderLastFrame || sink->soc.expectNoLastFrame)) &&
                     (havePriEvent || (pfd.revents & POLLPRI)) )
                {
                   pfd.revents &= ~POLLPRI;
