@@ -95,19 +95,23 @@
 
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 
-#define INT_FATAL(FORMAT, ...)      printf("Westeros Fatal: " FORMAT "\n", ##__VA_ARGS__)
-#define INT_ERROR(FORMAT, ...)      printf("Westeros Error: " FORMAT "\n", ##__VA_ARGS__)
-#define INT_WARNING(FORMAT, ...)    printf("Westeros Warning: " FORMAT "\n",  ##__VA_ARGS__)
-#define INT_INFO(FORMAT, ...)       printf("Westeros Info: " FORMAT "\n",  ##__VA_ARGS__)
-#define INT_DEBUG(FORMAT, ...)      printf("Westeros Debug: " FORMAT "\n", ##__VA_ARGS__)
-#define INT_TRACE(FORMAT, ...)
+#define INT_FATAL(FORMAT, ...)      wstLog(0, "Westeros Fatal: " FORMAT "\n", __VA_ARGS__)
+#define INT_ERROR(FORMAT, ...)      wstLog(0, "Westeros Error: " FORMAT "\n", __VA_ARGS__)
+#define INT_WARNING(FORMAT, ...)    wstLog(1, "Westeros Warning: " FORMAT "\n", __VA_ARGS__)
+#define INT_INFO(FORMAT, ...)       wstLog(2, "Westeros Info: " FORMAT "\n", __VA_ARGS__)
+#define INT_DEBUG(FORMAT, ...)      wstLog(3, "Westeros Debug: " FORMAT "\n", __VA_ARGS__)
+#define INT_TRACE1(FORMAT, ...)     wstLog(4, "Westeros Trace: " FORMAT "\n", __VA_ARGS__)
+#define INT_TRACE2(FORMAT, ...)     wstLog(5, "Westeros Trace: " FORMAT "\n", __VA_ARGS__)
+#define INT_TRACE3(FORMAT, ...)     wstLog(6, "Westeros Trace: " FORMAT "\n", __VA_ARGS__)
 
-#define FATAL(FORMAT, ...)          INT_FATAL(FORMAT, ##__VA_ARGS__)
-#define ERROR(FORMAT, ...)          INT_ERROR(FORMAT, ##__VA_ARGS__)
-#define WARNING(FORMAT, ...)        INT_WARNING(FORMAT, ##__VA_ARGS__)
-#define INFO(FORMAT, ...)           INT_INFO(FORMAT, ##__VA_ARGS__)
-#define DEBUG(FORMAT, ...)          INT_DEBUG(FORMAT, ##__VA_ARGS__)
-#define TRACE(FORMAT, ...)          INT_TRACE(FORMAT, ##__VA_ARGS__)
+#define FATAL(...)                  INT_FATAL(__VA_ARGS__, "")
+#define ERROR(...)                  INT_ERROR(__VA_ARGS__, "")
+#define WARNING(...)                INT_WARNING(__VA_ARGS__, "")
+#define INFO(...)                   INT_INFO(__VA_ARGS__, "")
+#define DEBUG(...)                  INT_DEBUG(__VA_ARGS__, "")
+#define TRACE1(...)                 INT_TRACE1(__VA_ARGS__, "")
+#define TRACE2(...)                 INT_TRACE2(__VA_ARGS__, "")
+#define TRACE3(...)                 INT_TRACE3(__VA_ARGS__, "")
 
 #define WST_EVENT_QUEUE_SIZE (64)
 
@@ -321,11 +325,15 @@ typedef struct _WstSurface
    const char *name;   
    int refCount;
    
+   pthread_mutex_t renderMutex;
+   bool needsRender;
+
    struct wl_resource *attachedBufferResource;
    struct wl_resource *detachedBufferResource;
    int attachedX;
    int attachedY;
    bool vpcBridgeSignal;
+   int commitCount;
    
    struct wl_list frameCallbackList;
    struct wl_listener attachedBufferDestroyListener;
@@ -525,6 +533,7 @@ typedef struct _WstCompositor
    WstEvent eventQueue[WST_EVENT_QUEUE_SIZE];
 } WstCompositor;
 
+static void wstLog( int level, const char *fmt, ... );
 static const char* wstGetNextNestedDisplayName(void);
 static bool wstCompositorCreateRenderer( WstContext *ctx );
 static void wstCompositorReleaseResources( WstContext *ctx );
@@ -851,11 +860,29 @@ static int g_pid= 0;
 static int g_nextNestedId= 0;
 static pthread_mutex_t g_mutexMasterEmbedded= PTHREAD_MUTEX_INITIALIZER;
 static WstCompositor *g_masterEmbedded= 0;
+static int g_activeLevel= 3;
 
+static void wstLog( int level, const char *fmt, ... )
+{
+   if ( level <= g_activeLevel )
+   {
+      va_list argptr;
+      va_start( argptr, fmt );
+      vfprintf( stderr, fmt, argptr );
+      va_end( argptr );
+   }
+}
 
 WstCompositor* WstCompositorCreate()
 {
    WstCompositor *wctx= 0;
+
+   const char *env= getenv( "WESTEROS_DEBUG" );
+   if ( env )
+   {
+      int level= atoi( env );
+      g_activeLevel= level;
+   }
 
    INFO("westeros (core) version " WESTEROS_VERSION_FMT, WESTEROS_VERSION );
    
@@ -2483,6 +2510,16 @@ bool WstCompositorComposeEmbedded( WstCompositor *wctx,
 
       pthread_mutex_lock( &ctx->mutex );
 
+      for (std::vector<WstSurface *>::iterator it = ctx->surfaces.begin(); it != ctx->surfaces.end(); ++it)
+      {
+         WstSurface *surface= (*it);
+         if ( surface->commitCount > 1 )
+         {
+            TRACE1("compositor: display %s surface drop %d", ctx->displayName, surface->commitCount-1);
+         }
+         surface->commitCount= 0;
+      }
+
       if ( !ctx->isEmbedded )
       {
          sprintf( wctx->lastErrorDetail,
@@ -2576,7 +2613,17 @@ bool WstCompositorComposeEmbedded( WstCompositor *wctx,
 
          *needHolePunch= ( rects.size() > 0 );
       }
-      
+
+      for (std::vector<WstSurface *>::iterator it = ctx->surfaces.begin(); it != ctx->surfaces.end(); ++it)
+      {
+         WstSurface *surface= (*it);
+         if ( surface->needsRender )
+         {
+            surface->needsRender= false;
+            pthread_mutex_unlock( &surface->renderMutex );
+         }
+      }
+
       pthread_mutex_unlock( &ctx->mutex );
       
       result= true;
@@ -5423,6 +5470,7 @@ static WstSurface* wstSurfaceCreate( WstCompositor *wctx)
    {
       surface->compositor= wctx;
       surface->refCount= 1;
+      pthread_mutex_init( &surface->renderMutex, 0 );
       
       surface->surfaceId= ctx->nextSurfaceId++;
       ctx->surfaceMap.insert( std::pair<int32_t,WstSurface*>( surface->surfaceId, surface ) );
@@ -5615,6 +5663,7 @@ static void wstSurfaceDestroy( WstSurface *surface )
 
    assert(surface->resource == NULL);
    
+   pthread_mutex_destroy( &surface->renderMutex );
    free(surface);
 
    if ( wctx->pointer )
@@ -5846,6 +5895,36 @@ static void wstISurfaceAttach(struct wl_client *client,
    WstSurface *surface= (WstSurface*)wl_resource_get_user_data(resource);
    WstContext *ctx= surface->compositor->ctx;
 
+   if ( ctx->isEmbedded && bufferResource )
+   {
+      /* Attempt to keep buffer processing synced to
+       * app rendering for embedded compositors
+       */
+      bool gotLock= true;
+      if ( pthread_mutex_trylock( &surface->renderMutex ) )
+      {
+         int retryLimit= ctx->framePeriodMillis;
+         gotLock= false;
+         while( retryLimit-- > 0 )
+         {
+            usleep( 1000 );
+            if ( !pthread_mutex_trylock( &surface->renderMutex ) )
+            {
+               gotLock= true;
+               break;
+            }
+         }
+         if ( !gotLock )
+         {
+            TRACE2("display %s is not being rendered by app", ctx->displayName);
+         }
+      }
+      if ( gotLock )
+      {
+         surface->needsRender= true;
+      }
+   }
+
    pthread_mutex_lock( &ctx->mutex );
    if ( surface->attachedBufferResource != bufferResource )
    {
@@ -5926,7 +6005,7 @@ static void wstISurfaceSetOpaqueRegion(struct wl_client *client,
    WESTEROS_UNUSED(client);
    WESTEROS_UNUSED(resource);
    WESTEROS_UNUSED(regionResource);
-   TRACE("wstISurfaceSetOpaqueRegion: not supported");
+   TRACE1("wstISurfaceSetOpaqueRegion: not supported");
 }
 
 static void wstISurfaceSetInputRegion(struct wl_client *client,
@@ -6198,6 +6277,8 @@ static void wstISurfaceCommit(struct wl_client *client, struct wl_resource *reso
          }
       }
    }
+
+   ++surface->commitCount;
 
    wstCompositorScheduleRepaint( ctx );
 

@@ -6518,7 +6518,6 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
       }
       #endif
       #ifdef USE_REFRESH_LOCK
-      #if 0
       if ( g_useRefreshLock )
       {
          nwIter= 0;
@@ -6529,7 +6528,6 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
             {
                if ( nwIter->surface == surface )
                {
-                  TRACE3("mark nw %p dirty", nwIter);
                   break;
                }
                nwIter= nwIter->next;
@@ -6545,67 +6543,16 @@ EGLAPI EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
          result= gRealEGLSwapBuffers( dpy, surface );
          if ( nwIter )
          {
+            if ( nwIter->dirty )
+            {
+               TRACE3("nw %p dropped a frame", nwIter);
+            }
+            TRACE3("mark nw %p dirty", nwIter);
             gCtx->dirty= true;
             nwIter->dirty= true;
             pthread_mutex_unlock( &nwIter->mutexRefresh );
          }
       }
-      #endif
-      #if 1
-      if ( g_useRefreshLock )
-      {
-         bool haveVideo= false;
-         nwIter= 0;
-         if ( gCtx && gCtx->isMaster )
-         {
-            nwIter= gCtx->nwFirst;
-            while( nwIter )
-            {
-               if ( nwIter->surface == surface )
-               {
-                  break;
-               }
-               nwIter= nwIter->next;
-           }
-         }
-         if ( nwIter )
-         {
-            pthread_mutex_lock( &gCtx->mutex );
-            if ( gCtx->overlayPlanes.usedCount )
-            {
-               WstOverlayPlane *iter= gCtx->overlayPlanes.usedHead;
-               while( iter )
-               {
-                  if ( iter->vfm )
-                  {
-                     haveVideo= true;
-                     break;
-                  }
-                  iter= iter->next;
-               }
-            }
-            pthread_mutex_unlock( &gCtx->mutex );
-            if ( haveVideo )
-            {
-               if ( gRealGLFlush ) gRealGLFlush();
-               if ( gRealGLFinish ) gRealGLFinish();
-               pthread_mutex_lock( &nwIter->mutexRefresh );
-               pthread_cond_wait( &nwIter->condRefresh, &nwIter->mutexRefresh );
-            }
-         }
-         result= gRealEGLSwapBuffers( dpy, surface );
-         if ( nwIter )
-         {
-            TRACE3("mark nw %p dirty", nwIter);
-            gCtx->dirty= true;
-            nwIter->dirty= true;
-            if ( haveVideo )
-            {
-               pthread_mutex_unlock( &nwIter->mutexRefresh );
-            }
-         }
-      }
-      #endif
       else
       {
       #endif
