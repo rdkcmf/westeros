@@ -1231,7 +1231,7 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
                queuedFrames= sink->soc.frameInCount - sink->soc.frameDecodeCount;
             }
             UNLOCK(sink);
-            GST_DEBUG("queuedFrames %d (in %d out %d dec %d disp %d)\n", queuedFrames, sink->soc.frameInCount, sink->soc.frameOutCount, sink->soc.frameDecodeCount, sink->soc.frameDisplayCount);
+            GST_DEBUG("queuedFrames %d (in %d out %d dec %d disp %d)", queuedFrames, sink->soc.frameInCount, sink->soc.frameOutCount, sink->soc.frameDecodeCount, sink->soc.frameDisplayCount);
             g_value_set_uint(value, queuedFrames);
          }
          break;
@@ -3184,6 +3184,7 @@ static void wstTearDownInputBuffers( GstWesterosSink *sink )
       }
       free( sink->soc.inBuffers );
       sink->soc.inBuffers= 0;
+      sink->soc.inQueuedCount= 0;
    }
 
    if ( sink->soc.numBuffersIn )
@@ -3452,6 +3453,7 @@ static void wstTearDownOutputBuffers( GstWesterosSink *sink )
 
       free( sink->soc.outBuffers );
       sink->soc.outBuffers= 0;
+      sink->soc.outQueuedCount= 0;
    }
 
    if ( sink->soc.numBuffersOut )
@@ -4464,13 +4466,13 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                              }
                              else
                              {
-                                GST_ERROR("release received for non-locked buffer %d (%d)\n", bid, bi );
+                                GST_ERROR("release received for non-locked buffer %d (%d)", bid, bi );
                                 FRAME("out:       error: release received for non-locked buffer %d (%d)", bid, bi);
                              }
                           }
                           else
                           {
-                             GST_DEBUG("release received for stale buffer %d\n", bid );
+                             GST_DEBUG("release received for stale buffer %d", bid );
                              FRAME("out:       note: release received for stale buffer %d", bid);
                           }
                         }
@@ -5227,7 +5229,7 @@ static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, in
       cropy= (cropy*WL_VPC_SURFACE_CROP_DENOM)/sink->windowHeight;
       cropw= (cropw*WL_VPC_SURFACE_CROP_DENOM)/sink->windowWidth;
       croph= (croph*WL_VPC_SURFACE_CROP_DENOM)/sink->windowHeight;
-      GST_DEBUG("wstSetTextureCrop: %d, %d, %d, %d - %d, %d, %d, %d\n", vx, vy, vw, vh, cropx, cropy, cropw, croph);
+      GST_DEBUG("wstSetTextureCrop: %d, %d, %d, %d - %d, %d, %d, %d", vx, vy, vw, vh, cropx, cropy, cropw, croph);
       wl_vpc_surface_set_geometry_with_crop( sink->vpcSurface, vx, vy, vw, vh, cropx, cropy, cropw, croph );
    }
    else
@@ -6286,7 +6288,7 @@ static bool swAllocSWBuffer( GstWesterosSink *sink, int buffIndex, int width, in
       rc= ioctl( sink->soc.drmFd, DRM_IOCTL_MODE_CREATE_DUMB, &createDumb );
       if ( rc )
       {
-         GST_ERROR("DRM_IOCTL_MODE_CREATE_DUMB failed: rc %d errno %d\n", rc, errno);
+         GST_ERROR("DRM_IOCTL_MODE_CREATE_DUMB failed: rc %d errno %d", rc, errno);
          goto exit;
       }
       memset( &mapDumb, 0, sizeof(mapDumb) );
