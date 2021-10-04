@@ -2696,6 +2696,24 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                           }
                         }
                         break;
+                     case 'D':
+                        if ( mlen >= 5)
+                        {
+                          int debugLevel= getU32( &m[4] );
+                          GST_DEBUG("got video-debug-level %d from video server", debugLevel);
+                          if ( (debugLevel >= 0) && (debugLevel <= 7) )
+                          {
+                             if ( debugLevel == 0 )
+                             {
+                                gst_debug_category_reset_threshold( gst_westeros_sink_debug );
+                             }
+                             else
+                             {
+                                gst_debug_category_set_threshold( gst_westeros_sink_debug, (GstDebugLevel)debugLevel );
+                             }
+                          }
+                        }
+                        break;
                      default:
                         break;
                   }

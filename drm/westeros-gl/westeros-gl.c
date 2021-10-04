@@ -133,6 +133,7 @@ typedef struct _VideoServerConnection
    bool threadStopRequested;
    int refreshRate;
    int zoomMode;
+   int videoDebugLevel;
    int syncType;
    int sessionId;
 } VideoServerConnection;
@@ -403,6 +404,7 @@ typedef struct _WstGLCtx
    WstOffloadMsgQ offloadMsgQ;
    bool autoFRMModeEnabled;
    int zoomMode;
+   int videoDebugLevel;
 } WstGLCtx;
 
 typedef struct _WstGLSizeCBInfo
@@ -446,6 +448,7 @@ static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bu
 static void wstVideoServerSendStatus( VideoServerConnection *conn, long long displayedFrameTime, int dropFrameCount );
 static void wstVideoServerSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime );
 static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMode );
+static void wstVideoServerSendDebugLevel( VideoServerConnection *conn, int debugLevel );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
 static void wstSelectMode( WstGLCtx *ctx, int width, int height );
@@ -1397,6 +1400,49 @@ static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMod
    pthread_mutex_unlock( &conn->mutex );
 }
 
+static void wstVideoServerSendDebugLevel( VideoServerConnection *conn, int debugLevel )
+{
+   struct msghdr msg;
+   struct iovec iov[1];
+   unsigned char mbody[4+4];
+   int len;
+   int sentLen;
+
+   pthread_mutex_lock( &conn->mutex );
+
+   msg.msg_name= NULL;
+   msg.msg_namelen= 0;
+   msg.msg_iov= iov;
+   msg.msg_iovlen= 1;
+   msg.msg_control= 0;
+   msg.msg_controllen= 0;
+   msg.msg_flags= 0;
+
+   len= 0;
+   mbody[len++]= 'V';
+   mbody[len++]= 'S';
+   mbody[len++]= 5;
+   mbody[len++]= 'D';
+   len += wstPutU32( &mbody[4], debugLevel );
+
+   iov[0].iov_base= (char*)mbody;
+   iov[0].iov_len= len;
+
+   do
+   {
+      sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+   }
+   while ( (sentLen < 0) && (errno == EINTR));
+
+   if ( sentLen == len )
+   {
+      DEBUG("sent videoDebugLevel %d to client", debugLevel);
+      conn->videoDebugLevel= debugLevel;
+   }
+
+   pthread_mutex_unlock( &conn->mutex );
+}
+
 static int wstAdaptFd( int fdin )
 {
    int fdout= fdin;
@@ -1461,6 +1507,7 @@ static void *wstVideoServerConnectionThread( void *arg )
    conn->videoPlane->conn= conn;
 
    conn->zoomMode= -1;
+   conn->videoDebugLevel= -1;
 
    conn->threadStarted= true;
    while( !conn->threadStopRequested )
@@ -1472,6 +1519,10 @@ static void *wstVideoServerConnectionThread( void *arg )
       if ( (gCtx->zoomMode != -1) && (gCtx->zoomMode != conn->zoomMode) )
       {
          wstVideoServerSendZoomMode( conn, gCtx->zoomMode );
+      }
+      if ( (gCtx->videoDebugLevel != -1) && (gCtx->videoDebugLevel != conn->videoDebugLevel) )
+      {
+         wstVideoServerSendDebugLevel( conn, gCtx->videoDebugLevel );
       }
 
       iov[0].iov_base= (char*)mbody;
@@ -2411,6 +2462,10 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                   {
                      sprintf( conn->response, "%d: zoom-mode %d", 0, gCtx->zoomMode );
                   }
+                  else if ( (tlen == 17) && !strncmp( tok, "video-debug-level", tlen) )
+                  {
+                     sprintf( conn->response, "%d: video-debug-level %d", 0, gCtx->videoDebugLevel );
+                  }
                   else if ( (tlen == 8) && !strncmp( tok, "loglevel", tlen ) )
                   {
                      sprintf( conn->response, "%d: loglevel %d", 0, g_activeLevel );
@@ -2635,6 +2690,30 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                      else
                      {
                         sprintf( conn->response, "%d: %s", -1, "set zoom-mode missing argument(s)" );
+                     }
+                  }
+                  else if ( (tlen == 17) && !strncmp( tok, "video-debug-level", tlen) )
+                  {
+                     tok= strtok_r( 0, " ", &ctx );
+                     if ( tok )
+                     {
+                        int value;
+                        value= atoi( tok );
+                        if ( value >= 0 )
+                        {
+                           pthread_mutex_lock( &gMutex );
+                           gCtx->videoDebugLevel= value;
+                           pthread_mutex_unlock( &gMutex );
+                           sprintf( conn->response, "%d: video-debug-level %d", 0, gCtx->videoDebugLevel );
+                        }
+                        else
+                        {
+                           sprintf( conn->response, "%d: %s", -1, "set zoom-mode invalid argument(s)" );
+                        }
+                     }
+                     else
+                     {
+                        sprintf( conn->response, "%d: %s", -1, "set video-debug-level missing argument(s)" );
                      }
                   }
                   else if ( (tlen == 8) && !strncmp( tok, "loglevel", tlen ) )
@@ -3743,6 +3822,7 @@ static WstGLCtx *wstInitCtx( void )
       ctx->graphicsEnable= true;
       ctx->videoEnable= true;
       ctx->zoomMode= -1;
+      ctx->videoDebugLevel= -1;
       #ifndef WESTEROS_GL_NO_PLANES
       ctx->usePlanes= true;
       #endif
