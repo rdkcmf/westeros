@@ -28,6 +28,14 @@
 
 #include "simplebuffer-client-protocol.h"
 
+#ifndef NO_GENERIC_AVSYNC
+#define USE_GENERIC_AVSYNC
+#endif
+
+#ifdef USE_AMLOGIC_MESON
+#undef USE_GENERIC_AVSYNC
+#endif
+
 #define WESTEROS_SINK_CAPS \
       "video/x-h264, " \
       "parsed=(boolean) true, " \
@@ -106,6 +114,24 @@ typedef struct _WstSWBuffer
    int pitch0;
    int pitch1;
 } WstSWBuffer;
+#endif
+
+#ifdef USE_GENERIC_AVSYNC
+typedef struct _AVSyncCtrl
+{
+   pthread_mutex_t mutex;
+   long long sysTime;
+   long long avTime;
+} AVSyncCtrl;
+
+typedef struct _AVSyncCtx
+{
+   int fd;
+   char name[PATH_MAX];
+   int ctrlSize;
+   AVSyncCtrl *ctrl;
+   GstElement *audioSink;
+} AVSyncCtx;
 #endif
 
 typedef struct _WstPARInfo
@@ -264,6 +290,10 @@ struct _GstWesterosSinkSoc
    gboolean useDmabufOutput;
    int dwMode;
    int drmFd;
+
+   #ifdef USE_GENERIC_AVSYNC
+   AVSyncCtx *avsctx;
+   #endif
 
    #ifdef USE_GST1
    GstPadChainFunction chainOrg;

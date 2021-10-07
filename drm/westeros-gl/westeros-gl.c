@@ -28,6 +28,7 @@
 #include <semaphore.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -94,6 +95,14 @@
 #ifdef EGL_ANDROID_native_fence_sync
 #define DRM_USE_NATIVE_FENCE
 #endif
+#endif
+
+#ifndef NO_GENERIC_AVSYNC
+#define USE_GENERIC_AVSYNC
+#endif
+
+#ifdef USE_AMLOGIC_MESON
+#undef USE_GENERIC_AVSYNC
 #endif
 
 typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
@@ -207,6 +216,15 @@ typedef struct _VideoFrame
    void *vf;
 } VideoFrame;
 
+#ifdef USE_GENERIC_AVSYNC
+typedef struct _AVSyncCtrl
+{
+   pthread_mutex_t mutex;
+   long long sysTime;
+   long long avTime;
+} AVSyncCtrl;
+#endif
+
 #define VFM_QUEUE_CAPACITY (16)
 typedef struct _VideoFrameManager
 {
@@ -216,6 +234,7 @@ typedef struct _VideoFrameManager
    VideoFrame *queue;
    pthread_mutex_t mutex;
    bool paused;
+   bool resetBaseTime;
    bool frameAdvance;
    long long vblankTime;
    long long vblankInterval;
@@ -235,6 +254,13 @@ typedef struct _VideoFrameManager
    bool syncInit;
    void *sync;
    int syncSession;
+   #ifdef USE_GENERIC_AVSYNC
+   int avscFd;
+   int avscSize;
+   AVSyncCtrl *avscCtrl;
+   long long avscAVTime;
+   bool avscAdjust;
+   #endif
 } VideoFrameManager;
 
 #define ACTIVE_FRAMES (4)
@@ -434,6 +460,11 @@ static void wstUpdateResources( int type, bool add, long long v, int line );
 static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *conn );
 static void wstDestroyVideoFrameManager( VideoFrameManager *vfm );
 static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
+#ifdef USE_GENERIC_AVSYNC
+static bool wstVideoFrameManagerSetSyncCtrl( VideoFrameManager *vfm, int fd, int size );
+static void wstVideoFrameManagerClearSyncCtrl( VideoFrameManager *vfm );
+static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm );
+#endif
 static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH );
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm );
@@ -481,6 +512,9 @@ static bool g_emitFPS= false;
 static PREALGLFLUSH gRealGLFlush= 0;
 static PREALGLFINISH gRealGLFinish= 0;
 static bool g_useRefreshLock= false;
+#endif
+#ifdef USE_GENERIC_AVSYNC
+static bool g_useGenericAVSync= false;
 #endif
 static int g_activeLevel= 2;
 static bool g_frameDebug= false;
@@ -1140,12 +1174,25 @@ static void wstVideoServerFlush( VideoServerConnection *conn )
    int rc;
    int len;
    int expireLimit= 0;
+   #ifdef USE_GENERIC_AVSYNC
+   int avscFd;
+   int avscSize;
+   AVSyncCtrl *avscCtrl;
+   #endif
 
    DEBUG("wstVideoServerFlush: enter");
 
    if ( conn->videoPlane->vfm )
    {
       expireLimit= conn->videoPlane->vfm->expireLimit;
+      #ifdef USE_GENERIC_AVSYNC
+      avscFd= conn->videoPlane->vfm->avscFd;
+      avscSize= conn->videoPlane->vfm->avscSize;
+      avscCtrl= conn->videoPlane->vfm->avscCtrl;
+      conn->videoPlane->vfm->avscFd= -1;
+      conn->videoPlane->vfm->avscSize= 0;
+      conn->videoPlane->vfm->avscCtrl= 0;
+      #endif
       wstDestroyVideoFrameManager( conn->videoPlane->vfm );
       conn->videoPlane->vfm= 0;
    }
@@ -1154,6 +1201,11 @@ static void wstVideoServerFlush( VideoServerConnection *conn )
    if ( conn->videoPlane->vfm )
    {
       conn->videoPlane->vfm->expireLimit= expireLimit;
+      #ifdef USE_GENERIC_AVSYNC
+      conn->videoPlane->vfm->avscFd= avscFd;
+      conn->videoPlane->vfm->avscSize= avscSize;
+      conn->videoPlane->vfm->avscCtrl= avscCtrl;
+      #endif
    }
    else
    {
@@ -1566,6 +1618,9 @@ static void *wstVideoServerConnectionThread( void *arg )
                switch( id )
                {
                   case 'F':
+                  #ifdef USE_GENERIC_AVSYNC
+                  case 'I':
+                  #endif
                      cmsg= CMSG_FIRSTHDR(&msg);
                      if ( cmsg &&
                           cmsg->cmsg_level == SOL_SOCKET &&
@@ -1810,6 +1865,26 @@ static void *wstVideoServerConnectionThread( void *arg )
                               conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
                            }
                            pthread_mutex_unlock( &gMutex );
+                           #ifdef USE_GENERIC_AVSYNC
+                           if ( g_useGenericAVSync )
+                           {
+                              if ( len >= 10 )
+                              {
+                                 int avsCtrlSize= wstGetU32( m+6 );
+                                 if ( (avsCtrlSize > 0) && (fd0 >= 0 ) )
+                                 {
+                                    if ( wstVideoFrameManagerSetSyncCtrl( conn->videoPlane->vfm, fd0, avsCtrlSize ) )
+                                    {
+                                       fd0= -1;
+                                    }
+                                 }
+                                 if ( fd0 >= 0 )
+                                 {
+                                    close( fd0 );
+                                 }
+                              }
+                           }
+                           #endif
                         }
                         break;
                      case 'A':
@@ -3051,6 +3126,12 @@ static void wstDestroyVideoFrameManager( VideoFrameManager *vfm )
          vfm->queueCapacity= 0;
          pthread_mutex_unlock( &vfm->mutex);
       }
+      #ifdef USE_GENERIC_AVSYNC
+      if ( vfm->avscCtrl )
+      {
+         wstVideoFrameManagerClearSyncCtrl( vfm );
+      }
+      #endif
       pthread_mutex_destroy( &vfm->mutex);
       free( vfm );
    }
@@ -3107,6 +3188,78 @@ static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type )
    }
    #endif
 }
+
+#ifdef USE_GENERIC_AVSYNC
+static bool wstVideoFrameManagerSetSyncCtrl( VideoFrameManager *vfm, int fd, int size )
+{
+   bool result= false;
+   AVSyncCtrl *ctrlNew= 0;
+
+   pthread_mutex_lock( &gMutex );
+   if ( vfm->avscCtrl )
+   {
+      wstVideoFrameManagerClearSyncCtrl( vfm );
+   }
+   if ( (fd >= 0) && (size >= sizeof(AVSyncCtrl)) )
+   {
+      ctrlNew= (AVSyncCtrl*)mmap( NULL,
+                                  size,
+                                  PROT_READ|PROT_WRITE,
+                                  MAP_SHARED | MAP_POPULATE,
+                                  fd,
+                                  0 //offset
+                                );
+      if ( ctrlNew != MAP_FAILED )
+      {
+         vfm->avscCtrl= ctrlNew;
+         vfm->avscFd= fd;
+         vfm->avscSize= size;
+         DEBUG("have new avscCtrl %p fd %d", ctrlNew, fd);
+         result= true;
+      }
+   }
+   pthread_mutex_unlock( &gMutex );
+
+   return result;
+}
+
+static void wstVideoFrameManagerClearSyncCtrl( VideoFrameManager *vfm )
+{
+   if ( vfm->avscCtrl )
+   {
+      munmap( vfm->avscCtrl, vfm->avscSize );
+      vfm->avscCtrl= 0;
+      if ( vfm->avscFd >= 0 )
+      {
+         close( vfm->avscFd );
+         vfm->avscFd= -1;
+      }
+      vfm->avscSize= 0;
+   }
+}
+
+static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm )
+{
+   long long time= 0;
+   long long avOffset;
+   if ( vfm && vfm->avscCtrl )
+   {
+      pthread_mutex_lock( &vfm->avscCtrl->mutex );
+      time= vfm->avscCtrl->avTime;
+      pthread_mutex_unlock( &vfm->avscCtrl->mutex );
+      if ( vfm->avscAdjust && (vfm->frameTimeBase != 0) )
+      {
+         avOffset= vfm->avscAVTime - vfm->displayedFrameTime;
+         vfm->avscAdjust= false;
+         FRAME("video %lld audio: %lld (%lld) frameTimeBase %lld adjust %lld", vfm->displayedFrameTime, vfm->avscAVTime, time, vfm->frameTimeBase, avOffset/10);
+         TRACE3("video %lld audio: %lld (%lld) frameTimeBase %lld adjust %lld", vfm->displayedFrameTime, vfm->avscAVTime, time, vfm->frameTimeBase, avOffset/10);
+         vfm->frameTimeBase += avOffset/10;
+         if ( vfm->frameTimeBase == 0 ) vfm->frameTimeBase= 1;
+      }
+   }
+   return time;
+}
+#endif
 
 static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH )
 {
@@ -3193,6 +3346,10 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
    {
       expireLimit= vfm->expireLimit;
    }
+   if ( vfm->paused )
+   {
+      vfm->resetBaseTime= true;
+   }
    #ifdef WESTEROS_GL_AVSYNC
    if ( vfm->sync )
    {
@@ -3242,6 +3399,9 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
    if ( !vfm->paused || vfm->frameAdvance )
    {
       int i;
+      #ifdef USE_GENERIC_AVSYNC
+      long long avTime= wstVideoFrameMangerGetTimeSyncCtrl( vfm );
+      #endif
       if ( (vfm->queueSize && vfm->flipTimeBase) || (vfm->queueSize > 2) || vfm->frameAdvance )
       {
          long long flipTime;
@@ -3308,6 +3468,10 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                   vfm->flipTimeCurrent= flipTime;
                   vfm->frameTimeCurrent= f->frameTime + vfm->adjust;
                   vfm->frameAdvance= false;
+                  #ifdef USE_GENERIC_AVSYNC
+                  vfm->avscAdjust= true;
+                  vfm->avscAVTime= avTime;
+                  #endif
                   break;
                }
             }
@@ -3337,8 +3501,9 @@ done:
 static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause )
 {
    FRAME("set pause: %d", pause);
-   if ( vfm->paused && !pause )
+   if ( vfm->paused && !pause && vfm->resetBaseTime )
    {
+      vfm->resetBaseTime= false;
       vfm->flipTimeBase= 0;
    }
    vfm->paused= pause;
@@ -3872,6 +4037,18 @@ static WstGLCtx *wstInitCtx( void )
          ctx->secureGraphics= true;
       }
       INFO("westeros-gl: secure graphics: %d", ctx->secureGraphics);
+      #ifndef WESTEROS_GL_AVSYNC
+      {
+         #ifdef USE_GENERIC_AVSYNC
+         env= getenv("WESTEROS_GL_USE_GENERIC_AVSYNC");
+         if ( env )
+         {
+            g_useGenericAVSync= true;
+         }
+         INFO("westeros-gl: generic avsync %d", g_useGenericAVSync);
+         #endif
+      }
+      #endif
       #if (defined DRM_USE_OUT_FENCE || defined DRM_USE_NATIVE_FENCE)
       ctx->nativeOutputFenceFd= -1;
       #endif
@@ -4253,7 +4430,6 @@ static WstGLCtx *wstInitCtx( void )
          }
 
          INFO( "wstInitCtx; found %d overlay planes", ctx->overlayPlanes.totalCount );
-         INFO( "using refresh lock when there is video" );
 
          if (
               haveVideoPlanes &&

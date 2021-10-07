@@ -25,6 +25,7 @@
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -179,6 +180,12 @@ static gpointer wstDispatchThread(gpointer data);
 static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *errorText, const char *description );
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 static int ioctl_wrapper( int fd, int request, void* arg );
+#ifdef USE_GENERIC_AVSYNC
+static void wstPruneAVSyncFiles( GstWesterosSink *sink );
+static AVSyncCtx* wstCreateAVSyncCtx( GstWesterosSink *sink );
+static void wstDestroyAVSyncCtx( GstWesterosSink *sink, AVSyncCtx *avsctx );
+static void wstUpdateAVSyncCtx( GstWesterosSink *sink, AVSyncCtx *avsctx );
+#endif
 static bool swIsSWDecode( GstWesterosSink *sink );
 #ifdef ENABLE_SW_DECODE
 static bool swInit( GstWesterosSink *sink );
@@ -915,6 +922,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveColorimetry= FALSE;
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
+   #ifdef USE_GENERIC_AVSYNC
+   sink->soc.avsctx= 0;
+   #endif
    #ifdef ENABLE_SW_DECODE
    sink->soc.firstFrameThread= NULL;
    sink->soc.nextSWBuffer= 0;
@@ -999,6 +1009,10 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       int level= atoi( env );
       g_frameDebug= (level > 0 ? true : false);
    }
+
+   #ifdef USE_GENERIC_AVSYNC
+   wstPruneAVSyncFiles( sink );
+   #endif
 
    result= TRUE;
 
@@ -2288,6 +2302,14 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       g_thread_join( sink->soc.dispatchThread );
       sink->soc.dispatchThread= NULL;
    }
+
+   #ifdef USE_GENERIC_AVSYNC
+   if ( sink->soc.avsctx )
+   {
+      wstDestroyAVSyncCtx( sink, sink->soc.avsctx );
+      sink->soc.avsctx= 0;
+   }
+   #endif
 
    LOCK(sink);
    if ( sink->soc.sb )
@@ -4019,9 +4041,18 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
       GstWesterosSink *sink= conn->sink;
       struct msghdr msg;
       struct iovec iov[1];
+      #ifdef USE_GENERIC_AVSYNC
+      unsigned char mbody[13];
+      #else
       unsigned char mbody[9];
+      #endif
       int len;
       int sentLen;
+      #ifdef USE_GENERIC_AVSYNC
+      struct cmsghdr *cmsg;
+      char cmbody[CMSG_SPACE(sizeof(int))];
+      int fdToSend= -1;
+      #endif
 
       msg.msg_name= NULL;
       msg.msg_namelen= 0;
@@ -4038,6 +4069,33 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
       mbody[len++]= 'I';
       mbody[len++]= sink->soc.syncType;
       len += putU32( &mbody[len], conn->sink->soc.sessionId );
+      #ifdef USE_GENERIC_AVSYNC
+      if ( sink->soc.avsctx )
+      {
+         fdToSend= fcntl( sink->soc.avsctx->fd, F_DUPFD_CLOEXEC, 0 );
+         if ( fdToSend >= 0 )
+         {
+            int *fd;
+            cmsg= (struct cmsghdr*)cmbody;
+            cmsg->cmsg_len= CMSG_LEN(sizeof(int));
+            cmsg->cmsg_level= SOL_SOCKET;
+            cmsg->cmsg_type= SCM_RIGHTS;
+
+            msg.msg_control= cmsg;
+            msg.msg_controllen= cmsg->cmsg_len;
+
+            fd= (int*)CMSG_DATA(cmsg);
+            fd[0]= fdToSend;
+
+            len += putU32( &mbody[len], sink->soc.avsctx->ctrlSize );
+            mbody[2]= (len-3);
+         }
+         else
+         {
+            GST_ERROR("wstSendSessionInfoVideoClientConnection: failed to dup avsctx fd");
+         }
+      }
+      #endif
 
       iov[0].iov_base= (char*)mbody;
       iov[0].iov_len= len;
@@ -4053,6 +4111,12 @@ static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *c
          GST_DEBUG("sent session info: type %d sessionId %d to video server", sink->soc.syncType, sink->soc.sessionId);
          g_print("sent session info: type %d sessionId %d to video server\n", sink->soc.syncType, sink->soc.sessionId);
       }
+      #ifdef USE_GENERIC_AVSYNC
+      if ( fdToSend >= 0 )
+      {
+         close( fdToSend );
+      }
+      #endif
    }
 }
 
@@ -4197,7 +4261,201 @@ static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn )
    }
 }
 
-#ifdef USE_AMLOGIC_MESON
+#ifdef USE_GENERIC_AVSYNC
+#define AVSYNC_PREFIX "westeros-sink-av-"
+#define AVSYNC_TEMPLATE "/tmp/" AVSYNC_PREFIX "%d-"
+static void wstPruneAVSyncFiles( GstWesterosSink *sink )
+{
+   DIR *dir;
+   struct dirent *result;
+   struct stat fileinfo;
+   int prefixLen;
+   int pid, rc;
+   const char *path;
+   char work[34];
+   path= getenv("XDG_RUNTIME_DIR");
+   if ( path )
+   {
+      if ( NULL != (dir = opendir( path )) )
+      {
+         prefixLen= strlen(AVSYNC_PREFIX);
+         while( NULL != (result = readdir( dir )) )
+         {
+            if ( (result->d_type != DT_DIR) &&
+                !strncmp(result->d_name, AVSYNC_PREFIX, prefixLen) )
+            {
+               snprintf( work, sizeof(work), "%s/%s", path, result->d_name);
+               if ( sscanf( work, AVSYNC_TEMPLATE, &pid ) == 1 )
+               {
+                  // Check if the pid of this temp file is still valid
+                  snprintf(work, sizeof(work), "/proc/%d", pid);
+                  rc= stat( work, &fileinfo );
+                  if ( rc )
+                  {
+                     // The pid is not valid, delete the file
+                     snprintf( work, sizeof(work), "%s/%s", path, result->d_name);
+                     GST_DEBUG("removing temp file: %s", work);
+                     remove( work );
+                  }
+               }
+            }
+         }
+
+         closedir( dir );
+      }
+   }
+}
+
+static AVSyncCtx* wstCreateAVSyncCtx( GstWesterosSink *sink )
+{
+   AVSyncCtx *avsctx= 0;
+   int static count= 0;
+   int pid, len, rc;
+   pthread_mutexattr_t attr;
+   const char *path;
+   char name[PATH_MAX];
+   AVSyncCtrl avsctrl;
+
+   pid= getpid();
+
+   path= getenv("XDG_RUNTIME_DIR");
+   if ( !path )
+   {
+      GST_ERROR("XDG_RUNTIME_DIR is not set");
+      goto exit;
+   }
+
+   len= snprintf( name, PATH_MAX, "%s/%s%d-%d", path, AVSYNC_PREFIX, pid, count ) + 1;
+   if ( len < 0 )
+   {
+      GST_ERROR("error building avs control file name");
+      goto exit;
+   }
+
+   if ( len > PATH_MAX )
+   {
+      GST_ERROR("avs control file name length exceeds max length %d", PATH_MAX );
+      goto exit;
+   }
+
+   rc= pthread_mutexattr_init( &attr );
+   if ( rc )
+   {
+      GST_ERROR("pthread_mutexattr_init failed: %d", rc);
+      goto exit;
+   }
+
+   rc= pthread_mutexattr_setpshared( &attr, PTHREAD_PROCESS_SHARED );
+   if ( rc )
+   {
+      GST_ERROR("pthread_mutexattr_setpshared failed: %d", rc);
+      goto exit;
+   }
+
+   avsctx= (AVSyncCtx*)calloc( 1, sizeof(AVSyncCtx) );
+   if ( avsctx )
+   {
+      avsctx->ctrlSize= sizeof(AVSyncCtrl);
+      strncpy( avsctx->name, name, PATH_MAX);
+
+      avsctx->fd= open( name,
+                       (O_CREAT|O_CLOEXEC|O_RDWR),
+                       (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH) );
+      if ( avsctx->fd < 0 )
+      {
+         GST_ERROR("Error creating avs control file (%s) errno %d", name, errno);
+         goto error_exit;
+      }
+
+      memset( &avsctrl, 0, avsctx->ctrlSize );
+      rc= write( avsctx->fd, &avsctrl, avsctx->ctrlSize );
+      if ( rc < 0 )
+      {
+         GST_ERROR("Error writing avs control file: errno %d", errno);
+         goto error_exit;
+      }
+
+      avsctx->ctrl= (AVSyncCtrl*)mmap( NULL,
+                                       avsctx->ctrlSize,
+                                       PROT_READ|PROT_WRITE,
+                                       MAP_SHARED | MAP_POPULATE,
+                                       avsctx->fd,
+                                       0 //offset
+                                     );
+      if ( avsctx->ctrl == MAP_FAILED )
+      {
+         GST_ERROR("Error from mmmap for avs control file");
+         goto error_exit;
+      }
+
+      rc= pthread_mutex_init( &avsctx->ctrl->mutex, &attr);
+      if ( rc )
+      {
+         GST_ERROR("pthread_mutex_init failed: %d", rc);
+         goto error_exit;
+      }
+   }
+
+   count= count+1;
+
+exit:
+   return avsctx;
+
+error_exit:
+   free( avsctx );
+   avsctx= 0;
+   goto exit;
+}
+
+static void wstDestroyAVSyncCtx( GstWesterosSink *sink, AVSyncCtx *avsctx )
+{
+   if ( avsctx )
+   {
+      if ( avsctx->audioSink )
+      {
+         gst_object_unref( avsctx->audioSink );
+         avsctx->audioSink= 0;
+      }
+      if ( avsctx->ctrl )
+      {
+         pthread_mutex_destroy( &avsctx->ctrl->mutex );
+         munmap( avsctx->ctrl, avsctx->ctrlSize );
+         avsctx->ctrl= 0;
+      }
+      if ( avsctx->fd >= 0 )
+      {
+         close( avsctx->fd );
+         avsctx->fd= -1;
+         if ( remove( avsctx->name ) != 0 )
+         {
+            GST_ERROR("remove failed for avsctx");
+         }
+      }
+      free( avsctx );
+   }
+}
+
+static void wstUpdateAVSyncCtx( GstWesterosSink *sink, AVSyncCtx *avsctx )
+{
+   if ( avsctx && avsctx->ctrl )
+   {
+      if ( avsctx->audioSink )
+      {
+         long long avTime= 0;
+         if ( gst_element_query_position( avsctx->audioSink, GST_FORMAT_TIME, &avTime ) )
+         {
+            pthread_mutex_lock( &avsctx->ctrl->mutex );
+            avsctx->ctrl->sysTime= g_get_monotonic_time();
+            avsctx->ctrl->avTime= avTime/1000LL;
+            pthread_mutex_unlock( &avsctx->ctrl->mutex );
+            GST_LOG("set avTime %lld\n", avsctx->ctrl->avTime);
+         }
+      }
+   }
+}
+#endif
+
+#if defined USE_AMLOGIC_MESON || defined USE_GENERIC_AVSYNC
 static GstElement* wstFindAudioSink( GstWesterosSink *sink )
 {
    GstElement *audioSink= 0;
@@ -4284,7 +4542,7 @@ static GstElement* wstFindAudioSink( GstWesterosSink *sink )
 
 static void wstSetSessionInfo( GstWesterosSink *sink )
 {
-   #ifdef USE_AMLOGIC_MESON
+   #if defined USE_AMLOGIC_MESON || defined USE_GENERIC_AVSYNC
    if ( sink->soc.conn )
    {
       GstElement *audioSink= 0;
@@ -4330,6 +4588,25 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       if ( audioSink )
       {
          sink->soc.syncType= 1;
+         #ifdef USE_GENERIC_AVSYNC
+         if ( !gst_base_sink_get_sync(GST_BASE_SINK(sink)) )
+         {
+            if ( sink->soc.avsctx && (sink->soc.avsctx->audioSink != audioSink) )
+            {
+               wstDestroyAVSyncCtx( sink, sink->soc.avsctx );
+               sink->soc.avsctx= 0;
+            }
+            if ( !sink->soc.avsctx )
+            {
+               sink->soc.avsctx= wstCreateAVSyncCtx( sink );
+               syncTypePrev= -1;
+            }
+            if ( sink->soc.avsctx )
+            {
+               sink->soc.avsctx->audioSink= (GstElement*)gst_object_ref(audioSink);
+            }
+         }
+         #endif
          gst_object_unref( audioSink );
       }
       if ( clock )
@@ -5665,6 +5942,9 @@ capture_start:
          int rc;
 
          LOCK(sink);
+         #ifdef USE_GENERIC_AVSYNC
+         wstUpdateAVSyncCtx( sink, sink->soc.avsctx );
+         #endif
          wstProcessMessagesVideoClientConnection( sink->soc.conn );
 
          if ( sink->windowChange )
