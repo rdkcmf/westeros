@@ -922,6 +922,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.haveColorimetry= FALSE;
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
+   sink->soc.dvBaseLayerPresent= -1;
+   sink->soc.dvEnhancementLayerPresent= -1;
    #ifdef USE_GENERIC_AVSYNC
    sink->soc.avsctx= 0;
    #endif
@@ -1507,6 +1509,16 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
       {
          gint num, denom, width, height;
          double pixelAspectRatioNext;
+         gboolean dv_bl_present_flag, dv_el_present_flag;
+
+         if (gst_structure_get_boolean( structure, "dv_bl_present_flag", &dv_bl_present_flag))
+         {
+            sink->soc.dvBaseLayerPresent= dv_bl_present_flag?1:0;
+         }
+         if (gst_structure_get_boolean( structure, "dv_el_present_flag", &dv_el_present_flag))
+         {
+            sink->soc.dvEnhancementLayerPresent= dv_el_present_flag?1:0;
+         }
          if ( gst_structure_get_fraction( structure, "framerate", &num, &denom ) )
          {
             if ( denom == 0 ) denom= 1;

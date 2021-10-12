@@ -51,6 +51,8 @@ struct aml_vdec_cfg_infos
     * bit 16       : force progressive output flag.
     * bit 15       : enable nr.
     * bit 14       : enable di local buff.
+    * bit 13       : report downscale yuv buffer size flag.
+    * bit 12       : for second field pts mode.default value 1.
     * bit 1        : Non-standard dv flag.
     * bit 0        : dv two layer flag.
     */
@@ -148,6 +150,30 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    streamparm.type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
    decParm->parms_status= V4L2_CONFIG_PARM_DECODE_CFGINFO;
 
+   /*set bit12 value to 1,
+    *v4l2 output 0 pts of second interlace field frame */
+   decParm->cfg.metadata_config_flag |= (1 << 12);
+
+   /* have base and enhancement layers both, that means its dual layer, dv two layer flag will be true */
+   if ( (sink->soc.dvBaseLayerPresent == 1) && (sink->soc.dvEnhancementLayerPresent == 1) )
+   {
+      decParm->cfg.metadata_config_flag |= (1 << 0);
+   }
+   else
+   {
+      decParm->cfg.metadata_config_flag |= (0 << 0);
+   }
+
+   /* have one of then, it's standard dv stream, Non-standard dv flag will be false */
+   if ( (sink->soc.dvBaseLayerPresent == 0) && (sink->soc.dvEnhancementLayerPresent == 0) )
+   {
+      decParm->cfg.metadata_config_flag |= (1 << 1);
+   }
+   else
+   {
+      decParm->cfg.metadata_config_flag |= (0 << 1);
+   }
+
    switch( sink->soc.inputFormat )
    {
       default:
@@ -191,6 +217,8 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
                     fmt, frameWidth, frameHeight, decParm->cfg.double_write_mode);
          break;
    }
+
+   g_print("metadata_config_flag 0x%x\n", decParm->cfg.metadata_config_flag);
 
    env= getenv("WESTEROS_SINK_AMLOGIC_DW_MODE");
    if ( env )

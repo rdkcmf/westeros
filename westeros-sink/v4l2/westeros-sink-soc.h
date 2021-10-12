@@ -281,6 +281,9 @@ struct _GstWesterosSinkSoc
    gboolean haveContentLightLevel;
    int hdrContentLightLevel[2];
 
+   int dvBaseLayerPresent;
+   int dvEnhancementLayerPresent;
+
    GstBuffer *prerollBuffer;
    gboolean frameStepOnPreroll;
    gboolean forceAspectRatio;
