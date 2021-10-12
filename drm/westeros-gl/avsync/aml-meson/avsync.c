@@ -81,7 +81,7 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       vfm->sync= av_sync_create( sessionId, /* session_id */
                                  vfm->conn->syncType,
                                  AV_SYNC_TYPE_VIDEO,
-                                 3 /* start threshold */
+                                 1 /* start threshold */
                                );
       if ( vfm->sync )
       {
@@ -96,7 +96,7 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       #else
       vfm->sync= av_sync_create( sessionId, /* session_id */
                                  vfm->conn->syncType,
-                                 3, /* start threshold */
+                                 1, /* start threshold */
                                  2, /* delay */
                                  vsyncInterval );
       if ( !vfm->sync )
