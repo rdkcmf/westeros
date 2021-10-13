@@ -4773,7 +4773,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                            guint64 frameTime= getS64( &m[4] );
                            sink->soc.numDropped= getU32( &m[12] );
                            FRAME( "out:       status received: frameTime %lld numDropped %d", frameTime, sink->soc.numDropped);
-                           if ( sink->prevPositionSegmentStart != 0xFFFFFFFFFFFFFFFFLL )
+                           if ( (frameTime != -1LL) && (sink->prevPositionSegmentStart != 0xFFFFFFFFFFFFFFFFLL) )
                            {
                               gint64 currentNano= frameTime*1000LL;
                               gint64 firstNano= ((sink->firstPTS/90LL)*GST_MSECOND)+((sink->firstPTS%90LL)*GST_MSECOND/90LL);
@@ -6285,6 +6285,10 @@ static gpointer wstEOSDetectionThread(gpointer data)
          eosEventSeen= sink->eosEventSeen;
          UNLOCK(sink)
 
+         if ( eosEventSeen )
+         {
+            GST_DEBUG("waiting for eos: frameOutCount %d displayCount %d (%d+%d)\n", count, displayCount, sink->soc.frameDisplayCount, sink->soc.numDropped);
+         }
          if ( videoPlaying && eosEventSeen && decoderEOS && (count == displayCount) && (outputFrameCount == count) )
          {
             --eosCountDown;

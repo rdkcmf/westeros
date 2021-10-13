@@ -451,7 +451,7 @@ static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long par
 static void wstOffloadFlushConn( VideoServerConnection *conn );
 static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int);
 static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int bufferId );
-static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm );
+static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm, long long displayedFrameTime, int dropFrameCount );
 static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime);
 static void wstOffloadFreeVideoFrameResources(VideoFrame *f );
 static void wstOffloadCloseFileHande( int fd );
@@ -668,11 +668,11 @@ static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int buffer
    wstOffloadMsgPush(WST_OLM_BUFF_RELEASE, conn, 0, bufferId);
 }
 
-static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm )
+static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm, long long displayedFrameTime, int dropFrameCount )
 {
-   TRACE1("OLM: status update frameTime %lld dropCount %d", vfm->displayedFrameTime, vfm->dropFrameCount);
-   wstOffloadMsgPush(WST_OLM_STATUS_UPDATE, conn, vfm->displayedFrameTime, vfm->dropFrameCount);
-   vfm->dropFrameCountReported = vfm->dropFrameCount;
+   TRACE1("OLM: status update frameTime %lld dropCount %d", displayedFrameTime, dropFrameCount);
+   wstOffloadMsgPush(WST_OLM_STATUS_UPDATE, conn, displayedFrameTime, dropFrameCount);
+   vfm->dropFrameCountReported = dropFrameCount;
 }
 
 static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime)
@@ -4969,6 +4969,7 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
          if ( iter->vfm )
          {
             bool sendStatus= false;
+            long long displayedFrameTime= -1LL;
             iter->vfm->vblankTime= vblankTime;
             iter->vfm->vblankInterval= vblankInterval;
             frame= wstVideoFrameManagerPopFrame( iter->vfm );
@@ -4981,6 +4982,7 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
                   iter->readyToFlip= true;
                   dirty= true;
                   iter->vfm->displayedFrameTime= frame->frameTime;
+                  displayedFrameTime= frame->frameTime;
                   sendStatus= true;
                }
             }
@@ -4996,7 +4998,7 @@ static bool wstCheckPlanes( WstGLCtx *ctx, long long vblankTime, long long vblan
             }
             if ( sendStatus )
             {
-               wstOffloadSendStatus( iter->conn, iter->vfm );
+               wstOffloadSendStatus( iter->conn, iter->vfm, displayedFrameTime, iter->vfm->dropFrameCount );
             }
          }
          iter= iter->next;
