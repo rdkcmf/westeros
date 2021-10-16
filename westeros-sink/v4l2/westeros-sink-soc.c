@@ -1551,6 +1551,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                sink->soc.frameWidth= width;
             }
+            sink->srcWidth= width;
             sink->soc.frameWidthStream= width;
          }
          height= -1;
@@ -1564,6 +1565,7 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             {
                sink->soc.frameHeight= height;
             }
+            sink->srcHeight= height;
             sink->soc.frameHeightStream= height;
          }
          pixelAspectRatioNext= 1.0;
@@ -5842,6 +5844,8 @@ capture_start:
          sink->soc.frameWidth= selection.r.width;
          sink->soc.frameHeight= selection.r.height;
       }
+      sink->srcWidth= sink->soc.frameWidth;
+      sink->srcHeight= sink->soc.frameHeight;
       wstSetSessionInfo( sink );
       UNLOCK(sink);
 

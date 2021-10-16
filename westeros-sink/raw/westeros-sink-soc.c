@@ -957,10 +957,12 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
          if ( gst_structure_get_int( structure, "width", &width ) )
          {
             sink->soc.frameWidth= width;
+            sink->srcWidth= width;
          }
          if ( gst_structure_get_int( structure, "height", &height ) )
          {
             sink->soc.frameHeight= height;
+            sink->srcHeight= height;
          }
          format= gst_structure_get_string( structure, "format" );
          if ( format )
