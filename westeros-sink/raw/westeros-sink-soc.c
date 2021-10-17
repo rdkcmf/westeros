@@ -107,6 +107,7 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
 static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, int vh );
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name );
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendResourceVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bool hide );
 static void wstSendSessionInfoVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSetSessionInfo( GstWesterosSink *sink );
@@ -2026,6 +2027,8 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
          goto exit;
       }
 
+      wstSendResourceVideoClientConnection( conn );
+
       error= false;
    }
 
@@ -2109,6 +2112,50 @@ static int putS64( unsigned char *p,  gint64 n )
    p[7]= (((guint64)n)&0xFF);
 
    return 8;
+}
+
+static void wstSendResourceVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      GstWesterosSink *sink= conn->sink;
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[8];
+      int len;
+      int sentLen;
+      int resourceId= ((sink->resAssignedId >= 0) ? sink->resAssignedId : 0);
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 5;
+      mbody[len++]= 'V';
+      len += putU32( &mbody[len], resourceId );
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent resource id to video server");
+         FRAME("sent resource id to video server");
+      }
+   }
 }
 
 static void wstSendHideVideoClientConnection( WstVideoClientConnection *conn, bool hide )

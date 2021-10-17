@@ -145,6 +145,7 @@ typedef struct _VideoServerConnection
    int videoDebugLevel;
    int syncType;
    int sessionId;
+   int videoResourceId;
 } VideoServerConnection;
 
 typedef struct _DisplayServerConnection
@@ -287,6 +288,7 @@ typedef struct _WstOverlayPlane
    bool supportsGraphics;
    bool frameRateMatchingPlane;
    int zOrder;
+   int videoResourceId;
    uint32_t crtc_id;
    drmModePlane *plane;
    drmModeObjectProperties *planeProps;
@@ -894,7 +896,7 @@ static WstOverlayPlane *wstOverlayAllocPrimary( WstOverlayPlanes *planes )
    return overlay;
 }
 
-static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool graphics )
+static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool graphics, bool primaryVideo )
 {
    WstOverlayPlane *overlay= 0;
 
@@ -905,7 +907,6 @@ static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool graphics
          (graphics || planes->availHead->supportsVideo)
       )
    {
-      ++planes->usedCount;
       if ( graphics )
       {
          overlay= planes->availTail;
@@ -922,29 +923,52 @@ static WstOverlayPlane *wstOverlayAlloc( WstOverlayPlanes *planes, bool graphics
       else
       {
          overlay= planes->availHead;
-         planes->availHead= overlay->next;
-         if ( planes->availHead )
+         while( overlay )
          {
-            planes->availHead->prev= 0;
-         }
-         else
-         {
-            planes->availTail= 0;
+            if ( (primaryVideo && overlay->frameRateMatchingPlane) ||
+                 (!primaryVideo && !overlay->frameRateMatchingPlane) )
+            {
+               if ( overlay->next )
+               {
+                  overlay->next->prev= overlay->prev;
+               }
+               else
+               {
+                  planes->availTail= overlay->prev;
+               }
+               if ( overlay->prev )
+               {
+                  overlay->prev->next= overlay->next;
+               }
+               else
+               {
+                  planes->availHead= overlay->next;
+               }
+               break;
+            }
+            else
+            {
+               overlay= overlay->next;
+            }
          }
       }
 
-      overlay->next= 0;
-      overlay->prev= planes->usedTail;
-      if ( planes->usedTail )
+      if ( overlay )
       {
-         planes->usedTail->next= overlay;
+         ++planes->usedCount;
+         overlay->next= 0;
+         overlay->prev= planes->usedTail;
+         if ( planes->usedTail )
+         {
+            planes->usedTail->next= overlay;
+         }
+         else
+         {
+            planes->usedHead= overlay;
+         }
+         planes->usedTail= overlay;
+         overlay->inUse= true;
       }
-      else
-      {
-         planes->usedHead= overlay;
-      }
-      planes->usedTail= overlay;
-      overlay->inUse= true;
    }
 
    pthread_mutex_unlock( &gCtx->mutex );
@@ -971,6 +995,7 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
       }
       overlay->inUse= false;
       overlay->conn= 0;
+      overlay->videoResourceId= -1;
       if ( planes->usedCount <= 0 )
       {
          ERROR("wstOverlayFree: unmatched free");
@@ -1534,30 +1559,6 @@ static void *wstVideoServerConnectionThread( void *arg )
 
    DEBUG("wstVideoServerConnectionThread: enter");
 
-   conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false );
-   INFO("video plane %p : zorder: %d", conn->videoPlane, (conn->videoPlane ? conn->videoPlane->zOrder: -1) );
-
-   if ( !conn->videoPlane )
-   {
-      ERROR("No video plane avaialble");
-      goto exit;
-   }
-
-   conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
-   if ( !conn->videoPlane->vfm )
-   {
-      ERROR("Unable to allocate vfm");
-      goto exit;
-   }
-
-   videoFrame.plane= conn->videoPlane;
-   for( i= 0; i < ACTIVE_FRAMES; ++i )
-   {
-      conn->videoPlane->videoFrame[i].plane= conn->videoPlane;
-   }
-
-   conn->videoPlane->conn= conn;
-
    conn->zoomMode= -1;
    conn->videoDebugLevel= -1;
 
@@ -1796,6 +1797,48 @@ static void *wstVideoServerConnectionThread( void *arg )
                               {
                                  close( fd2 );
                               }
+                           }
+                        }
+                        break;
+                     case 'V':
+                        {
+                           int videoResourceId= wstGetU32( m+1 );
+                           bool primary= (videoResourceId == 0);
+                           DEBUG("got video resource id %d from conn %p", videoResourceId, conn );
+                           if ( conn->videoPlane && (conn->videoPlane->videoResourceId != videoResourceId))
+                           {
+                              wstOverlayFree( &gCtx->overlayPlanes, conn->videoPlane );
+                              conn->videoPlane= 0;
+                           }
+                           if ( !conn->videoPlane )
+                           {
+                              conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
+                              INFO("video plane %p : zorder: %d videoResourceId %d",
+                                   conn->videoPlane, (conn->videoPlane ? conn->videoPlane->zOrder: -1), videoResourceId );
+
+                              if ( !conn->videoPlane )
+                              {
+                                 ERROR("No video plane avaialble");
+                                 goto exit;
+                              }
+
+                              conn->videoResourceId= videoResourceId;
+                              conn->videoPlane->videoResourceId= videoResourceId;
+
+                              conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
+                              if ( !conn->videoPlane->vfm )
+                              {
+                                 ERROR("Unable to allocate vfm");
+                                 goto exit;
+                              }
+
+                              videoFrame.plane= conn->videoPlane;
+                              for( i= 0; i < ACTIVE_FRAMES; ++i )
+                              {
+                                 conn->videoPlane->videoFrame[i].plane= conn->videoPlane;
+                              }
+
+                              conn->videoPlane->conn= conn;
                            }
                         }
                         break;
@@ -2046,6 +2089,7 @@ static VideoServerConnection *wstCreateVideoServerConnection( VideoServerCtx *se
       pthread_mutex_init( &conn->mutex, 0 );
       conn->socketFd= fd;
       conn->server= server;
+      conn->videoResourceId= -1;
 
       rc= pthread_attr_init( &attr );
       if ( rc )
@@ -3491,7 +3535,7 @@ done:
       vfm->underflowReported= false;
       if ( vfm->bufferIdCurrent == f->bufferId )
       {
-         avProgLog( vfm->conn->videoPlane->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", "hold");
+         avProgLog( vfm->conn->videoPlane->videoFrame[FRAME_CURR].frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "hold");
       }
       vfm->bufferIdCurrent= f->bufferId;
    }
@@ -4357,6 +4401,7 @@ static WstGLCtx *wstInitCtx( void )
                         newPlane->plane= plane;
                         newPlane->supportsVideo= isVideo;
                         newPlane->supportsGraphics= isGraphics;
+                        newPlane->videoResourceId= -1;
                         if ( ctx->useZPos )
                         {
                            newPlane->zOrder= n;
@@ -6041,7 +6086,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
                   }
 
                   FRAME("commit frame %d buffer %d", iter->videoFrame[FRAME_CURR].frameNumber, iter->videoFrame[FRAME_CURR].bufferId);
-                  avProgLog( iter->videoFrame[FRAME_CURR].frameTime*1000LL, 0, "WtoD", wstDispFullness(iter->vfm));
+                  avProgLog( iter->videoFrame[FRAME_CURR].frameTime*1000LL, iter->videoResourceId, "WtoD", wstDispFullness(iter->vfm));
                }
             }
          }
@@ -7393,7 +7438,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
 
          if ( ctx->usePlanes && !ctx->graphicsPreferPrimary )
          {
-            nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true );
+            nwItem->windowPlane= wstOverlayAlloc( &ctx->overlayPlanes, true, false );
             INFO("plane %p : zorder: %d", nwItem->windowPlane, (nwItem->windowPlane ? nwItem->windowPlane->zOrder: -1) );
          }
          else if ( ctx->haveAtomic )

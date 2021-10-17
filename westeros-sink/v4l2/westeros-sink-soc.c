@@ -163,6 +163,7 @@ static bool wstUnlockOutputBuffer( GstWesterosSink *sink, int buffIndex );
 static void wstRequeueOutputBuffer( GstWesterosSink *sink, int buffIndex );
 static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink *sink, const char *name );
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendResourceVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *conn );
@@ -272,6 +273,7 @@ static void avProgLog( long long nanoTime, int syncGroup, const char *edge, cons
       struct timespec tp;
       long long pts= -1LL;
 
+      if ( syncGroup < 0 ) syncGroup= 0;
       if ( GST_CLOCK_TIME_IS_VALID(nanoTime) )
       {
          pts= ((nanoTime / GST_SECOND) * 90000)+(((nanoTime % GST_SECOND) * 90000) / GST_SECOND);
@@ -1762,7 +1764,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
       }
       #endif
 
-      avProgLog( GST_BUFFER_PTS(buffer), 0, "GtoS", "");
+      avProgLog( GST_BUFFER_PTS(buffer), sink->resAssignedId, "GtoS", "");
 
       if ( GST_BUFFER_PTS_IS_VALID(buffer) )
       {
@@ -1871,7 +1873,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             goto exit;
          }
          ++sink->soc.inQueuedCount;
-         avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", wstInFullness(sink));
+         avProgLog( GST_BUFFER_PTS(buffer), sink->resAssignedId, "StoD", wstInFullness(sink));
          sink->soc.inBuffers[buffIndex].queued= true;
          sink->soc.inBuffers[buffIndex].gstbuf= gst_buffer_ref(buffer);
       }
@@ -1947,7 +1949,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                ++sink->soc.inQueuedCount;
                sink->soc.inBuffers[buffIndex].queued= true;
                UNLOCK(sink);
-               avProgLog( GST_BUFFER_PTS(buffer), 0, "StoD", wstInFullness(sink));
+               avProgLog( GST_BUFFER_PTS(buffer), sink->resAssignedId, "StoD", wstInFullness(sink));
             }
          }
 
@@ -2648,7 +2650,7 @@ static void wstProcessEvents( GstWesterosSink *sink )
             struct v4l2_format fmtIn, fmtOut;
             int32_t bufferType;
 
-            avProgLog( 0, 0, "DtoS", "source change start");
+            avProgLog( 0, sink->resAssignedId, "DtoS", "source change start");
             g_print("westeros-sink: source change event\n");
             memset( &fmtIn, 0, sizeof(fmtIn));
             bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE : V4L2_BUF_TYPE_VIDEO_OUTPUT);
@@ -3844,6 +3846,8 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
          goto exit;
       }
 
+      wstSendResourceVideoClientConnection( conn );
+
       error= false;
    }
 
@@ -3921,6 +3925,50 @@ static int putS64( unsigned char *p,  gint64 n )
    p[7]= (((guint64)n)&0xFF);
 
    return 8;
+}
+
+static void wstSendResourceVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      GstWesterosSink *sink= conn->sink;
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[8];
+      int len;
+      int sentLen;
+      int resourceId= ((sink->resAssignedId >= 0) ? sink->resAssignedId : 0);
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 5;
+      mbody[len++]= 'V';
+      len += putU32( &mbody[len], resourceId );
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent resource id to video server");
+         FRAME("sent resource id to video server");
+      }
+   }
 }
 
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
@@ -5031,7 +5079,7 @@ static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, i
          wstLockOutputBuffer( sink, buffIndex );
          FRAME("out:       send frame %d buffer %d (%d)", conn->sink->soc.frameOutCount-1, conn->sink->soc.outBuffers[buffIndex].bufferId, buffIndex);
 
-         avProgLog( sink->soc.outBuffers[buffIndex].frameTime*1000L, 0, "WtoW", "");
+         avProgLog( sink->soc.outBuffers[buffIndex].frameTime*1000L, sink->resAssignedId, "WtoW", "");
 
          do
          {
@@ -6112,7 +6160,7 @@ capture_start:
             sink->soc.prevDecodedTimestamp= currFramePTS;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;
             FRAME("out:       frame %d buffer %d (%d) PTS %lld decoded", sink->soc.frameOutCount, sink->soc.outBuffers[buffIndex].bufferId, buffIndex, frameTime);
-            avProgLog( frameTime, 0, "DtoS", wstOutFullness(sink));
+            avProgLog( frameTime, sink->resAssignedId, "DtoS", wstOutFullness(sink));
 
             wstUpdatePixelAspectRatio( sink );
             #ifdef USE_GST_AFD

@@ -65,6 +65,12 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       }
       pts90K vsyncInterval= 90000LL/refreshRate;
 
+      if ( !vfm->conn->videoPlane->frameRateMatchingPlane )
+      {
+         INFO("force vmaster mode for non-primary video plane");
+         vfm->conn->syncType= 0;
+      }
+
       #ifdef USE_AMLOGIC_MESON_MSYNC
       INFO("msync enabled");
       if ( sessionId == INVALID_SESSION_ID )
@@ -136,7 +142,7 @@ void *sync_free_frame( struct vframe *vf )
       {
          if ( fCheck->canExpire )
          {
-            avProgLog( fCheck->frameTime*1000LL, 0, "WtoD", "drop");
+            avProgLog( fCheck->frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "drop");
             fCheck->vf= 0;
             vfm->dropFrameCount += 1;
             wstOffloadFreeVideoFrameResources( fCheck );
@@ -167,6 +173,11 @@ static void wstAVSyncSetSyncType( VideoFrameManager *vfm, int type )
 {
    if ( vfm->sync )
    {
+      if ( !vfm->conn->videoPlane->frameRateMatchingPlane )
+      {
+         INFO("force vmaster mode for non-primary video plane");
+         vfm->conn->syncType= type= 0;
+      }
       DEBUG("calling av_sync_change_mode new mode %d\n", type);
       int rc= av_sync_change_mode( vfm->sync, type );
       if ( rc )
