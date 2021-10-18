@@ -932,6 +932,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    #ifdef ENABLE_SW_DECODE
    sink->soc.firstFrameThread= NULL;
    sink->soc.nextSWBuffer= 0;
+   sink->soc.swPrerolled= FALSE;
    sink->swInit= swInit;
    sink->swTerm= swTerm;
    sink->swLink= swLink;
@@ -1704,7 +1705,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
    #ifdef ENABLE_SW_DECODE
    if ( swIsSWDecode( sink ) )
    {
-      wstsw_render( sink, buffer );
+      wstsw_render( sink, buffer, !sink->soc.swPrerolled );
       return;
    }
    #endif
@@ -6429,6 +6430,9 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
 
    if ( swIsSWDecode( sink ) )
    {
+      #ifdef ENABLE_SW_DECODE
+      sink->soc.swPrerolled= true;
+      #endif
       goto done;
    }
 

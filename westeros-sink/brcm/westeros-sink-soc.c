@@ -731,7 +731,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.swPrerolled= false;
    sink->soc.swWorkSurface= 0;
    sink->soc.swNextCaptureSurface= 0;
-   sink->soc.firstFrameThread= NULL;
    sink->soc.g2d= 0;
    sink->soc.g2dEventCreated= false;
    sink->soc.frameWidth= -1;
@@ -1557,7 +1556,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
    #ifdef ENABLE_SW_DECODE
    if ( swIsSWDecode( sink ) && (sink->soc.dataProbeId == 0) )
    {
-      wstsw_render( sink, buffer );
+      wstsw_render( sink, buffer, !sink->soc.swPrerolled );
    }
    #endif
 
@@ -1576,6 +1575,13 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
 void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 {
+   #ifdef ENABLE_SW_DECODE
+   if ( swIsSWDecode( sink ) )
+   {
+      return;
+   }
+   #endif
+
    NEXUS_SimpleVideoDecoder_Flush( sink->soc.videoDecoder );
    LOCK(sink);
    sink->soc.captureCount= 0;
@@ -3468,8 +3474,7 @@ static gpointer swFirstFrameThread(gpointer data)
    if ( sink )
    {
       g_signal_emit (G_OBJECT (sink), g_signals[SIGNAL_FIRSTFRAME], 0, 2, NULL);
-      g_thread_unref( sink->soc.firstFrameThread );
-      sink->soc.firstFrameThread= NULL;
+      gst_object_unref(sink);
    }
 
    return NULL;
@@ -3709,7 +3714,16 @@ void swDisplay( GstWesterosSink *sink, SWFrame *frame )
 
       if ( frame->frameNumber == 0 )
       {
-         sink->soc.firstFrameThread= g_thread_new("westeros_first_frame", swFirstFrameThread, sink);
+         GThread *firstFrameThread;
+         firstFrameThread= g_thread_new("westeros_first_frame", swFirstFrameThread, gst_object_ref(sink));
+         if ( firstFrameThread )
+         {
+            g_thread_unref( firstFrameThread );
+         }
+         else
+         {
+            gst_object_unref(sink);
+         }
       }
 
       if ( sink->soc.forceAspectRatio && sink->vpcSurface )
@@ -3972,7 +3986,7 @@ static GstPadProbeReturn dataProbe( GstPad *pad, GstPadProbeInfo *info, gpointer
 
          gst_buffer_ref(buffer);
 
-         if ( !wstsw_render( sink, buffer ) )
+         if ( !wstsw_render( sink, buffer, !sink->soc.swPrerolled ) )
          {
             result= GST_PAD_PROBE_REMOVE;
          }
@@ -4003,9 +4017,31 @@ static GstPadProbeReturn dataProbe( GstPad *pad, GstPadProbeInfo *info, gpointer
                   {
                      sink->eosEventSeen= TRUE;
                      gst_westeros_sink_eos_detected( sink );
-                     result= GST_PAD_PROBE_REMOVE;
                   }
                   break;
+              case GST_EVENT_FLUSH_START:
+                 {
+                    LOCK( sink );
+                    sink->flushStarted= TRUE;
+                    UNLOCK( sink );
+                    sink->soc.swPrerolled= false;
+                 }
+                 break;
+              case GST_EVENT_FLUSH_STOP:
+                 {
+                    gboolean reset_time= FALSE;
+                    gst_event_parse_flush_stop( event, &reset_time );
+                    if ( reset_time )
+                    {
+                       wstsw_reset_time( sink );
+                    }
+                    LOCK( sink );
+                    sink->flushStarted= FALSE;
+                    UNLOCK( sink );
+                 }
+                 break;
+              default:
+                break;
             }
          }
       }
@@ -4112,7 +4148,7 @@ static bool establishSource( GstWesterosSink *sink )
                            }
                            sink->soc.dataProbePad= (GstPad*)gst_object_ref( sinkPad );
                            sink->soc.dataProbeId= gst_pad_add_probe( sinkPad,
-                                                                     (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER|GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM),
+                                                                     (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER|GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM|GST_PAD_PROBE_TYPE_EVENT_FLUSH),
                                                                      dataProbe,
                                                                      sink,
                                                                      dataProbeDestroy );

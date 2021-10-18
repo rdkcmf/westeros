@@ -1846,10 +1846,26 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          break;
 
       case GST_EVENT_FLUSH_STOP:
-         LOCK( sink );
-         sink->flushStarted= FALSE;
-         UNLOCK( sink );
-         passToDefault= TRUE;
+         {
+            #ifdef ENABLE_SW_DECODE
+            gboolean reset_time= FALSE;
+            gst_event_parse_flush_stop( event, &reset_time );
+
+            if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+            {
+               if ( reset_time && sink->flushStarted == TRUE )
+               {
+                  wstsw_reset_time( sink );
+               }
+            }
+            #endif
+
+            LOCK( sink );
+            sink->flushStarted= FALSE;
+            UNLOCK( sink );
+
+            passToDefault= TRUE;
+         }
          break;
 
       case GST_EVENT_EOS:

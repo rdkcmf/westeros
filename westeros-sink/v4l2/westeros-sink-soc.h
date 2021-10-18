@@ -306,6 +306,7 @@ struct _GstWesterosSinkSoc
    GThread *firstFrameThread;
    int nextSWBuffer;
    WstSWBuffer swBuffer[WST_NUM_SW_BUFFERS];
+   gboolean swPrerolled;
    #endif
 
    #ifdef GLIB_VERSION_2_32 

@@ -218,7 +218,7 @@ void wstsw_set_codec_init_data( GstWesterosSink *sink, int initDataLen, uint8_t 
    }
 }
 
-bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer )
+bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer, gboolean preroll )
 {
    bool result= true;
    SWCtx *swCtx= (SWCtx*)sink->swCtx;
@@ -227,9 +227,13 @@ bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer )
 
    while( swCtx->paused )
    {
+      if ( preroll == TRUE )
+      {
+         break;
+      }
       usleep( 1000 );
-      if ( !swCtx->active )
-      {      
+      if ( !swCtx->active || sink->flushStarted )
+      {
          goto exit;
       }
    }
@@ -418,6 +422,16 @@ exit:
    return result;
 }
 
+void wstsw_reset_time( GstWesterosSink *sink )
+{
+   SWCtx *swCtx= (SWCtx*)sink->swCtx;
+   if ( swCtx )
+   {
+      swCtx->outputFrameCount= 0;
+      swCtx->prevFrameTime= -1LL;
+   }
+}
+
 static gboolean wstsw_null_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
    if ( initSWDecoder( sink ) )
@@ -453,6 +467,7 @@ static gboolean wstsw_ready_to_paused( GstWesterosSink *sink, gboolean *passToDe
       sink->swLink( sink );
    }
    swCtx->active= true;
+   swCtx->paused= true;
 
    return TRUE;
 }

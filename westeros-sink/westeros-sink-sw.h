@@ -47,7 +47,8 @@ typedef struct _SWFrame
 
 void wstsw_process_caps( GstWesterosSink *sink, GstCaps *caps );
 void wstsw_set_codec_init_data( GstWesterosSink *sink, int initDataLen, uint8_t *initData );
-bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer );
+bool wstsw_render( GstWesterosSink *sink, GstBuffer *buffer, gboolean preroll );
+void wstsw_reset_time( GstWesterosSink *sink );
 static gboolean wstsw_null_to_ready( GstWesterosSink *sink, gboolean *passToDefault );
 static gboolean wstsw_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault );
 static gboolean wstsw_paused_to_playing( GstWesterosSink *sink, gboolean *passToDefault );
