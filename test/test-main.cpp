@@ -357,6 +357,14 @@ TESTCASE genericTests[]=
       "Test ERM owner change usage",
       testCaseERMOwnerChangeUsage
    },
+   { "testERMDualVideo1",
+      "Test ERM dual video 1",
+      testCaseERMDualVideo1
+   },
+   { "testERMDualVideo2",
+      "Test ERM dual video 2",
+      testCaseERMDualVideo2
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition

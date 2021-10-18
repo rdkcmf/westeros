@@ -28,7 +28,7 @@
 
 #include "essos-resmgr.h"
 
-static const char *configFile=
+static const char *configFileBase=
 "policy: requester-wins-priority-tie\n \
 video: hardware\n \
 video: hardware,limitedResolution(1920,1080),limitedQuality\n \
@@ -39,7 +39,16 @@ frontend: none\n \
 svpa: none\n \
 ";
 
-static bool initERM( EMCTX *emctx )
+static const char *configFileDual=
+"policy: requester-wins-priority-tie\n \
+video: hardware\n \
+video: hardware,limitedQuality\n \
+audio: none\n \
+frontend: none\n \
+svpa: none\n \
+";
+
+static bool initERM( EMCTX *emctx, const char *configFileSrc )
 {
    bool result= false;
    FILE *pFileConfig= 0;
@@ -52,8 +61,8 @@ static bool initERM( EMCTX *emctx )
       goto exit;
    }
 
-   len= fwrite( configFile, 1, strlen(configFile), pFileConfig );
-   if ( len != strlen(configFile) )
+   len= fwrite( configFileSrc, 1, strlen(configFileSrc), pFileConfig );
+   if ( len != strlen(configFileSrc) )
    {
       EMERROR("Unable to populate ERM config file");
       goto exit;
@@ -245,7 +254,7 @@ bool testCaseERMBasicRequestVideo( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -334,7 +343,7 @@ bool testCaseERMBasicRequestAudio( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -423,7 +432,7 @@ bool testCaseERMBasicRequestFrontEnd( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -512,7 +521,7 @@ bool testCaseERMBasicRequestSVPAllocator( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -601,7 +610,7 @@ bool testCaseERMBasicRequestLoop( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -690,7 +699,7 @@ bool testCaseERMBasicRequestAsync( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -777,7 +786,7 @@ bool testCaseERMVideoSizeConstraint( EMCTX *emctx )
    pthread_t threadIdA= 0;
    TestCtx ctxA;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -883,7 +892,7 @@ bool testCaseERMRequesterIncreasePriority( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -973,7 +982,7 @@ bool testCaseERMOwnerDecreasePriority( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -1063,7 +1072,7 @@ bool testCaseERMOwnerChangeUsage( EMCTX *emctx )
    TestCtx ctxA;
    TestCtx ctxB;
 
-   result= initERM( emctx );
+   result= initERM( emctx, configFileBase );
    if ( !result )
    {
       EMERROR("initERM failed");
@@ -1142,4 +1151,195 @@ exit:
    return testResult;
 }
 
+bool testCaseERMDualVideo1( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   bool error= false;
+   int rc;
+   pthread_t threadIdA= 0;
+   pthread_t threadIdB= 0;
+   TestCtx ctxA;
+   TestCtx ctxB;
+
+   result= initERM( emctx, configFileBase );
+   if ( !result )
+   {
+      EMERROR("initERM failed");
+      goto exit;
+   }
+
+   memset( &ctxA, 0, sizeof(ctxA) );
+   ctxA.emctx= emctx;
+   ctxA.name= "A";
+   ctxA.type= EssRMgrResType_videoDecoder;
+   ctxA.async= true;
+   ctxA.loop= 1;
+   ctxA.priority= 0;
+   ctxA.usage= 7;
+   ctxA.delay= 60000;
+   ctxA.assignedId= -1;
+   ctxA.prevAssignedId= -1;
+   rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   usleep( 10000 );
+
+   memset( &ctxB, 0, sizeof(ctxA) );
+   ctxB.emctx= emctx;
+   ctxB.name= "B";
+   ctxB.type= EssRMgrResType_videoDecoder;
+   ctxB.async= true;
+   ctxB.loop= 1;
+   ctxB.priority= 0;
+   ctxB.usage= 4;
+   ctxB.maxWidth=320;
+   ctxB.maxHeight=240;
+   ctxB.delay= 100000;
+   ctxB.assignedId= -1;
+   ctxB.prevAssignedId= -1;
+   rc= pthread_create( &threadIdB, NULL, requestThread, &ctxB );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   pthread_join( threadIdA, NULL );
+   pthread_join( threadIdB, NULL );
+
+   if ( ctxA.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for A: expected 1 actual %d", ctxA.grantCount );
+      error= true;
+   }
+   if ( ctxA.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for A: expected 0 actual %d", ctxA.revokeCount );
+      error= true;
+   }
+   if ( ctxB.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for B: expected 1 actual %d", ctxB.grantCount );
+      error= true;
+   }
+   if ( ctxB.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for B: expected 0 actual %d", ctxB.revokeCount );
+      error= true;
+   }
+   if ( error ) goto exit;
+   if ( ctxB.prevAssignedId != 2 )
+   {
+      EMERROR("Unexpected prev id for A: expected 2 actual %d", ctxB.prevAssignedId );
+      error= true;
+   }
+   if ( error ) goto exit;
+
+   testResult= true;
+
+exit:
+   termERM( emctx );
+
+   return testResult;
+}
+
+bool testCaseERMDualVideo2( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   bool error= false;
+   int rc;
+   pthread_t threadIdA= 0;
+   pthread_t threadIdB= 0;
+   TestCtx ctxA;
+   TestCtx ctxB;
+
+   result= initERM( emctx, configFileDual );
+   if ( !result )
+   {
+      EMERROR("initERM failed");
+      goto exit;
+   }
+
+   memset( &ctxA, 0, sizeof(ctxA) );
+   ctxA.emctx= emctx;
+   ctxA.name= "A";
+   ctxA.type= EssRMgrResType_videoDecoder;
+   ctxA.async= true;
+   ctxA.loop= 1;
+   ctxA.priority= 0;
+   ctxA.usage= 7;
+   ctxA.delay= 60000;
+   ctxA.assignedId= -1;
+   ctxA.prevAssignedId= -1;
+   rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   usleep( 10000 );
+
+   memset( &ctxB, 0, sizeof(ctxA) );
+   ctxB.emctx= emctx;
+   ctxB.name= "B";
+   ctxB.type= EssRMgrResType_videoDecoder;
+   ctxB.async= true;
+   ctxB.loop= 1;
+   ctxB.priority= 0;
+   ctxB.usage= 4;
+   ctxB.delay= 100000;
+   ctxB.assignedId= -1;
+   ctxB.prevAssignedId= -1;
+   rc= pthread_create( &threadIdB, NULL, requestThread, &ctxB );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   pthread_join( threadIdA, NULL );
+   pthread_join( threadIdB, NULL );
+
+   if ( ctxA.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for A: expected 1 actual %d", ctxA.grantCount );
+      error= true;
+   }
+   if ( ctxA.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for A: expected 0 actual %d", ctxA.revokeCount );
+      error= true;
+   }
+   if ( ctxB.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for B: expected 1 actual %d", ctxB.grantCount );
+      error= true;
+   }
+   if ( ctxB.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for B: expected 0 actual %d", ctxB.revokeCount );
+      error= true;
+   }
+   if ( error ) goto exit;
+   if ( ctxB.prevAssignedId != 1 )
+   {
+      EMERROR("Unexpected prev id for A: expected 2 actual %d", ctxB.prevAssignedId );
+      error= true;
+   }
+   if ( error ) goto exit;
+
+   testResult= true;
+
+exit:
+   termERM( emctx );
+
+   return testResult;
+}
 

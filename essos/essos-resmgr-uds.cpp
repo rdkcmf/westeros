@@ -3714,7 +3714,14 @@ static int essRMFindSuitableResource( EssRMgrResourceConnection *conn, int type,
                      }
                      continue;
                   }
-                  if ( suitableIdx == -1 )
+                  if ( (suitableIdx != -1) &&
+                       (res[suitableIdx].connOwner != 0) &&
+                       (res[idx].connOwner == 0) )
+                  {
+                     suitableIdx= idx;
+                     currMaxSize= maxSize;
+                  }
+                  else if ( suitableIdx == -1 )
                   {
                      suitableIdx= idx;
                      currMaxSize= maxSize;
@@ -3750,8 +3757,9 @@ static int essRMFindSuitableResource( EssRMgrResourceConnection *conn, int type,
                      }
                   }
                }
-               if ( suitableIdx >= 0 )
+               if ( (i == 0) && (suitableIdx >= 0) )
                {
+                  TRACE1("select ideal resource id %d", suitableIdx);
                   break;
                }
             }

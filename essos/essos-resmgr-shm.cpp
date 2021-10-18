@@ -2835,12 +2835,18 @@ static int essRMFindSuitableResource( EssRMgr *rm, int type, int priority, EssRM
                      }
                      continue;
                   }
-                  if ( suitableIdx == -1 )
+                  if ( (suitableIdx != -1) &&
+                       (res[suitableIdx].pidOwner != 0) &&
+                       (res[idx].pidOwner == 0) )
                   {
                      suitableIdx= idx;
                      currMaxSize= maxSize;
                   }
-                  else
+                  else if ( suitableIdx == -1 )
+                  {
+                     suitableIdx= idx;
+                     currMaxSize= maxSize;
+                  }
                   if ( 
                        (res[suitableIdx].pidOwner != 0) &&
                        (res[idx].pidOwner != 0) &&
@@ -2871,8 +2877,9 @@ static int essRMFindSuitableResource( EssRMgr *rm, int type, int priority, EssRM
                      }
                   }
                }
-               if ( suitableIdx >= 0 )
+               if ( (i == 0) && (suitableIdx >= 0) )
                {
+                  TRACE1("select ideal resource id %d", suitableIdx);
                   break;
                }
             }

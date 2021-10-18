@@ -31,6 +31,8 @@ bool testCaseERMVideoSizeConstraint( EMCTX *emctx );
 bool testCaseERMRequesterIncreasePriority( EMCTX *emctx );
 bool testCaseERMOwnerDecreasePriority( EMCTX *emctx );
 bool testCaseERMOwnerChangeUsage( EMCTX *emctx );
+bool testCaseERMDualVideo1( EMCTX *emctx );
+bool testCaseERMDualVideo2( EMCTX *emctx );
 
 #endif
 
