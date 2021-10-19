@@ -2839,6 +2839,15 @@ static int essRMFindSuitableResource( EssRMgr *rm, int type, int priority, EssRM
                        (res[suitableIdx].pidOwner != 0) &&
                        (res[idx].pidOwner == 0) )
                   {
+                     // prefer unassigned resource
+                     suitableIdx= idx;
+                     currMaxSize= maxSize;
+                  }
+                  else if ( (suitableIdx != -1) &&
+                            (res[idx].pidOwner == 0) &&
+                            ((res[idx].capabilities & res[idx].criteriaMask) > (res[suitableIdx].capabilities & res[suitableIdx].criteriaMask)) )
+                  {
+                     // prefer less capable resource
                      suitableIdx= idx;
                      currMaxSize= maxSize;
                   }

@@ -365,6 +365,10 @@ TESTCASE genericTests[]=
       "Test ERM dual video 2",
       testCaseERMDualVideo2
    },
+   { "testERMDualVideo3",
+      "Test ERM dual video 3",
+      testCaseERMDualVideo3
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition

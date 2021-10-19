@@ -1330,7 +1330,68 @@ bool testCaseERMDualVideo2( EMCTX *emctx )
    if ( error ) goto exit;
    if ( ctxB.prevAssignedId != 1 )
    {
-      EMERROR("Unexpected prev id for A: expected 2 actual %d", ctxB.prevAssignedId );
+      EMERROR("Unexpected prev id for A: expected 1 actual %d", ctxB.prevAssignedId );
+      error= true;
+   }
+   if ( error ) goto exit;
+
+   testResult= true;
+
+exit:
+   termERM( emctx );
+
+   return testResult;
+}
+
+bool testCaseERMDualVideo3( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   bool error= false;
+   int rc;
+   pthread_t threadIdA= 0;
+   TestCtx ctxA;
+
+   result= initERM( emctx, configFileDual );
+   if ( !result )
+   {
+      EMERROR("initERM failed");
+      goto exit;
+   }
+
+   memset( &ctxA, 0, sizeof(ctxA) );
+   ctxA.emctx= emctx;
+   ctxA.name= "B";
+   ctxA.type= EssRMgrResType_videoDecoder;
+   ctxA.async= true;
+   ctxA.loop= 1;
+   ctxA.priority= 0;
+   ctxA.usage= 4;
+   ctxA.delay= 100000;
+   ctxA.assignedId= -1;
+   ctxA.prevAssignedId= -1;
+   rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   pthread_join( threadIdA, NULL );
+
+   if ( ctxA.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for A: expected 1 actual %d", ctxA.grantCount );
+      error= true;
+   }
+   if ( ctxA.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for A: expected 0 actual %d", ctxA.revokeCount );
+      error= true;
+   }
+   if ( ctxA.prevAssignedId != 1 )
+   {
+      EMERROR("Unexpected prev id for A: expected 1 actual %d", ctxA.prevAssignedId );
       error= true;
    }
    if ( error ) goto exit;

@@ -3718,6 +3718,15 @@ static int essRMFindSuitableResource( EssRMgrResourceConnection *conn, int type,
                        (res[suitableIdx].connOwner != 0) &&
                        (res[idx].connOwner == 0) )
                   {
+                     // prefer unassigned resource
+                     suitableIdx= idx;
+                     currMaxSize= maxSize;
+                  }
+                  else if ( (suitableIdx != -1) &&
+                            (res[idx].connOwner == 0) &&
+                            ((res[idx].capabilities & res[idx].criteriaMask) > (res[suitableIdx].capabilities & res[suitableIdx].criteriaMask)) )
+                  {
+                     // prefer less capable resource
                      suitableIdx= idx;
                      currMaxSize= maxSize;
                   }
