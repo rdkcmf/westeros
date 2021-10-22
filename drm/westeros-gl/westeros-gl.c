@@ -4384,11 +4384,11 @@ static WstGLCtx *wstInitCtx( void )
                            {
                               case DRM_FORMAT_NV12:
                                  isVideo= true;
-                                 if ( !haveVideoPlanes )
+                                 if ( !haveVideoPlanes && !isPrimary )
                                  {
                                     newPlane->frameRateMatchingPlane= true;
+                                    haveVideoPlanes= true;
                                  }
-                                 haveVideoPlanes= true;
                                  break;
                               case DRM_FORMAT_ARGB8888:
                                  isGraphics= true;
