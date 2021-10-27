@@ -121,7 +121,8 @@ enum
    ZOOM_NORMAL,
    ZOOM_16_9_STRETCH,
    ZOOM_4_3_PILLARBOX,
-   ZOOM_ZOOM
+   ZOOM_ZOOM,
+   ZOOM_GLOBAL
 };
 
 #define needBounds(sink) ( sink->soc.forceAspectRatio || (sink->soc.zoomMode != ZOOM_NONE) )
@@ -686,8 +687,8 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
    g_object_class_install_property (gobject_class, PROP_ZOOM_MODE,
      g_param_spec_int ("zoom-mode",
                        "zoom-mode",
-                       "Set zoom mode: 0-none, 1-direct, 2-normal, 3-16x9 stretch, 4-4x3 pillar box, 5-zoom",
-                       ZOOM_NONE, ZOOM_ZOOM, ZOOM_NONE, G_PARAM_READWRITE));
+                       "Set zoom mode: 0-none, 1-direct, 2-normal, 3-16x9 stretch, 4-4x3 pillar box, 5-zoom, 6-global",
+                       ZOOM_NONE, ZOOM_GLOBAL, ZOOM_NONE, G_PARAM_READWRITE));
 
    g_object_class_install_property (gobject_class, PROP_OVERSCAN_SIZE,
      g_param_spec_int ("overscan-size",
@@ -824,7 +825,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.afdInfoCapacity= 0;
    #endif
    sink->soc.showChanged= FALSE;
-   sink->soc.zoomModeUser= FALSE;
+   sink->soc.zoomModeGlobal= FALSE;
    sink->soc.zoomMode= ZOOM_NONE;
    sink->soc.overscanSize= DEFAULT_OVERSCAN;
    sink->soc.frameWidth= -1;
@@ -1140,11 +1141,20 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
       case PROP_ZOOM_MODE:
          {
             gint zoom= g_value_get_int(value);
-            if ( !sink->soc.zoomModeUser || (sink->soc.zoomMode != zoom) )
+            if ( zoom == ZOOM_GLOBAL )
             {
+               GST_DEBUG("enable global zoom");
+               sink->soc.zoomModeGlobal= TRUE;
+            }
+            else
+            {
+               if ( sink->soc.zoomModeGlobal )
+               {
+                  GST_DEBUG("disable global zoom");
+                  sink->soc.zoomModeGlobal= FALSE;
+               }
                GST_DEBUG("set zoom-mode to %d", zoom);
                sink->soc.zoomMode= zoom;
-               sink->soc.zoomModeUser= TRUE;
             }
          }
          break;
@@ -4860,7 +4870,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                         {
                           int zoomMode= getU32( &m[4] );
                           GST_DEBUG("got zoom-mode %d from video server", zoomMode);
-                          if ( sink->soc.zoomModeUser == FALSE )
+                          if ( sink->soc.zoomModeGlobal == TRUE )
                           {
                              if ( (zoomMode >= ZOOM_NONE) && (zoomMode <= ZOOM_ZOOM) )
                              {
@@ -4870,7 +4880,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                           }
                           else
                           {
-                             GST_DEBUG("user zoom mode set: ignore server value");
+                             GST_DEBUG("global zoom disabled: ignore server value");
                           }
                         }
                         break;

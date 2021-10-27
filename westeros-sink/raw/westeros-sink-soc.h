@@ -105,7 +105,7 @@ struct _GstWesterosSinkSoc
    WstAFDInfo afdActive;
    #endif
    gboolean showChanged;
-   gboolean zoomModeUser;
+   gboolean zoomModeGlobal;
    int zoomMode;
    int overscanSize;
    int frameWidth;

@@ -179,7 +179,7 @@ struct _GstWesterosSinkSoc
    int afdInfoCapacity;
    #endif
    gboolean showChanged;
-   gboolean zoomModeUser;
+   gboolean zoomModeGlobal;
    int zoomMode;
    int overscanSize;
    int frameWidth;
