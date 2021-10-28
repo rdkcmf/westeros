@@ -6145,7 +6145,8 @@ capture_start:
             bool gfxFrame= false;
             sink->soc.resubFd= -1;
 
-            if ( sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec != -1 )
+            if ( (sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec != -1) &&
+                 (!sink->soc.expectNoLastFrame || (sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec >= 0)) )
             {
                currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
             }

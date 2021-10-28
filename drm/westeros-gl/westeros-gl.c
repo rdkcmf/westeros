@@ -3456,6 +3456,11 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
             FRAME("set base: flipTimeBase %lld frameTimeBase %lld", vfm->flipTimeBase, vfm->frameTimeBase);
          }
          i= 0;
+         if ( vfm->conn && vfm->conn->videoPlane &&
+              (vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1))
+         {
+            f= &vfm->conn->videoPlane->videoFrame[FRAME_CURR];
+         }
          while ( i < vfm->queueSize )
          {
             VideoFrame *fCheck= &vfm->queue[i];
@@ -3488,7 +3493,15 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                   }
                   --vfm->queueSize;
                   pthread_mutex_unlock( &vfm->mutex);
-                  f= 0;
+                  if ( vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1)
+                  {
+                     f= &vfm->conn->videoPlane->videoFrame[FRAME_CURR];
+                  }
+                  else
+                  {
+                     DEBUG("set f to 0");
+                     f= 0;
+                  }
                   continue;
                }
                if ( i > 0 )
@@ -3527,6 +3540,9 @@ done:
    if ( !f && !vfm->paused && (vfm->bufferIdCurrent != -1) && !vfm->underflowReported &&
         vfm->conn && vfm->conn->videoPlane && (vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1) )
    {
+      #ifndef WESTEROS_GL_AVSYNC
+      INFO("f %p paused %d bufferIdCurrent %d vfm->queueSize %d", f, vfm->paused, vfm->bufferIdCurrent, vfm->queueSize);
+      #endif
       vfm->underflowDetected= true;
       INFO("underflow detected video plane %p", vfm->conn->videoPlane);
    }
