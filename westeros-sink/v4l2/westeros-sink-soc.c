@@ -903,6 +903,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.pauseException= FALSE;
    sink->soc.pauseGetGfxFrame= FALSE;
    sink->soc.useGfxSync= FALSE;
+   sink->soc.allow4kZoom= FALSE;
    sink->soc.pauseGfxBuffIndex= -1;
    sink->soc.hideVideoFramesDelay= 2;
    sink->soc.hideGfxFramesDelay= 1;
@@ -1003,6 +1004,12 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    {
       sink->soc.lowMemoryMode= TRUE;
       printf("westeros-sink: low memory mode\n");
+   }
+
+   if ( getenv("WESTEROS_SINK_ALLOW_4K_ZOOM") )
+   {
+      sink->soc.allow4kZoom= TRUE;
+      printf("westeros-sink: allow 4k zoom\n");
    }
 
    #ifdef USE_AMLOGIC_MESON_MSYNC
@@ -5295,6 +5302,7 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
 {
    int vx, vy, vw, vh;
    int frameWidth, frameHeight;
+   int zoomMode;;
    double contentWidth, contentHeight;
    double roix, roiy, roiw, roih;
    double arf, ard;
@@ -5318,8 +5326,15 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    roiw= contentWidth;
    roih= contentHeight;
 
+   zoomMode= sink->soc.zoomMode;
+   if ( !sink->soc.allow4kZoom &&
+        ((sink->soc.frameWidthStream > 1920) || (sink->soc.frameHeightStream > 1080)) )
+   {
+      zoomMode= ZOOM_NORMAL;
+      if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("4k (%dx%d) force zoom mormal", sink->soc.frameWidthStream, sink->soc.frameHeightStream);
+   }
    if ( sink->soc.pixelAspectRatioChanged ) GST_DEBUG("ard %f arf %f", ard, arf);
-   switch( sink->soc.zoomMode )
+   switch( zoomMode )
    {
       case ZOOM_NORMAL:
          {

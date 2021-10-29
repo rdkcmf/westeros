@@ -118,6 +118,7 @@ struct _GstWesterosSinkSoc
    uint32_t numDropped;
    gint64 currentInputPTS;
    gboolean haveHardware;
+   gboolean allow4kZoom;
 
    gboolean updateSession;
    int syncType;

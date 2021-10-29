@@ -2587,7 +2587,7 @@ static int EMV4l2IOctl( EMDevice *dev, int fd, int request, void *arg )
                         {
                            TRACE1("Producing underflow");
                            dev->ctx->simpleVideoDecoderMain.signalUnderflow= false;
-                           usleep( 120000 );
+                           usleep( 150000 );
                            TRACE1("Done underflow delay");
                         }
                         if ( dev->dev.v4l2.readyFrameCount > 0 )
