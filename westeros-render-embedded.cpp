@@ -307,6 +307,7 @@ typedef struct _WstRendererEMB
    std::vector<WstRenderSurface*> surfaces;
    std::vector<GLuint> deadTextures;
 
+   float baseZOrder;
    bool fastPathActive;   
    WstRenderer *rendererFast;
 
@@ -538,7 +539,7 @@ static WstRenderSurface *wstRendererEMBCreateSurface(WstRendererEMB *renderer)
         surface->y= 0;
         surface->visible= true;
         surface->opacity= 1.0;
-        surface->zorder= 0.5;
+        surface->zorder= renderer->baseZOrder;
         
         surface->dirty= true;
         
@@ -549,6 +550,12 @@ static WstRenderSurface *wstRendererEMBCreateSurface(WstRendererEMB *renderer)
             {
                wstRendererDeactivateFastPath( renderer );
             }
+            else
+            {
+               renderer->rendererFast->surfaceSetZOrder( renderer->rendererFast,
+                                                         surface->surfaceFast,
+                                                         surface->zorder );
+           }
         }
     }
    
@@ -2566,6 +2573,15 @@ static void wstRendererInitFastPath( WstRendererEMB *renderer )
       
       renderer->rendererFast= rendererFast;
       
+      {
+         renderer->baseZOrder= 0.5;
+         const char *env= getenv("WESTEROS_FAST_RENDER_BASE_ZORDER");
+         if ( env )
+         {
+            renderer->baseZOrder= atof(env);
+            printf("wstRendererInitFastPath: base zorder: %f\n", renderer->baseZOrder);
+         }
+      }
       printf("wstRendererInitFastPath: module (%s) loaded and intialized\n", moduleName );
    }
    
