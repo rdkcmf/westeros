@@ -1,0 +1,133 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.27 Release Notes
+------------------------------
+
+Date: Nov 11, 2021
+Tag: Westeros-1.01.27
+Changes:
+
+
+* v4l2: clear prerollBuffer on flush
+
+* Fix compilation error
+
+* Add --enable-essosresmgrfree configure option
+
+Adds --enable-essosresmgrfree option that allows to build essos library
+without the essosrmgr library.
+
+* Add generating essos pkg-config file 
+
+* v4l2: fix eos when playback starts with out-of-segment frames
+
+* v4l2: refine resolution change processing
+
+* brcm: use first frame cb to improve drop counts
+
+* sink: use raw PTS to track SEI timecodes
+
+* essos: allow loop throttling for direct linux
+
+-event loop throttling for direct linux operation (non-wayland) can
+be disabled by defining the env var ESSOS_DIRECT_NO_EVENT_LOOP_THROTTLE.
+This is in addition to the exiting env var ESSOS_NO_EVENT_LOOP_THROTTLE
+which affects both direct and wayland
+
+* drm, v4l2: updates to reduce frame drops at 60 fps
+
+* v4l2: report unthresholded queud-frames
+
+* v4l2, raw: apply stretch and zoom to 16:9 content
+
+* drm: adjust frame queue locking
+
+* drm: flush offload queue on video connection destroy
+
+* v4l2: don't expect last frame flag on rpi v4l2 res changes
+
+* v4l2: add support for AV1 with Dolby Vision
+
+* core, drm: changes to reduce graphics frame drops
+
+* v4l2: minor logging corrections
+
+* drm, v4l2, raw: support setting sink log level from westeros-gl-console
+
+* drm, v4l2: add generic av sync mechanism
+
+-Supplies a default avsync mechanism for systems using drm+v4l2
+-Runtime enable by defining WESTEROS_GL_USE_GENERIC_AVSYNC=1 for drm
+ master process and WESTEROS_SINK_USE_FREERUN=1 for sink.
+-Build time disable with -DNO_GENERIC_AVSYNC
+
+* Fix build errors in RPi
+
+Fixing build errors observed in RPi dunfell builds.
+
+* drm: reduce amlogic start threshold from 3 to 1
+
+* v4l2: updates to amlogic device parameters
+
+-set flags for Dolby Vision: dual layer, non-standard
+-set flag for second field pts mode
+
+* drm: v4l2: update video server status messages
+
+-video server status messages now set frame time to -1 for messages that
+indicate only frame drops.  This fixes an eos detection issue that
+happens if the video server drops a frame while holding the current frame
+
+* v4l2, raw: hook up frame dimension properties
+
+* drm, v4l2, raw: choose video plane based on video resource
+
+* erm: prefer free resource when choosing from non-ideal set
+
+* brcm,v4l2: software decoder improvements
+
+- fix crash in swFirstFrameThread in g_thread_unref (when
+soc.firstFrameThread wasn't yet set).
+- support flushing seek and video looping (restarting playback after
+EOS).
+
+* erm: prefer less capable resources that meet criteria
+
+* drm: (rpi) fix determination of main video plane
+
+* v4l2,raw: implement global zoom:
+
+-the application of zoom mode from the westeros-soc-drm video server is
+now opt-in rather than opt-out.  the zoom-mode settings made in the video
+server will now only take effect if the zoom-mode property of a westerossink
+element has been set to 6 (global)
+
+* drm, v4l2: fix spurious underflow events:
+
+-pts interpolation for src frames with pts -1 is broken on rpi since
+the rpi v4l2 does not return the same timestamp on decoded frames as
+passed to the decoder.  This is a source of false underflows
+-when base gstreamer avsync or westeros generic av sync is used
+there are a few situations leading to false underflows that are now fixed
+
+* v4l2, raw: don't apply global zoom settings to 4k content:
+
+-by default, global zoom settings will not be applied to 4k content.  This
+ can be disabled with the env var WESTEROS_SINK_ALLOW_4K_ZOOM=1
+
+* brcm: allow setting base zorder for fast render
+ 
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
