@@ -6089,8 +6089,12 @@ capture_start:
 
             if ( sink->soc.quitVideoOutputThread ) break;
 
-            if ( (pfd.revents & (POLLIN|POLLRDNORM)) == 0  )
+            if ( ((pfd.revents & (POLLIN|POLLRDNORM)) == 0) || sink->soc.decoderLastFrame  )
             {
+               if ( pfd.revents & (POLLIN|POLLRDNORM) )
+               {
+                  GST_DEBUG("checking events: revents %x decoderLastFrame %d", pfd.revents, sink->soc.decoderLastFrame);
+               }
                /* check events if streaming is starting or we have reached last frame */
                if ( (!sink->soc.numBuffersOut || (sink->soc.decoderLastFrame || sink->soc.expectNoLastFrame)) &&
                     (havePriEvent || (pfd.revents & POLLPRI)) )
