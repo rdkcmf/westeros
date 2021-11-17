@@ -1908,6 +1908,17 @@ static void *wstVideoServerConnectionThread( void *arg )
                               conn->videoPlane->vfm= wstCreateVideoFrameManager( conn );
                            }
                            pthread_mutex_unlock( &gMutex );
+                           #ifdef WESTEROS_GL_AVSYNC
+                           if ( conn->videoPlane->vfm )
+                           {
+                              VideoFrameManager *vfm= conn->videoPlane->vfm;
+                              if ( !vfm->syncInit )
+                              {
+                                 vfm->syncInit= true;
+                                 wstAVSyncInit( vfm, vfm->conn->sessionId );
+                              }
+                           }
+                           #endif
                            #ifdef USE_GENERIC_AVSYNC
                            if ( g_useGenericAVSync )
                            {
