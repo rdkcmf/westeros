@@ -3256,6 +3256,18 @@ static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent
                   UNLOCK(sink);
                }
             }
+            else if ( gst_event_has_name( event, "custom-instant-rate-change" ) )
+            {
+               gdouble playbackRate= 1.0;
+               if ( gst_structure_get_double( structure, "rate", &playbackRate ) == TRUE )
+               {
+                  GST_DEBUG("Instant playback rate change: %.2f", playbackRate);
+                  LOCK(sink);
+                  sink->playbackRate= playbackRate;
+                  updateClientPlaySpeed( sink, playbackRate, GST_STATE(GST_ELEMENT(sink)) == GST_STATE_PLAYING  ? TRUE : FALSE );
+                  UNLOCK(sink);
+               }
+            }
 
             *passToDefault= FALSE;
 
