@@ -5529,9 +5529,14 @@ static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll,
    }
    if (fullness >= OFFLOAD_QUEUE_CAPACITY - 1)
    {
-      ERROR("offload Message queue nospace please enlarge OFFLOAD_QUEUE_CAPACITY %d fullness %d", OFFLOAD_QUEUE_CAPACITY, fullness);
-       pthread_mutex_unlock( &pMsgQ->mutex);
-       return;
+      static int fullCount= 0;
+      if ( (fullCount++ % 10) == 0 )
+      {
+         ERROR("offload Message queue nospace please enlarge OFFLOAD_QUEUE_CAPACITY %d fullness %d count %d", OFFLOAD_QUEUE_CAPACITY, fullness, fullCount);
+      }
+      pthread_mutex_unlock( &pMsgQ->mutex);
+      wstOffloadMsgExecute( type, param_pv, param_ll, param_int );
+      return;
    }
    pCur= &pMsgQ->msg[pMsgQ->writeIdx];
    pCur->msgType= type;
