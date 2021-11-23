@@ -1804,13 +1804,18 @@ static bool essRMInitCtrlFile( EssRMgr *rm )
 {
    bool result= false;
    int rc;
-   EssRMgrState state;
+   EssRMgrState *state= 0;
 
    INFO("Initializing control file");
 
-   memset( &state, 0, sizeof(EssRMgrState) );
+   state= (EssRMgrState*)malloc( sizeof(EssRMgrState) );
+   if ( !state )
+   {
+      goto exit;
+   }
+   memset( state, 0, sizeof(EssRMgrState) );
 
-   rc= write( rm->fdCtrlFile, &state, sizeof(EssRMgrState) );
+   rc= write( rm->fdCtrlFile, state, sizeof(EssRMgrState) );
    if ( rc < 0 )
    {
       ERROR("Error writing control file: errno %d", errno);
@@ -1820,6 +1825,11 @@ static bool essRMInitCtrlFile( EssRMgr *rm )
    result= true;
 
 exit:
+   if ( state )
+   {
+      free( state );
+   }
+
    return result;
 }
 
