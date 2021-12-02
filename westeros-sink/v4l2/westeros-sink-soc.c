@@ -866,6 +866,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.syncType= -1;
    #ifdef USE_AMLOGIC_MESON_MSYNC
    sink->soc.sessionId= -1;
+   sink->soc.userSession= FALSE;
+   sink->soc.userAVSyncMode= FALSE;
    #else
    sink->soc.sessionId= 0;
    #endif
@@ -1118,6 +1120,14 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             {
                sink->soc.syncType= mode;
                GST_WARNING("AV sync mode %d", mode);
+               if ( (mode >= 0) && (mode <= 4) )
+               {
+                  sink->soc.userAVSyncMode= TRUE;
+               }
+               else
+               {
+                  sink->soc.userAVSyncMode= FALSE;
+               }
             }
             break;
          }
@@ -4635,6 +4645,11 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       {
          syncTypePrev= -1;
          sessionIdPrev= -1;
+      }
+      else if ( !sink->soc.userSession && sink->soc.userAVSyncMode )
+      {
+         syncTypePrev= -1;
+         sink->soc.sessionId= INVALID_SESSION_ID;
       }
       else
       {

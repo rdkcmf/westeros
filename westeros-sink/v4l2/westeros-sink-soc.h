@@ -223,6 +223,7 @@ struct _GstWesterosSinkSoc
    int sessionId;
    #ifdef USE_AMLOGIC_MESON_MSYNC
    gboolean userSession;
+   gboolean userAVSyncMode;
    #endif
    int bufferCohort;
    uint32_t minBuffersIn;
