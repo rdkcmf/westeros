@@ -4863,14 +4863,18 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                               sink->position= sink->positionSegmentStart + currentNano - firstNano;
                               sink->currentPTS= currentNano / (GST_SECOND/90000LL);
                               GST_DEBUG("receive frameTime: %lld position %lld PTS %lld", currentNano, sink->position, sink->currentPTS);
-                              if (sink->soc.frameDisplayCount == 0)
+
+                              if (sink->soc.frameOutCount > 0 )
                               {
-                                  sink->soc.emitFirstFrameSignal= TRUE;
-                              }
-                              ++sink->soc.frameDisplayCount;
-                              if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
-                              {
-                                 sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                                 if (sink->soc.frameDisplayCount == 0)
+                                 {
+                                     sink->soc.emitFirstFrameSignal= TRUE;
+                                 }
+                                 ++sink->soc.frameDisplayCount;
+                                 if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
+                                 {
+                                    sink->timeCodePresent( sink, sink->position, g_signals[SIGNAL_TIMECODE] );
+                                 }
                               }
                            }
                         }

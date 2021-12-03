@@ -1207,6 +1207,8 @@ static void wstVideoServerFlush( VideoServerConnection *conn )
 
    DEBUG("wstVideoServerFlush: enter");
 
+   wstOffloadFlushConn( conn );
+
    if ( conn->videoPlane->vfm )
    {
       expireLimit= conn->videoPlane->vfm->expireLimit;
