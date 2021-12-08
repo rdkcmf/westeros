@@ -63,6 +63,10 @@
 #define QOS_INTERVAL (120)
 #define DEFAULT_OVERSCAN (0)
 
+#define SYNC_VMASTER (0)
+#define SYNC_AMASTER (1)
+#define SYNC_IMMEDIATE (255)
+
 #define IOCTL ioctl_wrapper
 
 #ifdef GLIB_VERSION_2_32
@@ -101,6 +105,7 @@ enum
   PROP_WINDOW_SHOW,
   PROP_ZOOM_MODE,
   PROP_OVERSCAN_SIZE,
+  PROP_IMMEDIATE_OUTPUT,
   PROP_ENABLE_TEXTURE,
   PROP_REPORT_DECODE_ERRORS,
   PROP_QUEUED_FRAMES
@@ -707,6 +712,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                        "Get number for frames that are decoded and queued for rendering",
                        0, G_MAXUINT32, 0, G_PARAM_READABLE ));
 
+   g_object_class_install_property (gobject_class, PROP_IMMEDIATE_OUTPUT,
+     g_param_spec_boolean ("immediate-output",
+                           "immediate output mode",
+                           "Decoded frames are output with minimum delay. B frames are dropped.", FALSE, G_PARAM_READWRITE));
+
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -828,6 +838,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.zoomModeGlobal= FALSE;
    sink->soc.zoomMode= ZOOM_NONE;
    sink->soc.overscanSize= DEFAULT_OVERSCAN;
+   sink->soc.useImmediateOutput= FALSE;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
    sink->soc.frameWidthStream= -1;
@@ -1200,6 +1211,11 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.enableDecodeErrorSignal= g_value_get_boolean(value);
             break;
          }
+      case PROP_IMMEDIATE_OUTPUT:
+         {
+            sink->soc.useImmediateOutput= g_value_get_boolean(value);
+            break;
+         }
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -1280,6 +1296,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
             GST_DEBUG("queuedFrames %d (in %d out %d dec %d disp %d)", queuedFrames, sink->soc.frameInCount, sink->soc.frameOutCount, sink->soc.frameDecodeCount, sink->soc.frameDisplayCount);
             g_value_set_uint(value, queuedFrames);
          }
+         break;
+      case PROP_IMMEDIATE_OUTPUT:
+         g_value_set_boolean(value, sink->soc.useImmediateOutput);
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -4653,7 +4672,7 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       }
       else
       {
-         sink->soc.syncType= 0;
+         sink->soc.syncType= SYNC_VMASTER;
          sink->soc.sessionId= INVALID_SESSION_ID;
          if ( sink->segment.applied_rate == 1.0 )
          {
@@ -4664,7 +4683,7 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
             GstClock* amlclock= gst_aml_hal_asink_get_clock( audioSink );
             if (amlclock)
             {
-               sink->soc.syncType= 1;
+               sink->soc.syncType= SYNC_AMASTER;
                sink->soc.sessionId= gst_aml_clock_get_session_id( amlclock );
                gst_object_unref( amlclock );
             }
@@ -4677,12 +4696,12 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
          }
       }
       #else
-      sink->soc.syncType= 0;
+      sink->soc.syncType= SYNC_VMASTER;
       sink->soc.sessionId= 0;
       audioSink= wstFindAudioSink( sink );
       if ( audioSink )
       {
-         sink->soc.syncType= 1;
+         sink->soc.syncType= SYNC_AMASTER;
          #ifdef USE_GENERIC_AVSYNC
          if ( !gst_base_sink_get_sync(GST_BASE_SINK(sink)) )
          {
@@ -4721,8 +4740,7 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
             sclen= strlen(socClockName);
             if ( (len == sclen) && !strncmp(clockName, socClockName, len) )
             {
-               sink->soc.syncType= 1;
-               /* TBD: set sessionid */
+               sink->soc.syncType= SYNC_AMASTER;
             }
             g_free( clockName );
          }
@@ -4732,6 +4750,10 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
          sink->soc.sessionId= sink->resAssignedId;
       }
       #endif
+      if ( sink->soc.useImmediateOutput )
+      {
+         sink->soc.syncType= SYNC_IMMEDIATE;
+      }
       if ( (syncTypePrev != sink->soc.syncType) || (sessionIdPrev != sink->soc.sessionId) )
       {
          wstSendSessionInfoVideoClientConnection( sink->soc.conn );

@@ -151,6 +151,12 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    streamparm.type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
    decParm->parms_status= V4L2_CONFIG_PARM_DECODE_CFGINFO;
 
+   if ( sink->soc.useImmediateOutput )
+   {
+      GST_DEBUG("enable low latency mode");
+      decParm->cfg.low_latency_mode= 1;
+   }
+
    /*set bit12 value to 1,
     *v4l2 output 0 pts of second interlace field frame */
    decParm->cfg.metadata_config_flag |= (1 << 12);

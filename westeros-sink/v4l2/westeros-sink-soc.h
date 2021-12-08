@@ -180,6 +180,7 @@ struct _GstWesterosSinkSoc
    #endif
    gboolean showChanged;
    gboolean zoomModeGlobal;
+   gboolean useImmediateOutput;
    int zoomMode;
    int overscanSize;
    int frameWidth;

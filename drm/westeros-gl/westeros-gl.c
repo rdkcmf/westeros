@@ -105,6 +105,10 @@
 #undef USE_GENERIC_AVSYNC
 #endif
 
+#define SYNC_VMASTER (0)
+#define SYNC_AMASTER (1)
+#define SYNC_IMMEDIATE (255)
+
 typedef EGLDisplay (*PREALEGLGETDISPLAY)(EGLNativeDisplayType);
 typedef EGLBoolean (*PREALEGLSWAPBUFFERS)(EGLDisplay, EGLSurface surface );
 typedef EGLContext (*PREALEGLCREATECONTEXT)(EGLDisplay dpy,
@@ -1885,6 +1889,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                            {
                               if (
                                    (conn->sessionId != sessionId) ||
+                                   (syncType == SYNC_IMMEDIATE) ||
                                    (
                                      (conn->syncType != syncType) &&
                                      (
@@ -1914,7 +1919,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                            if ( conn->videoPlane->vfm )
                            {
                               VideoFrameManager *vfm= conn->videoPlane->vfm;
-                              if ( !vfm->syncInit )
+                              if ( !vfm->syncInit && (syncType != SYNC_IMMEDIATE) )
                               {
                                  vfm->syncInit= true;
                                  wstAVSyncInit( vfm, vfm->conn->sessionId );
@@ -3378,7 +3383,7 @@ static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f
 
    pthread_mutex_lock( &vfm->mutex);
    #ifdef WESTEROS_GL_AVSYNC
-   if ( !vfm->syncInit )
+   if ( !vfm->syncInit && (vfm->conn->syncType != SYNC_IMMEDIATE) )
    {
       vfm->syncInit= true;
       wstAVSyncInit( vfm, vfm->conn->sessionId );
@@ -3459,6 +3464,29 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
       #ifdef USE_GENERIC_AVSYNC
       long long avTime= wstVideoFrameMangerGetTimeSyncCtrl( vfm );
       #endif
+      if ( vfm->conn->syncType == SYNC_IMMEDIATE )
+      {
+         pthread_mutex_lock( &vfm->mutex);
+         if ( vfm->queueSize > 0 )
+         {
+            f= &vfm->queue[0];
+            while( vfm->queueSize > 1 )
+            {
+               if ( vfm->bufferIdCurrent != f->bufferId )
+               {
+                  avProgLog( f->frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "drop");
+                  FRAME("  drop frame %d buffer %d", f->frameNumber, f->bufferId);
+                  vfm->dropFrameCount += 1;
+                  wstOffloadFreeVideoFrameResources( f );
+                  wstOffloadSendBufferRelease(vfm->conn, f->bufferId );
+               }
+               memmove( &vfm->queue[0], &vfm->queue[1], (vfm->queueSize-(1))*sizeof(VideoFrame) );
+               --vfm->queueSize;
+            }
+         }
+         pthread_mutex_unlock( &vfm->mutex);
+      }
+      else
       if ( (vfm->queueSize && vfm->flipTimeBase) || (vfm->queueSize > 2) || vfm->frameAdvance )
       {
          long long flipTime;
@@ -3550,7 +3578,8 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
       }
    }
 done:
-   if ( !f && !vfm->paused && (vfm->bufferIdCurrent != -1) && !vfm->underflowReported &&
+   if ( !f && !vfm->paused && (vfm->conn->syncType != SYNC_IMMEDIATE) &&
+        (vfm->bufferIdCurrent != -1) && !vfm->underflowReported &&
         vfm->conn && vfm->conn->videoPlane && (vfm->conn->videoPlane->videoFrame[FRAME_CURR].bufferId != -1) )
    {
       #ifndef WESTEROS_GL_AVSYNC
