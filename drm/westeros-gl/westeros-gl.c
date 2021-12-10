@@ -4545,6 +4545,10 @@ static WstGLCtx *wstInitCtx( void )
 
          if ( ctx->isMaster )
          {
+            if ( !gCtx )
+            {
+               gCtx= ctx;
+            }
             gDisplayServer= (DisplayServerCtx*)calloc( 1, sizeof(DisplayServerCtx) );
             if ( gDisplayServer )
             {
