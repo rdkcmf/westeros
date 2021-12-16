@@ -1,0 +1,72 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.27 Release Notes
+------------------------------
+
+Date: Dec 16, 2021
+Tag: Westeros-1.01.28
+Changes:
+
+
+* v4l2: ensure driver events are checked after last frame decoded
+
+* brcm: intial support for instant rate change
+
+* drm: eliminate a source of video latency:
+
+-perform avsync initialization earlier to avoid introducing an additional
+one vertical period latency.
+
+* v4l2, raw: use window rect for vpc geometry updates
+
+* drm: fix offload queue full resource leak
+
+* drm: update amlogic decoder config
+
+* erm: avoid allocating large state in stack
+
+* v4l2: respect user set avsync mode
+
+* drm, v4l2: fix a cause of missing eos
+
+-prevent video server status messages that pertain to events prior to
+a flush from updating state after the flush
+
+* drm, v4l2: add immediate-output:
+
+-add support for low latency video which can be enabled by setting the
+immediate-output westerossink property to true.
+
+* drm: fix display server startup race condition
+
+* drm, v4l2, raw: add policy control for zoom:
+
+-two policies are added to westeros-soc-drm: global-zoom-active, allow-4k-zoom.  These policies are sent from the video server to westeros sink instances and control whether or not user zoom settings (global zoom) apply by default or not, and whether user zoom settings should be applied to 4k content.  The policles can be set on startup via these env vars:
+
+export WESTEROS_GL_GLOBAL_ZOOM_ACTIVE=1 (or =0)
+export WESTEROS_GL_ALLOW_4K_ZOOM=1 (or =0)
+
+The policies can also be set and queried via westeros-gl-console commands:
+
+westros-gl-console get global-zoom-active
+westeros-gl-console set global-zoom-active 1
+westeros-gl-console get allow-4k-zoom
+westeros-gl-console set allow-4k-zoom 1
+
+The default value for both policies is 0
+
+ 
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
