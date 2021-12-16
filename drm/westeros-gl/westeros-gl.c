@@ -146,6 +146,7 @@ typedef struct _VideoServerConnection
    bool threadStopRequested;
    int refreshRate;
    int zoomMode;
+   int zoomPolicyVersion;
    int videoDebugLevel;
    int syncType;
    int sessionId;
@@ -435,7 +436,10 @@ typedef struct _WstGLCtx
    bool offloadThreadStopRequested;
    WstOffloadMsgQ offloadMsgQ;
    bool autoFRMModeEnabled;
+   bool globalZoomActive;
+   bool allow4kZoom;
    int zoomMode;
+   int zoomPolicyVersion;
    int videoDebugLevel;
 } WstGLCtx;
 
@@ -484,7 +488,7 @@ static void wstFreeVideoFrameResources( VideoFrame *f );
 static void wstVideoServerSendBufferRelease( VideoServerConnection *conn, int bufferId );
 static void wstVideoServerSendStatus( VideoServerConnection *conn, long long displayedFrameTime, int dropFrameCount );
 static void wstVideoServerSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime );
-static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMode );
+static void wstVideoServerSendZoomMode( VideoServerConnection *conn, WstGLCtx *ctx, int zoomMode );
 static void wstVideoServerSendDebugLevel( VideoServerConnection *conn, int debugLevel );
 static void wstTermCtx( WstGLCtx *ctx );
 static void wstUpdateCtx( WstGLCtx *ctx );
@@ -1440,11 +1444,11 @@ static void wstVideoServerSendUnderflow( VideoServerConnection *conn, long long 
    pthread_mutex_unlock( &conn->mutex );
 }
 
-static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMode )
+static void wstVideoServerSendZoomMode( VideoServerConnection *conn, WstGLCtx *ctx, int zoomMode )
 {
    struct msghdr msg;
    struct iovec iov[1];
-   unsigned char mbody[4+4];
+   unsigned char mbody[4+4+4+4];
    int len;
    int sentLen;
 
@@ -1461,9 +1465,11 @@ static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMod
    len= 0;
    mbody[len++]= 'V';
    mbody[len++]= 'S';
-   mbody[len++]= 5;
+   mbody[len++]= 13;
    mbody[len++]= 'Z';
-   len += wstPutU32( &mbody[4], zoomMode );
+   len += wstPutU32( &mbody[len], ctx->globalZoomActive );
+   len += wstPutU32( &mbody[len], ctx->allow4kZoom );
+   len += wstPutU32( &mbody[len], zoomMode );
 
    iov[0].iov_base= (char*)mbody;
    iov[0].iov_len= len;
@@ -1477,6 +1483,7 @@ static void wstVideoServerSendZoomMode( VideoServerConnection *conn, int zoomMod
    if ( sentLen == len )
    {
       DEBUG("sent zoomMode %d to client", zoomMode);
+      conn->zoomPolicyVersion= ctx->zoomPolicyVersion;
       conn->zoomMode= zoomMode;
    }
 
@@ -1566,6 +1573,7 @@ static void *wstVideoServerConnectionThread( void *arg )
    DEBUG("wstVideoServerConnectionThread: enter");
 
    conn->zoomMode= -1;
+   conn->zoomPolicyVersion= -1;
    conn->videoDebugLevel= -1;
 
    conn->threadStarted= true;
@@ -1575,9 +1583,10 @@ static void *wstVideoServerConnectionThread( void *arg )
       {
          wstVideoServerSendRefreshRate( conn, gCtx->modeInfo->vrefresh );
       }
-      if ( (gCtx->zoomMode != -1) && (gCtx->zoomMode != conn->zoomMode) )
+      if ( (gCtx->zoomPolicyVersion != conn->zoomPolicyVersion) ||
+           ((gCtx->zoomMode != -1) && (gCtx->zoomMode != conn->zoomMode)) )
       {
-         wstVideoServerSendZoomMode( conn, gCtx->zoomMode );
+         wstVideoServerSendZoomMode( conn, gCtx, gCtx->zoomMode );
       }
       if ( (gCtx->videoDebugLevel != -1) && (gCtx->videoDebugLevel != conn->videoDebugLevel) )
       {
@@ -2599,6 +2608,14 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                   {
                      sprintf( conn->response, "%d: zoom-mode %d", 0, gCtx->zoomMode );
                   }
+                  else if ( (tlen == 18) && !strncmp( tok, "global-zoom-active", tlen) )
+                  {
+                     sprintf( conn->response, "%d: global-zoom-active %d", 0, gCtx->globalZoomActive );
+                  }
+                  else if ( (tlen == 13) && !strncmp( tok, "allow-4k-zoom", tlen) )
+                  {
+                     sprintf( conn->response, "%d: allow-4k-zoom %d", 0, gCtx->allow4kZoom );
+                  }
                   else if ( (tlen == 17) && !strncmp( tok, "video-debug-level", tlen) )
                   {
                      sprintf( conn->response, "%d: video-debug-level %d", 0, gCtx->videoDebugLevel );
@@ -2827,6 +2844,72 @@ static void wstDisplayServerProcessMessage( DisplayServerConnection *conn, int m
                      else
                      {
                         sprintf( conn->response, "%d: %s", -1, "set zoom-mode missing argument(s)" );
+                     }
+                  }
+                  else if ( (tlen == 18) && !strncmp( tok, "global-zoom-active", tlen) )
+                  {
+                     tok= strtok_r( 0, " ", &ctx );
+                     if ( tok )
+                     {
+                        int value= -1;
+                        tlen= strlen( tok );
+                        if ( (tlen == 1) && !strncmp( tok, "0", tlen) )
+                        {
+                           value= 0;
+                        }
+                        else if ( (tlen == 1) && !strncmp( tok, "1", tlen) )
+                        {
+                           value= 1;
+                        }
+                        if ( value >= 0 )
+                        {
+                           pthread_mutex_lock( &gMutex );
+                           gCtx->zoomPolicyVersion += 1;
+                           gCtx->globalZoomActive= value;
+                           pthread_mutex_unlock( &gMutex );
+                           sprintf( conn->response, "%d: global-zoom-active %d", 0, gCtx->globalZoomActive );
+                        }
+                        else
+                        {
+                           sprintf( conn->response, "%d: %s", -1, "set global-zoom-active invalid argument(s)" );
+                        }
+                     }
+                     else
+                     {
+                        sprintf( conn->response, "%d: %s", -1, "set global-zoom-active missing argument(s)" );
+                     }
+                  }
+                  else if ( (tlen == 13) && !strncmp( tok, "allow-4k-zoom", tlen) )
+                  {
+                     tok= strtok_r( 0, " ", &ctx );
+                     if ( tok )
+                     {
+                        int value= -1;
+                        tlen= strlen( tok );
+                        if ( (tlen == 1) && !strncmp( tok, "0", tlen) )
+                        {
+                           value= 0;
+                        }
+                        else if ( (tlen == 1) && !strncmp( tok, "1", tlen) )
+                        {
+                           value= 1;
+                        }
+                        if ( value >= 0 )
+                        {
+                           pthread_mutex_lock( &gMutex );
+                           gCtx->zoomPolicyVersion += 1;
+                           gCtx->allow4kZoom= value;
+                           pthread_mutex_unlock( &gMutex );
+                           sprintf( conn->response, "%d: allow-4k-zoom %d", 0, gCtx->allow4kZoom );
+                        }
+                        else
+                        {
+                           sprintf( conn->response, "%d: %s", -1, "set allow-4k-zoom invalid argument(s)" );
+                        }
+                     }
+                     else
+                     {
+                        sprintf( conn->response, "%d: %s", -1, "set allow-4k-zoom missing argument(s)" );
                      }
                   }
                   else if ( (tlen == 17) && !strncmp( tok, "video-debug-level", tlen) )
@@ -4139,6 +4222,34 @@ static WstGLCtx *wstInitCtx( void )
          ctx->secureGraphics= true;
       }
       INFO("westeros-gl: secure graphics: %d", ctx->secureGraphics);
+      env= getenv("WESTEROS_GL_GLOBAL_ZOOM_ACTIVE");
+      if ( env )
+      {
+         int value= atoi(env);
+         if ( value )
+         {
+            ctx->globalZoomActive= true;
+         }
+         else
+         {
+            ctx->globalZoomActive= false;
+         }
+      }
+      INFO("westeros-gl: global zoom active: %d", ctx->globalZoomActive);
+      env= getenv("WESTEROS_GL_ALLOW_4K_ZOOM");
+      if ( env )
+      {
+         int value= atoi(env);
+         if ( value )
+         {
+            ctx->allow4kZoom= true;
+         }
+         else
+         {
+            ctx->allow4kZoom= false;
+         }
+      }
+      INFO("westeros-gl: allow 4k zoom: %d", ctx->allow4kZoom);
       #ifndef WESTEROS_GL_AVSYNC
       {
          #ifdef USE_GENERIC_AVSYNC

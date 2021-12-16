@@ -470,6 +470,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.showChanged= FALSE;
    sink->soc.zoomModeGlobal= FALSE;
    sink->soc.zoomMode= ZOOM_NONE;
+   sink->soc.zoomModeUser= -1;;
    sink->soc.overscanSize= DEFAULT_OVERSCAN;
    sink->soc.frameWidth= -1;
    sink->soc.frameHeight= -1;
@@ -576,12 +577,6 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
       printf("westeros-sink: capture only\n");
    }
 
-   if ( getenv("WESTEROS_SINK_ALLOW_4K_ZOOM") )
-   {
-      sink->soc.allow4kZoom= TRUE;
-      printf("westeros-sink: allow 4k zoom\n");
-   }
-
    #ifdef USE_AMLOGIC_MESON_MSYNC
    printf("westeros-sink: msync enabled\n");
    #endif
@@ -664,6 +659,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
       case PROP_ZOOM_MODE:
          {
             gint zoom= g_value_get_int(value);
+            sink->soc.zoomModeUser= zoom;
             if ( zoom == ZOOM_GLOBAL )
             {
                GST_DEBUG("enable global zoom");
@@ -2752,10 +2748,21 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                         }
                         break;
                      case 'Z':
-                        if ( mlen >= 5)
+                        if ( mlen >= 13)
                         {
-                          int zoomMode= getU32( &m[4] );
-                          GST_DEBUG("got zoom-mode %d from video server", zoomMode);
+                          int globalZoomActive= getU32( &m[4] );
+                          int allow4kZoom= getU32( &m[8] );
+                          int zoomMode= getU32( &m[12] );
+                          GST_DEBUG("got zoom-mode %d from video server (globalZoomActive %d allow4kZoom %d)", zoomMode);
+                          if ( sink->soc.zoomModeUser == -1 )
+                          {
+                             sink->soc.zoomModeGlobal= globalZoomActive;
+                             if ( !globalZoomActive )
+                             {
+                                sink->soc.zoomMode= ZOOM_NONE;
+                             }
+                          }
+                          sink->soc.allow4kZoom= allow4kZoom;
                           if ( sink->soc.zoomModeGlobal == TRUE )
                           {
                              if ( (zoomMode >= ZOOM_NONE) && (zoomMode <= ZOOM_ZOOM) )
