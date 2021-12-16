@@ -4172,6 +4172,7 @@ static WstGLCtx *wstInitCtx( void )
       ctx->graphicsEnable= true;
       ctx->videoEnable= true;
       ctx->zoomMode= -1;
+      ctx->allow4kZoom= true;
       ctx->videoDebugLevel= -1;
       #ifndef WESTEROS_GL_NO_PLANES
       ctx->usePlanes= true;
