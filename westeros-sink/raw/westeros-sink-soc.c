@@ -128,7 +128,7 @@ static bool drmAllocBuffer( GstWesterosSink *sink, int buffIndex, int width, int
 static void drmFreeBuffer( GstWesterosSink *sink, int buffIndex );
 static void drmLockBuffer( GstWesterosSink *sink, int buffIndex );
 static bool drmUnlockBuffer( GstWesterosSink *sink, int buffIndex );
-static bool drmUnlockAllBuffers( GstWesterosSink *sink );
+static void drmUnlockAllBuffers( GstWesterosSink *sink );
 #ifdef USE_GST_ALLOCATORS
 static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer );
 #endif
@@ -1506,6 +1506,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
 gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
 {
    WESTEROS_UNUSED(sink);
+   return TRUE;
 }
 
 void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
@@ -1599,6 +1600,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 
 gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
 {
+   return FALSE;
 }
 
 static void wstSinkSocStopVideo( GstWesterosSink *sink )
@@ -3331,7 +3333,7 @@ static bool drmUnlockBuffer( GstWesterosSink *sink, int buffIndex )
    return unlocked;
 }
 
-static bool drmUnlockAllBuffers( GstWesterosSink *sink )
+static void drmUnlockAllBuffers( GstWesterosSink *sink )
 {
    WstDrmBuffer *drmBuff= 0;
    int buffIndex;
