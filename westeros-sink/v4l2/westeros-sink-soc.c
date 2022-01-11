@@ -937,6 +937,9 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.useDmabufOutput= FALSE;
    sink->soc.dwMode= -1;
    sink->soc.drmFd= -1;
+   sink->soc.codecData= NULL;
+   sink->soc.codecDataLen= 0;
+   sink->soc.codecDataInjected= FALSE;
    sink->soc.haveColorimetry= FALSE;
    sink->soc.haveMasteringDisplay= FALSE;
    sink->soc.haveContentLightLevel= FALSE;
@@ -1045,6 +1048,11 @@ void gst_westeros_sink_soc_term( GstWesterosSink *sink )
    if ( sink->soc.devname )
    {
       free( sink->soc.devname );
+   }
+
+   if ( sink->soc.codecData )
+   {
+      free( sink->soc.codecData );
    }
 
    #ifdef GLIB_VERSION_2_32
@@ -1720,6 +1728,45 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                sink->soc.haveContentLightLevel= TRUE;
             }
          }
+         if ( gst_structure_has_field(structure, "codec_data") )
+         {
+            const GValue *value= gst_structure_get_value(structure, "codec_data");
+            if ( value )
+            {
+               GstBuffer *buf;
+               GstMapInfo map;
+               buf= gst_value_get_buffer(value);
+               if ( buf )
+               {
+                  if ( gst_buffer_map(buf, &map, GST_MAP_READ) )
+                  {
+                     LOCK(sink);
+                     if ( sink->soc.codecData )
+                     {
+                        free( sink->soc.codecData );
+                        sink->soc.codecDataLen= 0;
+                     }
+                     sink->soc.codecData= (guint8*)malloc( map.size );
+                     if ( sink->soc.codecData )
+                     {
+                        memcpy( sink->soc.codecData, map.data, map.size);
+                        sink->soc.codecDataLen= map.size;
+                        sink->soc.codecDataInjected= FALSE;
+                     }
+                     else
+                     {
+                        GST_ERROR("no memory for codec data size %d", map.size);
+                     }
+                     UNLOCK(sink);
+                     gst_buffer_unmap(buf, &map);
+                  }
+                  else
+                  {
+                     GST_ERROR("gst_buffer_map failed for codec data");
+                  }
+               }
+            }
+         }
 
          if ( frameSizeChange && (sink->soc.hasEvents == FALSE) )
          {
@@ -1887,6 +1934,14 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             goto exit;
          }
 
+         if ( sink->soc.codecData )
+         {
+            GST_WARNING("have unexpected codec data when using dma-buf for input");
+            free( sink->soc.codecData );
+            sink->soc.codecData= NULL;
+            sink->soc.codecDataLen= 0;
+         }
+
          if (GST_BUFFER_PTS_IS_VALID(buffer) )
          {
             GstClockTime timestamp= GST_BUFFER_PTS(buffer) + 500LL;
@@ -1942,6 +1997,8 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
             offset= 0;
             while( offset < inSize )
             {
+               guint8 *start;
+
                buffIndex= wstGetInputBuffer( sink );
                if ( (buffIndex < 0) && !sink->flushStarted )
                {
@@ -1960,6 +2017,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   UNLOCK(sink);
                   goto exit;
                }
+               start= (guint8*)sink->soc.inBuffers[buffIndex].start;
 
                copylen= sink->soc.inBuffers[buffIndex].capacity;
                if ( copylen > avail )
@@ -1967,7 +2025,18 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   copylen= avail;
                }
 
-               memcpy( sink->soc.inBuffers[buffIndex].start, &inData[offset], copylen );
+               if ( sink->soc.codecData && !sink->soc.codecDataInjected )
+               {
+                  GST_DEBUG("injecting %d bytes codec data", sink->soc.codecDataLen);
+                  memcpy( start, sink->soc.codecData, sink->soc.codecDataLen );
+                  start += sink->soc.codecDataLen;
+                  sink->soc.codecDataInjected= TRUE;
+                  if ( copylen > avail-sink->soc.codecDataLen )
+                  {
+                     copylen= avail-sink->soc.codecDataLen;
+                  }
+               }
+               memcpy( start, &inData[offset], copylen );
 
                offset += copylen;
                avail -= copylen;
@@ -2337,6 +2406,13 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       free( sink->soc.outputFormats );
       sink->soc.outputFormats= 0;
    }
+   if ( sink->soc.codecData )
+   {
+      free( sink->soc.codecData );
+      sink->soc.codecData= NULL;
+   }
+   sink->soc.codecDataLen= 0;
+   sink->soc.codecDataInjected= FALSE;
 
    sink->videoStarted= FALSE;
    UNLOCK(sink);
@@ -5232,6 +5308,7 @@ static void wstDecoderReset( GstWesterosSink *sink, bool hard )
    sink->soc.prevFrame2Fd= -1;
    sink->soc.nextFrameFd= -1;
    sink->soc.formatsSet= FALSE;
+   sink->soc.codecDataInjected= FALSE;
 }
 
 typedef struct bufferInfo

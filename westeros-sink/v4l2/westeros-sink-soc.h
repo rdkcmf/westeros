@@ -278,6 +278,10 @@ struct _GstWesterosSinkSoc
    int videoWidth;
    int videoHeight;
 
+   guint8 *codecData;
+   int codecDataLen;
+   gboolean codecDataInjected;
+
    gboolean haveColorimetry;
    int hdrColorimetry[4];
    gboolean haveMasteringDisplay;
