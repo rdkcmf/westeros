@@ -92,6 +92,8 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       if ( vfm->sync )
       {
          struct video_config config;
+
+         memset(&config, 0, sizeof(struct video_config));
          config.delay= 2;
          av_sync_video_config( vfm->sync, &config);
       }
