@@ -67,6 +67,8 @@
 #define ESSRMGR_CRITERIA_MASK_FE    (0x0000)
 #define ESSRMGR_CRITERIA_MASK_SVPA  (0x0000)
 
+#define DEFAULT_TIMEOUT_MS (3000)
+
 static int gLogLevel= 2;
 
 static void essrm_printf( int level, const char *fmt, ... )

@@ -52,6 +52,7 @@ typedef struct _EssRMgrHdr
    uint32_t crc;
    int nextRequestId;
    bool requesterWinsPriorityTie;
+   int timeoutMS;
 } EssRMgrHdr;
 
 typedef struct _EssRMgrResourceNotify
@@ -846,6 +847,7 @@ void EssRMgrDumpState( EssRMgr *rm )
    if ( essRMLockCtrlFileAndValidate( rm ) )
    {
       printf("requester wins priority tie: %d\n", rm->state->hdr.requesterWinsPriorityTie);
+      printf("revoke-timeout: %d ms\n", rm->state->hdr.timeoutMS);
       for( int i= 0; i < rm->state->base.numVideoDecoders; ++i )
       {
          printf("video decoder: %d caps %X owner %d priority %d\n",
@@ -1158,6 +1160,7 @@ static bool essRMReadConfigFile( EssRMgr *rm )
    int feIndex= 0;
    int svpaIndex= 0;
    int maxWidth, maxHeight;
+   int timeout= DEFAULT_TIMEOUT_MS;
 
    configFileName= getenv("ESSRMGR_CONFIG_FILE");
    if ( !configFileName || (stat( configFileName, &fileStat ) != 0) )
@@ -1235,6 +1238,54 @@ static bool essRMReadConfigFile( EssRMgr *rm )
                   {
                      INFO("policy: requester-wins-priority-tie");
                      rm->state->hdr.requesterWinsPriorityTie= true;
+                  }
+                  else if ( (i == 14) && !strncmp( work, "revoke-timeout", i ) )
+                  {
+                     bool haveValue;
+                     if ( c == '(' )
+                     {
+                        i= 0;
+                        haveValue= false;
+                        for( ; ; )
+                        {
+                           c= fgetc( pFile );
+                           if ( (c == ' ') || (c == ')') || (c == '\t') || (c == '\n') || (c == EOF) )
+                           {
+                              if ( i > 0 )
+                              {
+                                 work[i]= '\0';
+                                 haveValue= true;
+                              }
+                           }
+                           else
+                           {
+                              if ( i < ESSRMGR_MAX_NAMELEN )
+                              {
+                                 work[i++]= c;
+                              }
+                              else
+                              {
+                                 truncation= true;
+                              }
+                           }
+                           if ( haveValue )
+                           {
+                              int value= atoi( work );
+                              if ( value <= 0 )
+                              {
+                                 ERROR("bad timeout: using default");
+                                 value= DEFAULT_TIMEOUT_MS;;
+                              }
+                              timeout= value;
+                              haveValue= false;
+                              if ( c != ')' )
+                              {
+                                 ERROR("syntax error with timeout");
+                              }
+                              break;
+                           }
+                        }
+                     }
                   }
                }
                if ( (c == '\n') || (c == EOF) )
@@ -1547,6 +1598,7 @@ static bool essRMReadConfigFile( EssRMgr *rm )
    rm->state->base.numAudioDecoders= audioIndex;
    rm->state->base.numFrontEnds= feIndex;
    rm->state->base.numSVPAllocators= svpaIndex;
+   rm->state->hdr.timeoutMS= timeout;
 
    INFO("config file defines %d video decoders %d audio decoders %d frontends %d svpa",
         rm->state->base.numVideoDecoders,
@@ -2139,7 +2191,7 @@ static bool essRMRevokeResource( EssRMgr *rm, int type, int id )
          rc= sem_post( &ctrl->revoke[id].semNotify );
          if ( rc == 0 )
          {
-            int retry= 300;
+            int retry= rm->state->hdr.timeoutMS/10;
 
             essRMUnlockCtrlFile( rm );
             for( ; ; )
@@ -2189,7 +2241,7 @@ static bool essRMTransferResource( EssRMgr *rm, int id, EssRMgrResourceNotify *p
       int rc= sem_post( &pending->semNotify );
       if ( rc == 0 )
       {
-         int retry= 300;
+         int retry= rm->state->hdr.timeoutMS/10;
 
          essRMUnlockCtrlFile( rm );
          for( ; ; )

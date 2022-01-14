@@ -69,6 +69,7 @@ typedef struct _EssRMgrResource
 typedef struct _EssRMgrBase
 {
    bool requesterWinsPriorityTie;
+   int timeoutMS;
    int numVideoDecoders;
    EssRMgrResource videoDecoder[ESSRMGR_MAX_ITEMS];
    int numAudioDecoders;
@@ -142,6 +143,7 @@ typedef struct _EssRMgrClientConnection
    pthread_t threadId;
    bool threadStarted;
    bool threadStopRequested;
+   int timeoutMS;
 } EssRMgrClientConnection;
 
 typedef enum _EssRMgrValue
@@ -152,6 +154,7 @@ typedef enum _EssRMgrValue
    EssRMgrValue_state= 3,
    EssRMgrValue_aggregateState= 4,
    EssRMgrValue_policy_tie= 5,
+   EssRMgrValue_policy_revokeTimeout= 6,
 } EssRMgrValue;
 
 typedef struct _EssRMgrRequestInfo
@@ -474,6 +477,8 @@ static void essRMDumpState( EssRMgrResourceConnection *conn, int requestId )
 
    snprintf(msg, sizeof(msg), "requester wins priority tie: %d\n", state->base.requesterWinsPriorityTie);
    essRMSendDumpStateResponse( conn, requestId, msg );
+   snprintf(msg, sizeof(msg), "revoke-timeout: %d ms\n", state->base.timeoutMS);
+   essRMSendDumpStateResponse( conn, requestId, msg );
    for( int i= 0; i < state->base.numVideoDecoders; ++i )
    {
       snprintf(msg, sizeof(msg), "video decoder: %d caps %X owner %d priority %d\n",
@@ -608,6 +613,8 @@ static void *essRMResourceConnectionThread( void *arg )
    int moff= 0, len, i, rc;
 
    DEBUG("essRMResourceConnectionThread: enter");
+
+   essRMSendGetValueResponse( conn, -1, EssRMgrValue_policy_revokeTimeout, server->state->base.timeoutMS, 0, 0);
 
    conn->threadStarted= true;
    while( !conn->threadStopRequested )
@@ -1022,6 +1029,11 @@ static void *essRMResourceConnectionThread( void *arg )
                            case EssRMgrValue_policy_tie:
                               {
                                  value1= server->state->base.requesterWinsPriorityTie;
+                              }
+                              break;
+                           case EssRMgrValue_policy_revokeTimeout:
+                              {
+                                 value1= server->state->base.timeoutMS;
                               }
                               break;
                         }
@@ -1755,7 +1767,15 @@ static void *essRMClientConnectionThread( void *userData )
                         }
                         else
                         {
-                           ERROR("no match for requestId %d", requestId);
+                           if ( (requestId == -1) && (valueId == EssRMgrValue_policy_revokeTimeout) )
+                           {
+                              DEBUG("set timeout to %d ms", value1);
+                              rm->conn->timeoutMS= value1;
+                           }
+                           else
+                           {
+                              ERROR("no match for requestId %d", requestId);
+                           }
                         }
                      }
                      break;
@@ -1878,6 +1898,7 @@ static EssRMgrClientConnection *essRMCreateClientConnection( EssRMgr *rm )
       conn->rm= rm;
       conn->socketFd= -1;
       conn->name= ESSRMGR_SERVER_NAME;
+      conn->timeoutMS= DEFAULT_TIMEOUT_MS;
       pthread_mutex_init( &conn->mutex, 0 );
 
       workingDir= getenv("XDG_RUNTIME_DIR");
@@ -1941,7 +1962,7 @@ exit:
 
 static bool essRMWaitResponseClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
 {
-   int retry= 3000;
+   int retry= conn->timeoutMS/10;
    return essRMSemWait( &info->semComplete, info->waitForever, retry );
 }
 
@@ -4114,7 +4135,7 @@ static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int 
       if ( result && wait )
       {
          EssRMgrResourceServerCtx *server= conn->server;
-         int retry= 300;
+         int retry= conn->server->state->base.timeoutMS/10;
          for( ; ; )
          {
             if ( res[id].connOwner == 0 )
@@ -4246,6 +4267,7 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
    int feIndex= 0;
    int svpaIndex= 0;
    int maxWidth, maxHeight;
+   int timeout= DEFAULT_TIMEOUT_MS;
 
    configFileName= getenv("ESSRMGR_CONFIG_FILE");
    if ( !configFileName || (stat( configFileName, &fileStat ) != 0) )
@@ -4323,6 +4345,54 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
                   {
                      INFO("policy: requester-wins-priority-tie");
                      server->state->base.requesterWinsPriorityTie= true;
+                  }
+                  else if ( (i == 14) && !strncmp( work, "revoke-timeout", i ) )
+                  {
+                     bool haveValue;
+                     if ( c == '(' )
+                     {
+                        i= 0;
+                        haveValue= false;
+                        for( ; ; )
+                        {
+                           c= fgetc( pFile );
+                           if ( (c == ' ') || (c == ')') || (c == '\t') || (c == '\n') || (c == EOF) )
+                           {
+                              if ( i > 0 )
+                              {
+                                 work[i]= '\0';
+                                 haveValue= true;
+                              }
+                           }
+                           else
+                           {
+                              if ( i < ESSRMGR_MAX_NAMELEN )
+                              {
+                                 work[i++]= c;
+                              }
+                              else
+                              {
+                                 truncation= true;
+                              }
+                           }
+                           if ( haveValue )
+                           {
+                              int value= atoi( work );
+                              if ( value <= 0 )
+                              {
+                                 ERROR("bad timeout: using default");
+                                 value= DEFAULT_TIMEOUT_MS;;
+                              }
+                              timeout= value;
+                              haveValue= false;
+                              if ( c != ')' )
+                              {
+                                 ERROR("syntax error with timeout");
+                              }
+                              break;
+                           }
+                        }
+                     }
                   }
                }
                if ( (c == '\n') || (c == EOF) )
@@ -4635,6 +4705,7 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
    server->state->base.numAudioDecoders= audioIndex;
    server->state->base.numFrontEnds= feIndex;
    server->state->base.numSVPAllocators= svpaIndex;
+   server->state->base.timeoutMS= timeout;
 
    INFO("config file defines %d video decoders %d audio decoders %d frontends %d svpa",
         server->state->base.numVideoDecoders,
