@@ -1721,7 +1721,7 @@ static void *essRMClientConnectionThread( void *userData )
                         pthread_mutex_unlock( &rm->mutex );
                         if ( needConfirm )
                         {
-                           essRMSemWait( &info->semConfirm, false, 3000 );
+                           essRMSemWait( &info->semConfirm, false, conn->timeoutMS );
                         }
                      }
                      break;
@@ -1872,7 +1872,7 @@ static void essRMDestroyClientConnection( EssRMgrClientConnection *conn )
             it != notifications.end(); ++it )
       {
          EssRMgrRequestInfo* info= (*it);
-         essRMSemWait( &info->semComplete, false, 3000 );
+         essRMSemWait( &info->semComplete, false, conn->timeoutMS );
          sem_destroy( &info->semComplete );
          free( info );
       }
@@ -1962,7 +1962,7 @@ exit:
 
 static bool essRMWaitResponseClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
 {
-   int retry= conn->timeoutMS/10;
+   int retry= conn->timeoutMS;
    return essRMSemWait( &info->semComplete, info->waitForever, retry );
 }
 
