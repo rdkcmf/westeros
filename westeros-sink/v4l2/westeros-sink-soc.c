@@ -5608,7 +5608,14 @@ static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, in
    {
       if ( sink->display && sink->vpcSurface )
       {
-         wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+         if ( sink->soc.captureEnabled || sink->soc.framesBeforeHideGfx )
+         {
+            wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+         }
+         else
+         {
+            wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+         }
          wl_display_flush(sink->display);
       }
    }
@@ -5742,7 +5749,14 @@ static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, in
    }
    else
    {
-      wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+      if ( sink->soc.captureEnabled || sink->soc.framesBeforeHideGfx )
+      {
+         wl_vpc_surface_set_geometry( sink->vpcSurface, vx, vy, vw, vh );
+      }
+      else
+      {
+         wl_vpc_surface_set_geometry( sink->vpcSurface, sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
+      }
    }
 }
 
