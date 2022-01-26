@@ -369,6 +369,10 @@ TESTCASE genericTests[]=
       "Test ERM dual video 3",
       testCaseERMDualVideo3
    },
+   { "testERMRevokeTimeout",
+      "Test ERM revoke timeout",
+      testCaseERMRevokeTimeout
+   },
    { "testRenderBasicComposition",
      "Test compositor basic composition",
      testCaseRenderBasicComposition

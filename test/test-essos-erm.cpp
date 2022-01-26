@@ -48,6 +48,30 @@ frontend: none\n \
 svpa: none\n \
 ";
 
+static const char *configFileShortTimeout=
+"policy: requester-wins-priority-tie\n \
+policy: revoke-timeout(100)\n \
+video: hardware\n \
+video: hardware,limitedResolution(1920,1080),limitedQuality\n \
+video: hardware,limitedResolution(640,480),limitedQuality\n \
+video: software,limitedPerformance\n \
+audio: none\n \
+frontend: none\n \
+svpa: none\n \
+";
+
+static const char *configFileLongTimeout=
+"policy: requester-wins-priority-tie\n \
+policy: revoke-timeout(500)\n \
+video: hardware\n \
+video: hardware,limitedResolution(1920,1080),limitedQuality\n \
+video: hardware,limitedResolution(640,480),limitedQuality\n \
+video: software,limitedPerformance\n \
+audio: none\n \
+frontend: none\n \
+svpa: none\n \
+";
+
 static bool initERM( EMCTX *emctx, const char *configFileSrc )
 {
    bool result= false;
@@ -101,6 +125,7 @@ typedef struct _TestCtx
    bool async;
    int type;
    int delay;
+   int revokeDelay;
    int priority;
    int priority2;
    int usage;
@@ -136,6 +161,11 @@ static void notify( EssRMgr *rm, int event, int type, int id, void* userData )
                   tctx->prevAssignedId= tctx->assignedId;
                   tctx->assignedId= -1;
                   printf("%s revoked: releasing resource type %d id %d revoke count %d\n", tctx->name, type, id, tctx->revokeCount);
+                  if ( tctx->revokeDelay > 0 )
+                  {
+                     printf("delaying release by %d ms\n", tctx->revokeDelay);
+                     usleep( tctx->revokeDelay );
+                  }
                   EssRMgrReleaseResource( rm, type, id );
                   printf("%s revoked: done releasing resource type %d id %d\n", tctx->name, type, id);
                }
@@ -1392,6 +1422,174 @@ bool testCaseERMDualVideo3( EMCTX *emctx )
    if ( ctxA.prevAssignedId != 1 )
    {
       EMERROR("Unexpected prev id for A: expected 1 actual %d", ctxA.prevAssignedId );
+      error= true;
+   }
+   if ( error ) goto exit;
+
+   testResult= true;
+
+exit:
+   termERM( emctx );
+
+   return testResult;
+}
+
+bool testCaseERMRevokeTimeout( EMCTX *emctx )
+{
+   bool testResult= false;
+   bool result;
+   bool error= false;
+   int rc;
+   pthread_t threadIdA= 0;
+   pthread_t threadIdB= 0;
+   TestCtx ctxA;
+   TestCtx ctxB;
+
+   result= initERM( emctx, configFileShortTimeout );
+   if ( !result )
+   {
+      EMERROR("initERM failed");
+      goto exit;
+   }
+
+   memset( &ctxA, 0, sizeof(ctxA) );
+   ctxA.emctx= emctx;
+   ctxA.name= "A";
+   ctxA.type= EssRMgrResType_videoDecoder;
+   ctxA.async= true;
+   ctxA.loop= 1;
+   ctxA.priority= 2;
+   ctxA.usage= 7;
+   ctxA.delay= 200000;
+   ctxA.revokeDelay= 250000;
+   ctxA.assignedId= -1;
+   ctxA.prevAssignedId= -1;
+   rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   usleep( 10000 );
+
+   memset( &ctxB, 0, sizeof(ctxA) );
+   ctxB.emctx= emctx;
+   ctxB.name= "B";
+   ctxB.type= EssRMgrResType_videoDecoder;
+   ctxB.async= true;
+   ctxB.loop= 1;
+   ctxB.priority= 2;
+   ctxB.usage= 7;
+   ctxB.delay= 100000;
+   ctxB.assignedId= -1;
+   ctxB.prevAssignedId= -1;
+   rc= pthread_create( &threadIdB, NULL, requestThread, &ctxB );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   pthread_join( threadIdA, NULL );
+   pthread_join( threadIdB, NULL );
+
+   if ( ctxA.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for A: expected 1 actual %d", ctxA.grantCount );
+      error= true;
+   }
+   if ( ctxA.revokeCount != 1 )
+   {
+      EMERROR("Unexpected revoke count for A: expected 1 actual %d", ctxA.revokeCount );
+      error= true;
+   }
+   if ( ctxB.grantCount != 0 )
+   {
+      EMERROR("Unexpected grant count for B: expected 0 actual %d", ctxB.grantCount );
+      error= true;
+   }
+   if ( ctxB.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for B: expected 0 actual %d", ctxB.revokeCount );
+      error= true;
+   }
+   if ( error ) goto exit;
+
+
+
+   termERM( emctx );
+
+   usleep( 10000 );
+
+
+   result= initERM( emctx, configFileLongTimeout );
+   if ( !result )
+   {
+      EMERROR("initERM failed");
+      goto exit;
+   }
+
+   memset( &ctxA, 0, sizeof(ctxA) );
+   ctxA.emctx= emctx;
+   ctxA.name= "A";
+   ctxA.type= EssRMgrResType_videoDecoder;
+   ctxA.async= true;
+   ctxA.loop= 1;
+   ctxA.priority= 2;
+   ctxA.usage= 7;
+   ctxA.delay= 200000;
+   ctxA.revokeDelay= 250000;
+   ctxA.assignedId= -1;
+   ctxA.prevAssignedId= -1;
+   rc= pthread_create( &threadIdA, NULL, requestThread, &ctxA );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   usleep( 10000 );
+
+   memset( &ctxB, 0, sizeof(ctxA) );
+   ctxB.emctx= emctx;
+   ctxB.name= "B";
+   ctxB.type= EssRMgrResType_videoDecoder;
+   ctxB.async= true;
+   ctxB.loop= 1;
+   ctxB.priority= 2;
+   ctxB.usage= 7;
+   ctxB.delay= 100000;
+   ctxB.assignedId= -1;
+   ctxB.prevAssignedId= -1;
+   rc= pthread_create( &threadIdB, NULL, requestThread, &ctxB );
+   if ( rc )
+   {
+      EMERROR("Failed to created thread A");
+      goto exit;
+   }
+
+   pthread_join( threadIdA, NULL );
+   pthread_join( threadIdB, NULL );
+
+   if ( ctxA.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for A: expected 1 actual %d", ctxA.grantCount );
+      error= true;
+   }
+   if ( ctxA.revokeCount != 1 )
+   {
+      EMERROR("Unexpected revoke count for A: expected 1 actual %d", ctxA.revokeCount );
+      error= true;
+   }
+   if ( ctxB.grantCount != 1 )
+   {
+      EMERROR("Unexpected grant count for B: expected 0 actual %d", ctxB.grantCount );
+      error= true;
+   }
+   if ( ctxB.revokeCount != 0 )
+   {
+      EMERROR("Unexpected revoke count for B: expected 0 actual %d", ctxB.revokeCount );
       error= true;
    }
    if ( error ) goto exit;

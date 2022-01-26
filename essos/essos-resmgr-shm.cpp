@@ -1277,6 +1277,7 @@ static bool essRMReadConfigFile( EssRMgr *rm )
                                  value= DEFAULT_TIMEOUT_MS;;
                               }
                               timeout= value;
+                              INFO("policy: revoke-timeout: %d", timeout);
                               haveValue= false;
                               if ( c != ')' )
                               {

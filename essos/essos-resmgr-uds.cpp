@@ -141,6 +141,7 @@ typedef struct _EssRMgrClientConnection
    struct sockaddr_un addr;
    int socketFd;
    pthread_t threadId;
+   bool ready;
    bool threadStarted;
    bool threadStopRequested;
    int timeoutMS;
@@ -1771,6 +1772,7 @@ static void *essRMClientConnectionThread( void *userData )
                            {
                               DEBUG("set timeout to %d ms", value1);
                               rm->conn->timeoutMS= value1;
+                              rm->conn->ready= true;
                            }
                            else
                            {
@@ -1890,6 +1892,7 @@ static EssRMgrClientConnection *essRMCreateClientConnection( EssRMgr *rm )
    bool error= true;
    const char *workingDir;
    int pathNameLen, addressSize;
+   bool started;
 
    conn= (EssRMgrClientConnection*)calloc( 1, sizeof(EssRMgrClientConnection));
    if ( conn )
@@ -1946,6 +1949,26 @@ static EssRMgrClientConnection *essRMCreateClientConnection( EssRMgr *rm )
       }
 
       error= false;
+
+      started= false;
+      for( ; ; )
+      {
+         if ( rm->conn->threadStarted )
+         {
+            started= true;
+         }
+         if ( !rm->conn->threadStarted && started )
+         {
+            error= true;
+            break;
+         }
+         if ( rm->conn->ready )
+         {
+            DEBUG("connection ready");
+            break;
+         }
+         usleep( 10000 );
+      }
    }
 
 exit:
@@ -2463,6 +2486,7 @@ static bool essRMSemWait( sem_t *sem, bool waitForever, int retry )
 {
    bool result= false;
    int rc;
+   int timeout= retry;
 
    for( ; ; )
    {
@@ -2477,7 +2501,7 @@ static bool essRMSemWait( sem_t *sem, bool waitForever, int retry )
       {
          if ( --retry == 0 )
          {
-            INFO("request timeout" );
+            INFO("request timeout: timeout %d ms", timeout );
             break;
          }
       }
@@ -3219,6 +3243,7 @@ static bool essRMRequestResource( EssRMgrResourceConnection *conn, EssRMgrReques
                if ( !essRMRevokeResource( conn, req->type, assignIdx, true ) )
                {
                   ERROR("failed to revoke resource type %d id %d", req->type, assignIdx);
+                  req->assignedId= -1;
                   goto exit;
                }
             }
@@ -3334,10 +3359,15 @@ static void essRMReleaseResource( EssRMgrResourceConnection *conn, int type, int
                   }
                }
             }
-            else
+            else if ( res[id].connOwner )
             {
                ERROR("client %d attempting to release res type %d id %d owned by client %d",
                       conn->clientId, type, id, res[id].connOwner->clientId );
+            }
+            else
+            {
+               ERROR("client %d attempting to release unowned res type %d id %d",
+                      conn->clientId, type, id );
             }
          }
       }
@@ -4103,6 +4133,7 @@ static bool essRMAssignResource( EssRMgrResourceConnection *conn, int id, EssRMg
 static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int id, bool wait )
 {
    bool result= false;
+   bool error= false;
    EssRMgrResource *res= 0;
 
    switch( type )
@@ -4144,7 +4175,9 @@ static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int 
             }
             if ( --retry == 0 )
             {
-               INFO("preemption timeout waiting for conn %p to release res type %d id %d", connPreempt, type, id );
+               INFO("preemption timeout waiting for conn %p to release res type %d id %d (timeout %d ms)",
+                    connPreempt, type, id, conn->server->state->base.timeoutMS );
+               error= true;
                break;
             }
             pthread_mutex_unlock( &server->state->mutex );
@@ -4153,7 +4186,7 @@ static bool essRMRevokeResource( EssRMgrResourceConnection *conn, int type, int 
          }
       }
 
-      result= true;
+      result= !error;
    }
 
 exit:
@@ -4384,6 +4417,7 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
                                  value= DEFAULT_TIMEOUT_MS;;
                               }
                               timeout= value;
+                              INFO("policy: revoke-timeout: %d", timeout);
                               haveValue= false;
                               if ( c != ')' )
                               {
