@@ -3032,6 +3032,18 @@ static void essInitInputWayland( EssCtx *ctx )
    }
 }
 
+static int essReadAndDispatchWaylandDisplayQueue( EssCtx *ctx )
+{
+   if ( wl_display_prepare_read( ctx->wldisplay ) == 0 )
+   {
+      if ( wl_display_read_events( ctx->wldisplay ) == -1 )
+      {
+         return -1;
+      }
+   }
+   return wl_display_dispatch_pending( ctx->wldisplay );
+}
+
 static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx )
 {
    int n;
@@ -3045,7 +3057,7 @@ static void essProcessRunWaylandEventLoopOnce( EssCtx *ctx )
    {
       if ( ctx->wlPollFd.revents & POLLIN )
       {
-         if ( wl_display_dispatch( ctx->wldisplay ) == -1 )
+         if ( essReadAndDispatchWaylandDisplayQueue( ctx ) == -1 )
          {
             error= true;
          }
