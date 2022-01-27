@@ -1,0 +1,51 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.29 Release Notes
+------------------------------
+
+Date: Jan 27, 2022
+Tag: Westeros-1.01.29
+Changes:
+
+* v4l2: fix eos issue for streams starting without timestamps
+
+* raw: fix missing return values
+
+* v4l2: add support for codec_data in caps
+
+* erm: make revoke timeout configurable
+
+* erm: update missed timeouts to configured value
+
+* drm: clear avsync video_config struct
+
+* v4l2, raw: fix vpc positioning for textures
+
+The Nov 18 commit 'v4l2, raw: use window rect for geometry updates' fixed
+the positioning on the video plane but broke the positioning of
+textures.
+
+* essos: fix possible hang in essProcessRunWaylandEventLoopOnce
+
+A wl_display_read_events called in another thread may result in
+wl_display_dispatch to block calling thread (in wl_display_poll)
+blocking essProcessRunWaylandEventLoopOnce
+
+* erm: fix race condition
+
+fix a race condition that can result in the first resource request
+of a context using the wrong revoke timeout
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
