@@ -1552,6 +1552,11 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             result= TRUE;
          }
          #endif
+         else if ( (len == 10) && !strncmp("image/jpeg", mime, len) )
+         {
+            sink->soc.inputFormat= V4L2_PIX_FMT_MJPEG;
+            result= TRUE;
+         }
          else
          {
             GST_ERROR("gst_westeros_sink_soc_accept_caps: not accepting caps (%s)", mime );
@@ -2552,6 +2557,13 @@ static void wstBuildSinkCaps( GstWesterosSinkClass *klass, GstWesterosSink *dumm
                                              );
                break;
             #endif
+            case V4L2_PIX_FMT_MJPEG:
+               capsTemp= gst_caps_from_string(
+                                                "image/jpeg, " \
+                                                "width=(int) [1,MAX], " \
+                                                "height=(int) [1,MAX] ; "
+                                             );
+               break;
             default:
                break;
          }
