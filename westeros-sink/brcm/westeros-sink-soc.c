@@ -956,6 +956,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             gfloat serverPlaySpeed;
 
             serverPlaySpeed= g_value_get_float(value);
+            GST_DEBUG("set prop serverPlaySpeed %d", serverPlaySpeed);
             if ( sink->videoStarted )
             {
                NEXUS_VideoDecoderSettings settings;
@@ -1226,6 +1227,7 @@ gboolean gst_westeros_sink_soc_null_to_ready( GstWesterosSink *sink, gboolean *p
    
    WESTEROS_UNUSED(passToDefault);
 
+   GST_DEBUG("sink_soc_null_to_ready");
    if ( sinkAcquireResources( sink ) )
    {
       result= TRUE;
@@ -1243,6 +1245,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
    WESTEROS_UNUSED(passToDefault);
    NEXUS_Error rc;
    
+   GST_DEBUG("sink_soc_ready_to_paused");
    if ( !queryPeerHandles(sink) )
    {
       sink->startAfterLink= TRUE;
@@ -1272,6 +1275,7 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
 gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolean *passToDefault )
 {
    WESTEROS_UNUSED(passToDefault);
+   GST_DEBUG("sink_soc_paused_to_playing");
    queryPeerHandles(sink);	
 
    LOCK(sink);
@@ -1350,6 +1354,14 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
          NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
          GST_INFO_OBJECT(sink, "disable TsmMode");
       }
+      else
+      {
+         NEXUS_VideoDecoderTrickState trickState;
+         NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+         trickState.tsmEnabled= NEXUS_TsmMode_eEnabled;
+         NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+         GST_INFO_OBJECT(sink, "enable TsmMode");
+      }
       UNLOCK( sink );
    }
    else
@@ -1366,6 +1378,7 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
    sink->soc.videoPlaying = FALSE;
    UNLOCK(sink);
 
+   GST_DEBUG("sink_soc_playing_to_paused: stcChannel %p", sink->soc.stcChannel);
    if ( sink->soc.stcChannel )
    {
       NEXUS_Error rc;
@@ -1403,6 +1416,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
 {
    WESTEROS_UNUSED(passToDefault);
 
+   GST_DEBUG("sink_soc_paused_to_ready");
    sinkSocStopVideo( sink );
    
    return TRUE;
@@ -1412,6 +1426,7 @@ gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *p
 {
    *passToDefault= false;
 
+   GST_DEBUG("sink_soc_ready_to_null");
    sinkSocStopVideo( sink );
 
    freeCaptureSurfaces(sink);
@@ -1952,6 +1967,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       }    
       ptr= g_value_get_pointer(val);   
       sink->soc.stcChannel= (NEXUS_SimpleStcChannelHandle )ptr;
+      GST_LOG("queryPeerHandles: stc channel %p", sink->soc.stcChannel);
       gst_query_unref(query);
    }
 
@@ -1978,6 +1994,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       return FALSE;
    }    
    sink->soc.codec= g_value_get_int(val);    
+   GST_LOG("queryPeerHandles: codec %d", sink->soc.codec);
    gst_query_unref(query);
 
 
@@ -2003,6 +2020,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       return FALSE;
    }
    sink->soc.videoPidChannel= (NEXUS_PidChannelHandle)g_value_get_pointer(val);
+   GST_LOG("queryPeerHandles: video pid channel %p", sink->soc.videoPidChannel);
    gst_query_unref(query);
 
    #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
@@ -2071,6 +2089,8 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    #endif
 
    allocCaptureSurfaces( sink );
+
+   GST_LOG("queryPeerHandles: exit");
 
    return TRUE;
 }
@@ -3117,6 +3137,7 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
    NEXUS_VideoDecoderTrickState trickState;
    NEXUS_VideoDecoderSettings settings;
 
+   GST_LOG("updateClientPlaySpeed: enter: clientPlaySpeed %f playing %d", clientPlaySpeed, playing);
    if ( !sink->videoStarted || sink->soc.serverPlaySpeed != 1.0 )
    {
       return;
@@ -3128,6 +3149,7 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
        NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
        trickState.rate= NEXUS_NORMAL_DECODE_RATE * 2;
        trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
+       GST_LOG("updateClientPlaySpeed: useImmediateOutput: SetTrickState rate %d TsmMode disabled", trickState.rate);
        NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
        return;
    }
@@ -3180,6 +3202,8 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
          trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
       }
 
+      GST_LOG("updateClientPlaySpeed: useImmediateOutput: rate %d decodeMode %d topFieldOnly %d TsmMode disabled %d",
+              trickState.rate, trickState.decodeMode, trickState.topFieldOnly, trickState.tsmEnabled);
       NEXUS_Error rc = NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
       if ( NEXUS_SUCCESS != rc )
       {
@@ -3190,6 +3214,7 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
          GST_INFO_OBJECT(sink, "Play speed set to %f", clientPlaySpeed);
       }
 
+      GST_LOG("updateClientPlaySpeed: SimpleStcChannel_Freeze: stcChannel %p freeze %d", sink->soc.stcChannel, (clientPlaySpeed == 0.0 || !playing));
       rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, (clientPlaySpeed == 0.0 || !playing) ? TRUE : FALSE);
       if ( rc != NEXUS_SUCCESS )
       {
@@ -3333,6 +3358,14 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
                trickState.tsmEnabled= NEXUS_TsmMode_eDisabled;
                NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
                GST_INFO_OBJECT(sink, "disable TsmMode");
+            }
+            else
+            {
+               NEXUS_VideoDecoderTrickState trickState;
+               NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+               trickState.tsmEnabled= NEXUS_TsmMode_eEnabled;
+               NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+               GST_INFO_OBJECT(sink, "enable TsmMode");
             }
          }
 
@@ -4211,6 +4244,8 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
    sink->soc.videoWindow= NEXUS_SurfaceClient_AcquireVideoWindow( sink->soc.surfaceClient, 0);
    sink->soc.videoDecoderId= sink->soc.allocSurface.simpleVideoDecoder[0].id;
    sink->soc.videoDecoder= NEXUS_SimpleVideoDecoder_Acquire( sink->soc.videoDecoderId );
+   GST_DEBUG("sinkAcquireVideo: acquire videoWindow %p videoDecoderId %d videoDecoder %p",
+              sink->soc.videoWindow, sink->soc.videoDecoderId, sink->soc.videoDecoder);
 
    NEXUS_StartCallbacks( sink->soc.videoDecoder );
 
@@ -4261,6 +4296,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       connectSettings.simpleVideoDecoder[0].windowCapabilities.maxHeight= MAX_PIP_HEIGHT;
    }
    rc= NxClient_Connect(&connectSettings, &sink->soc.connectId);
+   GST_DEBUG("sinkAcquireVideo: NxClient_Connect rc %d connectId %d", rc, sink->soc.connectId);
    if ( rc == NEXUS_SUCCESS )
    {
       sink->soc.presentationStarted= FALSE;
@@ -4448,6 +4484,7 @@ static int sinkAcquireResources( GstWesterosSink *sink )
    {
       sink->soc.surfaceClientId= sink->soc.allocSurface.surfaceClient[0].id;
       sink->soc.surfaceClient= NEXUS_SurfaceClient_Acquire(sink->soc.surfaceClientId);
+      GST_LOG("sinkAcquireResources: acquire surfaceClientId %d surfaceClient %p", sink->soc.surfaceClientId, sink->soc.surfaceClient);
 
       result= sinkAcquireVideo( sink );
    }
@@ -4467,6 +4504,7 @@ static void sinkReleaseResources( GstWesterosSink *sink )
 
       if ( sink->soc.surfaceClient )
       {
+         GST_LOG("sinkReleaseResources: release surfaceClientId %d surfaceClient %p", sink->soc.surfaceClientId, sink->soc.surfaceClient);
          NEXUS_SurfaceClient_Release(sink->soc.surfaceClient);
          sink->soc.surfaceClient= 0;
       }
