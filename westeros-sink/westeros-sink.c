@@ -697,17 +697,13 @@ static gboolean gst_westeros_sink_backend_playing_to_paused( GstWesterosSink *si
 static gboolean gst_westeros_sink_backend_paused_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
    gboolean result;
-   if ( sink->rm && (sink->resAssignedId < 0) )
-   {
-      result= TRUE;
-   }
    #ifdef ENABLE_SW_DECODE
-   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
    {
       result= wstsw_paused_to_ready( sink, passToDefault );
    }
-   #endif
    else
+   #endif
    {
       result= gst_westeros_sink_soc_paused_to_ready( sink, passToDefault );
    }
@@ -721,17 +717,13 @@ static gboolean gst_westeros_sink_backend_paused_to_ready( GstWesterosSink *sink
 static gboolean gst_westeros_sink_backend_ready_to_null( GstWesterosSink *sink, gboolean *passToDefault )
 {
    gboolean result;
-   if ( sink->rm && (sink->resAssignedId < 0) )
-   {
-      result= TRUE;
-   }
    #ifdef ENABLE_SW_DECODE
-   else if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
+   if ( sink->rm && (sink->resCurrCaps.capabilities & EssRMgrVidCap_software) )
    {
       result= wstsw_ready_to_null( sink, passToDefault );
    }
-   #endif
    else
+   #endif
    {
       result= gst_westeros_sink_soc_ready_to_null( sink, passToDefault );
    }
