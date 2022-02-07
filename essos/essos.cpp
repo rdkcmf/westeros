@@ -2950,6 +2950,16 @@ static bool essPlatformInitWayland( EssCtx *ctx )
       ctx->wlPollFd.revents= 0;
 
       ctx->displayType= (NativeDisplayType)ctx->wldisplay;
+      if( ctx->eglDisplay == EGL_NO_DISPLAY )
+      {
+         ctx->eglDisplay= eglGetDisplay( ctx->displayType );
+         if( !ctx->eglDisplay )
+         {
+            sprintf( ctx->lastErrorDetail,
+                     "Error. Unable to get EGL display: eglError %X", eglGetError() );
+            goto exit;
+         }
+      }
 
       result= true;
    }
