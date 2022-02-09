@@ -1925,6 +1925,8 @@ static void freeCaptureSurfaces( GstWesterosSink *sink )
          sink->soc.captureSurface[i]= NULL;
       }
    }
+   sink->soc.captureWidth= -1;
+   sink->soc.captureHeight= -1;
 }
 
 static gboolean queryPeerHandles(GstWesterosSink *sink) 
@@ -4466,6 +4468,7 @@ static void sinkReleaseVideo( GstWesterosSink *sink )
       sink->soc.dataProbeCodecData= 0;
    }
    #endif
+   freeCaptureSurfaces(sink);
    UNLOCK( sink );
    GST_DEBUG("sinkReleaseVideo: exit");
 }
