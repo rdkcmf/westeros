@@ -2632,6 +2632,13 @@ static void updateVideoStatus( GstWesterosSink *sink )
                   // to keep our running time correct.
                   sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
                }
+               else if ( sink->currentPTS < prevPTS )
+               {
+                  // We have a rollover: Adjust firstPTS to keep our running time correct.
+                  sink->firstPTS= sink->currentPTS-(gint64)((uint32_t)sink->currentPTS-(uint32_t)prevPTS);
+                  sink->firstPTS -= ((sink->position-sink->positionSegmentStart)*90LL+GST_MSECOND/2)/GST_MSECOND;
+                  GST_DEBUG("PTS rollover: (%lld to %lld) firstPTS now %lld", prevPTS, sink->currentPTS, sink->firstPTS);
+               }
                sink->position= sink->positionSegmentStart + ((sink->currentPTS - sink->firstPTS) * GST_MSECOND) / 90LL;
                if ( sink->timeCodePresent && sink->enableTimeCodeSignal )
                {
