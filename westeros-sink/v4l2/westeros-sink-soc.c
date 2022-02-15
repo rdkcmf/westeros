@@ -5003,7 +5003,7 @@ static void wstProcessMessagesVideoClientConnection( WstVideoClientConnection *c
                           int globalZoomActive= getU32( &m[4] );
                           int allow4kZoom= getU32( &m[8] );
                           int zoomMode= getU32( &m[12] );
-                          GST_DEBUG("got zoom-mode %d from video server (globalZoomActive %d allow4kZoom %d)", zoomMode);
+                          GST_DEBUG("got zoom-mode %d from video server (globalZoomActive %d allow4kZoom %d)", zoomMode, globalZoomActive, allow4kZoom);
                           if ( sink->soc.zoomModeUser == -1 )
                           {
                              sink->soc.zoomModeGlobal= globalZoomActive;
