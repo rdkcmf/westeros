@@ -2632,7 +2632,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
                   // to keep our running time correct.
                   sink->firstPTS= sink->firstPTS-(prevPTS-sink->currentPTS);
                }
-               else if ( sink->currentPTS < prevPTS )
+               else if ( (sink->currentPTS < prevPTS) && (prevPTS > (0x1FFFFFFFFLL-90000LL)) )
                {
                   // We have a rollover: Adjust firstPTS to keep our running time correct.
                   sink->firstPTS= sink->currentPTS-(gint64)((uint32_t)sink->currentPTS-(uint32_t)prevPTS);
