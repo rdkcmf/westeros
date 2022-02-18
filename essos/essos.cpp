@@ -2950,6 +2950,7 @@ static bool essPlatformInitWayland( EssCtx *ctx )
       ctx->wlPollFd.revents= 0;
 
       ctx->displayType= (NativeDisplayType)ctx->wldisplay;
+      #ifndef HAVE_WESTEROS
       if( ctx->eglDisplay == EGL_NO_DISPLAY )
       {
          ctx->eglDisplay= eglGetDisplay( ctx->displayType );
@@ -2960,6 +2961,7 @@ static bool essPlatformInitWayland( EssCtx *ctx )
             goto exit;
          }
       }
+      #endif
 
       result= true;
    }
