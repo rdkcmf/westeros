@@ -1,0 +1,55 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.30 Release Notes
+------------------------------
+
+Date: Feb 22, 2022
+Tag: Westeros-1.01.30
+Changes:
+
+* v4l2: add support for mjpeg
+
+* brcm: restore tsm mode with audio dependent clock 
+
+* sink: fix leak after ERM revoke
+
+this fixes the issue of potential resource leaks when a sink element
+is disposed of after having had its resouces revoked by ERM.
+
+* essos: fix crash in wl_egl_window_create for platforms with weston
+
+* brcm: release capture buffers on ERM revoke
+
+* brcm: fix position error from decoder pts status rollover
+
+* v4l2: fix log message
+
+* brcm: fix false rollover detection
+
+* essos: make new eglGetDisplay call conditional:
+
+Make the change from 'fix crash in wl_egl_window_create for platforms with weston' present only if HAVE_WESTEROS is not defined.  This fixes a regression in
+another platfrom caused by this change
+
+* v4l2: reduce eos count down
+
+* brcm: sink updates
+-1080i fallback to SDR
+-HDR10 on AXG1V4
+-Use first pts rather than first pts passed callback
+
+
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
