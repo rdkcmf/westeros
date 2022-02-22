@@ -6500,7 +6500,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
 
    GST_DEBUG("wstVideoEOSThread: enter");
 
-   eosCountDown= 10;
+   eosCountDown= 2;
    LOCK(sink)
    outputFrameCount= sink->soc.frameOutCount;
    frameRate= (sink->soc.frameRate > 0.0 ? sink->soc.frameRate : 30.0);
@@ -6544,7 +6544,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
          else
          {
             outputFrameCount= count;
-            eosCountDown= 10;
+            eosCountDown= 2;
          }
       }
    }
