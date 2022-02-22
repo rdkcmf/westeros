@@ -111,7 +111,7 @@ static void postErrorMessage( GstWesterosSink *sink, int errorCode, const char *
 static gpointer captureThread(gpointer data);
 static void processFrame( GstWesterosSink *sink );
 static void updateVideoStatus( GstWesterosSink *sink );
-static void firstPtsPassedCallback( void *userData, int n );
+static void firstPtsCallback( void *userData, int n );
 static void underflowCallback( void *userData, int n );
 static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
@@ -538,7 +538,8 @@ static void streamChangedCallback(void * context, int param)
 
    NEXUS_SimpleVideoDecoder_GetStreamInformation(decoderHandle, &streamInfo);
    #if (NEXUS_PLATFORM_VERSION_MAJOR > 17) || ((NEXUS_PLATFORM_VERSION_MAJOR == 17) && (NEXUS_PLATFORM_VERSION_MINOR > 1))
-   #ifdef ENABLE_DOLBYVISION
+   #if defined (ENABLE_DOLBYVISION) || defined (ENABLE_HDR10)
+   /* ENABLE_DOLBYVISION is for Xi6/XiONE, ENABLE_HDR10 is for XG1v4. Both need this code */
    NxClient_DisplaySettings displaySettings;
    NEXUS_Error rc= NEXUS_SUCCESS;
    NEXUS_VideoDynamicRangeMode dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eTrackInput;
@@ -548,6 +549,7 @@ static void streamChangedCallback(void * context, int param)
       case NEXUS_VideoDecoderDynamicRangeMetadataType_eDolbyVision:
          #ifdef ENABLE_DOLBYVISION
          #if (NEXUS_PLATFORM_VERSION_MAJOR >= 19)
+        /* SDK 19.x introduced Dolby Vision Low Latency so the enums changed */
          dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eDolbyVisionSourceLed;
          #else
          dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eDolbyVision;
@@ -577,18 +579,29 @@ static void streamChangedCallback(void * context, int param)
          }
          break;
    }
+
+   #if defined (ENABLE_DOLBYVISION) || defined (ENABLE_HDR10)
+   /* ENABLE_DOLBYVISION is for Xi6/XiONE, ENABLE_HDR10 is for XG1v4. Both need this code */
    #ifdef ENABLE_DOLBYVISION
-   NxClient_GetDisplaySettings(&displaySettings);
    #if (NEXUS_PLATFORM_VERSION_MAJOR >= 19)
+   /* SDK 19.x introduced Dolby Vision Low Latency so the enums changed */
    if(dynamicRangeMode == NEXUS_VideoDynamicRangeMode_eDolbyVisionSourceLed && IsDbvUnsupportedFormat())
    #else
    if(dynamicRangeMode == NEXUS_VideoDynamicRangeMode_eDolbyVision && IsDbvUnsupportedFormat())
    #endif
    {
-       dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eTrackInput;
+       #if (NEXUS_PLATFORM_VERSION_MAJOR >= 20)
+       /* eTrackInput meaning changed subtly between 20.x and 19.x so need to treat differently */
+       dynamicRangeMode = NEXUS_VideoDynamicRangeMode_eSdr;
+       #else
+       dynamicRangeMode = NEXUS_VideoDynamicRangeMode_eTrackInput;
+       #endif
        GST_WARNING("Dolby Vision not supported with current video format setting output mode to eTrackInput.");
    }
+   #endif
 
+
+   NxClient_GetDisplaySettings(&displaySettings);
    if(displaySettings.hdmiPreferences.dynamicRangeMode != dynamicRangeMode)
    {
       displaySettings.hdmiPreferences.dynamicRangeMode= dynamicRangeMode;
@@ -680,7 +693,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
-   sink->soc.firstPtsPassedCallbackCalled= FALSE;
+   sink->soc.firstPtsCallbackCalled= FALSE;
    sink->soc.noFrameCount= 0;
    sink->soc.ignoreDiscontinuity= FALSE;
    sink->soc.checkForEOS= FALSE;
@@ -1604,7 +1617,7 @@ void gst_westeros_sink_soc_flush( GstWesterosSink *sink )
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
-   sink->soc.firstPtsPassedCallbackCalled= FALSE;
+   sink->soc.firstPtsCallbackCalled= FALSE;
    sink->soc.ignoreDiscontinuity= TRUE;
    sink->soc.checkForEOS= FALSE;
    sink->soc.emitEOS= FALSE;
@@ -1847,7 +1860,7 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.numDecoded= 0;
    sink->soc.numDropped= 0;
    sink->soc.numDroppedOutOfSegment= 0;
-   sink->soc.firstPtsPassedCallbackCalled= FALSE;
+   sink->soc.firstPtsCallbackCalled= FALSE;
    sink->soc.prevQueueDepth= 0;
    sink->soc.prevFifoDepth= 0;
    sink->soc.prevNumDecoded= 0;
@@ -2660,7 +2673,7 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->soc.noFrameCount= 0;
             sink->soc.presentationStarted= TRUE;
 
-            if ( (sink->soc.firstPtsPassedCallbackCalled  == TRUE) &&
+            if ( (sink->soc.firstPtsCallbackCalled  == TRUE) &&
                  (((videoStatus.numDisplayDrops-sink->soc.numDroppedOutOfSegment) > sink->soc.numDropped) ||
                   (((videoStatus.numDecoded % QOS_INTERVAL) == 0) && videoStatus.numDecoded)) )
             {
@@ -2961,7 +2974,7 @@ gboolean gst_westeros_sink_soc_query( GstWesterosSink *sink, GstQuery *query )
    return rv;
 }
 
-static void firstPtsPassedCallback( void *userData, int n )
+static void firstPtsCallback( void *userData, int n )
 {
    GstWesterosSink *sink= (GstWesterosSink*)userData;
    WESTEROS_UNUSED(n);
@@ -2985,7 +2998,7 @@ static void firstPtsPassedCallback( void *userData, int n )
    {
       sink->soc.presentationStarted= TRUE;
    }
-   sink->soc.firstPtsPassedCallbackCalled= TRUE;
+   sink->soc.firstPtsCallbackCalled= TRUE;
 }
 
 static void underflowCallback( void *userData, int n )
@@ -4325,8 +4338,8 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       settings.ptsOffset= sink->soc.ptsOffset;
       settings.fifoEmpty.callback= underflowCallback;
       settings.fifoEmpty.context= sink;
-      settings.firstPtsPassed.callback= firstPtsPassedCallback;
-      settings.firstPtsPassed.context= sink;
+      settings.firstPts.callback= firstPtsCallback;
+      settings.firstPts.context= sink;
       settings.ptsError.callback= ptsErrorCallback;
       settings.ptsError.context= sink;
       #if (NEXUS_PLATFORM_VERSION_MAJOR > 15) || ((NEXUS_PLATFORM_VERSION_MAJOR == 15) && (NEXUS_PLATFORM_VERSION_MINOR > 2))
