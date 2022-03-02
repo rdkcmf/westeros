@@ -4635,7 +4635,7 @@ static void wstUpdateAVSyncCtx( GstWesterosSink *sink, AVSyncCtx *avsctx )
       if ( avsctx->audioSink )
       {
          long long avTime= 0;
-         if ( gst_element_query_position( avsctx->audioSink, GST_FORMAT_TIME, &avTime ) )
+         if ( gst_element_query_position( avsctx->audioSink, GST_FORMAT_TIME, (gint64 *)&avTime ) )
          {
             pthread_mutex_lock( &avsctx->ctrl->mutex );
             avsctx->ctrl->sysTime= g_get_monotonic_time();
