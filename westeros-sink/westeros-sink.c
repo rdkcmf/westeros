@@ -1541,9 +1541,21 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
                      wl_registry_add_listener(sink->registry, &registryListener, sink);
                      wl_display_roundtrip_queue(sink->display,sink->queue);
 
-                     sink->surface= wl_compositor_create_surface(sink->compositor);
-                     printf("westeros-sink: ready-to-paused: surface=%p\n", (void*)sink->surface);
-                     wl_proxy_set_queue((struct wl_proxy*)sink->surface, sink->queue);
+                     if ( !sink->compositor )
+                     {
+                        GST_DEBUG("no compositor yet: retrying");
+                        wl_display_roundtrip_queue(sink->display,sink->queue);
+                     }
+                     if ( sink->compositor )
+                     {
+                        sink->surface= wl_compositor_create_surface(sink->compositor);
+                        printf("westeros-sink: ready-to-paused: surface=%p\n", (void*)sink->surface);
+                        wl_proxy_set_queue((struct wl_proxy*)sink->surface, sink->queue);
+                     }
+                     else
+                     {
+                        GST_ERROR("westeros-sink: ready-to-paused: unable to get compositor");
+                     }
                      wl_display_flush( sink->display );
                   }
                   else
