@@ -2303,7 +2303,7 @@ static gpointer captureThread(gpointer data)
 
    end_loop:
 
-      if ( sink->display && wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
+      if ( sink->display && sink->queue && wl_display_dispatch_queue_pending(sink->display, sink->queue) == 0 )
       {
          wl_display_flush(sink->display);
          if ( !eosDetected )
@@ -2852,7 +2852,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       NxClient_SetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition );
 
       // Send a buffer to compositor to update hole punch geometry
-      if ( sink->soc.sb )
+      if ( sink->soc.sb && sink->surface )
       {
          struct wl_buffer *buff;
          
