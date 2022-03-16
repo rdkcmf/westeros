@@ -1121,6 +1121,33 @@ static void wstSetVideoFrameRect( VideoFrame *vf, int rectX, int rectY, int rect
    frameWidth= vf->frameWidth;
    frameHeight= vf->frameHeight;
 
+   if ( rectW < 0 ) rectW= 4;
+   if ( rectH < 0 ) rectH= 4;
+   if ( (rectX < 0) && (-rectX > rectW) ) rectX= -(rectW-2);
+   if ( (rectY < 0) && (-rectY > rectH) ) rectY= -(rectH-2);
+   if ( gCtx && gCtx->modeSet )
+   {
+      int gfxWidth, gfxHeight;
+      if ( gCtx->nwFirst )
+      {
+         gfxWidth= gCtx->nwFirst->width;
+         gfxHeight= gCtx->nwFirst->height;
+      }
+      else
+      {
+         gfxWidth= gCtx->modeInfo->hdisplay;
+         gfxHeight= gCtx->modeInfo->vdisplay;
+      }
+      if ( rectX >= gfxWidth )
+      {
+         rectX= gfxWidth-2;
+      }
+      if ( rectY >= gfxHeight )
+      {
+         rectY= gfxHeight-2;
+      }
+   }
+
    frameSkipX= 0;
    frameSkipY= 0;
    #ifdef DRM_NO_SRC_CROP
