@@ -2361,6 +2361,15 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
          }
       }
 
+      if ( sink->soc.dispatchThread )
+      {
+         sink->soc.quitDispatchThread= TRUE;
+         UNLOCK(sink);
+         g_thread_join( sink->soc.dispatchThread );
+         LOCK(sink);
+         sink->soc.dispatchThread= NULL;
+      }
+
       wstStopEvents( sink );
 
       wstTearDownInputBuffers( sink );
@@ -2434,13 +2443,6 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
       sink->soc.quitEOSDetectionThread= TRUE;
       g_thread_join( sink->soc.eosDetectionThread );
       sink->soc.eosDetectionThread= NULL;
-   }
-
-   if ( sink->soc.dispatchThread )
-   {
-      sink->soc.quitDispatchThread= TRUE;
-      g_thread_join( sink->soc.dispatchThread );
-      sink->soc.dispatchThread= NULL;
    }
 
    #ifdef USE_GENERIC_AVSYNC
