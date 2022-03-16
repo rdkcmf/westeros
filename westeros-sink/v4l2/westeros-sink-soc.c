@@ -3236,9 +3236,11 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
       goto exit;
    }
 
+   LOCK(sink);
    sink->soc.inBuffers= (WstBufferInfo*)calloc( reqbuf.count, sizeof(WstBufferInfo) );
    if ( !sink->soc.inBuffers )
    {
+      UNLOCK(sink);
       GST_ERROR("wstSetupInputBuffers: no memory for WstBufferInfo" );
       goto exit;
    }
@@ -3258,6 +3260,7 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
       rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QUERYBUF, bufIn );
       if ( rc < 0 )
       {
+         UNLOCK(sink);
          GST_ERROR("wstSetupInputBuffers: failed to query input buffer %d: rc %d errno %d", i, rc, errno);
          goto exit;
       }
@@ -3267,6 +3270,7 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
          {
             if ( bufIn->length != 1 )
             {
+               UNLOCK(sink);
                GST_ERROR("wstSetupInputBuffers: num planes expected to be 1 for compressed input but is %d", bufIn->length);
                goto exit;
             }
@@ -3290,6 +3294,7 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
                          memOffset );
          if ( bufStart == MAP_FAILED )
          {
+            UNLOCK(sink);
             GST_ERROR("wstSetupInputBuffers: failed to mmap input buffer %d: errno %d", i, errno);
             goto exit;
          }
@@ -3310,6 +3315,7 @@ static bool wstSetupInputBuffers( GstWesterosSink *sink )
       }
       sink->soc.inBuffers[i].fd= -1;
    }
+   UNLOCK(sink);
 
    result= true;
 
