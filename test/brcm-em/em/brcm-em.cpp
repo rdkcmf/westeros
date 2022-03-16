@@ -2021,6 +2021,7 @@ void NEXUS_Graphics2D_GetDefaultOpenSettings(
    )
 {
    TRACE1("NEXUS_Graphics2D_GetDefaultOpenSettings");
+   memset( pSettings, 0, sizeof(NEXUS_Graphics2DOpenSettings) );
 }
 
 NEXUS_Graphics2DHandle NEXUS_Graphics2D_Open(
@@ -2058,6 +2059,7 @@ void NEXUS_Graphics2D_GetSettings(
     )
 {
    TRACE1("NEXUS_Graphics2D_GetSettings");
+   memset( pSettings, 0, sizeof(NEXUS_Graphics2DSettings) );
 }
 
 NEXUS_Error NEXUS_Graphics2D_SetSettings(
@@ -2077,6 +2079,7 @@ void NEXUS_Graphics2D_GetDefaultBlitSettings(
     )
 {
    TRACE1("NEXUS_Graphics2D_GetDefaultBlitSettings");
+   memset( pSettings, 0, sizeof(NEXUS_Graphics2DBlitSettings) );
 }
 
 NEXUS_Error NEXUS_Graphics2D_Blit(
@@ -2180,6 +2183,11 @@ void NEXUS_Surface_GetStatus(
     )
 {
    TRACE1("NEXUS_Surface_GetStatus");
+
+   if ( pStatus )
+   {
+      memset( pStatus, 0, sizeof(NEXUS_SurfaceStatus) );
+   }
 }
 
 void NEXUS_Surface_Flush(
@@ -2253,6 +2261,7 @@ NEXUS_Error NEXUS_SurfaceClient_GetStatus(
       goto exit;
    }
 
+   memset( pStatus, 0, sizeof(NEXUS_SurfaceClientStatus) );
    pStatus->display.framebuffer.width= ctx->displayWidth;
    pStatus->display.framebuffer.height= ctx->displayHeight;
 
@@ -2488,7 +2497,7 @@ void NEXUS_GetVideoDecoderCapabilities(
     )
 {
    TRACE1("NEXUS_GetVideoDecoderCapabilities");
-   memset( pCapabilities, 0, sizeof(pCapabilities));
+   memset( pCapabilities, 0, sizeof(NEXUS_VideoDecoderCapabilities));
    pCapabilities->memory[0].maxFormat= NEXUS_VideoFormat_e3840x2160p24hz;
 }
 
@@ -2525,6 +2534,7 @@ void NEXUS_SimpleVideoDecoder_GetDefaultStartSettings(
     )
 {
    TRACE1("NEXUS_SimpleVideoDecoder_GetDefauiltStartSettings");
+   memset( pSettings, 0, sizeof(NEXUS_SimpleVideoDecoderStartSettings) );
    pSettings->settings.eotf= NEXUS_VideoEotf_eInvalid;
 }
 
@@ -2603,6 +2613,10 @@ void NEXUS_SimpleVideoDecoder_GetStreamInformation(
       goto exit;
    }
 
+   if ( pStreamInfo )
+   {
+      memset( pStreamInfo, 0, sizeof(NEXUS_VideoDecoderStreamInformation) );
+   }
 exit:
    return;
 }
@@ -2632,6 +2646,7 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_GetClientStatus(
       goto exit;
    }
 
+   memset( pStatus, 0, sizeof(NEXUS_SimpleVideoDecoderClientStatus) );
    pStatus->enabled= dec->inUse;
 
    rc= NEXUS_SUCCESS;
@@ -2788,6 +2803,8 @@ void NEXUS_SimpleVideoDecoder_GetExtendedSettings(
       goto exit;
    }
 
+   memset( pSettings, 0, sizeof(NEXUS_VideoDecoderExtendedSettings) );
+
 exit:
    return;
 }
@@ -2908,6 +2925,7 @@ NEXUS_Error NEXUS_SimpleVideoDecoder_GetStatus(
       goto exit;
    }
 
+   memset( pStatus, 0, sizeof(NEXUS_VideoDecoderStatus) );
    pStatus->started= dec->started;
    pStatus->source.width= dec->videoWidth;
    pStatus->source.height= dec->videoHeight;
@@ -3077,6 +3095,7 @@ void NEXUS_SimpleVideoDecoder_GetDefaultStartCaptureSettings(
     )
 {
    TRACE1("NEXUS_SimpleVideoDecoder_GetDefaultStartCaptureSettings");
+   memset( pSettings, 0, sizeof(NEXUS_SimpleVideoDecoderStartCaptureSettings) );
 }
 
 NEXUS_Error NEXUS_SimpleVideoDecoder_StartCapture(
@@ -3309,6 +3328,7 @@ void NxClient_GetDefaultJoinSettings(
     )
 {
    TRACE1("NxClient_GetDefaultJoinSettings");
+   memset( pSettings, 0, sizeof(NxClient_JoinSettings) );
 }
 
 NEXUS_Error NxClient_Join(
@@ -3327,6 +3347,7 @@ void NxClient_GetDefaultAllocSettings(
     )
 {
    TRACE1("NxClient_GetDefaultAllocSettings");
+   memset( pSettings, 0, sizeof(NxClient_AllocSettings) );
 }
 
 NEXUS_Error NxClient_Alloc(
@@ -3369,6 +3390,7 @@ void NxClient_GetDefaultConnectSettings(
     )
 {
    TRACE1("NxClient_GetDefaultConnectSettings");
+   memset( pSettings, 0, sizeof(NxClient_ConnectSettings) );
 }
 
 NEXUS_Error NxClient_Connect(
@@ -3473,6 +3495,7 @@ void NxClient_GetDisplaySettings(
     )
 {
    TRACE1("NxClient_GetDisplaySettings");
+   memset( pSettings, 0, sizeof(NxClient_DisplaySettings) );
 }
 
 NEXUS_Error NxClient_SetDisplaySettings(

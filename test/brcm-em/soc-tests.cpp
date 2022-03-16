@@ -3193,6 +3193,9 @@ static bool testCaseSocAPISetDefaultCursor( EMCTX *emctx )
       goto exit;
    }
 
+   // Allow cursor to become active
+   usleep( 100000 );
+
    WstCompositorDestroy( wctx );
 
    testResult= true;
@@ -4105,6 +4108,8 @@ static bool testCaseSocSinkVisibility( EMCTX *emctx )
       }
 
       gst_element_set_state( pipeline, GST_STATE_NULL );
+
+      gst_element_get_state( pipeline, NULL, NULL, GST_CLOCK_TIME_NONE );
 
       pipeline= 0;
       src= 0;
@@ -5152,6 +5157,8 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
 
       gst_element_set_state( pipeline, GST_STATE_NULL );
 
+      gst_element_get_state( pipeline, NULL, NULL, GST_CLOCK_TIME_NONE );
+
       if ( wctx )
       {
          WstCompositorDestroy( wctx );
@@ -5208,6 +5215,8 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
             goto exit;
          }
       }
+
+      usleep( 100000 );
    }
 
    testResult= true;
@@ -5988,6 +5997,9 @@ static bool testCaseSocRenderBasicCompositionEmbeddedFast( EMCTX *emctx )
    eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
 
    hints= WstHints_noRotation;
+   memset( matrix, 0, sizeof(matrix) );
+   matrix[0]= matrix[5]= matrix[10]= matrix[15]= 1.0;
+
    WstCompositorComposeEmbedded( wctx,
                                  0, // x
                                  0, // y

@@ -928,7 +928,7 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
    TestCtx testCtx;
    TestCtx *ctx= &testCtx;
    EGLBoolean b;
-   int bufferIdBase= 500;
+   int bufferIdBase= 1;
    int bufferIdCount= 3;
    int expectedBufferId= 1;
 
@@ -1077,14 +1077,17 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
 
    eglSwapInterval( ctx->eglCtx.eglDisplay, 1 );
 
+   ctx->lastTextureBufferId= -1;
+
    eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
 
-   wl_display_roundtrip(display);
+   while ( ctx->lastTextureBufferId == -1 )
+   {
+      wl_display_roundtrip(display);
+   }
 
    for( int i= 0; i < 20; ++i )
    {
-      usleep( 17000 );
-
       if ( ctx->lastTextureBufferId != expectedBufferId )
       {
          EMERROR("Unexpected last texture bufferId: expected(%d) actual(%d) iteration %d", expectedBufferId, ctx->lastTextureBufferId, i );
@@ -1092,6 +1095,8 @@ bool testCaseRenderBasicCompositionNested( EMCTX *emctx )
       }
 
       eglSwapBuffers(ctx->eglCtx.eglDisplay, ctx->eglCtx.eglSurfaceWindow);
+
+      usleep( 16666 );
 
       expectedBufferId += 1;
       if ( expectedBufferId >= bufferIdCount+1 )

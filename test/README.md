@@ -25,11 +25,15 @@ make -f Makefile.test
 
 Run all tests with:
 
-./run-tests.sh
+./run-tests.sh <plat>
+
+where <plat> may be one of:
+  brcm
+  drm
 
 To run a specific test:
 
-./run-tests testname
+./run-tests <plat> testname
 
 ---
 # Copyright and license

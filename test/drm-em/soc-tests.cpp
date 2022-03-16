@@ -831,6 +831,9 @@ static bool testCaseSocSinkElementRecycle( EMCTX *emctx )
 
    gst_element_set_state( pipeline, GST_STATE_READY );
 
+   // Allow pipeline to transition to ready
+   gst_element_get_state( pipeline, NULL, NULL, GST_CLOCK_TIME_NONE );
+
    receivedSignal= false;
    textureCount= 0;
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
@@ -3822,6 +3825,8 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
 
       gst_element_set_state( pipeline, GST_STATE_NULL );
 
+      gst_element_get_state( pipeline, NULL, NULL, GST_CLOCK_TIME_NONE );
+
       if ( wctx )
       {
          WstCompositorDestroy( wctx );
@@ -3878,6 +3883,8 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
             goto exit;
          }
       }
+
+      usleep( 100000 );
    }
 
    testResult= true;

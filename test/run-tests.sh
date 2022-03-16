@@ -25,9 +25,10 @@ export LD_PRELOAD=$LD_PRELOAD:../lib/libwesteros-ut-em.so
 export XDG_RUNTIME_DIR=/tmp
 export GST_REGISTRY=.
 export GST_PLUGIN_SYSTEM_PATH=../lib/gstreamer-1.0
+#export WESTEROS_SINK_USE_ESSRMGR=1
 if [ "$2" = "valgrind" ]
 then
-  valgrind --leak-check=yes ./westeros-unittest -w
+  valgrind --leak-check=yes --track-origins=yes ./westeros-unittest -w $3
 elif [ "$2" = "gdb" ]
 then
   gdb ./westeros-unittest

@@ -3191,35 +3191,42 @@ drmVersionPtr drmGetVersion(int fd)
 {
    drmVersionPtr ver= 0;
    EMDevice *dev= 0;
+   const char *s;
 
    TRACE1("drmGetVersion: fd %d", fd);
 
    dev= EMDrmGetDevice(fd);
    if ( dev && (dev->type == EM_DEVICE_TYPE_DRM) )
    {
-      ver= calloc( 1, sizeof(struct drm_version) );
+      ver= (drmVersionPtr)calloc( 1, sizeof(drmVersion) );
       if ( ver )
       {
          ver->version_major= 1;
          ver->version_minor= 0;
          ver->version_patchlevel= 0;
 
-         ver->name= strdup("meson");
+         s= "meson";
+         ver->name_len= strlen(s);
+         ver->name= (char*)malloc( ver->name_len+1 );
          if ( ver->name )
          {
-            ver->name_len= strlen(ver->name);
+            strcpy( ver->name, s );
          }
 
-         ver->date= strdup("20180321");
+         s= "20180321";
+         ver->date_len= strlen(s);
+         ver->date= (char*)malloc( ver->date_len+1 );
          if ( ver->date )
          {
-            ver->date_len= strlen(ver->date);
+            strcpy( ver->date, s );
          }
 
-         ver->desc= strdup("Amlogic Meson DRM driver");
+         s= "Amlogic Meson DRM driver";
+         ver->desc_len= strlen(s);
+         ver->desc= (char*)malloc( ver->desc_len+1 );
          if ( ver->desc )
          {
-            ver->desc_len= strlen(ver->desc);
+            strcpy( ver->desc, s );
          }
       }
    }
