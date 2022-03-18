@@ -2838,6 +2838,34 @@ static void wstProcessEvents( GstWesterosSink *sink )
                   sink->soc.pixelAspectRatioChanged= TRUE;
                   sink->soc.pixelAspectRatio= wstPopPixelAspectRatio( sink );
                }
+
+               if ( !sink->soc.havePixelAspectRatio || (sink->soc.pixelAspectRatio == 1.0) )
+               {
+                  struct v4l2_cropcap cropcap;
+                  int bufferType= (sink->soc.isMultiPlane ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE);
+                  memset( &cropcap, 0, sizeof(cropcap) );
+                  cropcap.type= bufferType;
+                  rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_CROPCAP, &cropcap );
+                  if ( !rc )
+                  {
+                     int width, height;
+                     width= cropcap.pixelaspect.denominator;
+                     height= cropcap.pixelaspect.numerator;
+                     GST_DEBUG("cropcap: pixel aspect ratio %d:%d",  width, height);
+                     if ( !width || !height )
+                     {
+                        GST_DEBUG("force pixel aspect of 1:1");
+                        width= height= 1;
+                     }
+                     sink->soc.pixelAspectRatioChanged= TRUE;
+                     sink->soc.pixelAspectRatio= (double)width/(double)height;
+                  }
+                  else
+                  {
+                     GST_ERROR("fail to get cropcap %d", errno);
+                  }
+               }
+
                if ( needBounds(sink) && sink->vpcSurface )
                {
                    wstGetVideoBounds( sink, &vx, &vy, &vw, &vh );
