@@ -1983,9 +1983,9 @@ exit:
    return conn;
 }
 
-static bool essRMWaitResponseClientConnection( EssRMgrClientConnection *conn, EssRMgrRequestInfo *info )
+static bool essRMWaitResponseClientConnection( EssRMgrClientConnection *conn, int timeoutMS, EssRMgrRequestInfo *info )
 {
-   int retry= conn->timeoutMS;
+   int retry= timeoutMS;
    return essRMSemWait( &info->semComplete, info->waitForever, retry );
 }
 
@@ -2610,13 +2610,23 @@ bool EssRMgrGetPolicyPriorityTie( EssRMgr *rm )
    EssRMgrRequestInfo *info= 0;
    bool value= false;
    int rc;
+   bool result;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -2624,18 +2634,20 @@ bool EssRMgrGetPolicyPriorityTie( EssRMgr *rm )
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_policy_tie ) )
+      result= essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_policy_tie );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
 
          value= info->value1;
       }
@@ -2656,13 +2668,22 @@ bool EssRMgrGetAVState( EssRMgr *rm, int *state )
    bool result= false;
    EssRMgrRequestInfo *info= 0;
    int rc;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -2670,18 +2691,20 @@ bool EssRMgrGetAVState( EssRMgr *rm, int *state )
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_aggregateState ) )
+      result= essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_aggregateState );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
 
          *state= info->value1;
 
@@ -2704,13 +2727,23 @@ int EssRMgrResourceGetCount( EssRMgr *rm, int type )
    EssRMgrRequestInfo *info= 0;
    int count= 0;
    int rc;
+   bool result;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -2718,19 +2751,21 @@ int EssRMgrResourceGetCount( EssRMgr *rm, int type )
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
       info->type= type;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_count ) )
+      result= essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_count );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result  )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
 
          count= info->value1;
       }
@@ -2751,13 +2786,22 @@ bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *client, int *p
    bool result= false;
    EssRMgrRequestInfo *info= 0;
    int rc;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -2765,20 +2809,22 @@ bool EssRMgrResourceGetOwner( EssRMgr *rm, int type, int id, int *client, int *p
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
       info->type= type;
       info->assignedId= id;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_owner ) )
+      result= essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_owner );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
 
          if ( client ) *client= info->value1;
          if ( priority ) *priority= info->value2;
@@ -2802,13 +2848,22 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
    bool result= false;
    EssRMgrRequestInfo *info= 0;
    int rc;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -2816,20 +2871,22 @@ bool EssRMgrResourceGetCaps( EssRMgr *rm, int type, int id, EssRMgrCaps *caps )
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
       info->type= type;
       info->assignedId= id;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_caps ) )
+      result= essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_caps );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
 
          if ( caps )
          {
@@ -2868,13 +2925,22 @@ bool EssRMgrResourceGetState( EssRMgr *rm, int type, int id, int *state )
    bool result= false;
    EssRMgrRequestInfo *info= 0;
    int rc;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -2882,20 +2948,22 @@ bool EssRMgrResourceGetState( EssRMgr *rm, int type, int id, int *state )
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
       info->type= type;
       info->assignedId= id;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_state ) )
+      result= essRMSendGetValueClientConnection( rm->conn, info, EssRMgrValue_state );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result  )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
 
          if ( state )
          {
@@ -2950,6 +3018,7 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
    bool result= false;
    EssRMgrRequestInfo *info= 0;
    int rc;
+   int timeoutMS;
 
    TRACE2("EssRMgrRequestResource: enter: rm %p type %d", rm, type );
 
@@ -2997,12 +3066,13 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
       memcpy(&info->req, req, sizeof(EssRMgrRequest));
 
       rm->requests.push_back( info );
+      timeoutMS= rm->conn->timeoutMS;
       pthread_mutex_unlock( &rm->mutex );
 
       result= essRMSendResRequestClientConnection( rm->conn, info );
       if ( result )
       {
-         result= essRMWaitResponseClientConnection( rm->conn, info );
+         result= essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
          if ( result )
          {
             pthread_mutex_lock( &rm->mutex );
@@ -3158,13 +3228,23 @@ void EssRMgrDumpState( EssRMgr *rm )
 {
    EssRMgrRequestInfo *info= 0;
    int rc;
+   bool result;
+   int timeoutMS;
 
    if ( rm && rm->conn )
    {
+      pthread_mutex_lock( &rm->mutex );
+      if ( !rm->conn )
+      {
+         pthread_mutex_unlock( &rm->mutex );
+         goto exit;
+      }
+
       info= (EssRMgrRequestInfo*)calloc( 1, sizeof(EssRMgrRequestInfo));
       if ( !info )
       {
          ERROR("no memory for request");
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
@@ -3172,18 +3252,20 @@ void EssRMgrDumpState( EssRMgr *rm )
       if ( rc )
       {
          ERROR("failed to create semComplete for request: %d error %d", rc, errno);
+         pthread_mutex_unlock( &rm->mutex );
          goto exit;
       }
 
       info->waitForever= true;
-      pthread_mutex_lock( &rm->mutex );
       info->requestId= rm->nextRequestId++;
       rm->requests.push_back( info );
-      pthread_mutex_unlock( &rm->mutex );
+      timeoutMS= rm->conn->timeoutMS;
 
-      if ( essRMSendDumpStateClientConnection( rm->conn, info ) )
+      result= essRMSendDumpStateClientConnection( rm->conn, info );
+      pthread_mutex_unlock( &rm->mutex );
+      if ( result )
       {
-         essRMWaitResponseClientConnection( rm->conn, info );
+         essRMWaitResponseClientConnection( rm->conn, timeoutMS, info );
       }
       info= 0;
    }
