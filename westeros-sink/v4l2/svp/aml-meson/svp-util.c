@@ -219,7 +219,11 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          }
          frameWidth= sink->soc.frameWidthStream;
          frameHeight= sink->soc.frameHeightStream;
+         #ifdef WESTEROS_SINK_LOW_MEM_DWMODE
+         decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_4;
+         #else
          decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_2;
+         #endif
          decParm->cfg.metadata_config_flag |= (1<<13);
          GST_DEBUG("format %s size %dx%d dw mode %d",
                     fmt, frameWidth, frameHeight, decParm->cfg.double_write_mode);

@@ -3428,7 +3428,11 @@ static bool wstSetupOutputBuffers( GstWesterosSink *sink )
       sink->soc.minBuffersOut= ctl.value;
       if ( (sink->soc.minBuffersOut != 0) && (sink->soc.minBuffersOut > NUM_OUTPUT_BUFFERS) )
       {
+         #ifdef WESTEROS_SINK_LOW_MEM_BUFFERS
+         neededBuffers= sink->soc.minBuffersOut;
+         #else
          neededBuffers= sink->soc.minBuffersOut+1;
+         #endif
       }
    }
 
