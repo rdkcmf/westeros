@@ -1855,6 +1855,16 @@ static void *wstVideoServerConnectionThread( void *arg )
                            if ( !conn->videoPlane )
                            {
                               conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
+                              if ( !conn->videoPlane )
+                              {
+                                 long long delay= 16667*2LL;
+                                 if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh )
+                                 {
+                                    delay= (1000000LL+(gCtx->modeInfo->vrefresh/2))/gCtx->modeInfo->vrefresh;
+                                 }
+                                 usleep( delay );
+                                 conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
+                              }
                               INFO("video plane %p : zorder: %d videoResourceId %d",
                                    conn->videoPlane, (conn->videoPlane ? conn->videoPlane->zOrder: -1), videoResourceId );
 
@@ -2089,6 +2099,21 @@ exit:
                            0, // fb rect y
                            gCtx->modeInfo->hdisplay<<16,
                            gCtx->modeInfo->hdisplay<<16 );
+
+      conn->videoPlane->inUse= false;
+      {
+         long long delay= 16667*2LL;
+         if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh )
+         {
+            delay= (1000000LL+(gCtx->modeInfo->vrefresh/2))/gCtx->modeInfo->vrefresh;
+         }
+         DEBUG("wstVideoServerConnectionThread: delay for %lld us", delay);
+         pthread_mutex_unlock( &gCtx->mutex );
+         pthread_mutex_unlock( &gMutex );
+         usleep( delay );
+         pthread_mutex_lock( &gMutex );
+         pthread_mutex_lock( &gCtx->mutex );
+      }
 
       wstVideoServerFreeBuffers( conn, true );
 
@@ -6110,7 +6135,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
       WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
       while( iter )
       {
-         if ( iter->dirty && iter->readyToFlip )
+         if ( iter->dirty && iter->readyToFlip && iter->inUse )
          {
             if ( iter->videoFrame[FRAME_NEXT].fbId ||
                  (iter->vfm->paused && (iter->videoFrame[FRAME_CURR].fbId > 0)) )
