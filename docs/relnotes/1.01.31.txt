@@ -1,0 +1,52 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.31 Release Notes
+------------------------------
+
+Date: March 24, 2022
+Tag: Westeros-1.01.31
+Changes:
+
+* v4l2: add cast for build issue
+
+Add cast for build issue in 64 bit RPi4
+
+* sink: retry obtaining compositor
+
+* brcm: add some null checks in sink
+
+* v4l2: fix potential crash
+
+-join wayland dispatch thread prior to tearing down output buffers
+
+* test: fixes/improvements to automated test code
+
+* drm: fix errors from video positioned offscreen
+
+* v4l2: add locking around input buffer creation
+
+* v4l2: add support for VIDIOC_CROPCAP to check pixel-aspect-ratio
+
+* erm: uds: fix thread safety issue in some requests
+
+* drm: fix potential glitch on video client close
+
+* v4l2: add some memory reduction build options:
+
+-build with -DWESTEROS_SINK_LOW_MEM_DWMODE to reduce double write mode memory usage
+-build with -DWESTEROS_SINK_LOW_MEM_BUFFERS to reduce capture buffer memory usage
+
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
