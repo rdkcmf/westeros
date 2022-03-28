@@ -6576,6 +6576,16 @@ static gpointer wstEOSDetectionThread(gpointer data)
                }
                else
                {
+                  GstBaseSink *basesink;
+                  basesink = GST_BASE_SINK(sink);
+                  GST_BASE_SINK_PREROLL_LOCK(basesink);
+                  if ( GST_BASE_SINK(sink)->need_preroll && GST_BASE_SINK(sink)->have_preroll )
+                  {
+                     GST_BASE_SINK(sink)->need_preroll= FALSE;
+                     GST_BASE_SINK(sink)->have_preroll= FALSE;
+                     GST_BASE_SINK_PREROLL_SIGNAL(basesink);
+                  }
+                  GST_BASE_SINK_PREROLL_UNLOCK(basesink);
                   gst_westeros_sink_eos_detected( sink );
                }
                break;
