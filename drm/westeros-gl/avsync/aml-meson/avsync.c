@@ -113,6 +113,11 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       }
       #endif
       DEBUG("Created sync module: %p vsyncInterval %d", vfm->sync, vsyncInterval );
+      if ( vfm->sync && (vfm->rate != 1.0) )
+      {
+         INFO("set av_sync speed %f", vfm->rate);
+         av_sync_set_speed( vfm->sync, vfm->rate );
+      }
    }
 }
 
@@ -129,6 +134,7 @@ static void wstAVSyncTerm( VideoFrameManager *vfm )
          vfm->syncSession = -1;
       }
       #endif
+      vfm->syncInit= false;
    }
 }
 
@@ -277,6 +283,12 @@ static void wstAVSyncPause( VideoFrameManager *vfm, bool pause )
 {
    if ( vfm->sync )
    {
+      INFO("pause: %d speed %f", pause, vfm->rate);
+      if ( !pause )
+      {
+         INFO("set av_sync speed %f sync mode %d", vfm->rate, vfm->conn->syncType);
+         av_sync_set_speed( vfm->sync, vfm->rate );
+      }
       av_sync_pause( vfm->sync, pause );
    }
 }

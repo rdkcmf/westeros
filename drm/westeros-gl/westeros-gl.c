@@ -242,6 +242,7 @@ typedef struct _VideoFrameManager
    bool paused;
    bool resetBaseTime;
    bool frameAdvance;
+   float rate;
    long long vblankTime;
    long long vblankInterval;
    long long vblankIntervalPrev;
@@ -1918,9 +1919,20 @@ static void *wstVideoServerConnectionThread( void *arg )
                         break;
                      case 'P':
                         {
+                           float rate= 1.0;
                            bool pause= (m[1] == 1);
-                           DEBUG("got pause (%d) video plane %d", pause, conn->videoPlane->plane->plane_id);
+                           if ( mlen >= 10 )
+                           {
+                              int num= (int)wstGetU32( m+2 );
+                              int denom= (int)wstGetU32( m+6 );
+                              if ( denom )
+                              {
+                                 rate= (float)num/(float)denom;
+                              }
+                           }
+                           DEBUG("got pause (%d) rate (%f) video plane %d", pause, rate, conn->videoPlane->plane->plane_id);
                            pthread_mutex_lock( &gMutex );
+                           conn->videoPlane->vfm->rate= rate;
                            wstVideoFrameManagerPause( conn->videoPlane->vfm, pause );
                            pthread_mutex_unlock( &gMutex );
                         }
@@ -3358,6 +3370,7 @@ static VideoFrameManager *wstCreateVideoFrameManager( VideoServerConnection *con
       vfm->queueSize= 0;
       vfm->bufferIdCurrent= -1;
       vfm->syncSession= -1;
+      vfm->rate= 1.0;
 
       for( i= 0; i < vfm->queueCapacity; ++i )
       {
@@ -3640,7 +3653,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
          while ( i < vfm->queueSize )
          {
             VideoFrame *fCheck= &vfm->queue[i];
-            flipTime= (fCheck->frameTime - vfm->frameTimeBase) + vfm->flipTimeBase;
+            flipTime= ((fCheck->frameTime - vfm->frameTimeBase)/vfm->rate) + vfm->flipTimeBase;
             FRAME("i %d flipTime %lld flipTimeCurrent %lld frameTimeCurrent %lld frameTime %lld frameTimeBase %lld flipTimeBase %lld frameAdvance %d",
                   i, flipTime, vfm->flipTimeCurrent, vfm->frameTimeCurrent, fCheck->frameTime, vfm->frameTimeBase, vfm->flipTimeBase, vfm->frameAdvance);
             if ( flipTime == vfm->flipTimeCurrent )

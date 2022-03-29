@@ -4189,7 +4189,7 @@ static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, b
    {
       struct msghdr msg;
       struct iovec iov[1];
-      unsigned char mbody[7];
+      unsigned char mbody[13];
       int len;
       int sentLen;
 
@@ -4204,9 +4204,11 @@ static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, b
       len= 0;
       mbody[len++]= 'V';
       mbody[len++]= 'S';
-      mbody[len++]= 2;
+      mbody[len++]= 10;
       mbody[len++]= 'P';
       mbody[len++]= (pause ? 1 : 0);
+      len += putU32( &mbody[len], conn->sink->segment.rate*10000LL );
+      len += putU32( &mbody[len], 10000LL );
 
       iov[0].iov_base= (char*)mbody;
       iov[0].iov_len= len;
@@ -4219,8 +4221,8 @@ static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, b
 
       if ( sentLen == len )
       {
-         GST_LOG("sent pause %d to video server", pause);
-         FRAME("sent pause %d to video server", pause);
+         GST_LOG("sent pause %d (rate %f) to video server", pause, conn->sink->segment.rate);
+         FRAME("sent pause %d (rate %f) to video server", pause, conn->sink->segment.rate);
       }
    }
 }
