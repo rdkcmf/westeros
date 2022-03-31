@@ -2020,6 +2020,7 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
 
          if ( inSize )
          {
+            int headerlen;
             avail= inSize;
             offset= 0;
             while( offset < inSize )
@@ -2046,23 +2047,22 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                }
                start= (guint8*)sink->soc.inBuffers[buffIndex].start;
 
-               copylen= sink->soc.inBuffers[buffIndex].capacity;
-               if ( copylen > avail )
-               {
-                  copylen= avail;
-               }
-
+               headerlen= 0;
                if ( sink->soc.codecData && !sink->soc.codecDataInjected )
                {
                   GST_DEBUG("injecting %d bytes codec data", sink->soc.codecDataLen);
                   memcpy( start, sink->soc.codecData, sink->soc.codecDataLen );
                   start += sink->soc.codecDataLen;
+                  headerlen= sink->soc.codecDataLen;
                   sink->soc.codecDataInjected= TRUE;
-                  if ( copylen > avail-sink->soc.codecDataLen )
-                  {
-                     copylen= avail-sink->soc.codecDataLen;
-                  }
                }
+
+               copylen= sink->soc.inBuffers[buffIndex].capacity - headerlen;
+               if ( copylen > avail )
+               {
+                  copylen= avail;
+               }
+
                memcpy( start, &inData[offset], copylen );
 
                offset += copylen;
@@ -2073,10 +2073,10 @@ void gst_westeros_sink_soc_render( GstWesterosSink *sink, GstBuffer *buffer )
                   GstClockTime timestamp= GST_BUFFER_PTS(buffer) + 500LL;
                   GST_TIME_TO_TIMEVAL( timestamp, sink->soc.inBuffers[buffIndex].buf.timestamp );
                }
-               sink->soc.inBuffers[buffIndex].buf.bytesused= copylen;
+               sink->soc.inBuffers[buffIndex].buf.bytesused= copylen + headerlen;
                if ( sink->soc.isMultiPlane )
                {
-                  sink->soc.inBuffers[buffIndex].buf.m.planes[0].bytesused= copylen;
+                  sink->soc.inBuffers[buffIndex].buf.m.planes[0].bytesused= copylen + headerlen;
                }
                rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_QBUF, &sink->soc.inBuffers[buffIndex].buf );
                if ( rc < 0 )
