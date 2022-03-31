@@ -108,7 +108,8 @@ enum
   PROP_IMMEDIATE_OUTPUT,
   PROP_ENABLE_TEXTURE,
   PROP_REPORT_DECODE_ERRORS,
-  PROP_QUEUED_FRAMES
+  PROP_QUEUED_FRAMES,
+  PROP_STOP_KEEP_FRAME
 };
 enum
 {
@@ -174,6 +175,7 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendKeepFrameVideoClientConnection( WstVideoClientConnection *conn );
 static void wstDecoderReset( GstWesterosSink *sink, bool hard );
 static void wstGetVideoBounds( GstWesterosSink *sink, int *x, int *y, int *w, int *h );
 static void wstSetTextureCrop( GstWesterosSink *sink, int vx, int vy, int vw, int vh );
@@ -717,6 +719,11 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                            "immediate output mode",
                            "Decoded frames are output with minimum delay. B frames are dropped.", FALSE, G_PARAM_READWRITE));
 
+   g_object_class_install_property (gobject_class, PROP_STOP_KEEP_FRAME,
+     g_param_spec_boolean ("stop-keep-frame",
+                           "keep last frame on stop",
+                           "true - keep last frame; false: display black", FALSE, G_PARAM_READWRITE));
+
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
                                                (GSignalFlags) (G_SIGNAL_RUN_LAST),
@@ -838,6 +845,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.zoomModeGlobal= FALSE;
    sink->soc.zoomMode= ZOOM_NONE;
    sink->soc.zoomModeUser= -1;;
+   sink->soc.keepLastFrame= FALSE;
+   sink->soc.keepLastFrameChanged= FALSE;
    sink->soc.overscanSize= DEFAULT_OVERSCAN;
    sink->soc.useImmediateOutput= FALSE;
    sink->soc.frameWidth= -1;
@@ -1220,6 +1229,16 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             sink->soc.useImmediateOutput= g_value_get_boolean(value);
             break;
          }
+      case PROP_STOP_KEEP_FRAME:
+         {
+            bool keep= g_value_get_boolean(value);
+            if ( (keep != sink->soc.keepLastFrame) && !sink->soc.conn )
+            {
+               sink->soc.keepLastFrameChanged= TRUE;
+            }
+            sink->soc.keepLastFrame= keep;
+            break;
+         }
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -1303,6 +1322,9 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_IMMEDIATE_OUTPUT:
          g_value_set_boolean(value, sink->soc.useImmediateOutput);
+         break;
+      case PROP_STOP_KEEP_FRAME:
+         g_value_set_boolean(value, sink->soc.keepLastFrame);
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -2409,6 +2431,7 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.emitFirstFrameSignal= FALSE;
    sink->soc.emitUnderflowSignal= FALSE;
    sink->soc.decodeError= FALSE;
+   sink->soc.keepLastFrame= FALSE;
 
    if ( sink->soc.inputFormats )
    {
@@ -4019,6 +4042,8 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
 
       wstSendResourceVideoClientConnection( conn );
 
+      wstSendKeepFrameVideoClientConnection( conn );
+
       error= false;
    }
 
@@ -4492,6 +4517,49 @@ static void wstSendRateVideoClientConnection( WstVideoClientConnection *conn )
       {
          GST_LOG("sent frame rate to video server: %d/%d", sink->soc.frameRateFractionNum, sink->soc.frameRateFractionDenom);
          FRAME("sent frame rate to video server: %d/%d", sink->soc.frameRateFractionNum, sink->soc.frameRateFractionDenom);
+      }
+   }
+}
+
+static void wstSendKeepFrameVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      GstWesterosSink *sink= conn->sink;
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[5];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 2;
+      mbody[len++]= 'K';
+      mbody[len++]= sink->soc.keepLastFrame;
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent resource id to video server");
+         FRAME("sent resource id to video server");
       }
    }
 }
@@ -6251,6 +6319,11 @@ capture_start:
          {
             sink->soc.frameRateChanged= FALSE;
             wstSendRateVideoClientConnection( sink->soc.conn );
+         }
+         if ( sink->soc.keepLastFrameChanged )
+         {
+            sink->soc.keepLastFrameChanged= FALSE;
+            wstSendKeepFrameVideoClientConnection( sink->soc.conn );
          }
          if ( wasPaused && !sink->soc.videoPaused )
          {

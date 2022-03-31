@@ -293,6 +293,7 @@ typedef struct _WstOverlayPlane
    bool supportsVideo;
    bool supportsGraphics;
    bool frameRateMatchingPlane;
+   bool keepLastFrame;
    int zOrder;
    int videoResourceId;
    uint32_t crtc_id;
@@ -1005,6 +1006,7 @@ static void wstOverlayFree( WstOverlayPlanes *planes, WstOverlayPlane *overlay )
       overlay->inUse= false;
       overlay->conn= 0;
       overlay->videoResourceId= -1;
+      overlay->keepLastFrame= false;
       if ( planes->usedCount <= 0 )
       {
          ERROR("wstOverlayFree: unmatched free");
@@ -1225,7 +1227,10 @@ static void wstVideoServerFreeBuffers( VideoServerConnection *conn, bool full )
    {
       if ( (i >= 2) || full )
       {
-         wstFreeVideoFrameResources( &conn->videoPlane->videoFrame[i] );
+         if ( (i != FRAME_CURR) || !conn->videoPlane->keepLastFrame )
+         {
+            wstFreeVideoFrameResources( &conn->videoPlane->videoFrame[i] );
+         }
       }
    }
 }
@@ -1855,8 +1860,9 @@ static void *wstVideoServerConnectionThread( void *arg )
                            }
                            if ( !conn->videoPlane )
                            {
+                              int retries= 3;
                               conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
-                              if ( !conn->videoPlane )
+                              while ( !conn->videoPlane )
                               {
                                  long long delay= 16667*2LL;
                                  if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh )
@@ -1865,6 +1871,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                                  }
                                  usleep( delay );
                                  conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
+                                 if ( --retries <= 0 ) break;
                               }
                               INFO("video plane %p : zorder: %d videoResourceId %d",
                                    conn->videoPlane, (conn->videoPlane ? conn->videoPlane->zOrder: -1), videoResourceId );
@@ -2062,6 +2069,15 @@ static void *wstVideoServerConnectionThread( void *arg )
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
+                     case 'K':
+                        {
+                           bool keep= (m[1] != 0);
+                           DEBUG("got keep frame (%d) video plane %d", keep, conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           conn->videoPlane->keepLastFrame= keep;
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
                      default:
                         ERROR("got unknown video server message: mlen %d", mlen);
                         wstDumpMessage( mbody, mlen+3 );
@@ -2097,34 +2113,37 @@ exit:
 
       drmModePlane *plane= conn->videoPlane->plane;
       plane->crtc_id= gCtx->enc->crtc_id;
-      DEBUG("wstVideoServerConnectionThread: drmModeSetPlane plane_id %d crtc_id %d", plane->plane_id, plane->crtc_id);
-      rc= drmModeSetPlane( gCtx->drmFd,
-                           plane->plane_id,
-                           plane->crtc_id,
-                           0, // fbid
-                           0, // flags
-                           0, // plane x
-                           0, // plane y
-                           gCtx->modeInfo->hdisplay,
-                           gCtx->modeInfo->vdisplay,
-                           0, // fb rect x
-                           0, // fb rect y
-                           gCtx->modeInfo->hdisplay<<16,
-                           gCtx->modeInfo->hdisplay<<16 );
-
       conn->videoPlane->inUse= false;
+      if ( !conn->videoPlane->keepLastFrame )
       {
-         long long delay= 16667*2LL;
-         if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh )
+         DEBUG("wstVideoServerConnectionThread: drmModeSetPlane plane_id %d crtc_id %d", plane->plane_id, plane->crtc_id);
+         rc= drmModeSetPlane( gCtx->drmFd,
+                              plane->plane_id,
+                              plane->crtc_id,
+                              0, // fbid
+                              0, // flags
+                              0, // plane x
+                              0, // plane y
+                              gCtx->modeInfo->hdisplay,
+                              gCtx->modeInfo->vdisplay,
+                              0, // fb rect x
+                              0, // fb rect y
+                              gCtx->modeInfo->hdisplay<<16,
+                              gCtx->modeInfo->hdisplay<<16 );
+
          {
-            delay= (1000000LL+(gCtx->modeInfo->vrefresh/2))/gCtx->modeInfo->vrefresh;
+            long long delay= 16667*2LL;
+            if ( gCtx->modeInfo && gCtx->modeInfo->vrefresh )
+            {
+               delay= (1000000LL+(gCtx->modeInfo->vrefresh/2))/gCtx->modeInfo->vrefresh;
+            }
+            DEBUG("wstVideoServerConnectionThread: delay for %lld us", delay);
+            pthread_mutex_unlock( &gCtx->mutex );
+            pthread_mutex_unlock( &gMutex );
+            usleep( delay );
+            pthread_mutex_lock( &gMutex );
+            pthread_mutex_lock( &gCtx->mutex );
          }
-         DEBUG("wstVideoServerConnectionThread: delay for %lld us", delay);
-         pthread_mutex_unlock( &gCtx->mutex );
-         pthread_mutex_unlock( &gMutex );
-         usleep( delay );
-         pthread_mutex_lock( &gMutex );
-         pthread_mutex_lock( &gCtx->mutex );
       }
 
       wstVideoServerFreeBuffers( conn, true );

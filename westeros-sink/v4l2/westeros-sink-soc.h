@@ -181,6 +181,8 @@ struct _GstWesterosSinkSoc
    gboolean showChanged;
    gboolean zoomModeGlobal;
    gboolean useImmediateOutput;
+   gboolean keepLastFrame;
+   gboolean keepLastFrameChanged;
    int zoomMode;
    int zoomModeUser;
    int overscanSize;
