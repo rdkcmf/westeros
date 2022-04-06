@@ -1237,6 +1237,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
                sink->soc.keepLastFrameChanged= TRUE;
             }
             sink->soc.keepLastFrame= keep;
+            GST_DEBUG("set keepLastFrame %d", sink->soc.keepLastFrame);
             break;
          }
       default:
@@ -2431,7 +2432,6 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    sink->soc.emitFirstFrameSignal= FALSE;
    sink->soc.emitUnderflowSignal= FALSE;
    sink->soc.decodeError= FALSE;
-   sink->soc.keepLastFrame= FALSE;
 
    if ( sink->soc.inputFormats )
    {
@@ -4558,8 +4558,8 @@ static void wstSendKeepFrameVideoClientConnection( WstVideoClientConnection *con
 
       if ( sentLen == len )
       {
-         GST_LOG("sent resource id to video server");
-         FRAME("sent resource id to video server");
+         GST_LOG("sent keepLastFrame %d to video server", sink->soc.keepLastFrame);
+         FRAME("sent keepLastFrame %d to video server", sink->soc.keepLastFrame);
       }
    }
 }
