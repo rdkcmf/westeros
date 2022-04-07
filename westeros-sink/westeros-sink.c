@@ -483,7 +483,7 @@ static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userDa
    WstSinkResReqInfo *info= (WstSinkResReqInfo*)userData;
    GstWesterosSink *sink= info->sink;
 
-   GST_DEBUG("resMgrNotify: enter");
+   GST_DEBUG("resMgrNotify: enter: sink %p", sink);
    switch( type )
    {
       case EssRMgrResType_videoDecoder:
@@ -505,10 +505,10 @@ static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userDa
             case EssRMgrEvent_revoked:
                {
                   memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
-                  GST_DEBUG("releasing video decoder %d", id);
+                  GST_DEBUG("sink %p releasing video decoder %d", sink, id);
                   sink->releaseResources( sink );
                   EssRMgrReleaseResource( sink->rm, EssRMgrResType_videoDecoder, id );
-                  GST_DEBUG("done releasing video decoder %d", id);
+                  GST_DEBUG("sink %p done releasing video decoder %d", sink, id);
                   sink->resAssignedId= -1;
                   if (
                        (EssRMgrGetPolicyPriorityTie( sink->rm ) == false) ||
@@ -530,7 +530,7 @@ static void resMgrNotify( EssRMgr *rm, int event, int type, int id, void* userDa
       default:
          break;
    }
-   GST_DEBUG("resMgrNotify: exit");
+   GST_DEBUG("resMgrNotify: exit: sink %p", sink);
 }
 
 static void resMgrRequestDecoder( GstWesterosSink *sink )
@@ -553,14 +553,15 @@ static void resMgrRequestDecoder( GstWesterosSink *sink )
       {
          if ( sink->resReqPrimary.resReq.assignedId >= 0 )
          {
-            GST_DEBUG("assigned id %d caps %X", sink->resReqPrimary.resReq.assignedId, sink->resReqPrimary.resReq.assignedCaps );
+            GST_DEBUG("sink %p assigned id %d caps %X", sink, sink->resReqPrimary.resReq.assignedId, sink->resReqPrimary.resReq.assignedCaps );
             sink->resAssignedId= sink->resReqPrimary.resReq.assignedId;
             memset( &sink->resCurrCaps, 0, sizeof(EssRMgrCaps) );
             if ( !EssRMgrResourceGetCaps( sink->rm, EssRMgrResType_videoDecoder, sink->resAssignedId, &sink->resCurrCaps ) )
             {
                GST_ERROR("gst_westeros_sink: resMgrRequestDecoder: failed to get caps of assigned decoder");
             }
-            GST_DEBUG("assigned id %d caps %X (%dx%d)",
+            GST_DEBUG("sink %p assigned id %d caps %X (%dx%d)",
+                      sink,
                       sink->resAssignedId,
                       sink->resCurrCaps.capabilities,
                       sink->resCurrCaps.info.video.maxWidth,
@@ -625,6 +626,14 @@ static gboolean gst_westeros_sink_backend_null_to_ready( GstWesterosSink *sink, 
 static gboolean gst_westeros_sink_backend_ready_to_paused( GstWesterosSink *sink, gboolean *passToDefault )
 {
    gboolean result;
+   if ( sink->rm && (sink->resAssignedId < 0) )
+   {
+      resMgrRequestDecoder(sink);
+      if ( sink->resAssignedId >= 0 )
+      {
+         sink->acquireResources( sink );
+      }
+   }
    if ( sink->rm && (sink->resAssignedId < 0) )
    {
       result= TRUE;
@@ -1485,7 +1494,8 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
    GstWesterosSink *sink= GST_WESTEROS_SINK(element);
    gboolean passToDefault= true;
 
-   GST_DEBUG_OBJECT(element, "westeros-sink: change state from %s to %s",
+   GST_DEBUG_OBJECT(element, "westeros-sink: sink %p change state from %s to %s",
+      sink,
       gst_element_state_get_name (GST_STATE_TRANSITION_CURRENT (transition)),
       gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
 
@@ -1799,7 +1809,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
       }
    }
 
-   GST_DEBUG_OBJECT (sink, "received event %p %" GST_PTR_FORMAT, event, event);
+   GST_DEBUG_OBJECT (sink, "sink %p received event %p %", sink, GST_PTR_FORMAT, event, event);
 
    switch (GST_EVENT_TYPE(event))
    {

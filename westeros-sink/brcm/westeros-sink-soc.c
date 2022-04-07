@@ -1951,7 +1951,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    gpointer *ptr;
    gboolean result;
 
-   GST_DEBUG_OBJECT(sink, "queryPeerHandles: enter: peerPad %p", (void*)sink->peerPad);
+   GST_DEBUG_OBJECT(sink, "queryPeerHandles: enter: sink %p peerPad %p", sink, (void*)sink->peerPad);
    if ( !sink->peerPad ) 
    {
       return FALSE;
@@ -1982,7 +1982,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       }    
       ptr= g_value_get_pointer(val);   
       sink->soc.stcChannel= (NEXUS_SimpleStcChannelHandle )ptr;
-      GST_LOG("queryPeerHandles: stc channel %p", sink->soc.stcChannel);
+      GST_DEBUG("queryPeerHandles: sink %p stc channel %p", sink, sink->soc.stcChannel);
       gst_query_unref(query);
    }
 
@@ -2009,7 +2009,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       return FALSE;
    }    
    sink->soc.codec= g_value_get_int(val);    
-   GST_LOG("queryPeerHandles: codec %d", sink->soc.codec);
+   GST_DEBUG("queryPeerHandles: sink %p codec %d", sink, sink->soc.codec);
    gst_query_unref(query);
 
 
@@ -2035,7 +2035,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       return FALSE;
    }
    sink->soc.videoPidChannel= (NEXUS_PidChannelHandle)g_value_get_pointer(val);
-   GST_LOG("queryPeerHandles: video pid channel %p", sink->soc.videoPidChannel);
+   GST_DEBUG("queryPeerHandles: sink %p video pid channel %p", sink, sink->soc.videoPidChannel);
    gst_query_unref(query);
 
    #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
@@ -2062,7 +2062,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
          if ( gst_structure_has_field(structure, "colorimetry") )
          {
             GstVideoColorimetry colorimetryInfo;
-            GST_LOG("queryPeerHandles: have colorimetry");
+            GST_DEBUG("queryPeerHandles: sink %p have colorimetry", sink);
             colorimetry= gst_structure_get_string(structure,"colorimetry");
             gst_video_colorimetry_from_string(&colorimetryInfo,colorimetry);
             if ( colorimetryInfo.transfer == 13 )
@@ -2081,7 +2081,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
 
          if ( gst_structure_has_field(structure, "mastering_display_metadata") )
          {
-            GST_LOG("queryPeerHandles have mastering_display_metadata");
+            GST_DEBUG("queryPeerHandles sink %p have mastering_display_metadata", sink);
             masteringDisplayMetadata= gst_structure_get_string(structure,"mastering_display_metadata");
             if ( masteringDisplayMetadata )
             {
@@ -2091,7 +2091,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
 
          if ( gst_structure_has_field(structure, "content_light_level") )
          {
-            GST_LOG("queryPeerHandles: have content_light_level");
+            GST_DEBUG("queryPeerHandles: sink %p have content_light_level", sink);
             contentLightLevel= gst_structure_get_string(structure,"content_light_level");
             if ( contentLightLevel )
             {
@@ -2105,7 +2105,7 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
 
    allocCaptureSurfaces( sink );
 
-   GST_LOG("queryPeerHandles: exit");
+   GST_DEBUG("queryPeerHandles: sink %p exit", sink);
 
    return TRUE;
 }
@@ -3258,13 +3258,14 @@ static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent
    gboolean result= FALSE;
 
    LOCK( sink );
-   if ( sink->startAfterLink && !sink->videoStarted )
+   if ( sink->startAfterLink && !sink->videoStarted && (!sink->rm || sink->resAssignedId >= 0) )
    {
       if ( queryPeerHandles(sink) )
       {
+         GST_DEBUG("processEventSinkSoc: sink %p calling start video", sink);
          if ( !gst_westeros_sink_soc_start_video( sink ) )
          {
-            GST_ERROR("prerollSinkSoc: gst_westeros_sink_soc_start_video failed");
+            GST_ERROR("processEventSinkSoc: gst_westeros_sink_soc_start_video failed");
          }
       }
    }
@@ -3366,8 +3367,9 @@ static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer)
          #endif
 
          LOCK( sink );
-         if ( !sink->videoStarted )
+         if ( !sink->videoStarted && (!sink->rm || sink->resAssignedId >= 0)  )
          {
+            GST_DEBUG("prerollSinkSoc: sink %p calling start video", sink);
             if ( !gst_westeros_sink_soc_start_video( sink ) )
             {
                GST_ERROR("prerollSinkSoc: gst_westeros_sink_soc_start_video failed");
