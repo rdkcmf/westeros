@@ -82,6 +82,8 @@ static void showUsage()
    printf("  --get-caps <type> <id>\n");
    printf("  --get-state <type> <id>\n");
    printf("  --get-avstate\n");
+   printf("  --add-bl <appid>\n");
+   printf("  --remove-bl <appid>\n");
    printf("  -? : show usage\n" );
    printf("\n" );   
 }
@@ -119,6 +121,9 @@ int main( int argc, const char **argv )
    int getStateType= 0;
    int getStateId= 0;
    int getAVState= false;
+   bool addBL= false;
+   bool removeBL= false;
+   const char *appId= 0;
 
    printf("essos-sample-resmgr v1.0\n");
 
@@ -284,6 +289,24 @@ int main( int argc, const char **argv )
             ++argidx;
             getAVState= true;
          }
+         else if ( (len == 8) && !strncmp( argv[argidx], "--add-bl", len) )
+         {
+            ++argidx;
+            if ( argidx < argc )
+            {
+               appId= argv[argidx];
+               addBL= true;
+            }
+         }
+         else if ( (len == 11) && !strncmp( argv[argidx], "--remove-bl", len) )
+         {
+            ++argidx;
+            if ( argidx < argc )
+            {
+               appId= argv[argidx];
+               removeBL= true;
+            }
+         }
          else
          {
             printf( "unknown option %s\n\n", argv[argidx] );
@@ -430,6 +453,18 @@ int main( int argc, const char **argv )
          int state= 0;
          bool result= EssRMgrGetAVState( rm, &state );
          printf("AV state result %d state %d\n", result, state );
+      }
+
+      if ( addBL )
+      {
+         bool result= EssRMgrAddToBlackList( rm, appId );
+         printf("add (%s) to BL: %d\n", appId, result );
+      }
+
+      if ( removeBL )
+      {
+         bool result= EssRMgrRemoveFromBlackList( rm, appId );
+         printf("remove (%s) to BL: %d\n", appId, result );
       }
    }
  

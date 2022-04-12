@@ -20,9 +20,16 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <linux/netlink.h>
+#include <assert.h>
 #include <algorithm>
+#include <map>
+#include <string>
 
 #define ESSRMGR_SERVER_NAME "resource"
+
+#define ESSRMGR_MAX_APPIDLEN (80)
+
+#define ESSRMGR_NOT_AUTHORIZED (2)
 
 typedef struct _EssRMgrResourceServerCtx EssRMgrResourceServerCtx;
 typedef struct _EssRMgrResourceConnection EssRMgrResourceConnection;
@@ -69,6 +76,7 @@ typedef struct _EssRMgrResource
 typedef struct _EssRMgrBase
 {
    bool requesterWinsPriorityTie;
+   bool unauthorizedRequestsAbort;
    int timeoutMS;
    int numVideoDecoders;
    EssRMgrResource videoDecoder[ESSRMGR_MAX_ITEMS];
@@ -107,6 +115,7 @@ typedef struct _EssRMgrResourceConnection
    bool threadStopRequested;
    sem_t semComplete;
    int clientId;
+   char appId[ESSRMGR_MAX_APPIDLEN+1];
 } 
 EssRMgrResourceConnection;
 
@@ -131,6 +140,7 @@ typedef struct _EssRMgrResourceServerCtx
    std::vector<EssRMgrResourceConnection*> connections;
    EssRMgrState *state;
    int nextClientId;
+   std::map<std::string,int> blackList;
 } EssRMgrResourceServerCtx;
 
 typedef struct _EssRMgrClientConnection
@@ -144,6 +154,7 @@ typedef struct _EssRMgrClientConnection
    bool ready;
    bool threadStarted;
    bool threadStopRequested;
+   bool unauthorizedRequestsAbort;
    int timeoutMS;
 } EssRMgrClientConnection;
 
@@ -155,7 +166,8 @@ typedef enum _EssRMgrValue
    EssRMgrValue_state= 3,
    EssRMgrValue_aggregateState= 4,
    EssRMgrValue_policy_tie= 5,
-   EssRMgrValue_policy_revokeTimeout= 6,
+   EssRMgrValue_policy_abortUnauthorized= 6,
+   EssRMgrValue_policy_revokeTimeout= 7,
 } EssRMgrValue;
 
 typedef struct _EssRMgrRequestInfo
@@ -167,6 +179,7 @@ typedef struct _EssRMgrRequestInfo
    int type;
    int requestId;
    int assignedId;
+   int result;
    int value1;
    int value2;
    int value3;
@@ -185,6 +198,8 @@ typedef struct _EssRMgr
 
 static void essRMInitDefaultState( EssRMgrResourceServerCtx *rm );
 static bool essRMReadConfigFile( EssRMgrResourceServerCtx *rm );
+static bool essRMgrAppIdAuthorized( EssRMgrResourceConnection *conn, char *appId );
+static bool essRMgrUpdateBlackList( EssRMgrResourceConnection *conn, char *appId, bool add );
 static bool essRMRequestResource( EssRMgrResourceConnection *conn, EssRMgrRequest *req );
 static void essRMReleaseResource( EssRMgrResourceConnection *conn, int type, int id );
 static bool essRMSetPriorityResource( EssRMgrResourceConnection *conn, int requestId, int type, int priority );
@@ -299,7 +314,7 @@ static bool essRMSendResRevoke( EssRMgrResourceConnection *conn, int type, int i
    return result;
 }
 
-static bool essRMSendResRequestResponse( EssRMgrResourceConnection *conn, EssRMgrRequest *req, bool reqResult )
+static bool essRMSendResRequestResponse( EssRMgrResourceConnection *conn, EssRMgrRequest *req, int reqResult )
 {
    bool result= false;
    if ( conn )
@@ -478,6 +493,8 @@ static void essRMDumpState( EssRMgrResourceConnection *conn, int requestId )
 
    snprintf(msg, sizeof(msg), "requester wins priority tie: %d\n", state->base.requesterWinsPriorityTie);
    essRMSendDumpStateResponse( conn, requestId, msg );
+   snprintf(msg, sizeof(msg), "unauthorized requests abort: %d\n", state->base.unauthorizedRequestsAbort);
+   essRMSendDumpStateResponse( conn, requestId, msg );
    snprintf(msg, sizeof(msg), "revoke-timeout: %d ms\n", state->base.timeoutMS);
    essRMSendDumpStateResponse( conn, requestId, msg );
    for( int i= 0; i < state->base.numVideoDecoders; ++i )
@@ -515,6 +532,14 @@ static void essRMDumpState( EssRMgrResourceConnection *conn, int requestId )
                (state->base.svpAlloc[i].connOwner  ? state->base.svpAlloc[i].connOwner->clientId : 0),
                state->base.frontEnd[i].priorityOwner );
       essRMSendDumpStateResponse( conn, requestId, msg );
+   }
+   if ( conn->server->blackList.size() )
+   {
+      for( std::map<std::string,int>::iterator it= conn->server->blackList.begin(); it != conn->server->blackList.end(); ++it )
+      {
+         snprintf(msg, sizeof(msg), "black list: (%s)\n", it->first.c_str() );
+         essRMSendDumpStateResponse( conn, requestId, msg);
+      }
    }
    essRMSendDumpStateResponse( conn, requestId, 0 );
 }
@@ -610,10 +635,12 @@ static void *essRMResourceConnectionThread( void *arg )
    EssRMgrResourceServerCtx *server= conn->server;
    struct msghdr msg;
    struct iovec iov[1];
-   unsigned char mbody[64];
+   unsigned char mbody[64+ESSRMGR_MAX_APPIDLEN];
    int moff= 0, len, i, rc;
 
    DEBUG("essRMResourceConnectionThread: enter");
+
+   essRMSendGetValueResponse( conn, -1, EssRMgrValue_policy_abortUnauthorized, server->state->base.unauthorizedRequestsAbort, 0, 0);
 
    essRMSendGetValueResponse( conn, -1, EssRMgrValue_policy_revokeTimeout, server->state->base.timeoutMS, 0, 0);
 
@@ -686,8 +713,12 @@ static void *essRMResourceConnectionThread( void *arg )
                   case 'R':
                      if ( mlen >= 14 )
                      {
-                        bool result= false;
+                        bool result= 0;
+                        int reqresult= 0;
+                        int appIdLen;
+                        char appId[ESSRMGR_MAX_APPIDLEN+1];
                         int infolen;
+                        int offset;
                         EssRMgrRequest req;
                         memset( &req, 0, sizeof(EssRMgrRequest));
                         req.type= m[4];
@@ -695,29 +726,46 @@ static void *essRMResourceConnectionThread( void *arg )
                         req.requestId= getU32( &m[6] );
                         req.usage= getU32( &m[10] );
                         req.priority= getU32( &m[14] );
-                        infolen= getU32( &m[18] );
+                        req.assignedId= -1;
+                        appIdLen= getU32( &m[18] );
+                        offset= 22;
+                        if ( appIdLen > 0 )
+                        {
+                           memcpy( appId, &m[22], appIdLen );
+                           appId[appIdLen]= '\0';
+                           offset += appIdLen;
+                        }
+                        infolen= getU32( &m[offset] );
                         DEBUG("got res req res type %d", req.type);
                         pthread_mutex_lock( &server->state->mutex );
-                        switch( req.type )
+                        if ( essRMgrAppIdAuthorized( conn, appId ) )
                         {
-                           case EssRMgrResType_videoDecoder:
-                              if ( infolen >= 8 )
-                              {
-                                 req.info.video.maxWidth= getU32( &m[22] );
-                                 req.info.video.maxHeight= getU32( &m[26] );
-                              }
-                              result= essRMRequestResource( conn, &req );
-                              break;
-                           case EssRMgrResType_audioDecoder:
-                           case EssRMgrResType_frontEnd:
-                           case EssRMgrResType_svpAllocator:
-                              result= essRMRequestResource( conn, &req );
-                              break;
-                           default:
-                              ERROR("unsupported resource type: %d", req.type);
-                              break;
+                           strncpy( conn->appId, appId, ESSRMGR_MAX_APPIDLEN);
+                           switch( req.type )
+                           {
+                              case EssRMgrResType_videoDecoder:
+                                 if ( infolen >= 8 )
+                                 {
+                                    req.info.video.maxWidth= getU32( &m[offset] );
+                                    req.info.video.maxHeight= getU32( &m[offset+4] );
+                                 }
+                                 result= essRMRequestResource( conn, &req );
+                                 break;
+                              case EssRMgrResType_audioDecoder:
+                              case EssRMgrResType_frontEnd:
+                              case EssRMgrResType_svpAllocator:
+                                 result= essRMRequestResource( conn, &req );
+                                 break;
+                              default:
+                                 ERROR("unsupported resource type: %d", req.type);
+                                 break;
+                           }
                         }
-                        essRMSendResRequestResponse(conn, &req, result);
+                        else
+                        {
+                           reqresult= ESSRMGR_NOT_AUTHORIZED;
+                        }
+                        essRMSendResRequestResponse(conn, &req, reqresult);
                         pthread_mutex_unlock( &server->state->mutex );
                      }
                      break;
@@ -1039,6 +1087,28 @@ static void *essRMResourceConnectionThread( void *arg )
                               break;
                         }
                         essRMSendGetValueResponse( conn, requestId, valueId, value1, value2, value3);
+                     }
+                     break;
+                  case 'B':
+                     if ( mlen >= 6 )
+                     {
+                        bool add= ((m[4] != 0) ? true : false);
+                        char appId[ESSRMGR_MAX_APPIDLEN+1];
+                        int appIdLen= getU32( &m[5] );
+                        if ( appIdLen > ESSRMGR_MAX_APPIDLEN )
+                        {
+                           appIdLen= ESSRMGR_MAX_APPIDLEN;
+                        }
+                        appId[0]= '\0';
+                        if ( appIdLen )
+                        {
+                           strncpy( appId, (char*)&m[9], appIdLen );
+                           appId[appIdLen]= '\0';
+                        }
+                        DEBUG("got BL add/remove %d appid (%s)", add, appId);
+                        pthread_mutex_lock( &server->state->mutex );
+                        essRMgrUpdateBlackList( conn, appId, add );
+                        pthread_mutex_unlock( &server->state->mutex );
                      }
                      break;
                   case 'D':
@@ -1391,6 +1461,8 @@ static bool essRMInitResourceServer( EssRMgrResourceServerCtx *server )
       goto exit;
    }
 
+   server->blackList= std::map<std::string,int>();
+
    rc= pthread_create( &server->server->threadId, NULL, essRMResoureServerThread, server );
    if ( rc )
    {
@@ -1409,6 +1481,7 @@ static void essRMTermResourceServer( EssRMgrResourceServerCtx *server )
 {
    if ( server )
    {
+      server->blackList.clear();
       essRMTermServiceServer( server->server );
       server->server= 0;
       if ( server->state )
@@ -1692,7 +1765,7 @@ static void *essRMClientConnectionThread( void *userData )
                      {
                         bool needConfirm= false;
                         EssRMgrRequestInfo *info= 0;
-                        bool result= m[4];
+                        int result= m[4];
                         int requestId= getU32( &m[5] );
                         int assignedId= getU32( &m[9] );
                         int assignedCaps= getU32( &m[13] );
@@ -1703,6 +1776,7 @@ static void *essRMClientConnectionThread( void *userData )
                         if ( info )
                         {
                            needConfirm= info->needConfirm;
+                           info->result= result;
                            info->assignedId= assignedId;
                            info->req.assignedId= assignedId;
                            info->req.assignedCaps= assignedCaps;
@@ -1768,7 +1842,12 @@ static void *essRMClientConnectionThread( void *userData )
                         }
                         else
                         {
-                           if ( (requestId == -1) && (valueId == EssRMgrValue_policy_revokeTimeout) )
+                           if ( (requestId == -1) && (valueId == EssRMgrValue_policy_abortUnauthorized) )
+                           {
+                              DEBUG("set unauthorizedRequestsAbort to %d ms", value1);
+                              rm->conn->unauthorizedRequestsAbort= (bool)value1;
+                           }
+                           else if ( (requestId == -1) && (valueId == EssRMgrValue_policy_revokeTimeout) )
                            {
                               DEBUG("set timeout to %d ms", value1);
                               rm->conn->timeoutMS= value1;
@@ -1997,9 +2076,20 @@ static bool essRMSendResRequestClientConnection( EssRMgrClientConnection *conn, 
       EssRMgrRequest *req= &info->req;
       struct msghdr msg;
       struct iovec iov[1];
-      unsigned char mbody[64];
+      unsigned char mbody[64+ESSRMGR_MAX_APPIDLEN];
       int len, infolen;
       int sentLen;
+      const char *appId= getenv("ESSRMGR_APPID");
+      int appIdLen= 0;
+
+      if ( appId )
+      {
+         appIdLen= strlen(appId);
+         if ( appIdLen > ESSRMGR_MAX_APPIDLEN )
+         {
+            appIdLen= ESSRMGR_MAX_APPIDLEN;
+         }
+      }
 
       pthread_mutex_lock( &conn->mutex );
 
@@ -2026,6 +2116,12 @@ static bool essRMSendResRequestClientConnection( EssRMgrClientConnection *conn, 
       len += putU32( &mbody[len], info->requestId );
       len += putU32( &mbody[len], req->usage );
       len += putU32( &mbody[len], req->priority );
+      len += putU32( &mbody[len], appIdLen );
+      if ( appIdLen )
+      {
+         memcpy( &mbody[len], appId, appIdLen );
+         len += appIdLen;
+      }
       len += putU32( &mbody[len], infolen );
       if ( req->type == EssRMgrResType_videoDecoder )
       {
@@ -2346,6 +2442,80 @@ static bool essRMSendCancelClientConnection( EssRMgrClientConnection *conn, EssR
 
       pthread_mutex_unlock( &conn->mutex );
    }
+   return result;
+}
+
+static bool essRMSendBlackListClientConnection( EssRMgrClientConnection *conn, const char *appId, bool add )
+{
+   bool result= false;
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[20+ESSRMGR_MAX_APPIDLEN];
+      int len;
+      int sentLen;
+      int appIdLen= 0;
+
+      if ( appId )
+      {
+         appIdLen= strlen(appId);
+         if ( appIdLen > ESSRMGR_MAX_APPIDLEN )
+         {
+            appIdLen= ESSRMGR_MAX_APPIDLEN;
+         }
+      }
+
+      if ( appIdLen > 0 )
+      {
+         pthread_mutex_lock( &conn->mutex );
+
+         msg.msg_name= NULL;
+         msg.msg_namelen= 0;
+         msg.msg_iov= iov;
+         msg.msg_iovlen= 1;
+         msg.msg_control= 0;
+         msg.msg_controllen= 0;
+         msg.msg_flags= 0;
+
+         len= 0;
+         mbody[len++]= 'R';
+         mbody[len++]= 'S';
+         mbody[len++]= 0;
+         mbody[len++]= 'B';
+         mbody[len++]= (add ? 1 : 0);
+         len += putU32( &mbody[len], appIdLen );
+         if ( appIdLen )
+         {
+            memcpy( &mbody[len], appId, appIdLen );
+            len += appIdLen;
+         }
+         if( len > sizeof(mbody) )
+         {
+            ERROR("essRMSendAddBLClientConnection: msg too big");
+         }
+         mbody[2]= (len-3);
+
+         iov[0].iov_base= (char*)mbody;
+         iov[0].iov_len= len;
+
+         do
+         {
+            sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+            TRACE1("sentLen %d len %d", sentLen, len);
+         }
+         while ( (sentLen < 0) && (errno == EINTR));
+
+         if ( sentLen == len )
+         {
+            result= true;
+            DEBUG("sent add BL: appId (%s) to resource server", appId);
+         }
+
+         pthread_mutex_unlock( &conn->mutex );
+      }
+   }
+
    return result;
 }
 
@@ -3088,6 +3258,16 @@ bool EssRMgrRequestResource( EssRMgr *rm, int type, EssRMgrRequest *req )
             pthread_mutex_unlock( &rm->mutex );
             info->needConfirm= false;
             sem_post( &info->semConfirm );
+            if ( info->result == ESSRMGR_NOT_AUTHORIZED )
+            {
+               if ( rm->conn->unauthorizedRequestsAbort )
+               {
+                  ERROR("erm resource request denied: not authorized: aborting");
+                  assert( false );
+               }
+               ERROR("erm resource request denied: not authorized");
+               result= false;
+            }
          }
          info= 0;
       }
@@ -3224,6 +3404,30 @@ void EssRMgrRequestCancel( EssRMgr *rm, int type, int requestId )
    }
 }
 
+bool EssRMgrAddToBlackList( EssRMgr *rm, const char *appId )
+{
+   bool result= false;
+
+   if ( rm && rm->conn )
+   {
+      result= essRMSendBlackListClientConnection( rm->conn, appId, true );
+   }
+
+   return result;
+}
+
+bool EssRMgrRemoveFromBlackList( EssRMgr *rm, const char *appId )
+{
+   bool result= false;
+
+   if ( rm && rm->conn )
+   {
+      result= essRMSendBlackListClientConnection( rm->conn, appId, false );
+   }
+
+   return result;
+}
+
 void EssRMgrDumpState( EssRMgr *rm )
 {
    EssRMgrRequestInfo *info= 0;
@@ -3275,6 +3479,97 @@ exit:
    {
       free( info );
    }
+}
+
+static bool essRMgrAppIdAuthorized( EssRMgrResourceConnection *conn, char *appId )
+{
+   bool result= true;
+   if ( conn && appId )
+   {
+      EssRMgrResourceServerCtx *server= conn->server;
+      if ( server->blackList.size() )
+      {
+         std::map<std::string,int>::iterator it= server->blackList.find( appId );
+         if ( it != server->blackList.end() )
+         {
+            result= false;
+         }
+      }
+   }
+   DEBUG("check appid(%s), authorized: %d", appId, result);
+   return result;
+}
+
+static void essRMgrRevokeAll( EssRMgrResourceConnection *conn, char *appId )
+{
+   EssRMgrState *state= conn->server->state;
+
+   DEBUG("start revoke all resources for appId (%s)", appId);
+   for( int i= 0; i < state->base.numVideoDecoders; ++i )
+   {
+      if ( state->base.videoDecoder[i].connOwner &&
+           !strcmp( state->base.videoDecoder[i].connOwner->appId, appId ) )
+      {
+         DEBUG("revoke video %d", i);
+         essRMRevokeResource( conn, state->base.videoDecoder[i].type, i, false );
+      }
+   }
+   for( int i= 0; i < state->base.numAudioDecoders; ++i )
+   {
+      if ( state->base.audioDecoder[i].connOwner &&
+           !strcmp( state->base.audioDecoder[i].connOwner->appId, appId ) )
+      {
+         DEBUG("revoke audio %d", i);
+         essRMRevokeResource( conn, state->base.audioDecoder[i].type, i, false );
+      }
+   }
+   for( int i= 0; i < state->base.numFrontEnds; ++i )
+   {
+      if ( state->base.frontEnd[i].connOwner &&
+           !strcmp( state->base.frontEnd[i].connOwner->appId, appId ) )
+      {
+         DEBUG("revoke front end %d", i);
+         essRMRevokeResource( conn, state->base.videoDecoder[i].type, i, false );
+      }
+   }
+   for( int i= 0; i < state->base.numSVPAllocators; ++i )
+   {
+      if ( state->base.svpAlloc[i].connOwner &&
+           !strcmp( state->base.svpAlloc[i].connOwner->appId, appId ) )
+      {
+         DEBUG("revoke svpa %d", i);
+         essRMRevokeResource( conn, state->base.videoDecoder[i].type, i, false );
+      }
+   }
+   DEBUG("done revoke all resources for appId (%s)", appId);
+}
+
+static bool essRMgrUpdateBlackList( EssRMgrResourceConnection *conn, char *appId, bool add )
+{
+   bool result= false;
+   if ( conn && appId )
+   {
+      EssRMgrResourceServerCtx *server= conn->server;
+      std::map<std::string,int>::iterator it= server->blackList.find( appId );
+      if ( add )
+      {
+         if ( it == server->blackList.end() )
+         {
+            server->blackList.insert( std::pair<std::string,int>( appId, 0 ) );
+            essRMgrRevokeAll( conn, appId );
+            result= true;
+         }
+      }
+      else
+      {
+         if ( it != server->blackList.end() )
+         {
+            server->blackList.erase( it );
+            result= true;
+         }
+      }
+   }
+   return result;
 }
 
 static bool essRMRequestResource( EssRMgrResourceConnection *conn, EssRMgrRequest *req )
@@ -4201,6 +4496,7 @@ static bool essRMAssignResource( EssRMgrResourceConnection *conn, int id, EssRMg
    if ( res && typeName )
    {
       INFO("%s id %d assigned to conn %p client %d", typeName, id, conn, conn->clientId);
+      req->assignedId= id;
       res[id].requestIdOwner= req->requestId;
       res[id].connOwner= conn;
       res[id].priorityOwner= req->priority;
@@ -4281,7 +4577,7 @@ static bool essRMTransferResource( EssRMgrResourceConnection *conn, EssRMgrResou
 
    if ( conn )
    {
-      result= essRMSendResRequestResponse(conn, &pending->notify.req, result);
+      result= essRMSendResRequestResponse(conn, &pending->notify.req, result ? 1 : 0);
 
       essRMPutPendingPoolItem( conn, pending );
    }
@@ -4460,6 +4756,11 @@ static bool essRMReadConfigFile( EssRMgrResourceServerCtx *server )
                   {
                      INFO("policy: requester-wins-priority-tie");
                      server->state->base.requesterWinsPriorityTie= true;
+                  }
+                  else if ( (i == 27) && !strncmp( work, "unauthorized-requests-abort", i ) )
+                  {
+                     INFO("policy: unauthorized-requests-abort");
+                     server->state->base.unauthorizedRequestsAbort= true;
                   }
                   else if ( (i == 14) && !strncmp( work, "revoke-timeout", i ) )
                   {

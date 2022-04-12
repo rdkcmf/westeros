@@ -290,6 +290,22 @@ bool EssRMgrRequestSetUsage( EssRMgr *rm, int type, int requestId, EssRMgrUsage 
 void EssRMgrRequestCancel( EssRMgr *rm, int type, int requestId );
 
 /**
+ * EssRMgrAddToBlackList
+ *
+ * Add an application to the black list.  While in the black list
+ * an application is not authorized to request resources.
+ */
+bool EssRMgrAddToBlackList( EssRMgr *rm, const char *appId );
+
+/**
+ * EssRMgrRemoveFromBlackList
+ *
+ * Remove an application from the black list.
+ */
+bool EssRMgrRemoveFromBlackList( EssRMgr *rm, const char *appId );
+
+
+/**
  * EssRMgrDumpState
  *
  * Emit state data to log output

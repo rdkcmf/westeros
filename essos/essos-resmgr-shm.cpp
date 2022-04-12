@@ -840,6 +840,24 @@ void EssRMgrRequestCancel( EssRMgr *rm, int type, int requestId )
    }
 }
 
+bool EssRMgrAddToBlackList( EssRMgr *, const char * )
+{
+   bool result= false;
+
+   WARNING("erm: shm does not support black list");
+
+   return result;
+}
+
+bool EssRMgrRemoveFromBlackList( EssRMgr *, const char * )
+{
+   bool result= false;
+
+   WARNING("erm: shm does not support black list");
+
+   return result;
+}
+
 
 void EssRMgrDumpState( EssRMgr *rm )
 {
@@ -2132,6 +2150,7 @@ static bool essRMAssignResource( EssRMgr *rm, int id, EssRMgrRequest *req )
       if ( rc == 0 )
       {
          INFO("%s %d assigned to pid %d", typeName, id, pid);
+         req->assignedId= id;
          res[id].requestIdOwner= req->requestId;
          res[id].pidOwner= pid;
          res[id].priorityOwner= req->priority;
