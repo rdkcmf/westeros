@@ -731,10 +731,11 @@ static void *essRMResourceConnectionThread( void *arg )
                         offset= 22;
                         if ( appIdLen > 0 )
                         {
-                           memcpy( appId, &m[22], appIdLen );
-                           appId[appIdLen]= '\0';
                            offset += appIdLen;
+                           if ( appIdLen > ESSRMGR_MAX_APPIDLEN ) appIdLen= ESSRMGR_MAX_APPIDLEN;
+                           memcpy( appId, &m[22], appIdLen );
                         }
+                        appId[appIdLen]= '\0';
                         infolen= getU32( &m[offset] );
                         DEBUG("got res req res type %d", req.type);
                         pthread_mutex_lock( &server->state->mutex );
