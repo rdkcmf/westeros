@@ -351,7 +351,7 @@ static gboolean emVideoSrcDoSeek( GstBaseSrc *baseSrc, GstSegment *segment )
    return TRUE;
 }
 
-#define DATA_INTERVAL (16000)
+#define DATA_INTERVAL (16667)
 
 static void emVideoSrcLoop( GstPad *pad )
 {

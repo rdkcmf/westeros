@@ -894,8 +894,7 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
    EMSimpleVideoDecoder *videoDecoder= 0;
    float frameRate;
    int frameNumber;
-   gint64 pos, posExpected;
-   gint64 diff;
+   gint64 pos, posExpectedMin, posExpectedMax;
    EGLBoolean b;
    TestEGLCtx eglCtx;
    int windowWidth= 1920;
@@ -992,6 +991,7 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
 
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
 
+   posExpectedMin= 0;
    for( int i= 0; i < 10; ++i )
    {
       usleep( INTERVAL_200_MS );
@@ -999,21 +999,21 @@ static bool testCaseSocSinkBasicPositionReporting( EMCTX *emctx )
       frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
       frameNumber= videoSrcGetFrameNumber( src );
 
-      posExpected= (frameNumber/frameRate)*GST_SECOND;
+      posExpectedMax= (frameNumber/frameRate)*GST_SECOND;
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
          EMERROR("Failed to query position");
          goto exit;
       }
-      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
-      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
-      if ( diff > 10*1000000000LL/60LL )
+      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpectedMax));
+      if ( (pos < posExpectedMin) || (pos > posExpectedMax) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
-         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpectedMax), GST_TIME_ARGS(pos));
          goto exit;
       }
+      posExpectedMin= pos;
    }
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
@@ -1215,8 +1215,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
    EMSimpleVideoDecoder *videoDecoder= 0;
    float frameRate;
    int frameNumber;
-   gint64 pos, posExpected= 0;
-   gint64 diff;
+   gint64 pos, posExpectedMin, posExpectedMax;
    bool isPaused;
    EGLBoolean b;
    TestEGLCtx eglCtx;
@@ -1313,6 +1312,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
 
    isPaused= false;
+   posExpectedMin= 0;
    for( int i= 0; i < 10; ++i )
    {
       if ( i == 4 )
@@ -1333,7 +1333,7 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
 
       if ( !isPaused )
       {
-         posExpected= (frameNumber/frameRate)*GST_SECOND;
+         posExpectedMax= (frameNumber/frameRate)*GST_SECOND;
       }
 
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
@@ -1343,15 +1343,15 @@ static bool testCaseSocSinkBasicPauseResume( EMCTX *emctx )
          goto exit;
       }
 
-      g_print("%d paused %d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, isPaused, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+      g_print("%d paused %d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, isPaused, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpectedMax));
 
-      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
-      if ( diff > 10*1000000000LL/60LL )
+      if ( (pos < posExpectedMin) || (pos > posExpectedMax) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
-         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpectedMax), GST_TIME_ARGS(pos));
          goto exit;
       }
+      posExpectedMin= pos;
    }
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
@@ -1393,9 +1393,8 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
    EMSimpleVideoDecoder *videoDecoder= 0;
    float frameRate;
    int frameNumber;
-   gint64 pos, posExpected;
+   gint64 pos, posExpectedMin, posExpectedMax;
    gint64 seekPos;
-   gint64 diff;
    gboolean rv;
    EGLBoolean b;
    TestEGLCtx eglCtx;
@@ -1491,6 +1490,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
 
    gst_element_set_state( pipeline, GST_STATE_PLAYING );
 
+   posExpectedMin= 0;
    for( int i= 0; i < 5; ++i )
    {
       usleep( INTERVAL_200_MS );
@@ -1498,7 +1498,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
       frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
       frameNumber= videoSrcGetFrameNumber( src );
 
-      posExpected= (frameNumber/frameRate)*GST_SECOND;
+      posExpectedMax= (frameNumber/frameRate)*GST_SECOND;
 
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
@@ -1507,15 +1507,15 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
          goto exit;
       }
 
-      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpectedMax));
 
-      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
-      if ( diff > 10*1000000000LL/60LL )
+      if ( (pos < posExpectedMin) || (pos > posExpectedMax) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
-         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpectedMax), GST_TIME_ARGS(pos));
          goto exit;
       }
+      posExpectedMin= pos;
    }
 
    seekPos= 30.0 * GST_SECOND;
@@ -1535,6 +1535,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
       goto exit;
    }
 
+   posExpectedMin= 0;
    for( int i= 0; i < 5; ++i )
    {
       usleep( INTERVAL_200_MS );
@@ -1542,7 +1543,7 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
       frameRate= EMSimpleVideoDecoderGetFrameRate( videoDecoder );
       frameNumber= videoSrcGetFrameNumber( src );
 
-      posExpected= seekPos + (frameNumber/frameRate)*GST_SECOND;
+      posExpectedMax= seekPos + (frameNumber/frameRate)*GST_SECOND;
 
       if ( !gst_element_query_position( pipeline, GST_FORMAT_TIME, &pos ) )
       {
@@ -1551,15 +1552,15 @@ static bool testCaseSocSinkBasicSeek( EMCTX *emctx )
          goto exit;
       }
 
-      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpected));
+      g_print("%d position %" GST_TIME_FORMAT " expected %" GST_TIME_FORMAT "\n", i, GST_TIME_ARGS(pos), GST_TIME_ARGS(posExpectedMax));
 
-      diff= (pos < posExpected) ? posExpected-pos : pos-posExpected;
-      if ( diff > 10*1000000000LL/60LL )
+      if ( (pos < posExpectedMin) || (pos > posExpectedMax) )
       {
          gst_element_set_state( pipeline, GST_STATE_NULL );
-         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpected), GST_TIME_ARGS(pos));
+         EMERROR("Position out of range: expected %" GST_TIME_FORMAT " actual %" GST_TIME_FORMAT, GST_TIME_ARGS(posExpectedMax), GST_TIME_ARGS(pos));
          goto exit;
       }
+      posExpectedMin= pos;
    }
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
