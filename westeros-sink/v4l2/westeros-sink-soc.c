@@ -3902,15 +3902,24 @@ static int wstGetOutputBuffer( GstWesterosSink *sink )
    rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_DQBUF, &buf );
    if ( rc == 0 )
    {
-      bufferIndex= buf.index;
-      if ( sink->soc.isMultiPlane )
+      LOCK(sink);
+      if ( !sink->soc.quitVideoOutputThread )
       {
-         memcpy( sink->soc.outBuffers[bufferIndex].buf.m.planes, buf.m.planes, sizeof(struct v4l2_plane)*WST_MAX_PLANES);
-         buf.m.planes= sink->soc.outBuffers[bufferIndex].buf.m.planes;
+         bufferIndex= buf.index;
+         if ( sink->soc.isMultiPlane )
+         {
+            memcpy( sink->soc.outBuffers[bufferIndex].buf.m.planes, buf.m.planes, sizeof(struct v4l2_plane)*WST_MAX_PLANES);
+            buf.m.planes= sink->soc.outBuffers[bufferIndex].buf.m.planes;
+         }
+         sink->soc.outBuffers[bufferIndex].buf= buf;
+         sink->soc.outBuffers[bufferIndex].queued= false;
+         --sink->soc.outQueuedCount;
       }
-      sink->soc.outBuffers[bufferIndex].buf= buf;
-      sink->soc.outBuffers[bufferIndex].queued= false;
-      --sink->soc.outQueuedCount;
+      else
+      {
+         bufferIndex= -1;
+      }
+      UNLOCK(sink);
    }
    else
    {
