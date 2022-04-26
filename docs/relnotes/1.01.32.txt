@@ -1,0 +1,55 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.32 Release Notes
+------------------------------
+
+Date: April 26, 2022
+Tag: Westeros-1.01.32
+Changes:
+
+
+* v4l2: avoid deadlock if eos detected during preroll
+
+* drm, v4l2, raw: support client-side playback rate
+
+* drm, v4l2: add support for holding last frame on stop
+
+-set sink property 'stop-keep-frame=true' to have the last frame
+continue to display after the pipeline stops instead of displaying
+black
+
+* v4l2: fix cases of truncated data when codec data is in caps
+
+* v4l2: don't reset stop-keep-frame on return to ready state
+
+* sink: re-request resources on ready to paused if revoked
+
+* erm: add black list
+
+-the black list is a mechanism to prevent certain entities from requesting
+resources at certain times.  Each requesting entity is assigned an appid,
+which is a string, via the env var ESSRMGR_APPID.  An application manager
+can add and remove appid's from a black list and while an appid is in the
+black list that application is not permitted to request or hold resources
+
+* test: fix some video play postion checks
+
+* erm: fix possible bad appid
+
+* v4l2: fix race condition between dequeue and decoder teardown
+
+
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
