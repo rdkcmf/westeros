@@ -6665,8 +6665,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
                   GST_BASE_SINK_PREROLL_LOCK(basesink);
                   if ( GST_BASE_SINK(sink)->need_preroll && GST_BASE_SINK(sink)->have_preroll )
                   {
-                     GST_BASE_SINK(sink)->need_preroll= FALSE;
-                     GST_BASE_SINK(sink)->have_preroll= FALSE;
+                     g_print("westeros-sink: EOS signal preroll\n");
                      GST_BASE_SINK_PREROLL_SIGNAL(basesink);
                   }
                   GST_BASE_SINK_PREROLL_UNLOCK(basesink);
