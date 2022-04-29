@@ -1474,7 +1474,17 @@ gboolean gst_westeros_sink_soc_playing_to_paused( GstWesterosSink *sink, gboolea
 
 gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean *passToDefault )
 {
+   gboolean keepLastFrame;
+
+   /* ensure cleanup happens but preserve
+      keepLastFrame across transition to ready */
+   keepLastFrame= sink->soc.keepLastFrame;
+   sink->soc.keepLastFrame= FALSE;
+
    wstSinkSocStopVideo( sink );
+
+   sink->soc.keepLastFrame= keepLastFrame;
+
    LOCK( sink );
    sink->videoStarted= FALSE;
    UNLOCK( sink );
@@ -1494,8 +1504,16 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
 gboolean gst_westeros_sink_soc_ready_to_null( GstWesterosSink *sink, gboolean *passToDefault )
 {
    WESTEROS_UNUSED(sink);
+   gboolean keepLastFrame;
+
+   /* ensure cleanup happens but preserve
+      keepLastFrame across transition to null */
+   keepLastFrame= sink->soc.keepLastFrame;
+   sink->soc.keepLastFrame= FALSE;
 
    wstSinkSocStopVideo( sink );
+
+   sink->soc.keepLastFrame= keepLastFrame;
 
    avProgTerm();
 
@@ -2374,23 +2392,26 @@ static void wstSinkSocStopVideo( GstWesterosSink *sink )
    {
       sink->soc.quitVideoOutputThread= TRUE;
       sink->soc.quitEOSDetectionThread= TRUE;
-      sink->soc.quitDispatchThread= TRUE;
-      if ( sink->display )
-      {
-         int fd= wl_display_get_fd( sink->display );
-         if ( fd >= 0 )
-         {
-            shutdown( fd, SHUT_RDWR );
-         }
-      }
-
-      if ( sink->soc.dispatchThread )
+      if ( !sink->soc.keepLastFrame )
       {
          sink->soc.quitDispatchThread= TRUE;
-         UNLOCK(sink);
-         g_thread_join( sink->soc.dispatchThread );
-         LOCK(sink);
-         sink->soc.dispatchThread= NULL;
+         if ( sink->display )
+         {
+            int fd= wl_display_get_fd( sink->display );
+            if ( fd >= 0 )
+            {
+               shutdown( fd, SHUT_RDWR );
+            }
+         }
+
+         if ( sink->soc.dispatchThread )
+         {
+            sink->soc.quitDispatchThread= TRUE;
+            UNLOCK(sink);
+            g_thread_join( sink->soc.dispatchThread );
+            LOCK(sink);
+            sink->soc.dispatchThread= NULL;
+         }
       }
 
       wstStopEvents( sink );
