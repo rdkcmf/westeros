@@ -1809,7 +1809,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
       }
    }
 
-   GST_DEBUG_OBJECT (sink, "sink %p received event %p %", sink, GST_PTR_FORMAT, event, event);
+   GST_DEBUG_OBJECT (sink, "sink %p received event %p %" GST_PTR_FORMAT, sink, event, event);
 
    switch (GST_EVENT_TYPE(event))
    {
