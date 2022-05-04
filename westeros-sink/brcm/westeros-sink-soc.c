@@ -3013,7 +3013,9 @@ static void underflowCallback( void *userData, int n )
       rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
       if ( NEXUS_SUCCESS == rc )
       {
-         GST_INFO("underflow: EOS: %d queueDepth %d", sink->eosEventSeen, videoStatus.queueDepth);
+         GST_INFO("underflow: EOS: %d qDepth %d presStarted %d ignoreDisc %d bytesDecoded %llu ImmedateOut %d PTS 0x%x",
+                   sink->eosEventSeen, videoStatus.queueDepth, sink->soc.presentationStarted, sink->soc.ignoreDiscontinuity,
+                   videoStatus.numBytesDecoded, sink->soc.useImmediateOutput, videoStatus.pts);
          LOCK(sink);
          if ( sink->eosEventSeen )
          {
@@ -3032,10 +3034,7 @@ static void underflowCallback( void *userData, int n )
          }
          else
          {
-            GST_INFO("underflow: presentationStarted %d ignoreDisc %d numBytesDecoded %llu PTS 0x%x eosSeen %d",
-                      sink->soc.presentationStarted, sink->soc.ignoreDiscontinuity, videoStatus.numBytesDecoded,
-                      videoStatus.pts, sink->eosEventSeen );
-            if ( sink->soc.presentationStarted && !sink->soc.ignoreDiscontinuity && videoStatus.numBytesDecoded )
+            if ( sink->soc.presentationStarted && !sink->soc.ignoreDiscontinuity && videoStatus.numBytesDecoded && !sink->soc.useImmediateOutput )
             {
                sink->soc.emitUnderflow= TRUE;
             }
