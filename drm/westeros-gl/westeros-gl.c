@@ -3494,6 +3494,7 @@ static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, i
 {
    int i;
    pthread_mutex_lock( &vfm->mutex);
+   pthread_mutex_lock( &gMutex );
    for( i= 0; i < vfm->queueSize; ++i )
    {
       VideoFrame *vf= &vfm->queue[i];
@@ -3501,14 +3502,13 @@ static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, i
    }
    if ( vfm->paused )
    {
-      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectX= rectX;
-      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectY= rectY;
-      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectW= rectW;
-      vfm->conn->videoPlane->videoFrame[FRAME_CURR].rectH= rectH;
+      VideoFrame *vf= &vfm->conn->videoPlane->videoFrame[FRAME_CURR];
+      wstSetVideoFrameRect( vf, rectX, rectY, rectW, rectH, NULL, NULL );
       gCtx->forceDirty= true;
       vfm->conn->videoPlane->dirty= true;
       vfm->conn->videoPlane->readyToFlip= true;
    }
+   pthread_mutex_unlock( &gMutex );
    pthread_mutex_unlock( &vfm->mutex);
 }
 
