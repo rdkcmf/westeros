@@ -6666,7 +6666,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
 
          if ( eosEventSeen )
          {
-            GST_DEBUG("waiting for eos: frameOutCount %d displayCount %d (%d+%d)\n", count, displayCount, sink->soc.frameDisplayCount, sink->soc.numDropped);
+            GST_DEBUG("waiting for eos: frameOutCount %d displayCount %d (%d+%d)", count, displayCount, sink->soc.frameDisplayCount, sink->soc.numDropped);
          }
          if ( videoPlaying && eosEventSeen && decoderEOS && (count == displayCount) && (outputFrameCount == count) )
          {
@@ -6681,16 +6681,37 @@ static gpointer wstEOSDetectionThread(gpointer data)
                }
                else
                {
-                  GstBaseSink *basesink;
-                  basesink = GST_BASE_SINK(sink);
-                  GST_BASE_SINK_PREROLL_LOCK(basesink);
-                  if ( GST_BASE_SINK(sink)->need_preroll && GST_BASE_SINK(sink)->have_preroll )
+                  GstBaseSink *bs;
+                  bs= GST_BASE_SINK(sink);
+                  GST_BASE_SINK_PREROLL_LOCK(bs);
+                  GST_DEBUG("EOS: need_preroll %d have_preroll %d", bs->need_preroll, bs->have_preroll);
+                  if ( bs->need_preroll )
                   {
+                     GstState cur, nxt, pend;
+                     /* complete preroll and commit state */
                      g_print("westeros-sink: EOS signal preroll\n");
-                     GST_BASE_SINK_PREROLL_SIGNAL(basesink);
+                     bs->need_preroll= FALSE;
+                     bs->have_preroll= TRUE;
+                     GST_OBJECT_LOCK(bs);
+                     cur= GST_STATE(bs);
+                     nxt= GST_STATE_NEXT(bs);
+                     GST_STATE(bs)= pend= GST_STATE_PENDING(bs);
+                     GST_STATE_NEXT(bs)= GST_STATE_PENDING(bs)= GST_STATE_VOID_PENDING;
+                     GST_STATE_RETURN(bs)= GST_STATE_CHANGE_SUCCESS;
+                     GST_OBJECT_UNLOCK(bs);
+                     GST_DEBUG("EOS posting state change: curr(%s) next(%s) pending(%s)",
+                               gst_element_state_get_name(cur),
+                               gst_element_state_get_name(nxt),
+                               gst_element_state_get_name(pend));
+                     gst_element_post_message(GST_ELEMENT_CAST(bs), gst_message_new_state_changed(GST_OBJECT_CAST(bs), cur, nxt, pend));
+                     GST_DEBUG("EOS posting async done");
+                     gst_element_post_message(GST_ELEMENT_CAST(bs), gst_message_new_async_done(GST_OBJECT_CAST(bs), GST_CLOCK_TIME_NONE));
+                     GST_STATE_BROADCAST(bs)
                   }
-                  GST_BASE_SINK_PREROLL_UNLOCK(basesink);
+                  GST_BASE_SINK_PREROLL_UNLOCK(bs);
+                  GST_DEBUG("EOS: calling eos detected: need_preroll %d have_preroll %d", bs->need_preroll, bs->have_preroll);
                   gst_westeros_sink_eos_detected( sink );
+                  GST_DEBUG("EOS: done calling eos detected: need_preroll %d have_preroll %d", bs->need_preroll, bs->have_preroll);
                }
                break;
             }
