@@ -77,7 +77,8 @@ enum
   PROP_WINDOW_SHOW,
   PROP_ZOOM_MODE,
   PROP_OVERSCAN_SIZE,
-  PROP_ENABLE_TEXTURE
+  PROP_ENABLE_TEXTURE,
+  PROP_STATS
 };
 enum
 {
@@ -138,6 +139,7 @@ static int sinkAcquireResources( GstWesterosSink *sink );
 static void sinkReleaseResources( GstWesterosSink *sink );
 static int sinkAcquireVideo( GstWesterosSink *sink );
 static void sinkReleaseVideo( GstWesterosSink *sink );
+static GstStructure *wstSinkGetStats( GstWesterosSink * sink );
 
 #ifdef USE_AMLOGIC_MESON
 #ifdef USE_AMLOGIC_MESON_MSYNC
@@ -367,6 +369,15 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
                        "overscan-size",
                        "Set overscan size to be used with applicable zoom-modes",
                        0, 10, DEFAULT_OVERSCAN, G_PARAM_READWRITE));
+
+#if GST_CHECK_VERSION(1, 18, 0)
+   g_object_class_override_property (gobject_class, PROP_STATS, "stats");
+#else
+   g_object_class_install_property (gobject_class, PROP_STATS,
+     g_param_spec_boxed ("stats", "Statistics",
+       "Sink Statistics", GST_TYPE_STRUCTURE,
+        (GParamFlags)(G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)));
+#endif
 
    g_signals[SIGNAL_FIRSTFRAME]= g_signal_new( "first-video-frame-callback",
                                                G_TYPE_FROM_CLASS(GST_ELEMENT_CLASS(klass)),
@@ -728,6 +739,13 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          break;
       case PROP_ENABLE_TEXTURE:
          g_value_set_boolean(value, sink->soc.enableTextureSignal);
+         break;
+      case PROP_STATS:
+         {
+            LOCK(sink);
+            g_value_take_boxed( value, wstSinkGetStats(sink) );
+            UNLOCK(sink);
+         }
          break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -3576,3 +3594,10 @@ static void sinkReleaseResources( GstWesterosSink *sink )
    sinkReleaseVideo( sink );
 }
 
+static GstStructure *wstSinkGetStats( GstWesterosSink * sink )
+{
+   g_return_val_if_fail (sink != NULL, NULL);
+   return gst_structure_new ("application/x-gst-base-sink-stats",
+      "dropped", G_TYPE_UINT64, (guint64)sink->soc.numDropped,
+      "rendered", G_TYPE_UINT64, (guint64)sink->soc.frameDisplayCount, NULL);
+}

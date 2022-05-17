@@ -88,6 +88,8 @@ enum
   ,
   PROP_SECURE_VIDEO
   #endif
+  ,
+  PROP_STATS
 };
 
 enum
@@ -137,6 +139,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink );
 static void sinkReleaseVideo( GstWesterosSink *sink );
 static int sinkAcquireResources( GstWesterosSink *sink );
 static void sinkReleaseResources( GstWesterosSink *sink );
+static GstStructure *wstSinkGetStats( GstWesterosSink * sink );
 
 static void sbFormat(void *data, struct wl_sb *wl_sb, uint32_t format)
 {
@@ -271,6 +274,15 @@ void gst_westeros_sink_soc_class_init(GstWesterosSinkClass *klass)
      g_param_spec_boolean ("secure-video",
                            "enable secure video",
                            "true: secure video enabled, false: secure video disabled", FALSE, G_PARAM_READWRITE));
+   #endif
+
+   #if GST_CHECK_VERSION(1, 18, 0)
+   g_object_class_override_property (gobject_class, PROP_STATS, "stats");
+   #else
+   g_object_class_install_property (gobject_class, PROP_STATS,
+     g_param_spec_boxed ("stats", "Statistics",
+       "Sink Statistics", GST_TYPE_STRUCTURE,
+        (GParamFlags)(G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)));
    #endif
 
    gstelement_class= GST_ELEMENT_CLASS(klass);
@@ -1197,6 +1209,13 @@ void gst_westeros_sink_soc_get_property(GObject *object, guint prop_id, GValue *
          g_value_set_boolean(value, sink->soc.secureVideo);
          break;
       #endif
+      case PROP_STATS:
+         {
+            LOCK(sink);
+            g_value_take_boxed( value, wstSinkGetStats(sink) );
+            UNLOCK(sink);
+         }
+         break;
       default:
          G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
          break;
@@ -4535,4 +4554,12 @@ static void sinkReleaseResources( GstWesterosSink *sink )
       sink->soc.surfaceClientId= 0;
       NxClient_Free(&sink->soc.allocSurface);
    }
+}
+
+static GstStructure *wstSinkGetStats( GstWesterosSink * sink )
+{
+   g_return_val_if_fail (sink != NULL, NULL);
+   return gst_structure_new ("application/x-gst-base-sink-stats",
+      "dropped", G_TYPE_UINT64, (guint64)sink->soc.numDropped,
+      "rendered", G_TYPE_UINT64, (guint64)sink->soc.numDecoded, NULL);
 }
