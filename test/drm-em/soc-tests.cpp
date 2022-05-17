@@ -643,9 +643,10 @@ static bool testCaseSocSinkUnderflowSignal( EMCTX *emctx )
    EMSimpleVideoDecoderSignalUnderflow( videoDecoder );
 
    // Allow pipeline to run briefly
-   usleep( 200000 );
+   usleep( 400000 );
 
    gst_element_set_state( pipeline, GST_STATE_NULL );
+   gst_element_get_state( pipeline, NULL, NULL, GST_CLOCK_TIME_NONE );
 
    if ( receivedSignalCount == 0 )
    {
@@ -3733,7 +3734,7 @@ static bool testCaseSocSinkVideoPosition( EMCTX *emctx )
       usleep( 200000 );
 
       hints= WstHints_noRotation;
-      for( int i= 0; i < 10; ++i )
+      for( int i= 0; i < 20; ++i )
       {
          usleep( 17000 );
 
