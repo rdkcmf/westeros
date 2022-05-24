@@ -3493,8 +3493,8 @@ static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm )
 static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH )
 {
    int i;
-   pthread_mutex_lock( &vfm->mutex);
    pthread_mutex_lock( &gMutex );
+   pthread_mutex_lock( &vfm->mutex);
    for( i= 0; i < vfm->queueSize; ++i )
    {
       VideoFrame *vf= &vfm->queue[i];
@@ -3508,8 +3508,8 @@ static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, i
       vfm->conn->videoPlane->dirty= true;
       vfm->conn->videoPlane->readyToFlip= true;
    }
-   pthread_mutex_unlock( &gMutex );
    pthread_mutex_unlock( &vfm->mutex);
+   pthread_mutex_unlock( &gMutex );
 }
 
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f )
