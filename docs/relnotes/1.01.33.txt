@@ -1,0 +1,45 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.33 Release Notes
+------------------------------
+
+Date: May 27, 2022
+Tag: Westeros-1.01.33
+Changes:
+
+* v4l2: adjust eos deadlock prevention in preroll
+
+* v4l2: keep vpc surface on ERM revoke when keep last frame active
+
+* sink: fix formatting for event log
+
+* brcm: fix spurious underflows with useImmediateOutput:
+
+useImmediateOutput forces underflows by settting 2x decode trickrate
+causes flood of underflow messages/logging with cameras, for example
+add code to filter emitUnderflow with useImmediateOutput
+removes underflow messages/logging flood
+
+* drm: fix errors from video positioned off screen while paused
+
+* v4l2: adjust eos deadlock prevention in preroll
+
+* v4l2, raw, brcm: add "stats" property
+
+* test: fix some test case issues
+
+* drm: fix mutex locking order for rect update
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
