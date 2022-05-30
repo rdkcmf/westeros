@@ -3500,7 +3500,7 @@ static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, i
       VideoFrame *vf= &vfm->queue[i];
       wstSetVideoFrameRect( vf, rectX, rectY, rectW, rectH, NULL, NULL );
    }
-   if ( vfm->paused )
+   if ( vfm->paused || (vfm->queueSize < 2) )
    {
       VideoFrame *vf= &vfm->conn->videoPlane->videoFrame[FRAME_CURR];
       wstSetVideoFrameRect( vf, rectX, rectY, rectW, rectH, NULL, NULL );
@@ -6170,7 +6170,7 @@ static void wstSwapDRMBuffersAtomic( WstGLCtx *ctx )
          if ( iter->dirty && iter->readyToFlip && iter->inUse )
          {
             if ( iter->videoFrame[FRAME_NEXT].fbId ||
-                 (iter->vfm->paused && (iter->videoFrame[FRAME_CURR].fbId > 0)) )
+                 (iter->videoFrame[FRAME_CURR].fbId > 0) )
             {
                uint32_t fbId, frameWidth, frameHeight;
                int rectX, rectY, rectW, rectH;
