@@ -4998,6 +4998,12 @@ static void wstSetSessionInfo( GstWesterosSink *sink )
       }
       if ( (syncTypePrev != sink->soc.syncType) || (sessionIdPrev != sink->soc.sessionId) )
       {
+         if ( (syncTypePrev != -1) && (syncTypePrev != sink->soc.syncType) )
+         {
+            g_print("westeros-sink: sync type change: %d -> %d adjust counts: out %d -> 0 displayed %d -> 0 dropped %d -> 0\n",
+                    syncTypePrev, sink->soc.syncType, sink->soc.frameOutCount, sink->soc.frameDisplayCount, sink->soc.numDropped);
+            sink->soc.frameOutCount= sink->soc.frameDisplayCount= sink->soc.numDropped= 0;
+         }
          wstSendSessionInfoVideoClientConnection( sink->soc.conn );
       }
    }
