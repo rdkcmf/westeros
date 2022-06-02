@@ -1861,7 +1861,9 @@ static void *wstVideoServerConnectionThread( void *arg )
                            if ( !conn->videoPlane )
                            {
                               int retries= 3;
+                              pthread_mutex_lock( &gMutex );
                               conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
+                              pthread_mutex_unlock( &gMutex );
                               while ( !conn->videoPlane )
                               {
                                  long long delay= 16667*2LL;
@@ -1870,7 +1872,9 @@ static void *wstVideoServerConnectionThread( void *arg )
                                     delay= (1000000LL+(gCtx->modeInfo->vrefresh/2))/gCtx->modeInfo->vrefresh;
                                  }
                                  usleep( delay );
+                                 pthread_mutex_lock( &gMutex );
                                  conn->videoPlane= wstOverlayAlloc( &gCtx->overlayPlanes, false, primary );
+                                 pthread_mutex_unlock( &gMutex );
                                  if ( --retries <= 0 ) break;
                               }
                               INFO("video plane %p : zorder: %d videoResourceId %d",
