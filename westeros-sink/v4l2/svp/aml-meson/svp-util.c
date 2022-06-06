@@ -21,6 +21,12 @@
 #include <string.h>
 #include "../svp-util.h"
 
+#define V4L2_CID_USER_AMLOGIC_BASE (V4L2_CID_USER_BASE + 0x1100)
+#define AML_V4L2_SET_DRMMODE (V4L2_CID_USER_AMLOGIC_BASE + 0)
+#define AML_V4L2_GET_INPUT_BUFFER_NUM (V4L2_CID_USER_AMLOGIC_BASE + 1)
+#define AML_V4L2_SET_DURATION (V4L2_CID_USER_AMLOGIC_BASE + 2)
+#define AML_V4L2_GET_FILMGRAIN_INFO (V4L2_CID_USER_AMLOGIC_BASE + 3)
+
 enum vdec_dw_mode
 {
    VDEC_DW_AFBC_ONLY = 0,
@@ -140,6 +146,60 @@ struct aml_dec_params
    struct aml_vdec_cnt_infos cnt;
 };
 
+static bool configForFilmGrain( GstWesterosSink *sink )
+{
+   bool result= false;
+   int fd= -1;
+   char valstr[64];
+   const char* path= "/sys/class/video/film_grain_support";
+   uint32_t val= 0;
+   int rc;
+   struct v4l2_control ctl;
+
+   GST_LOG("configForFilmGrain: enter");
+   fd= open(path, O_RDONLY|O_CLOEXEC);
+   if ( fd < 0 )
+   {
+      GST_DEBUG("unable to open file (%s)", path);
+      goto exit;
+   }
+
+   memset(valstr, 0, sizeof(valstr));
+   read(fd, valstr, sizeof(valstr) - 1);
+   valstr[strlen(valstr)] = '\0';
+
+   if ( sscanf(valstr, "%u", &val) < 1)
+   {
+      GST_DEBUG("unable to get flag from: (%s)", valstr);
+      goto exit;
+   }
+
+   GST_LOG("got film_grain_support:%d from node", val);
+   if(val != 0)
+   {
+      goto exit;
+   }
+
+   memset( &ctl, 0, sizeof(ctl));
+   ctl.id= AML_V4L2_GET_FILMGRAIN_INFO;
+   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_G_CTRL, &ctl );
+   GST_LOG("got VIDIOC_G_CTRL value: %d", ctl.value);
+   if(ctl.value == 0)
+   {
+      goto exit;
+   }
+
+   result= true;
+
+exit:
+   if ( fd >= 0 )
+   {
+      close(fd);
+   }
+   GST_LOG("configForFilmGrain: exit: result %d", result);
+   return result;
+}
+
 static void wstSVPDecoderConfig( GstWesterosSink *sink )
 {
    int rc;
@@ -223,6 +283,13 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_4;
          #else
          decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_2;
+         if ( (sink->soc.interlaced && (sink->soc.inputFormat == V4L2_PIX_FMT_HEVC)) ||
+              configForFilmGrain(sink) )
+         {
+            decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_1_DW;
+            GST_DEBUG("set dw mode 1:1 for H265 interlaced or film grain. format %s dw mode %d",
+                      fmt, decParm->cfg.double_write_mode);
+         }
          #endif
          decParm->cfg.metadata_config_flag |= (1<<13);
          GST_DEBUG("format %s size %dx%d dw mode %d",
@@ -238,7 +305,7 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       int dwMode= atoi(env);
       switch( dwMode )
       {
-         case 0: case 1: case 2: case 3: case 4: case 16:
+         case 0: case 1: case 2: case 3: case 4: case 16: case 256: case 512:
             decParm->cfg.double_write_mode= dwMode;
             break;
       }
@@ -438,8 +505,6 @@ static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
       struct v4l2_queryctrl queryctrl;
       struct v4l2_control control;
 
-      #define V4L2_CID_USER_AMLOGIC_BASE (V4L2_CID_USER_BASE + 0x1100)
-      #define AML_V4L2_SET_DRMMODE (V4L2_CID_USER_AMLOGIC_BASE + 0)
       memset( &queryctrl, 0, sizeof (queryctrl) );
       queryctrl.id= AML_V4L2_SET_DRMMODE;
 
