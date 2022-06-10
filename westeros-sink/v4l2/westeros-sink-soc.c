@@ -881,7 +881,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.devname= strdup(gDeviceName);
    sink->soc.enableTextureSignal= FALSE;
    sink->soc.v4l2Fd= -1;
-   sink->soc.caps= {0};
+   memset( &sink->soc.caps, 0, sizeof(sink->soc.caps));
    sink->soc.deviceCaps= 0;
    sink->soc.isMultiPlane= FALSE;
    sink->soc.preferNV12M= TRUE;
@@ -891,8 +891,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.inputFormats= 0;
    sink->soc.numOutputFormats= 0;
    sink->soc.outputFormats= 0;
-   sink->soc.fmtIn= {0};
-   sink->soc.fmtOut= {0};
+   memset( &sink->soc.fmtIn, 0, sizeof(sink->soc.fmtIn));
+   memset( &sink->soc.fmtOut, 0, sizeof(sink->soc.fmtOut));
    sink->soc.formatsSet= FALSE;
    sink->soc.updateSession= FALSE;
    sink->soc.syncType= -1;
