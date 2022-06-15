@@ -63,7 +63,7 @@ typedef struct _WstDrmBuffer
    int fd[WST_MAX_PLANE];
    int handle[WST_MAX_PLANE];
    gsize size[WST_MAX_PLANE];
-   gsize offset[WST_MAX_PLANE];
+   off_t offset[WST_MAX_PLANE];
    gsize pitch[WST_MAX_PLANE];
    gint64 frameTime; /* in microseconds */
    int buffIndex;

@@ -3429,8 +3429,10 @@ static WstDrmBuffer *drmImportBuffer( GstWesterosSink *sink, GstBuffer *buffer )
             mem= gst_buffer_peek_memory( buffer, i );
             if ( mem )
             {
+               gsize offset;
                drmBuff->fd[i]= gst_dmabuf_memory_get_fd( mem );
-               drmBuff->size[i]= gst_memory_get_sizes( mem, &drmBuff->offset[i], NULL );
+               drmBuff->size[i]= gst_memory_get_sizes( mem, &offset, NULL );
+               drmBuff->offset[i]= offset;
                switch( sink->soc.frameFormatStream )
                {
                   case DRM_FORMAT_NV12:

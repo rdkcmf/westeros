@@ -109,8 +109,8 @@ typedef struct _WstSWBuffer
    int handle1;
    int size0;
    int size1;
-   int offset0;
-   int offset1;
+   off_t offset0;
+   off_t offset1;
    int pitch0;
    int pitch1;
 } WstSWBuffer;
