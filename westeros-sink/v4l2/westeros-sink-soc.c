@@ -2351,6 +2351,13 @@ void gst_westeros_sink_soc_set_video_path( GstWesterosSink *sink, bool useGfxPat
 
 void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
 {
+   bool needUpdate= true;
+   int vx, vy, vw, vh;
+   vx= sink->soc.videoX;
+   vy= sink->soc.videoY;
+   vw= sink->soc.videoWidth;
+   vh= sink->soc.videoHeight;
+
    if ( sink->windowSizeOverride )
    {
       sink->soc.videoX= ((sink->windowX*sink->scaleXNum)/sink->scaleXDenom) + sink->transX;
@@ -2366,7 +2373,13 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       sink->soc.videoHeight= (sink->outputHeight*sink->scaleYNum)/sink->scaleYDenom;
    }
 
-   if ( !sink->soc.captureEnabled )
+   if ( (vx == sink->soc.videoX) && (vy == sink->soc.videoY) &&
+        (vw == sink->soc.videoWidth) && (vh == sink->soc.videoHeight) )
+   {
+      needUpdate= false;
+   }
+
+   if ( !sink->soc.captureEnabled && needUpdate )
    {
       /* Send a buffer to compositor to update hole punch geometry */
       if ( sink->soc.sb )

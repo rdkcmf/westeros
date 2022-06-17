@@ -2778,6 +2778,12 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
    NEXUS_SurfaceClientSettings vClientSettings;
    NEXUS_SurfaceComposition vComposition;
    NxClient_DisplaySettings nxDspSettings;
+   bool needUpdate= true;
+   int vx, vy, vw, vh;
+   vx= sink->soc.videoX;
+   vy= sink->soc.videoY;
+   vw= sink->soc.videoWidth;
+   vh= sink->soc.videoHeight;
 
    if ( swIsSWDecode( sink ) )
    {
@@ -2803,6 +2809,12 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       sink->soc.videoY= sink->transY;
       sink->soc.videoWidth= (sink->outputWidth*sink->scaleXNum)/sink->scaleXDenom;
       sink->soc.videoHeight= (sink->outputHeight*sink->scaleYNum)/sink->scaleYDenom;
+   }
+
+   if ( (vx == sink->soc.videoX) && (vy == sink->soc.videoY) &&
+        (vw == sink->soc.videoWidth) && (vh == sink->soc.videoHeight) )
+   {
+      needUpdate= false;
    }
 
    if ( sink->soc.videoWindow )
@@ -2870,20 +2882,23 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       }
       NxClient_SetSurfaceClientComposition(sink->soc.surfaceClientId, &vComposition );
 
-      // Send a buffer to compositor to update hole punch geometry
-      if ( sink->soc.sb && sink->surface )
+      if ( needUpdate )
       {
-         struct wl_buffer *buff;
-         
-         buff= wl_sb_create_buffer( sink->soc.sb, 
-                                    0,
-                                    sink->windowWidth, 
-                                    sink->windowHeight, 
-                                    sink->windowWidth*4, 
-                                    WL_SB_FORMAT_ARGB8888 );
-         wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
-         wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
-         wl_surface_commit( sink->surface );
+         // Send a buffer to compositor to update hole punch geometry
+         if ( sink->soc.sb && sink->surface )
+         {
+            struct wl_buffer *buff;
+
+            buff= wl_sb_create_buffer( sink->soc.sb,
+                                       0,
+                                       sink->windowWidth,
+                                       sink->windowHeight,
+                                       sink->windowWidth*4,
+                                       WL_SB_FORMAT_ARGB8888 );
+            wl_surface_attach( sink->surface, buff, sink->windowX, sink->windowY );
+            wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
+            wl_surface_commit( sink->surface );
+         }
       }
    }
 }
