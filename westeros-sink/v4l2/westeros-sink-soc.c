@@ -6705,7 +6705,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
          {
             GST_DEBUG("waiting for eos: frameOutCount %d displayCount %d (%d+%d)", count, displayCount, sink->soc.frameDisplayCount, sink->soc.numDropped);
          }
-         if ( videoPlaying && eosEventSeen && decoderEOS && (count == displayCount) && (outputFrameCount == count) )
+         if ( videoPlaying && eosEventSeen && decoderEOS && (count <= displayCount) && (outputFrameCount == count) )
          {
             --eosCountDown;
             if ( eosCountDown == 0 )
