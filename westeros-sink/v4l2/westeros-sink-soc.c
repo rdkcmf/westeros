@@ -2379,7 +2379,7 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
       needUpdate= false;
    }
 
-   if ( !sink->soc.captureEnabled && needUpdate )
+   if ( (!sink->soc.captureEnabled || (sink->soc.syncType == SYNC_IMMEDIATE))  && needUpdate )
    {
       /* Send a buffer to compositor to update hole punch geometry */
       if ( sink->soc.sb )
@@ -2396,8 +2396,27 @@ void gst_westeros_sink_soc_update_video_position( GstWesterosSink *sink )
          wl_surface_damage( sink->surface, 0, 0, sink->windowWidth, sink->windowHeight );
          wl_surface_commit( sink->surface );
       }
-      if ( sink->soc.videoPaused )
+      if ( sink->soc.videoPaused || (sink->soc.syncType == SYNC_IMMEDIATE) )
       {
+         if ( !sink->soc.videoPaused && (sink->soc.pauseGfxBuffIndex < 0) )
+         {
+            if ( sink->soc.useGfxSync )
+            {
+               int buffIndex= wstFindCurrentVideoBuffer( sink );
+               if ( buffIndex >= 0 )
+               {
+                  sink->soc.pauseGfxBuffIndex= buffIndex;
+                  if ( sink->soc.enableTextureSignal )
+                  {
+                     wstProcessTextureSignal( sink, buffIndex );
+                  }
+                  else if ( sink->soc.captureEnabled && sink->soc.sb )
+                  {
+                     wstProcessTextureWayland( sink, buffIndex );
+                  }
+               }
+            }
+         }
          wstSendRectVideoClientConnection(sink->soc.conn);
       }
    }
