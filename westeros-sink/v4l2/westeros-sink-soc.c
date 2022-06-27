@@ -1778,6 +1778,46 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
                        sink->soc.hdrMasteringDisplay[9] );
             }
          }
+         #if GST_CHECK_VERSION(1, 18, 0)
+         if ( gst_structure_has_field(structure, "mastering-display-info") )
+         {
+            const char *masteringDisplay= gst_structure_get_string(structure,"mastering-display-info");
+            if ( masteringDisplay &&
+                 sscanf( masteringDisplay, "%f:%f:%f:%f:%f:%f:%f:%f:%f:%f",
+                         &sink->soc.hdrMasteringDisplay[0],
+                         &sink->soc.hdrMasteringDisplay[1],
+                         &sink->soc.hdrMasteringDisplay[2],
+                         &sink->soc.hdrMasteringDisplay[3],
+                         &sink->soc.hdrMasteringDisplay[4],
+                         &sink->soc.hdrMasteringDisplay[5],
+                         &sink->soc.hdrMasteringDisplay[6],
+                         &sink->soc.hdrMasteringDisplay[7],
+                         &sink->soc.hdrMasteringDisplay[8],
+                         &sink->soc.hdrMasteringDisplay[9] ) == 10 )
+            {
+               sink->soc.haveMasteringDisplay= TRUE;
+               sink->soc.hdrMasteringDisplay[0] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[1] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[2] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[3] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[4] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[5] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[6] /= 50000.0;
+               sink->soc.hdrMasteringDisplay[7] /= 50000.0;
+               GST_DEBUG("mastering display [%f,%f,%f,%f,%f,%f,%f,%f,%f,%f]",
+                       sink->soc.hdrMasteringDisplay[0],
+                       sink->soc.hdrMasteringDisplay[1],
+                       sink->soc.hdrMasteringDisplay[2],
+                       sink->soc.hdrMasteringDisplay[3],
+                       sink->soc.hdrMasteringDisplay[4],
+                       sink->soc.hdrMasteringDisplay[5],
+                       sink->soc.hdrMasteringDisplay[6],
+                       sink->soc.hdrMasteringDisplay[7],
+                       sink->soc.hdrMasteringDisplay[8],
+                       sink->soc.hdrMasteringDisplay[9] );
+            }
+         }
+         #endif
          if ( gst_structure_has_field(structure, "content-light-level") )
          {
             const char *contentLightLevel= gst_structure_get_string(structure,"content-light-level");

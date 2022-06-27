@@ -122,6 +122,9 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed, gboolean
 static gboolean processEventSinkSoc( GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+#if GST_CHECK_VERSION(1, 18, 0)
+static void parseMasteringDisplayColorVolumeInfo( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
+#endif
 static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume );
 static void parseContentLightLevel( const gchar *str, NEXUS_ContentLightLevel *contentLightLevel );
 #endif
@@ -1520,6 +1523,18 @@ gboolean gst_westeros_sink_soc_accept_caps( GstWesterosSink *sink, GstCaps *caps
             }
          }
 
+         #if GST_CHECK_VERSION(1, 18, 0)
+         if ( gst_structure_has_field(structure, "mastering-display-info") )
+         {
+            GST_LOG("gst_westeros_sink_soc_accept_caps has mastering-display-info");
+            masteringDisplayMetadata= gst_structure_get_string(structure,"mastering-display-info");
+            if ( masteringDisplayMetadata )
+            {
+               parseMasteringDisplayColorVolumeInfo(masteringDisplayMetadata, &sink->soc.masteringDisplayColorVolume);
+            }
+         }
+         #endif
+
          if ( gst_structure_has_field(structure, "content-light-level") )
          {
             GST_LOG("gst_westeros_sink_soc_accept_caps has content-light-level");
@@ -2107,6 +2122,18 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
                parseMasteringDisplayColorVolume(masteringDisplayMetadata, &sink->soc.masteringDisplayColorVolume);
             }
          }
+
+         #if GST_CHECK_VERSION(1, 18, 0)
+         if ( gst_structure_has_field(structure, "mastering-display-info") )
+         {
+            GST_LOG("gst_westeros_sink_soc_accept_caps has mastering-display-info");
+            masteringDisplayMetadata= gst_structure_get_string(structure,"mastering-display-info");
+            if ( masteringDisplayMetadata )
+            {
+               parseMasteringDisplayColorVolumeInfo(masteringDisplayMetadata, &sink->soc.masteringDisplayColorVolume);
+            }
+         }
+         #endif
 
          if ( gst_structure_has_field(structure, "content_light_level") )
          {
@@ -3468,6 +3495,46 @@ done:
 }
 
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
+#if GST_CHECK_VERSION(1, 18, 0)
+static void parseMasteringDisplayColorVolumeInfo( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume )
+{
+   gdouble lumaMax, lumaMin;
+   gdouble Rx, Ry, Gx, Gy, Bx, By, Wx, Wy;
+
+   memset (colorVolume, 0, sizeof(NEXUS_MasteringDisplayColorVolume));
+
+   if (sscanf (metadata, "%lf:%lf:%lf:%lf:%lf:%lf:%lf:%lf:%lf:%lf",
+            &Rx, &Ry, &Gx, &Gy, &Bx, &By, &Wx, &Wy, &lumaMax, &lumaMin) == 10)
+   {
+      colorVolume->redPrimary.x= (int)(Rx);
+      colorVolume->redPrimary.y= (int)(Ry);
+      colorVolume->greenPrimary.x= (int)(Gx);
+      colorVolume->greenPrimary.y= (int)(Gy);
+      colorVolume->bluePrimary.x= (int)(Bx);
+      colorVolume->bluePrimary.y= (int)(By);
+      colorVolume->whitePoint.x= (int)(Wx);
+      colorVolume->whitePoint.y= (int)(Wy);
+
+      // 1 cd / m^2
+      colorVolume->luminance.max= (int)(lumaMax);
+
+      // 0.0001 cd / m^2
+      colorVolume->luminance.min= (int)(lumaMin*100000);
+   }
+
+   GST_DEBUG("mastering_display_metadata r(%d, %d) g(%d, %d) b(%d, %d) w(%d, %d) l(%d, %d)",
+               colorVolume->redPrimary.x,
+               colorVolume->redPrimary.y,
+               colorVolume->greenPrimary.x,
+               colorVolume->greenPrimary.y,
+               colorVolume->bluePrimary.x,
+               colorVolume->bluePrimary.y,
+               colorVolume->whitePoint.x,
+               colorVolume->whitePoint.y,
+               colorVolume->luminance.max,
+               colorVolume->luminance.min);
+}
+#endif
 static void parseMasteringDisplayColorVolume( const gchar *metadata, NEXUS_MasteringDisplayColorVolume *colorVolume )
 {
    gdouble lumaMax, lumaMin;
