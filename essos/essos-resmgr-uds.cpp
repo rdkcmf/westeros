@@ -2083,6 +2083,10 @@ static bool essRMSendResRequestClientConnection( EssRMgrClientConnection *conn, 
       const char *appId= getenv("ESSRMGR_APPID");
       int appIdLen= 0;
 
+      if ( !appId )
+      {
+         appId= getenv("CLIENT_IDENTIFIER");
+      }
       if ( appId )
       {
          appIdLen= strlen(appId);
