@@ -1,0 +1,44 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.34 Release Notes
+------------------------------
+
+Date: June 28, 2022
+Tag: Westeros-1.01.34
+Changes:
+
+* drm: update video rect when playing but with no queued frames
+
+* v4l2: adjust frame counts on sync mode change
+
+* drm: improve locking for video plane allocation
+
+* v4l2: use dw 1:1 for film grain and interlaced h265
+
+* v4l2: initialize structs with memset
+
+* raw,v4l2: use 64 bit offsets for DRM_IOCTL_MODE_MAP_DUMB
+
+* brcm, raw, v4l2: prevent redundant surface commits on rectangle changes
+
+* v4l2: improve defense against flushless sync mode changes
+
+* v4l2: allow vpc scaling when playing but no new frames
+
+* erm: use CLIENT_IDENTIFIER if ESSRMGR_APPID is not defined
+
+* brcm, v4l2: support mastering-display-info in gstreamer 1.18 and later
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
