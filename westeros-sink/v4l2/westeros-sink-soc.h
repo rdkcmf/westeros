@@ -122,6 +122,7 @@ typedef struct _AVSyncCtrl
    pthread_mutex_t mutex;
    long long sysTime;
    long long avTime;
+   bool active;
 } AVSyncCtrl;
 
 typedef struct _AVSyncCtx

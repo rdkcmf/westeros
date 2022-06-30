@@ -228,6 +228,7 @@ typedef struct _AVSyncCtrl
    pthread_mutex_t mutex;
    long long sysTime;
    long long avTime;
+   bool active;
 } AVSyncCtrl;
 #endif
 
@@ -475,7 +476,7 @@ static void wstVideoFrameManagerSetSyncType( VideoFrameManager *vfm, int type );
 #ifdef USE_GENERIC_AVSYNC
 static bool wstVideoFrameManagerSetSyncCtrl( VideoFrameManager *vfm, int fd, int size );
 static void wstVideoFrameManagerClearSyncCtrl( VideoFrameManager *vfm );
-static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm );
+static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm, bool *isActive );
 #endif
 static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH );
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f );
@@ -3471,15 +3472,22 @@ static void wstVideoFrameManagerClearSyncCtrl( VideoFrameManager *vfm )
    }
 }
 
-static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm )
+static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm, bool *isActive )
 {
    long long time= 0;
    long long avOffset;
-   if ( vfm && vfm->avscCtrl )
+   bool active= true;
+   if ( vfm && vfm->avscCtrl &&
+       (vfm->conn->syncType != SYNC_VMASTER) && (vfm->conn->syncType != SYNC_IMMEDIATE) )
    {
       pthread_mutex_lock( &vfm->avscCtrl->mutex );
       time= vfm->avscCtrl->avTime;
+      active= vfm->avscCtrl->active;
       pthread_mutex_unlock( &vfm->avscCtrl->mutex );
+      if ( !active )
+      {
+         vfm->flipTimeBase= 0;
+      }
       if ( vfm->avscAdjust && (vfm->frameTimeBase != 0) )
       {
          avOffset= vfm->avscAVTime - vfm->displayedFrameTime;
@@ -3490,6 +3498,7 @@ static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm )
          if ( vfm->frameTimeBase == 0 ) vfm->frameTimeBase= 1;
       }
    }
+   *isActive= active;
    return time;
 }
 #endif
@@ -3633,7 +3642,15 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
    {
       int i;
       #ifdef USE_GENERIC_AVSYNC
-      long long avTime= wstVideoFrameMangerGetTimeSyncCtrl( vfm );
+      bool active= false;
+      long long avTime= wstVideoFrameMangerGetTimeSyncCtrl( vfm, &active );
+      if ( !active && (vfm->bufferIdCurrent != -1) && (vfm->conn->syncType != SYNC_IMMEDIATE) )
+      {
+         f= &vfm->conn->videoPlane->videoFrame[FRAME_CURR];
+         TRACE3("  audio not active: avTime %lld", avTime);
+         FRAME("  audio not active: avTime %lld", avTime);
+         goto done;
+      }
       #endif
       if ( vfm->conn->syncType == SYNC_IMMEDIATE )
       {

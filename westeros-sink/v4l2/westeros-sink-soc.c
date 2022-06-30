@@ -4868,10 +4868,11 @@ static void wstUpdateAVSyncCtx( GstWesterosSink *sink, AVSyncCtx *avsctx )
          if ( gst_element_query_position( avsctx->audioSink, GST_FORMAT_TIME, (gint64 *)&avTime ) )
          {
             pthread_mutex_lock( &avsctx->ctrl->mutex );
+            avsctx->ctrl->active= (avsctx->ctrl->avTime != avTime/1000LL);
             avsctx->ctrl->sysTime= g_get_monotonic_time();
             avsctx->ctrl->avTime= avTime/1000LL;
             pthread_mutex_unlock( &avsctx->ctrl->mutex );
-            GST_LOG("set avTime %lld\n", avsctx->ctrl->avTime);
+            GST_LOG("set avTime %lld active %d\n", avsctx->ctrl->avTime, avsctx->ctrl->active);
          }
       }
    }
