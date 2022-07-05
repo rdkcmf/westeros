@@ -347,8 +347,8 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          /* range */
          switch( sink->soc.hdrColorimetry[0] )
          {
-            case 1:
-            case 2:
+            case GST_VIDEO_COLOR_RANGE_0_255:
+            case GST_VIDEO_COLOR_RANGE_16_235:
                decParm->hdr.signal_type |= ((sink->soc.hdrColorimetry[0] % 2)<<25);
                break;
             default:
@@ -357,22 +357,22 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          /* matrix coefficient */
          switch( sink->soc.hdrColorimetry[1] )
          {
-            case 1: /* RGB */
+            case GST_VIDEO_COLOR_MATRIX_RGB: /* RGB */
                decParm->hdr.signal_type |= 0;
                break;
-            case 2: /* FCC */
+            case GST_VIDEO_COLOR_MATRIX_FCC: /* FCC */
                decParm->hdr.signal_type |= 4;
                break;
-            case 3: /* BT709 */
+            case GST_VIDEO_COLOR_MATRIX_BT709: /* BT709 */
                decParm->hdr.signal_type |= 1;
                break;
-            case 4: /* BT601 */
+            case GST_VIDEO_COLOR_MATRIX_BT601: /* BT601 */
                decParm->hdr.signal_type |= 3;
                break;
-            case 5: /* SMPTE240M */
+            case GST_VIDEO_COLOR_MATRIX_SMPTE240M: /* SMPTE240M */
                decParm->hdr.signal_type |= 7;
                break;
-            case 6: /* BT2020 */
+            case GST_VIDEO_COLOR_MATRIX_BT2020: /* BT2020 */
                decParm->hdr.signal_type |= 9;
                break;
             default: /* unknown */
@@ -382,70 +382,80 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          /* transfer function */
          switch( sink->soc.hdrColorimetry[2] )
          {
-            case 5: /* BT709 */
+            case GST_VIDEO_TRANSFER_BT709: /* BT709 */
                decParm->hdr.signal_type |= (1<<8);
                break;
-            case 6: /* SMPTE240M */
+            case GST_VIDEO_TRANSFER_SMPTE240M: /* SMPTE240M */
                decParm->hdr.signal_type |= (7<<8);
                break;
-            case 9: /* LOG100 */
+            case GST_VIDEO_TRANSFER_LOG100: /* LOG100 */
                decParm->hdr.signal_type |= (9<<8);
                break;
-            case 10: /* LOG316 */
+            case GST_VIDEO_TRANSFER_LOG316: /* LOG316 */
                decParm->hdr.signal_type |= (10<<8);
                break;
-            case 12: /* BT2020_12 */
+            case GST_VIDEO_TRANSFER_BT2020_12: /* BT2020_12 */
                decParm->hdr.signal_type |= (15<<8);
                break;
-            case 11: /* BT2020_10 */
+            case GST_VIDEO_TRANSFER_BT2020_10: /* BT2020_10 */
                decParm->hdr.signal_type |= (14<<8);
                break;
-            case 13: /* SMPTE2084 */
+            #if ((GST_VERSION_MAJOR == 1) && (GST_VERSION_MINOR >= 18))
+            case GST_VIDEO_TRANSFER_SMPTE2084: /* SMPTE2084 */
+            #else
+            case GST_VIDEO_TRANSFER_SMPTE_ST_2084: /* SMPTE2084 */
+            #endif
                decParm->hdr.signal_type |= (16<<8);
                break;
-            case 14: /* ARIB_STD_B67 */
+            case GST_VIDEO_TRANSFER_ARIB_STD_B67: /* ARIB_STD_B67 */
                decParm->hdr.signal_type |= (18<<8);
                break;
             #if ((GST_VERSION_MAJOR == 1) && (GST_VERSION_MINOR >= 18))
-            case 16: /* BT601 */
+            case GST_VIDEO_TRANSFER_BT601: /* BT601 */
                decParm->hdr.signal_type |= (3<<8);
                break;
             #endif
-            case 1: /* GAMMA10 */
-            case 2: /* GAMMA18 */
-            case 3: /* GAMMA20 */
-            case 4: /* GAMMA22 */
-            case 7: /* SRGB */
-            case 8: /* GAMMA28 */
-            case 15: /* ADOBERGB */
+            case GST_VIDEO_TRANSFER_GAMMA10: /* GAMMA10 */
+            case GST_VIDEO_TRANSFER_GAMMA18: /* GAMMA18 */
+            case GST_VIDEO_TRANSFER_GAMMA20: /* GAMMA20 */
+            case GST_VIDEO_TRANSFER_GAMMA22: /* GAMMA22 */
+            case GST_VIDEO_TRANSFER_SRGB: /* SRGB */
+            case GST_VIDEO_TRANSFER_GAMMA28: /* GAMMA28 */
+            case GST_VIDEO_TRANSFER_ADOBERGB: /* ADOBERGB */
             default:
                break;
          }
          /* primaries */
          switch( sink->soc.hdrColorimetry[3] )
          {
-            case 1: /* BT709 */
+            case GST_VIDEO_COLOR_PRIMARIES_BT709: /* BT709 */
                decParm->hdr.signal_type |= ((1<<24)|(1<<16));
                break;
-            case 2: /* BT470M */
+            case GST_VIDEO_COLOR_PRIMARIES_BT470M: /* BT470M */
                decParm->hdr.signal_type |= ((1<<24)|(4<<16));
                break;
-            case 3: /* BT470BG */
+            case GST_VIDEO_COLOR_PRIMARIES_BT470BG: /* BT470BG */
                decParm->hdr.signal_type |= ((1<<24)|(5<<16));
                break;
-            case 4: /* SMPTE170M */
+            case GST_VIDEO_COLOR_PRIMARIES_SMPTE170M: /* SMPTE170M */
                decParm->hdr.signal_type |= ((1<<24)|(6<<16));
                break;
-            case 5: /* SMPTE240M */
+            case GST_VIDEO_COLOR_PRIMARIES_SMPTE240M: /* SMPTE240M */
                decParm->hdr.signal_type |= ((1<<24)|(7<<16));
                break;
-            case 6: /* FILM */
+            case GST_VIDEO_COLOR_PRIMARIES_FILM: /* FILM */
                decParm->hdr.signal_type |= ((1<<24)|(8<<16));
                break;
-            case 7: /* BT2020 */
+            case GST_VIDEO_COLOR_PRIMARIES_BT2020: /* BT2020 */
                decParm->hdr.signal_type |= ((1<<24)|(9<<16));
                break;
-            case 8: /* ADOBERGB */
+            case GST_VIDEO_COLOR_PRIMARIES_ADOBERGB: /* ADOBERGB */
+            #if ((GST_VERSION_MAJOR == 1) && (GST_VERSION_MINOR >= 18))
+            case GST_VIDEO_COLOR_PRIMARIES_SMPTEST428:
+            case GST_VIDEO_COLOR_PRIMARIES_SMPTERP431:
+            case GST_VIDEO_COLOR_PRIMARIES_SMPTEEG432:
+            case GST_VIDEO_COLOR_PRIMARIES_EBU3213:
+            #endif
             default:
                break;
          }
