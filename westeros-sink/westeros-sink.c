@@ -1154,6 +1154,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->startAfterLink= FALSE;
    sink->startAfterCaps= FALSE;
    sink->flushStarted= FALSE;
+   sink->needSegment= TRUE;
    sink->passCaps= FALSE;
    sink->rejectPrerollBuffers= FALSE;
    
@@ -1853,6 +1854,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          LOCK( sink );
          sink->eosEventSeen= FALSE;
          sink->flushStarted= TRUE;
+         sink->needSegment= TRUE;
          UNLOCK( sink );
          timeCodeFlush( sink );
          gst_westeros_sink_soc_flush( sink );
@@ -1924,6 +1926,12 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
                                         &segmentFormat, &segmentStart, 
                                         NULL, &segmentPosition);
             #endif
+            if ( !sink->needSegment && (appliedRate == 1.0) && (sink->segment.applied_rate != 1.0) )
+            {
+               GST_LOG_OBJECT( sink, "ignore extra segment: ignore applied_rate %d keep applied_rate %d", appliedRate, sink->segment.applied_rate);
+               break;
+            }
+            sink->needSegment= FALSE;
             gst_event_copy_segment( event, &sink->segment );
             
             GST_LOG_OBJECT(sink, 

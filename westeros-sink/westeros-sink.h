@@ -151,6 +151,7 @@ struct _GstWesterosSink
    gboolean startAfterLink;
    gboolean startAfterCaps;
    gboolean flushStarted;
+   gboolean needSegment;
    gboolean passCaps;
    
    gboolean eosEventSeen;
