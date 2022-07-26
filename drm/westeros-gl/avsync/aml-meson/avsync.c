@@ -65,7 +65,11 @@ static void wstAVSyncInit( VideoFrameManager *vfm, int sessionId )
       }
       pts90K vsyncInterval= 90000LL/refreshRate;
 
-      if ( !vfm->conn->videoPlane->frameRateMatchingPlane )
+      if ( !vfm->conn->videoPlane->frameRateMatchingPlane
+      #ifdef AV_SYNC_SESSION_V_MONO
+           && (vfm->conn->syncType != AV_SYNC_MODE_VIDEO_MONO)
+      #endif
+         )
       {
          INFO("force vmaster mode for non-primary video plane");
          vfm->conn->syncType= 0;
