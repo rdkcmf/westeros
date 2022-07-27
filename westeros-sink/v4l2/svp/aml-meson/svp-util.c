@@ -29,12 +29,19 @@
 
 enum vdec_dw_mode
 {
+   /* HEVC Double Write Mode */
    VDEC_DW_AFBC_ONLY = 0,
    VDEC_DW_AFBC_1_1_DW = 1,
    VDEC_DW_AFBC_1_4_DW = 2,
    VDEC_DW_AFBC_x2_1_4_DW = 3,
    VDEC_DW_AFBC_1_2_DW = 4,
    VDEC_DW_NO_AFBC = 16,
+
+   /* MMU Double Write Mode */
+   VDEC_DW_MMU_1 = 0x21,
+   VDEC_DW_MMU_1_4 = 0x22,
+   VDEC_DW_MMU_1_2 = 0x24,
+
    VDEC_DW_AFBC_AUTO_1_2 = 0x100,
    VDEC_DW_AFBC_AUTO_1_4 = 0x200,
 };
@@ -283,11 +290,16 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
          decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_4;
          #else
          decParm->cfg.double_write_mode= VDEC_DW_AFBC_AUTO_1_2;
-         if ( (sink->soc.interlaced && (sink->soc.inputFormat == V4L2_PIX_FMT_HEVC)) ||
-              configForFilmGrain(sink) )
+         if ( configForFilmGrain(sink) )
+         {
+            decParm->cfg.double_write_mode= VDEC_DW_MMU_1;
+            GST_DEBUG("set dw mode 1:1 for film grain. format %s dw mode %d",
+                      fmt, decParm->cfg.double_write_mode);
+         }
+         else if ( sink->soc.interlaced && (sink->soc.inputFormat == V4L2_PIX_FMT_HEVC) )
          {
             decParm->cfg.double_write_mode= VDEC_DW_AFBC_1_1_DW;
-            GST_DEBUG("set dw mode 1:1 for H265 interlaced or film grain. format %s dw mode %d",
+            GST_DEBUG("set dw mode 1:1 for H265 interlaced. format %s dw mode %d",
                       fmt, decParm->cfg.double_write_mode);
          }
          #endif
@@ -306,6 +318,7 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       switch( dwMode )
       {
          case 0: case 1: case 2: case 3: case 4: case 16: case 256: case 512:
+         case 33: case 34: case 36:
             decParm->cfg.double_write_mode= dwMode;
             break;
       }
