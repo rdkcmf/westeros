@@ -1,0 +1,39 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.35 Release Notes
+------------------------------
+
+Date: July 27, 2022
+Tag: Westeros-1.01.35
+Changes:
+
+* drm,v4l2,generic avsync: pause video scheduling in amaster mode when
+audio is not rendering
+
+* v4l2: use video color enum values
+
+* sink: ignore extra segment events:
+
+-defend against extra segment events sent by basesrc in pipelines using appsrc elements
+when performing trick play to avoid the applied_rate set by the app being reset to 1
+by the segment event sent by the appsrc's basesrc layer.
+
+* drm: add support for AV_SYNC_MODE_VIDEO_MONO
+
+* v4l2: use window rect for vpc geometry updates on source res change
+
+* v4l2: add support for new Amlogic double write modes
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
