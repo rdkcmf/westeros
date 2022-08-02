@@ -1243,7 +1243,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
       case PROP_STOP_KEEP_FRAME:
          {
             bool keep= g_value_get_boolean(value);
-            if ( (keep != sink->soc.keepLastFrame) && !sink->soc.conn )
+            if ( (keep != sink->soc.keepLastFrame) && sink->soc.conn )
             {
                sink->soc.keepLastFrameChanged= TRUE;
             }
@@ -6375,6 +6375,11 @@ capture_start:
          {
             sink->windowChange= false;
             gst_westeros_sink_soc_update_video_position( sink );
+         }
+         if ( sink->soc.keepLastFrameChanged )
+         {
+            sink->soc.keepLastFrameChanged= FALSE;
+            wstSendKeepFrameVideoClientConnection( sink->soc.conn );
          }
 
          if ( sink->soc.pauseException )
