@@ -3675,7 +3675,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
          pthread_mutex_unlock( &vfm->mutex);
       }
       else
-      if ( (vfm->queueSize && vfm->flipTimeBase) || (vfm->queueSize > 2) || vfm->frameAdvance )
+      if ( (vfm->queueSize && (vfm->flipTimeBase || (vfm->bufferIdCurrent != -1))) || (vfm->queueSize > 2) || vfm->frameAdvance )
       {
          long long flipTime;
          if ( vfm->flipTimeBase == 0)
@@ -3710,6 +3710,7 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                {
                   if ( fCheck->bufferId != vfm->bufferIdCurrent )
                   {
+                     avProgLog( fCheck->frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "drop");
                      FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
                      vfm->dropFrameCount += 1;
                      wstOffloadFreeVideoFrameResources( fCheck );
