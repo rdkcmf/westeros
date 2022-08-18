@@ -925,6 +925,7 @@ static void timeCodePresent( GstWesterosSink *sink, guint64 position, guint sign
 
 static void releaseWaylandResources( GstWesterosSink *sink )
 {
+   LOCK( sink );
    if ( sink->display )
    {
       if ( sink->vpcSurface )
@@ -979,6 +980,7 @@ static void releaseWaylandResources( GstWesterosSink *sink )
          sink->display= 0;
       }
    }
+   UNLOCK(sink);
 }
 
 #ifndef USE_GST1
@@ -1322,7 +1324,6 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
                {
                   sink->windowSizeOverride= true;
                }
-               UNLOCK( sink );
 
                printf("gst_westeros_sink_set_property set window rect (%d,%d,%d,%d)\n",
                        sink->windowX, sink->windowY, sink->windowWidth, sink->windowHeight );
@@ -1346,6 +1347,7 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
                      wl_display_flush( sink->display );
                   }
                }
+               UNLOCK( sink );
             }
          }
 
