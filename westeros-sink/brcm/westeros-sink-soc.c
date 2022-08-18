@@ -119,6 +119,7 @@ static void ptsErrorCallback( void *userData, int n );
 static NEXUS_VideoCodec convertVideoCodecToNexus(bvideo_codec codec);
 static long long getCurrentTimeMillis(void);
 static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat speed, gboolean playing );
+static void setDecodeMode( GstWesterosSink *sink );
 static gboolean processEventSinkSoc( GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
 static GstFlowReturn prerollSinkSoc(GstBaseSink *base_sink, GstBuffer *buffer);
 #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
@@ -984,7 +985,8 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
             gfloat serverPlaySpeed;
 
             serverPlaySpeed= g_value_get_float(value);
-            GST_DEBUG("set prop serverPlaySpeed %d", serverPlaySpeed);
+            GST_DEBUG("set prop serverPlaySpeed %f", serverPlaySpeed);
+            sink->soc.serverPlaySpeed= serverPlaySpeed;
             if ( sink->videoStarted )
             {
                NEXUS_VideoDecoderSettings settings;
@@ -1001,26 +1003,7 @@ void gst_westeros_sink_soc_set_property(GObject *object, guint prop_id, const GV
                sink->soc.serverPlaySpeed= serverPlaySpeed;
                sink->soc.lastStartPts45k= 0;
 
-               NEXUS_VideoDecoderTrickState trickState;
-               NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
-               if ( (sink->soc.serverPlaySpeed >= -1.0) && (sink->soc.serverPlaySpeed <= 1.0) )
-               {
-                  trickState.topFieldOnly= false;
-                  trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
-               }
-               else
-               if ( (sink->soc.serverPlaySpeed > 1.0) && (sink->soc.serverPlaySpeed <= 4.0) )
-               {
-                  trickState.topFieldOnly= true;
-                  trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
-               }
-               else
-               {
-                  trickState.topFieldOnly= true;
-                  trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
-               }
-               trickState.rate= NEXUS_NORMAL_DECODE_RATE;
-               NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
+               setDecodeMode( sink );
             }
          }
          break;
@@ -1290,13 +1273,13 @@ gboolean gst_westeros_sink_soc_ready_to_paused( GstWesterosSink *sink, gboolean 
       sink->startAfterCaps= TRUE;
    }
 
-   sink->soc.serverPlaySpeed= 1.0;
-   sink->soc.clientPlaySpeed= 1.0;
-   sink->soc.stoppedForPlaySpeedChange= FALSE;
-
    LOCK(sink);
    if ( !sink->startAfterLink && !sink->startAfterCaps )
    {
+      sink->soc.serverPlaySpeed= 1.0;
+      sink->soc.clientPlaySpeed= 1.0;
+      sink->soc.stoppedForPlaySpeedChange= FALSE;
+
       if ( !gst_westeros_sink_soc_start_video( sink ) )
       {
          GST_ERROR("gst_westeros_sink_soc_ready_to_paused: gst_westeros_sink_soc_start_video failed");
@@ -1345,6 +1328,15 @@ gboolean gst_westeros_sink_soc_paused_to_playing( GstWesterosSink *sink, gboolea
             NEXUS_SimpleVideoDecoder_GetSettings(sink->soc.videoDecoder, &settings);
             settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
             NEXUS_SimpleVideoDecoder_SetSettings(sink->soc.videoDecoder, &settings);
+            if ( sink->soc.stcChannel )
+            {
+               NEXUS_Error rc= NEXUS_SimpleStcChannel_Freeze(sink->soc.stcChannel, FALSE);
+               GST_DEBUG("NEXUS_SimpleStcChannel_Freeze FALSE ");
+               if ( rc != NEXUS_SUCCESS )
+               {
+                  GST_ERROR("gst_westeros_sink_soc_paused_to_playing: NEXUS_SimpleStcChannel_Freeze FALSE failed: %d", (int)rc);
+               }
+            }
             sink->soc.stoppedForPlaySpeedChange= FALSE;
          }
       }
@@ -1716,6 +1708,11 @@ gboolean gst_westeros_sink_soc_start_video( GstWesterosSink *sink )
    {
        GST_DEBUG_OBJECT(sink, "!queryPeerHandles");
        goto exit;
+   }
+
+   if ( sink->soc.serverPlaySpeed != 1.0 )
+   {
+      setDecodeMode( sink );
    }
 
    /* Start video decoder */
@@ -3311,6 +3308,30 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
          }
       }
    }
+}
+
+static void setDecodeMode( GstWesterosSink *sink )
+{
+   NEXUS_VideoDecoderTrickState trickState;
+   NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
+   if ( (sink->soc.serverPlaySpeed >= -1.0) && (sink->soc.serverPlaySpeed <= 1.0) )
+   {
+      trickState.topFieldOnly= false;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+   }
+   else
+   if ( (sink->soc.serverPlaySpeed > 1.0) && (sink->soc.serverPlaySpeed <= 4.0) )
+   {
+      trickState.topFieldOnly= true;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eAll;
+   }
+   else
+   {
+      trickState.topFieldOnly= true;
+      trickState.decodeMode= NEXUS_VideoDecoderDecodeMode_eI;
+   }
+   trickState.rate= NEXUS_NORMAL_DECODE_RATE;
+   NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
 }
 
 static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault )
