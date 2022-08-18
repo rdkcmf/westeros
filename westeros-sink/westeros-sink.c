@@ -1198,6 +1198,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->position= 0;
    sink->positionSegmentStart= 0;
    sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
+   sink->segment.start= -1LL;
    sink->segmentNumber= 0;
    sink->queryPositionFromPeer= FALSE;
    sink->useSegmentPosition= FALSE;
@@ -1909,9 +1910,11 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          {
             gint64 segmentStart, segmentPosition;
             GstFormat segmentFormat;
-            gdouble appliedRate = 1.0;
+            gdouble appliedRate= 1.0;
             gdouble playbackRate= 1.0;
             gboolean playbackRateChanged= FALSE;
+            gboolean needSegment= sink->needSegment;
+            gint64 segmentStartPrev= sink->segment.start;
 
             #ifdef USE_GST1
             const GstSegment *dataSegment;
@@ -1947,7 +1950,10 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             sink->position= 0;
             sink->currentPTS= 0;
             sink->positionSegmentStart= 0;
-            sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
+            if ( needSegment || (segmentStart != segmentStartPrev) )
+            {
+               sink->prevPositionSegmentStart= 0xFFFFFFFFFFFFFFFFLL;
+            }
 
             if ( sink->useSegmentPosition &&
                  (segmentFormat == GST_FORMAT_TIME) )
