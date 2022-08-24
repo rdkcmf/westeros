@@ -1692,7 +1692,7 @@ static void *essRMClientConnectionThread( void *userData )
    EssRMgrClientConnection *conn= rm->conn;
    struct msghdr msg;
    struct iovec iov[1];
-   unsigned char mbody[4+64];
+   unsigned char mbody[4+256];
    int moff= 0, len, i, rc;
 
    conn->threadStarted= true;
