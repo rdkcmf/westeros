@@ -900,6 +900,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.sessionId= -1;
    sink->soc.userSession= FALSE;
    sink->soc.userAVSyncMode= FALSE;
+   sink->soc.resmFd= -1;
    #else
    sink->soc.sessionId= 0;
    #endif
@@ -1506,6 +1507,10 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    LOCK( sink );
    sink->videoStarted= FALSE;
    UNLOCK( sink );
+
+   #ifdef WESTEROS_SINK_SVP
+   wstSVPResMDestroy( sink );
+   #endif
 
    if (gst_base_sink_is_async_enabled(GST_BASE_SINK(sink)))
    {

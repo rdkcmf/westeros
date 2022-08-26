@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include "resourcemanage.h"
 #include "../svp-util.h"
 
 #define V4L2_CID_USER_AMLOGIC_BASE (V4L2_CID_USER_BASE + 0x1100)
@@ -518,6 +519,45 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    }
 }
 
+static int wstSVPResMInit( GstWesterosSink *sink )
+{
+   int ret= 0;
+
+   if ( sink->soc.resmFd < 0 )
+   {
+      if (resman_support() && resman_resource_support("tvp"))
+      {
+         sink->soc.resmFd= resman_init("westeros-sink", RESMAN_APP_SEC_TVP);
+      }
+      if (sink->soc.resmFd >= 0)
+      {
+         GST_WARNING("acquire TVP res");
+         char arg[32]= {0};
+         if (!sink->soc.lowMemoryMode)
+         {
+           strcpy(arg, "uhd");
+         }
+         ret= resman_acquire_para(sink->soc.resmFd, RESMAN_ID_SEC_TVP, 10000, 1, arg);
+         if ( ret )
+         {
+            GST_ERROR("resmen_acquire_para ret %d", ret);
+         }
+      }
+   }
+   return ret;
+}
+
+static void wstSVPResMDestroy( GstWesterosSink *sink )
+{
+   if (sink->soc.resmFd >= 0)
+   {
+      GST_WARNING("release TVP res");
+      resman_release(sink->soc.resmFd, RESMAN_ID_SEC_TVP);
+      resman_close(sink->soc.resmFd);
+      sink->soc.resmFd= -1;
+   }
+}
+
 static void wstSVPSetInputMemMode( GstWesterosSink *sink, int mode )
 {
    int len= strlen( (char*)sink->soc.caps.driver );
@@ -729,6 +769,11 @@ static bool wstSVPSetupOutputBuffersDmabuf( GstWesterosSink *sink )
          {
             sink->soc.outBuffers[i].gemBuf.fd[j]= -1;
          }
+      }
+
+      if ( sink->soc.secureVideo )
+      {
+         wstSVPResMInit(sink);
       }
 
       for( i= 0; i < sink->soc.numBuffersOut; ++i )
