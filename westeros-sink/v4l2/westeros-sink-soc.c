@@ -210,6 +210,7 @@ static void sinkReleaseResources( GstWesterosSink *sink );
 static int sinkAcquireVideo( GstWesterosSink *sink );
 static void sinkReleaseVideo( GstWesterosSink *sink );
 static GstStructure *wstSinkGetStats( GstWesterosSink * sink );
+static gboolean processEventSinkSoc( GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault);
 
 #ifdef USE_AMLOGIC_MESON
 #include "meson_drm.h"
@@ -1008,6 +1009,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    }
    #endif
 
+   sink->processPadEvent= processEventSinkSoc;
    sink->acquireResources= sinkAcquireVideo;
    sink->releaseResources= sinkReleaseVideo;
 
@@ -7460,6 +7462,33 @@ void swDisplay( GstWesterosSink *sink, SWFrame *frame )
    GST_LOG("swDisplay: exit");
 }
 #endif
+
+static gboolean processEventSinkSoc(GstWesterosSink *sink, GstPad *pad, GstEvent *event, gboolean *passToDefault)
+{
+   gboolean result= FALSE;
+
+   switch (GST_EVENT_TYPE(event))
+   {
+#if GST_CHECK_VERSION(1,18,0)
+      case GST_EVENT_INSTANT_RATE_CHANGE:
+      {
+         if (sink->soc.syncType == SYNC_AMASTER)
+         {
+            #ifdef USE_AMLOGIC_MESON
+            // Audio sink handles playback rate change requests
+            result= TRUE;
+            *passToDefault= FALSE;
+            #endif
+         }
+         break;
+      }
+#endif
+      default:
+         break;
+   }
+
+   return result;
+}
 
 static int sinkAcquireResources( GstWesterosSink *sink )
 {
