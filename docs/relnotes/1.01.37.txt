@@ -1,0 +1,27 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.37 Release Notes
+------------------------------
+
+Date: Sept 14, 2022
+Tag: Westeros-1.01.37
+Changes:
+
+
+* v4l2: amlogic: intercept instant rate change requests
+
+Amlogic audio sink handles instant rage change requests. Westeros sink
+should intercept it as well to avoid subsequent GST_EVENT_INSTANT_RATE_SYNC_TIME.
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
