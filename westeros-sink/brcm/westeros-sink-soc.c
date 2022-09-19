@@ -2146,7 +2146,10 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
    }
    #endif
 
-   allocCaptureSurfaces( sink );
+   if ( !sink->soc.secureVideo || sink->soc.secureGraphics )
+   {
+      allocCaptureSurfaces( sink );
+   }
 
    GST_DEBUG("queryPeerHandles: sink %p exit", sink);
 
