@@ -114,6 +114,7 @@ struct _GstWesterosSinkSoc
    gboolean stoppedForPlaySpeedChange;
    gboolean secureVideo;
    gboolean haveHardware;
+   gboolean logLatency;
    #ifdef ENABLE_SW_DECODE
    GstPad *dataProbePad;
    gboolean dataProbeNeedStartCodes;

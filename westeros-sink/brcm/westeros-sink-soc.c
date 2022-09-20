@@ -449,6 +449,59 @@ bool checkIndependentVideoClock( GstWesterosSink *sink )
    return independentClock;
 }
 
+static void updateVidfilterSettings ( GstWesterosSink *sink )
+{
+   /* send low_latency setting upstream, so app only has to activate sink.. */
+   if ( sink->peerPad )
+   {
+      GstPad *pad= gst_pad_get_peer( sink->peerPad );
+      if ( pad )
+      {
+         gboolean low_latency= sink->soc.useLowDelay || sink->soc.useImmediateOutput;
+         GstStructure *structure;
+         /* send it to vidfilter for logging, since it has the recieve buffer time */
+         structure= gst_structure_new("vidfilter_settings",
+                                    "low_latency", G_TYPE_BOOLEAN, low_latency,
+                                    NULL );
+         if ( structure )
+         {
+            gst_pad_push_event( pad, gst_event_new_custom(GST_EVENT_CUSTOM_BOTH_OOB, structure));
+         }
+         gst_object_unref( pad );
+      }
+   }
+}
+
+static double systemTime( void )
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return ts.tv_sec + ts.tv_nsec/1000000000.0;
+}
+
+static void logFrameLatency( GstWesterosSink *sink, guint pts )
+{
+   double sysTime= systemTime();
+   if ( sink->peerPad )
+   {
+      GstPad *pad= gst_pad_get_peer( sink->peerPad );
+      if ( pad )
+      {
+         GstStructure *structure;
+         /* send it to vidfilter for logging, since it has the recieve buffer time */
+         structure= gst_structure_new("new_video_frame",
+                                       "pts", G_TYPE_UINT, pts,
+                                       "system_time", G_TYPE_DOUBLE, sysTime,
+                                       NULL );
+         if ( structure )
+         {
+            gst_pad_push_event( pad, gst_event_new_custom(GST_EVENT_CUSTOM_BOTH_OOB, structure));
+         }
+         gst_object_unref( pad );
+      }
+   }
+}
+
 static bool isSVPEnabled( void )
 {
    bool enabled= false;
@@ -750,6 +803,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.timeResourcesLost= 0;
    sink->soc.positionResourcesLost= 0;
    sink->soc.haveHardware= FALSE;
+   sink->soc.logLatency= false;
    #ifdef ENABLE_SW_DECODE
    sink->soc.dataProbeNeedStartCodes= FALSE;
    sink->soc.dataProbePad= 0;
@@ -2014,6 +2068,17 @@ static gboolean queryPeerHandles(GstWesterosSink *sink)
       ptr= g_value_get_pointer(val);   
       sink->soc.stcChannel= (NEXUS_SimpleStcChannelHandle )ptr;
       GST_DEBUG("queryPeerHandles: sink %p stc channel %p", sink, sink->soc.stcChannel);
+
+      gst_structure_get_boolean (structure2, "log_latency", &sink->soc.logLatency);
+      GST_INFO("sink->soc.logLatency %d", sink->soc.logLatency);
+
+      /* if we got the stcchannel, then update the vidfilter with our settting info */
+      updateVidfilterSettings(sink);
+      if (sink->soc.useLowDelay || sink->soc.useImmediateOutput)
+      {
+         /* don't use STC channel for lowest latency */
+         sink->soc.stcChannel= NULL;
+      }
       gst_query_unref(query);
    }
 
@@ -2357,7 +2422,7 @@ static gpointer captureThread(gpointer data)
             wl_display_roundtrip_queue(sink->display,sink->queue);
          }
       }
-      
+
       usleep( FRAME_POLL_TIME );
    }
 
@@ -2667,6 +2732,10 @@ static void updateVideoStatus( GstWesterosSink *sink )
             sink->soc.ignoreDiscontinuity= FALSE;
             sink->soc.numDecoded= videoStatus.numDecoded;
             prevPTS= sink->currentPTS;
+            if (sink->soc.logLatency)
+            {
+               logFrameLatency(sink, videoStatus.pts);
+            }
             sink->currentPTS= ((gint64)videoStatus.pts)*2LL;
             if (sink->prevPositionSegmentStart != sink->positionSegmentStart)
             {
@@ -3074,9 +3143,12 @@ static void underflowCallback( void *userData, int n )
       rc= NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus);
       if ( NEXUS_SUCCESS == rc )
       {
-         GST_INFO("underflow: EOS: %d qDepth %d presStarted %d ignoreDisc %d bytesDecoded %llu ImmedateOut %d PTS 0x%x",
-                   sink->eosEventSeen, videoStatus.queueDepth, sink->soc.presentationStarted, sink->soc.ignoreDiscontinuity,
-                   videoStatus.numBytesDecoded, sink->soc.useImmediateOutput, videoStatus.pts);
+         if ( !sink->soc.useImmediateOutput )
+         {
+            GST_INFO("underflow: EOS: %d qDepth %d presStarted %d ignoreDisc %d bytesDecoded %llu ImmediateOut %d PTS 0x%x",
+                     sink->eosEventSeen, videoStatus.queueDepth, sink->soc.presentationStarted, sink->soc.ignoreDiscontinuity,
+                     videoStatus.numBytesDecoded, sink->soc.useImmediateOutput, videoStatus.pts);
+         }
          LOCK(sink);
          if ( sink->eosEventSeen )
          {
@@ -4402,6 +4474,9 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
    settings.resourceChanged.callback= resourceChangedCallback;
    settings.resourceChanged.context= sink;
    settings.resourceChanged.param= 0;;
+   #if NEXUS_COMMON_PLATFORM_VERSION >= NEXUS_PLATFORM_VERSION(20,1)
+   settings.captureMode= NEXUS_VideoWindowCaptureMode_eAuto;
+   #endif
    NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &settings);
 
    /* Connect to the decoder */
@@ -4485,6 +4560,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       {
          ext_settings.zeroDelayOutputMode= true;
          ext_settings.ignoreDpbOutputDelaySyntax= true;
+         ext_settings.earlyPictureDeliveryMode= true;
          printf("westerossink: using immediate output mode\n");
       }
       ext_settings.treatIFrameAsRap= true;
@@ -4500,6 +4576,21 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       {
          GST_WARNING("sinkAcquireVideo: NEXUS_SimpleVideoDecoder_SetExtendedSettings failed rc %d", rc);
       }
+
+      #if NEXUS_COMMON_PLATFORM_VERSION >= NEXUS_PLATFORM_VERSION(20,1)
+      if (sink->soc.useLowDelay || sink->soc.useImmediateOutput)
+      {  /* reduce BVN delay */
+         NEXUS_SimpleVideoDecoderClientSettings clientSettings;
+         NEXUS_SimpleVideoDecoder_GetClientSettings(sink->soc.videoDecoder, &clientSettings);
+         clientSettings.mtgAllowed= false;
+         clientSettings.captureMode= NEXUS_VideoWindowCaptureMode_eOff;
+         rc= NEXUS_SimpleVideoDecoder_SetClientSettings(sink->soc.videoDecoder, &clientSettings);
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_WARNING("sinkAcquireVideo: NEXUS_SimpleVideoDecoder_SetClientSettings failed rc %d", rc);
+         }
+      }
+      #endif
 
       if ( sink->soc.usePip )
       {
