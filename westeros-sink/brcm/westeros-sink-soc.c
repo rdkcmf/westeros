@@ -1912,6 +1912,23 @@ static void sinkSocStopVideo( GstWesterosSink *sink )
       sink->soc.sb= 0;
    }
 
+   #if (defined (ENABLE_DOLBYVISION) || defined (ENABLE_HDR10)) && (NEXUS_COMMON_PLATFORM_VERSION >= NEXUS_PLATFORM_VERSION(17,3))
+   {
+      NxClient_DisplaySettings displaySettings;
+      NxClient_GetDisplaySettings(&displaySettings);
+
+      if (displaySettings.hdmiPreferences.dynamicRangeMode != NEXUS_VideoDynamicRangeMode_eTrackInput)
+      {
+         NEXUS_VideoDynamicRangeMode tempMode= displaySettings.hdmiPreferences.dynamicRangeMode;
+         displaySettings.hdmiPreferences.dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eSdr;
+         NxClient_SetDisplaySettings(&displaySettings);
+         displaySettings.hdmiPreferences.dynamicRangeMode= NEXUS_VideoDynamicRangeMode_eTrackInput;
+         NxClient_SetDisplaySettings(&displaySettings);
+         GST_INFO("Reset dynamicRangeMode to TrackInput from %d ", tempMode);
+      }
+   }
+   #endif
+
    if ( sink->videoStarted && sink->soc.videoDecoder )
    {
       #if ((NEXUS_PLATFORM_VERSION_MAJOR >= 18) || (NEXUS_PLATFORM_VERSION_MAJOR >= 17 && NEXUS_PLATFORM_VERSION_MINOR >= 3))
