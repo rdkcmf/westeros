@@ -779,7 +779,12 @@ static bool wstRendererSurfaceGetVisible( WstRenderer *renderer, WstRenderSurfac
    {
       NxClient_GetSurfaceClientComposition(surface->allocResults.surfaceClient[0].id, &composition);
       
-      isVisible= composition.visible;
+      isVisible= surface->visible;
+
+      if(isVisible != composition.visible)
+      {
+         printf("westeros_render_nexus: %s query received before scene update, returning surface->visible=%d, composition.visible=%d\n", __FUNCTION__, surface->visible, composition.visible);
+      }
       
       *visible= isVisible;
    }
