@@ -4578,6 +4578,9 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
          ext_settings.zeroDelayOutputMode= true;
          ext_settings.ignoreDpbOutputDelaySyntax= true;
          ext_settings.earlyPictureDeliveryMode= true;
+         #ifdef NEXUS_LOWLATENCY_GAMING_API_BACKPORT
+         ext_settings.lowLatencySettings.mode= NEXUS_VideoDecoderLowLatencyMode_eGaming;
+         #endif
          printf("westerossink: using immediate output mode\n");
       }
       ext_settings.treatIFrameAsRap= true;
