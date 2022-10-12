@@ -155,6 +155,13 @@
       <arg name="surfaceId" type="uint"/>
     </request>
 
+    <!-- Set the scale on a surface -->
+    <request name="set_scale">
+      <arg name="surfaceId" type="uint"/>
+      <arg name="scaleX" type="fixed"/>
+      <arg name="scaleY" type="fixed"/>
+    </request>
+
   </interface>
   
 </protocol>

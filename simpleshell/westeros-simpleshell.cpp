@@ -88,6 +88,8 @@ static void wstISimpleShellGetStatus(struct wl_client *client, struct wl_resourc
 static void wstISimpleShellGetSurfaces(struct wl_client *client, struct wl_resource *resource);
 static void wstISimpleShellSetFocus(struct wl_client *client, struct wl_resource *resource,
                                      uint32_t surfaceId);
+static void wstISimpleShellSetScale(struct wl_client *client, struct wl_resource *resource,
+                                     uint32_t surfaceId, wl_fixed_t scaleX, wl_fixed_t scaleY);
 
 const static struct wl_simple_shell_interface simple_shell_interface = {
    wstISimpleShellSetName,
@@ -97,7 +99,8 @@ const static struct wl_simple_shell_interface simple_shell_interface = {
    wstISimpleShellSetZOrder,
    wstISimpleShellGetStatus,
    wstISimpleShellGetSurfaces,
-   wstISimpleShellSetFocus
+   wstISimpleShellSetFocus,
+   wstISimpleShellSetScale
 };
 
 static void wstSimpleShellBroadcastSurfaceUpdate(struct wl_client *client, struct wl_simple_shell *shell, uint32_t surfaceId )
@@ -282,6 +285,18 @@ static void wstISimpleShellSetFocus(struct wl_client *client, struct wl_resource
    {
       shell->callbacks->set_focus(shell->userData, surfaceId);
    }
+}
+
+static void wstISimpleShellSetScale(struct wl_client *client, struct wl_resource *resource,
+                                     uint32_t surfaceId, wl_fixed_t scaleX, wl_fixed_t scaleY)
+{
+   struct wl_simple_shell *shell= (struct wl_simple_shell*)wl_resource_get_user_data(resource);
+   float fScaleX= wl_fixed_to_double(scaleX);
+   float fScaleY= wl_fixed_to_double(scaleY);
+
+   printf("westeros-simpleshell: wstSimpleShellSetScale: surfaceId %u scaleX %f scaleY %f\n",
+           surfaceId, fScaleX, fScaleY);
+   shell->callbacks->set_scale(shell->userData, surfaceId, fScaleX, fScaleY);
 }
 
 static void destroy_shell(struct wl_resource *resource)
