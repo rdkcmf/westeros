@@ -1,0 +1,57 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.38 Release Notes
+------------------------------
+
+Date: Oct 14, 2022
+Tag: Westeros-1.01.38
+Changes:
+
+
+* brcm: reduce memory usage
+
+-don't pre-allocate capture surfaces if secure video is used
+without secure graphics
+
+* brcm: low latency improvements
+
+    -add latency logging
+    -push new video frame PTS and systemtime to vidfilter, let it log Reduce latency
+    -add event to tell vidfilter to do lowlatency
+    -enable earlyPictureDeliveryMode,  disable mtgAllowed/captureMode
+
+* v4l2: ensure dv flags get reset
+
+-when new caps arrive, ensure dv flags are reset if the dv structures
+are not present.
+
+* brcm: return VideoDynamicRangeMode to eTrackInput after DV stream, GUI
+
+colors were more saturated, but may cause some TVs to flash/put up info
+
+* brcm: correct surface visibility query
+
+Reason for change: Return surface->visible and log if the
+value is different than composition settings
+
+* Expose surface scaling via the simpleshell
+
+* brcm: use NEXUS_VideoDecoderLowLatencyMode_eGaming with immediate-output if available
+
+* v4l2: generic avsync update
+
+-allow eos detection in cases where audio is of shorter duration than video
+
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
