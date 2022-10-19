@@ -2768,11 +2768,17 @@ void EssRMgrDestroy( EssRMgr *rm )
 {
    if ( rm )
    {
+      pthread_mutex_lock( &rm->mutex );
       if ( rm->conn )
       {
          EssRMgrClientConnection *conn= rm->conn;
          rm->conn= 0;
+         pthread_mutex_unlock( &rm->mutex );
          essRMDestroyClientConnection( conn );
+      }
+      else
+      {
+         pthread_mutex_unlock( &rm->mutex );
       }
 
       pthread_mutex_destroy( &rm->mutex );
