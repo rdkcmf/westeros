@@ -4196,7 +4196,7 @@ static int essRMFindSuitableResource( EssRMgrResourceConnection *conn, int type,
                      )
                   {
                      if ( 
-                          (res[suitableIdx].connOwner > 0) ||
+                          (res[suitableIdx].connOwner != 0) ||
                           (res[idx].connOwner == 0)
                         )
                      {

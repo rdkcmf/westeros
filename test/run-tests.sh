@@ -1,11 +1,12 @@
 #!/bin/bash
 unset LD_PRELOAD
+export LD_LIBRARY_PATH=../lib
 case $1 in
   brcm)
   pushd brcm/external/install/bin ;;
   drm)
-  export LD_PRELOAD=../lib/libwesteros_gl.so.0.0.0
-  pushd drm/external/install/bin ;;
+  pushd drm/external/install/bin
+  export LD_PRELOAD=../lib/libwesteros_gl.so.0.0.0 ;;
   *)
   echo "bad platform"
   exit ;;
@@ -20,9 +21,9 @@ for ARG in $@; do
   argnum=$argnum+1
 done
 killall westeros-unittest
-export LD_LIBRARY_PATH=../lib
 export LD_PRELOAD=$LD_PRELOAD:../lib/libwesteros-ut-em.so
 export XDG_RUNTIME_DIR=/tmp
+unset WAYLAND_DISPLAY
 export GST_REGISTRY=.
 export GST_PLUGIN_SYSTEM_PATH=../lib/gstreamer-1.0
 #export WESTEROS_SINK_USE_ESSRMGR=1

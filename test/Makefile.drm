@@ -194,6 +194,7 @@ linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c:
 	cp ../drm-em/gbm.pc $(CID)/share/pkgconfig && \
 	cp ../drm-em/libdrm.pc $(CID)/share/pkgconfig && \
 	cp ../drm-em/include/* $(WID)/include -r && \
+        cp $(CID)/include/* $(WID)/include -r && \
 	cd ../drm-em/em && \
 	cp $(CID)/../mesa/mesa-mesa-19.2.4/src/gbm/main/gbm.h $(WID)/include && \
 	cp $(CID)/../mesa/mesa-mesa-19.2.4/src/egl/wayland/wayland-drm/wayland-drm.xml protocol/wayland-drm.xml && \
@@ -223,6 +224,8 @@ linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c:
 	rm -f libwayland-egl.so && ln -s libwesteros-ut-em.so.0.0.0 libwayland-egl.so && \
 	rm -f libEGL.so && ln -s libwesteros-ut-em.so.0.0.0 libEGL.so && \
 	rm -f libGLESv2.so && ln -s libwesteros-ut-em.so.0.0.0 libGLESv2.so && \
+	rm -f libdrm.so && ln -s libwesteros-ut-em.so.0.0.0 libdrm.so && \
+	rm -f libgbm.so && ln -s libwesteros-ut-em.so.0.0.0 libgbm.so && \
 	cd ../../.. && \
 	touch .drm-em
 

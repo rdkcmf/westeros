@@ -576,6 +576,8 @@ bool EMStart( EMCTX *ctx )
          result= true;
       }
    }
+
+   return result;
 }
 
 bool EMSetDisplaySize( EMCTX *ctx, int width, int height )
@@ -3118,11 +3120,13 @@ DIR *EMOpenDir(const char *name)
 
 int EMCloseDir(DIR *dirp)
 {
+   EMDIR *dir= (EMDIR*)dirp;
    TRACE1("EMCloseDir");
-   if ( dirp )
+   if ( dir )
    {
-      free( dirp );
+      free( dir );
    }
+   return 0;
 }
 
 struct dirent *EMReadDir(DIR *dirp)
@@ -3496,6 +3500,14 @@ void drmModeFreeCrtc( drmModeCrtcPtr ptr )
    }
 }
 
+int drmModeSetCrtc(int fd, uint32_t crtcId, uint32_t bufferId,
+                   uint32_t x, uint32_t y, uint32_t *connectors, int count,
+                   drmModeModeInfoPtr mode)
+{
+   TRACE1("drmModeSetCrtc: fd %d crtcId %u", fd, crtcId);
+   return 0;
+}
+
 drmModeObjectPropertiesPtr drmModeObjectGetProperties( int fd, uint32_t objectId, uint32_t objectType )
 {
    drmModeObjectProperties *props= 0;
@@ -3793,6 +3805,30 @@ void drmModeFreePlane( drmModePlanePtr ptr )
    {
       free( ptr );
    }
+}
+
+extern int drmModeSetPlane(int fd, uint32_t planeId, uint32_t crtcId,
+                           uint32_t fbId, uint32_t flags,
+                           int32_t crtc_x, int32_t crtc_y,
+                           uint32_t crtc_w, uint32_t crtc_h,
+                           uint32_t src_x, uint32_t src_y,
+                           uint32_t src_w, uint32_t src_h)
+{
+   TRACE1("drmModeSetPlane: fd %d planeId %u", fd, planeId );
+   return 0;
+}
+
+int drmModePageFlip(int fd, uint32_t crtc_id, uint32_t fbId,
+                    uint32_t flags, void *user_data)
+{
+   TRACE1("drmModePageFlip: fd %d fbId %u", fd, fbId );
+   return 0;
+}
+
+int drmHandleEvent(int fd, drmEventContextPtr evctx)
+{
+   TRACE1("drmHandelEvent: fd %d", fd );
+   return 0;
 }
 
 int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)

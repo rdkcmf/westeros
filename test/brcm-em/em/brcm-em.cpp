@@ -1755,11 +1755,13 @@ DIR *EMOpenDir(const char *name)
 
 int EMCloseDir(DIR *dirp)
 {
+   EMDIR *dir= (EMDIR*)dirp;
    TRACE1("EMCloseDir");
-   if ( dirp )
+   if ( dir )
    {
-      free( dirp );
+      free( dir );
    }
+   return 0;
 }
 
 struct dirent *EMReadDir(DIR *dirp)
@@ -1799,6 +1801,7 @@ void BDBG_P_AssertFailed(const char *expr, const char *file, unsigned line)
 void *BKNI_Memset(void *mem, int ch, size_t n)
 {
    memset( mem, ch, n );
+   return mem;
 }
 
 BERR_Code BKNI_CreateEvent(BKNI_EventHandle *event)

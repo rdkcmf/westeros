@@ -84,7 +84,7 @@ external/.brcm-refsw:
 	cd external && \
 	mkdir brcm-refsw && \
 	cd brcm-refsw && \
-	wget https://nexus.teamccp.com/nexus/service/local/repositories/broadcom/content/components/sdk/refsw/17_3/refsw_release_unified_20170922/2.1/refsw_release_unified_20170922-2.1.tgz && \
+        wget $(BRCMSDKURI) && \
 	mkdir temp && \
 	cd temp && \
 	tar xzvf ../refsw_release_unified_20170922-2.1.tgz && \
@@ -229,6 +229,7 @@ external/.brcm-refsw:
 	cp temp/nexus/nxclient/include/nxclient_standby.h include && \
 	rm refsw_release_unified_20170922-2.1.tgz && \
 	rm -rf temp && \
+	patch -p2 < ../../../patches/brcm/video_types.patch && \
 	cd .. && \
 	touch .brcm-refsw
 
@@ -345,6 +346,7 @@ linux-dmabuf/protocol/linux-dmabuf-unstable-v1-protocol.c:
 
 .brcm-em:
 	mkdir -p $(WID)/usr/include && \
+	cp $(CID)/include/* $(WID)/include -r && \
 	cp ../brcm-em/wayland-egl.pc $(CID)/share/pkgconfig && \
 	cp ../brcm-em/include/platform_app.inc $(WID)/usr/include && \
 	cp ../brcm-em/include/* $(WID)/include -r && \

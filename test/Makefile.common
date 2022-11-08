@@ -76,8 +76,10 @@ external/.pkgconfig:
 	git clone git://anongit.freedesktop.org/pkg-config && \
 	cd pkg-config && \
 	git checkout pkg-config-0.29 && \
+	patch -p1 < ../../../patches/pkg-config/fix-m4-copy-error.patch && \
 	./autogen.sh --prefix $(CID) --no-configure && \
 	./configure --prefix $(CID) --with-internal-glib && \
+	patch -p1 < ../../../patches/pkg-config/gdate-fix-build-error.patch && \
 	make && make install && \
 	cd .. && \
 	touch .pkgconfig
@@ -113,9 +115,9 @@ external/.zlib:
 	cd external && \
 	mkdir zlib && \
 	cd zlib && \
-	wget http://www.zlib.net/zlib-1.2.11.tar.xz && \
-	tar xf zlib-1.2.11.tar.xz && \
-	cd zlib-1.2.11/ && \
+	wget http://www.zlib.net/zlib-1.2.13.tar.xz && \
+	tar xf zlib-1.2.13.tar.xz && \
+	cd zlib-1.2.13/ && \
 	./configure --prefix $(CID) && \
 	make && make install && \
 	cd ../.. && \
@@ -178,9 +180,9 @@ external/.bison:
 	cd external && \
 	mkdir bison && \
 	cd bison && \
-	wget http://ftp.gnu.org/gnu/bison/bison-3.0.4.tar.xz && \
-	tar xf bison-3.0.4.tar.xz && \
-	cd bison-3.0.4/ && \
+	wget http://ftp.gnu.org/gnu/bison/bison-3.1.tar.xz && \
+	tar xf bison-3.1.tar.xz && \
+	cd bison-3.1/ && \
 	./configure --prefix $(CID) && \
 	make && make install && \
 	cd ../.. && \
@@ -191,9 +193,9 @@ external/.expat:
 	cd external && \
 	mkdir expat && \
 	cd expat && \
-	wget https://sourceforge.net/projects/expat/files/expat/2.2.0/expat-2.2.0.tar.bz2 && \
-	tar xjvf expat-2.2.0.tar.bz2 && \
-	cd expat-2.2.0/ && \
+	wget https://sourceforge.net/projects/expat/files/expat/2.5.0/expat-2.5.0.tar.bz2 && \
+	tar xjvf expat-2.5.0.tar.bz2 && \
+	cd expat-2.5.0/ && \
 	./configure --prefix $(CID) && \
 	make && make install && \
 	cd ../.. && \
@@ -284,7 +286,7 @@ external/.libxcd:
 external/.libxkbcommon:
 	$(call setenv) && \
 	cd external && \
-	git clone git://github.com/xkbcommon/libxkbcommon && \
+	git clone https://github.com/xkbcommon/libxkbcommon.git && \
 	cd libxkbcommon && \
 	git checkout 73794e1e547704d7ba9242a8f7873e17631faecb && \
 	./autogen.sh --prefix $(CID) && \
@@ -326,6 +328,7 @@ external/.gst-plugins-base:
 	wget https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.10.4.tar.xz && \
 	tar xf gst-plugins-base-1.10.4.tar.xz && \
 	cd gst-plugins-base-1.10.4 && \
+	patch -p1 < ../../../../patches/gst-plugins-base/fix-stray-char.patch && \
 	./configure --prefix $(CID) && \
 	make && make install && \
 	cd ../.. && \
