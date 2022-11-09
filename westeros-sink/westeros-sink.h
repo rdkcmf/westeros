@@ -168,7 +168,8 @@ struct _GstWesterosSink
    GstSegment segment;
 
    unsigned segmentNumber;
-   
+
+   gchar *displayName;
    struct wl_display *display;
    struct wl_registry *registry;
    struct wl_simple_shell *shell;

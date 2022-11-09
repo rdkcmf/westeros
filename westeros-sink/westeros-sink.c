@@ -57,7 +57,8 @@ enum
   PROP_ENABLE_TIMECODE,
   PROP_VIDEO_PTS,
   PROP_RES_PRIORITY,
-  PROP_RES_USAGE
+  PROP_RES_USAGE,
+  PROP_DISPLAY_NAME
 };
 
 #ifdef USE_GST1
@@ -1074,6 +1075,11 @@ static void gst_westeros_sink_class_init(GstWesterosSinkClass *klass)
            "current video PTS value",
            G_MININT64, G_MAXINT64, 0, G_PARAM_READABLE));
 
+   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_DISPLAY_NAME,
+       g_param_spec_string ("display-name", "display name",
+           "Name of wayland display to use",
+           NULL, G_PARAM_WRITABLE));
+
 #ifdef USE_GST1
   GST_DEBUG_CATEGORY_INIT (gst_westeros_sink_debug,
                            #ifdef USE_RAW_SINK
@@ -1205,6 +1211,7 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
    sink->queryPositionFromPeer= FALSE;
    sink->useSegmentPosition= FALSE;
 
+   sink->displayName= 0;
    sink->display= 0;
    sink->currentSegment = NULL;
 
@@ -1257,6 +1264,12 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
 static void gst_westeros_sink_term(GstWesterosSink *sink)
 {
    sink->initialized= FALSE;
+
+   if ( sink->displayName )
+   {
+      g_free( sink->displayName );
+      sink->displayName= 0;
+   }
 
    gst_westeros_sink_soc_term( sink );
 
@@ -1429,6 +1442,22 @@ static void gst_westeros_sink_set_property(GObject *object, guint prop_id, const
          break;
       }
       
+      case PROP_DISPLAY_NAME:
+      {
+         const gchar *str= g_value_get_string(value);
+         if ( sink->displayName )
+         {
+            g_free( sink->displayName );
+            sink->displayName= 0;
+         }
+         if ( str )
+         {
+            sink->displayName= g_strdup( str );
+         }
+         g_print("westeros-sink: display name set to %s\n", sink->displayName );
+         break;
+      }
+
       default:
          gst_westeros_sink_soc_set_property(object, prop_id, value, pspec);
          break;
@@ -1541,7 +1570,7 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
             if ( !sink->display )
             {
-               sink->display= wl_display_connect(NULL);
+               sink->display= wl_display_connect(sink->displayName);
             }
             if ( sink->display )
             {
