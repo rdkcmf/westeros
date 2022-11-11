@@ -1510,7 +1510,7 @@ gboolean gst_westeros_sink_soc_paused_to_ready( GstWesterosSink *sink, gboolean 
    sink->videoStarted= FALSE;
    UNLOCK( sink );
 
-   #ifdef WESTEROS_SINK_SVP
+   #if defined USE_AMLOGIC_MESON && defined WESTEROS_SINK_SVP
    wstSVPResMDestroy( sink );
    #endif
 
