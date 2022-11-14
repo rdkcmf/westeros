@@ -66,6 +66,8 @@ typedef gboolean (*ProcessPadEvent)(GstWesterosSink *sink, GstPad *pad, GstEvent
 typedef int (*SinkAcquireResources)( GstWesterosSink *sink );
 typedef void (*SinkReleaseResources)( GstWesterosSink *sink );
 
+typedef void (*StatsLogUpdate)( GstWesterosSink *sink, int frameRenderCount, int frameDropCount );
+
 #ifdef ENABLE_SW_DECODE
 #include "../../westeros-sink/westeros-sink-sw.h"
 
@@ -212,6 +214,12 @@ struct _GstWesterosSink
    WstSinkTimeCode timeCodeActive;
    WstSinkTimeCode *timeCodes;
    SinkTimeCodePresent timeCodePresent;
+
+   StatsLogUpdate statsLogUpdate;
+   int statsLogInterval;
+   long long statsLogFirstLogTime;
+   long long statsLogLastLogTime;
+   int statsLogFrameRenderCountLast;
 
    struct _GstWesterosSinkSoc soc;
 };

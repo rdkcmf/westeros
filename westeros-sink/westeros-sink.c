@@ -984,6 +984,39 @@ static void releaseWaylandResources( GstWesterosSink *sink )
    UNLOCK(sink);
 }
 
+static void sinkStatsLogReset( GstWesterosSink *sink )
+{
+   sink->statsLogFirstLogTime= -1LL;
+   sink->statsLogLastLogTime= -1LL;
+   sink->statsLogFrameRenderCountLast= 0;
+}
+
+static void sinkStatsLogUpdate( GstWesterosSink *sink, int frameRenderCount, int frameDropCount )
+{
+   struct timespec tp;
+   long long now;
+
+   clock_gettime(CLOCK_MONOTONIC, &tp);
+
+   now= tp.tv_sec*1000LL + tp.tv_nsec/1000000LL;
+   if ( sink->statsLogFirstLogTime == -1LL )
+   {
+      sink->statsLogFirstLogTime= sink->statsLogLastLogTime= now;
+   }
+   if ( now >= sink->statsLogLastLogTime + sink->statsLogInterval )
+   {
+      double fps, fpsMean;
+      fps= (frameRenderCount - sink->statsLogFrameRenderCountLast) / ( (now - sink->statsLogLastLogTime)/1000.0 );
+      fpsMean= frameRenderCount / ( (now - sink->statsLogFirstLogTime)/1000.0 );
+
+      g_print( "westeros-sink: VIDEO_FRAME_STATS: rendered %d rate %f average %f dropped %d\n",
+               frameRenderCount, fps, fpsMean, frameDropCount );
+
+      sink->statsLogFrameRenderCountLast= frameRenderCount;
+      sink->statsLogLastLogTime= now;
+   }
+}
+
 #ifndef USE_GST1
 static void gst_westeros_sink_base_init(gpointer g_class)
 {
@@ -1132,6 +1165,20 @@ gst_westeros_sink_init(GstWesterosSink *sink, GstWesterosSinkClass *gclass)
 {
    WESTEROS_UNUSED(gclass);
 #endif
+   const char *env;
+   sink->statsLogUpdate= NULL;
+   env= getenv("WESTEROS_SINK_STATS_LOG");
+   if ( env )
+   {
+      int interval= atoi(env);
+      if ( interval )
+      {
+         sink->statsLogUpdate= sinkStatsLogUpdate;
+         sink->statsLogInterval= interval;
+         sinkStatsLogReset( sink );
+         g_print("westeros-sink: stats log enabled, interval %d ms\n", sink->statsLogInterval);
+      }
+   }
    
    sink->peerPad= NULL;
    
@@ -1700,6 +1747,8 @@ static GstStateChangeReturn gst_westeros_sink_change_state(GstElement *element, 
 
          timeCodeFlush( sink );
 
+         sinkStatsLogReset( sink );
+
          captureTerm(sink);
          break;
       }
@@ -1889,6 +1938,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
          sink->needSegment= TRUE;
          UNLOCK( sink );
          timeCodeFlush( sink );
+         sinkStatsLogReset( sink );
          gst_westeros_sink_soc_flush( sink );
          passToDefault= TRUE;
          break;

@@ -2851,6 +2851,11 @@ static void updateVideoStatus( GstWesterosSink *sink )
          sink->srcWidth= videoStatus.source.width;
          sink->srcHeight= videoStatus.source.height;
          UNLOCK( sink );
+
+         if ( sink->statsLogUpdate )
+         {
+            sink->statsLogUpdate( sink, videoStatus.numDecoded, sink->soc.numDropped );
+         }
       }
       else if ( !flushStarted )
       {

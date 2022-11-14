@@ -6752,6 +6752,10 @@ capture_start:
             UNLOCK(sink);
          }
       }
+      if ( sink->statsLogUpdate )
+      {
+         sink->statsLogUpdate( sink, sink->soc.frameDisplayCount, sink->soc.numDropped );
+      }
    }
 
    if ( sink->soc.needCaptureRestart )
