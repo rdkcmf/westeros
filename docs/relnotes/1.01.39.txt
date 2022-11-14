@@ -1,0 +1,34 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.39 Release Notes
+------------------------------
+
+Date: Nov 14, 2022
+Tag: Westeros-1.01.39
+Changes:
+
+
+* erm: fix thread safety issue in EssRMgrDestroy
+
+* test: fixes for running automated tests on ARM64 Linux
+
+* sink: add display-name property
+
+* v4l2: fix guarding of a non-generic call
+
+* sink: add stats log:
+-to enable define WESTEROS_SINK_STATS_LOG=N in the player environment
+where N is the desired log interval in milliseconds
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
