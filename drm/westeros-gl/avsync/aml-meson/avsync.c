@@ -288,7 +288,7 @@ static void wstAVSyncPause( VideoFrameManager *vfm, bool pause )
    if ( vfm->sync )
    {
       INFO("pause: %d speed %f", pause, vfm->rate);
-      if ( !pause )
+      if ( !pause && (vfm->rate != 1.0) )
       {
          INFO("set av_sync speed %f sync mode %d", vfm->rate, vfm->conn->syncType);
          av_sync_set_speed( vfm->sync, vfm->rate );
