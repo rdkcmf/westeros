@@ -6602,24 +6602,25 @@ capture_start:
             {
                currFramePTS= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec;
             }
-            if ( (currFramePTS == 0) && (sink->soc.frameDecodeCount > 1) )
-            {
-               double rate= (sink->soc.interlaced ? sink->soc.frameRate*2 : sink->soc.frameRate);
-               currFramePTS= sink->soc.prevDecodedTimestamp + 1000000LL/rate;
-               sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec= currFramePTS / 1000000LL;
-               sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec= currFramePTS % 1000000LL;
-            }
             if ( (sink->soc.frameRateFractionNum == 0) && (sink->soc.frameDecodeCount > 1) )
             {
                long long period= currFramePTS - sink->soc.prevDecodedTimestamp;
                if ( period > 0 )
                {
                   double rate= 1000000.0/period;
+                  sink->soc.frameRate= rate;
                   sink->soc.frameRateFractionNum= rate*1000;
                   sink->soc.frameRateFractionDenom= 1000;
                   sink->soc.frameRateChanged= TRUE;
                   g_print("westeros-sink: infer rate of %f: %d/%d\n", rate, sink->soc.frameRateFractionNum, sink->soc.frameRateFractionDenom );
                }
+            }
+            if ( (currFramePTS == 0) && (sink->soc.frameDecodeCount > 1) )
+            {
+               double rate= (sink->soc.interlaced ? sink->soc.frameRate*2 : sink->soc.frameRate);
+               currFramePTS= sink->soc.prevDecodedTimestamp + 1000000LL/rate;
+               sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec= currFramePTS / 1000000LL;
+               sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec= currFramePTS % 1000000LL;
             }
             sink->soc.prevDecodedTimestamp= currFramePTS;
             guint64 frameTime= sink->soc.outBuffers[buffIndex].buf.timestamp.tv_sec * 1000000000LL + sink->soc.outBuffers[buffIndex].buf.timestamp.tv_usec * 1000LL;

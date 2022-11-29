@@ -2012,7 +2012,7 @@ static gboolean gst_westeros_sink_event(GstPad *pad, GstEvent *event)
             #endif
             if ( !sink->needSegment && (appliedRate == 1.0) && (sink->segment.applied_rate != 1.0) )
             {
-               GST_LOG_OBJECT( sink, "ignore extra segment: ignore applied_rate %d keep applied_rate %d", appliedRate, sink->segment.applied_rate);
+               GST_LOG_OBJECT( sink, "ignore extra segment: ignore applied_rate %f keep applied_rate %f", appliedRate, sink->segment.applied_rate);
                break;
             }
             sink->needSegment= FALSE;
