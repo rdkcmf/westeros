@@ -48,6 +48,10 @@
 
 #include "westeros-gl.h"
 
+#ifdef DRM_USE_VIDEO_FENCE
+#include "linux/dma-buf.h"
+#endif
+
 #define INT_FATAL(FORMAT, ...)      wstLog(0, "FATAL: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define INT_ERROR(FORMAT, ...)      wstLog(0, "ERROR: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define INT_WARNING(FORMAT, ...)    wstLog(1, "WARN: %s:%d " FORMAT "\n", __FILE__, __LINE__, __VA_ARGS__)
@@ -201,6 +205,7 @@ typedef struct _VideoFrame
    bool hide;
    bool hidden;
    bool canExpire;
+   bool dropped;
    uint32_t fbId;
    uint32_t handle0;
    uint32_t handle1;
@@ -361,12 +366,25 @@ typedef enum WST_OFFLOAD_MSG
    WST_OLM_MAX_MSGS,
 } WST_OFFLOAD_MSG;
 
+typedef struct _WstOffloadVideoFrameResources
+{
+   int fd0;
+   int fd1;
+   int fd2;
+   uint32_t fbId;
+   uint32_t handle0;
+   uint32_t handle1;
+   void *vf;
+   bool dropped;
+} WstOffloadVideoFrameResources;
+
 typedef struct _WstOffloadMsg
 {
    uint32_t msgType;
    void *param_pvoid;
    long long param_long_long;
    int param_int;
+   void *param_pvoid2;
 } WstOffloadMsg;
 
 #define OFFLOAD_QUEUE_CAPACITY (64)
@@ -460,13 +478,13 @@ static void wstLog( int level, const char *fmt, ... );
 static void wstFrameLog( const char *fmt, ... );
 static void avProgLog( long long nanoTime, int syncGroup, const char *edge, const char *desc );
 static void wstStartOffloadMsgThread( WstGLCtx *ctx );
-static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long param_ll, int param_int);
+static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long param_ll, int param_int, void *param_pv2);
 static void wstOffloadFlushConn( VideoServerConnection *conn );
-static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int);
-static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int bufferId );
+static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int, void *param_pv2);
+static void wstOffloadSendBufferRelease( VideoServerConnection *conn, VideoFrame* f);
 static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm, long long displayedFrameTime, int dropFrameCount );
 static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime);
-static void wstOffloadFreeVideoFrameResources(VideoFrame *f );
+static void wstOffloadFreeVideoFrameResources( WstOffloadVideoFrameResources *f );
 static void wstOffloadCloseFileHande( int fd );
 static void wstOffloadFreeVf( void *vf );
 static void wstUpdateResources( int type, bool add, long long v, int line );
@@ -675,45 +693,77 @@ static char *wstDispFullness( VideoFrameManager *vfm )
    return NULL;
 }
 
-static void wstOffloadSendBufferRelease( VideoServerConnection *conn, int bufferId )
+static void wstOffloadSendBufferRelease( VideoServerConnection *conn, VideoFrame* f)
 {
-   TRACE1("OLM: release buffer %d to client", bufferId);
-   wstOffloadMsgPush(WST_OLM_BUFF_RELEASE, conn, 0, bufferId);
+   WstOffloadVideoFrameResources *r= 0;
+
+   if ( !conn || !f )
+   {
+      return;
+   }
+
+   if ( f->bufferId < 0 )
+   {
+      return;
+   }
+
+   TRACE1("OLM: release buffer %d to client", f->bufferId);
+   r= (WstOffloadVideoFrameResources *)calloc(1, sizeof(WstOffloadVideoFrameResources));
+   if ( r )
+   {
+      r->fd0= f->fd0;
+      r->fd1= f->fd1;
+      r->fd2= f->fd2;
+      r->vf = f->vf;
+      r->fbId = f->fbId;
+      r->handle0 = f->handle0;
+      r->handle1 = f->handle1;
+      r->dropped= f->dropped;
+      wstOffloadMsgPush(WST_OLM_BUFF_RELEASE, conn, 0, f->bufferId, r);
+   }
+   f->fd0= -1;
+   f->fd1= -1;
+   f->fd2= -1;
+   f->vf= NULL;
+   f->fbId= 0;
+   f->handle0= 0;
+   f->handle1= 0;
+   f->dropped= false;
 }
 
 static void wstOffloadSendStatus( VideoServerConnection *conn, VideoFrameManager *vfm, long long displayedFrameTime, int dropFrameCount )
 {
    TRACE1("OLM: status update frameTime %lld dropCount %d", displayedFrameTime, dropFrameCount);
-   wstOffloadMsgPush(WST_OLM_STATUS_UPDATE, conn, displayedFrameTime, dropFrameCount);
+   wstOffloadMsgPush(WST_OLM_STATUS_UPDATE, conn, displayedFrameTime, dropFrameCount, NULL);
    vfm->dropFrameCountReported = dropFrameCount;
 }
 
 static void wstOffloadSendUnderflow( VideoServerConnection *conn, long long displayedFrameTime)
 {
    TRACE1("OLM: send underflow @time %lld", displayedFrameTime);
-   wstOffloadMsgPush(WST_OLM_SENT_UNDERFLOW, conn, displayedFrameTime, 0);
+   wstOffloadMsgPush(WST_OLM_SENT_UNDERFLOW, conn, displayedFrameTime, 0, NULL);
 }
 
 static void wstOffloadCloseFileHande(int fd )
 {
    TRACE1("OLM: close buff file handle %d", fd);
-   wstOffloadMsgPush(WST_OLM_FD_HANDLE_CLOSE, NULL, 0, fd);
+   wstOffloadMsgPush(WST_OLM_FD_HANDLE_CLOSE, NULL, 0, fd, NULL);
 }
 
 static void wstOffloadFreeVf( void *vf )
 {
    TRACE1("OLM: close vf handle %p", vf);
-   wstOffloadMsgPush(WST_OLM_FREE_VF_BUFF, vf, 0, 0);
+   wstOffloadMsgPush(WST_OLM_FREE_VF_BUFF, vf, 0, 0, NULL);
 }
 
-static void wstOffloadFreeVideoFrameResources(VideoFrame *f )
+static void wstOffloadFreeVideoFrameResources(WstOffloadVideoFrameResources *f )
 {
    if ( f )
    {
       if ( f->vf )
       {
          FRAME("freeing sync vf %p", f->vf);
-         wstOffloadFreeVf( f->vf );
+         free( f->vf );
          f->vf= 0;
       }
       if ( f->fbId )
@@ -727,18 +777,60 @@ static void wstOffloadFreeVideoFrameResources(VideoFrame *f )
       }
       if ( f->fd0 >= 0 )
       {
+         #ifdef DRM_USE_VIDEO_FENCE
+         if ( !f->dropped )
+         {
+            struct dma_buf_export_sync_file dma_fence;
+            int rc= -1;
+
+            memset(&dma_fence, 0, sizeof(dma_fence));
+            dma_fence.flags |= DMA_BUF_SYNC_READ;
+            rc= ioctl(f->fd0, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &dma_fence);
+            TRACE3("DMA_BUF_IOCTL_EXPORT_SYNC_FILE rc %d dma_fence fd %d", rc, dma_fence.fd);
+            if (!rc && (dma_fence.fd >= 0) )
+            {
+               struct pollfd pfd;
+
+               pfd.fd= dma_fence.fd;
+               pfd.events= POLLIN;
+               pfd.revents= 0;
+
+               for ( ; ; )
+               {
+                  rc= poll( &pfd, 1, 3000);
+                  if ( (rc == -1) && ((errno == EINTR) || (errno == EAGAIN)) )
+                  {
+                     continue;
+                  }
+                  else if ( rc <= 0 )
+                  {
+                     ERROR("wait out video fence failed: fd %d rc %d errno %d\n", dma_fence.fd, rc, errno);
+                     if ( rc == 0 ) errno= ETIME;
+                  }
+                  else if (pfd.revents & (POLLNVAL | POLLERR))
+                  {
+                     ERROR("waiting on video fence fd %d, revents error\n", dma_fence.fd);
+                  }
+                  break;
+               }
+               close( dma_fence.fd );
+               dma_fence.fd= -1;
+            }
+            else
+            {
+               ERROR("DMA_BUF_IOCTL_EXPORT_SYNC_FILE rc %d dma_fence fd %d", rc, dma_fence.fd);
+            }
+         }
+         #endif
          wstUpdateResources( WSTRES_FD_VIDEO, false, f->fd0, __LINE__);
-         wstOffloadCloseFileHande( f->fd0 );
-         f->fd0= -1;
+         close( f->fd0 );
          if ( f->fd1 >= 0 )
          {
-            wstOffloadCloseFileHande( f->fd1 );
-            f->fd1= -1;
+            close( f->fd1 );
          }
          if ( f->fd2 >= 0 )
          {
-            wstOffloadCloseFileHande( f->fd2 );
-            f->fd2= -1;
+            close( f->fd2 );
          }
       }
    }
@@ -1814,6 +1906,7 @@ static void *wstVideoServerConnectionThread( void *arg )
                                  videoFrame.frameNumber= conn->videoPlane->frameCount++;
                                  videoFrame.vf= 0;
                                  videoFrame.canExpire= true;
+                                 videoFrame.dropped= false;
                                  conn->videoPlane->hidden= false;
                                  wstVideoFrameManagerPushFrame( conn->videoPlane->vfm, &videoFrame );
                               }
@@ -3665,8 +3758,8 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                   avProgLog( f->frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "drop");
                   FRAME("  drop frame %d buffer %d", f->frameNumber, f->bufferId);
                   vfm->dropFrameCount += 1;
-                  wstOffloadFreeVideoFrameResources( f );
-                  wstOffloadSendBufferRelease(vfm->conn, f->bufferId );
+                  f->dropped= true;
+                  wstOffloadSendBufferRelease(vfm->conn, f );
                }
                memmove( &vfm->queue[0], &vfm->queue[1], (vfm->queueSize-(1))*sizeof(VideoFrame) );
                --vfm->queueSize;
@@ -3713,8 +3806,8 @@ static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm )
                      avProgLog( fCheck->frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "drop");
                      FRAME("  drop frame %d buffer %d", fCheck->frameNumber, fCheck->bufferId);
                      vfm->dropFrameCount += 1;
-                     wstOffloadFreeVideoFrameResources( fCheck );
-                     wstOffloadSendBufferRelease(vfm->conn, fCheck->bufferId );
+                     fCheck->dropped= true;
+                     wstOffloadSendBufferRelease(vfm->conn, fCheck);
                   }
                   pthread_mutex_lock( &vfm->mutex);
                   if ( vfm->queueSize > i+1 )
@@ -5361,44 +5454,8 @@ static void wstReleasePreviousBuffers( WstGLCtx *ctx )
       WstOverlayPlane *iter= ctx->overlayPlanes.usedHead;
       while( iter )
       {
-         if ( iter->videoFrame[FRAME_FREE].fbId )
-         {
-            wstUpdateResources( WSTRES_FB_VIDEO, false, iter->videoFrame[FRAME_FREE].fbId, __LINE__);
-            drmModeRmFB( ctx->drmFd, iter->videoFrame[FRAME_FREE].fbId );
-            iter->videoFrame[FRAME_FREE].fbId= 0;
-            wstClosePrimeFDHandles( ctx, iter->videoFrame[FRAME_FREE].handle0, iter->videoFrame[FRAME_FREE].handle1, __LINE__ );
-            iter->videoFrame[FRAME_FREE].handle0= 0;
-            iter->videoFrame[FRAME_FREE].handle1= 0;
-            if ( iter->videoFrame[FRAME_FREE].fd0 >= 0 )
-            {
-               wstUpdateResources( WSTRES_FD_VIDEO, false, iter->videoFrame[FRAME_FREE].fd0, __LINE__);
-               wstOffloadCloseFileHande( iter->videoFrame[FRAME_FREE].fd0 );
-               iter->videoFrame[FRAME_FREE].fd0= -1;
-               if ( iter->videoFrame[FRAME_FREE].fd1 >= 0 )
-               {
-                  wstOffloadCloseFileHande( iter->videoFrame[FRAME_FREE].fd1 );
-                  iter->videoFrame[FRAME_FREE].fd1= -1;
-               }
-               if ( iter->videoFrame[FRAME_FREE].fd2 >= 0 )
-               {
-                  wstOffloadCloseFileHande( iter->videoFrame[FRAME_FREE].fd2 );
-                  iter->videoFrame[FRAME_FREE].fd2= -1;
-               }
-            }
-         }
-
-         if ( iter->videoFrame[FRAME_FREE].vf )
-         {
-            wstOffloadFreeVf( iter->videoFrame[FRAME_FREE].vf );
-            iter->videoFrame[FRAME_FREE].vf= 0;
-         }
-
-         if ( iter->videoFrame[FRAME_FREE].bufferId != -1 )
-         {
-            wstOffloadSendBufferRelease( iter->conn, iter->videoFrame[FRAME_FREE].bufferId );
-            iter->videoFrame[FRAME_FREE].bufferId= -1;
-         }
-
+         wstOffloadSendBufferRelease( iter->conn, &iter->videoFrame[FRAME_FREE]);
+         iter->videoFrame[FRAME_FREE].bufferId= -1;
          iter= iter->next;
       }
    }
@@ -5614,7 +5671,7 @@ static void *wstOffloadThread( void *arg )
    VideoServerConnection *conn;
    long long param_long_long;
    int param_int;
-   void *param_pvoid;
+   void *param_pvoid, *param_pvoid2;
    int rc;
    int fullness;
 
@@ -5652,9 +5709,10 @@ static void *wstOffloadThread( void *arg )
          param_pvoid= pCur->param_pvoid;
          param_long_long= pCur->param_long_long;
          param_int= pCur->param_int;
+         param_pvoid2= pCur->param_pvoid2;
          pthread_mutex_unlock( &pMsgQ->mutex);
 
-         wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int );
+         wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int, param_pvoid2 );
 
          TRACE1("OLM: process msg %d, lpar %lld, par %d", msgType, param_long_long, param_int);
          pMsgQ->readIdx++;
@@ -5672,7 +5730,7 @@ static void *wstOffloadThread( void *arg )
    return NULL;
 }
 
-static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long param_ll, int param_int)
+static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long param_ll, int param_int, void *param_pv2)
 {
    VideoServerConnection *conn;
    switch (msgType)
@@ -5681,9 +5739,17 @@ static void wstOffloadMsgExecute(uint32_t msgType, void *param_pv, long long par
          /* Nothing to do */
          break;
       case WST_OLM_BUFF_RELEASE:
-         conn= (VideoServerConnection*)param_pv;
-         wstVideoServerSendBufferRelease(conn, param_int);
-         break;
+         {
+            WstOffloadVideoFrameResources *f= (WstOffloadVideoFrameResources *)param_pv2;
+            if ( f )
+            {
+               wstOffloadFreeVideoFrameResources(f);
+               free(f);
+            }
+            conn= (VideoServerConnection*)param_pv;
+            wstVideoServerSendBufferRelease(conn, param_int);
+            break;
+         }
       case WST_OLM_STATUS_UPDATE:
          conn= (VideoServerConnection*)param_pv;
          wstVideoServerSendStatus(conn, param_ll, param_int);
@@ -5712,7 +5778,7 @@ static void wstOffloadFlushConn( VideoServerConnection *conn )
    int msgType;
    long long param_long_long;
    int param_int;
-   void *param_pvoid;
+   void *param_pvoid, *param_pvoid2;
 
    DEBUG("wstOffloadFlushConn: begin: conn %p",conn);
    pMsgQ= &gCtx->offloadMsgQ;
@@ -5734,6 +5800,7 @@ static void wstOffloadFlushConn( VideoServerConnection *conn )
       param_pvoid= pCur->param_pvoid;
       param_long_long= pCur->param_long_long;
       param_int= pCur->param_int;
+      param_pvoid2= pCur->param_pvoid2;
       switch (msgType)
       {
          case WST_OLM_BUFF_RELEASE:
@@ -5741,7 +5808,7 @@ static void wstOffloadFlushConn( VideoServerConnection *conn )
          case WST_OLM_SENT_UNDERFLOW:
             if ( conn == (VideoServerConnection *)param_pvoid )
             {
-               wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int );
+               wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int, param_pvoid2 );
                pCur->msgType= WST_OLM_NONE;
             }
             break;
@@ -5758,7 +5825,7 @@ static void wstOffloadFlushConn( VideoServerConnection *conn )
    DEBUG("wstOffloadFlushConn: end: conn %p",conn);
 }
 
-static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int)
+static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll, int param_int, void *param_pv2)
 {
    WstOffloadMsgQ *pMsgQ;
    WstOffloadMsg *pCur;
@@ -5788,7 +5855,7 @@ static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll,
          ERROR("offload Message queue nospace please enlarge OFFLOAD_QUEUE_CAPACITY %d fullness %d count %d", OFFLOAD_QUEUE_CAPACITY, fullness, fullCount);
       }
       pthread_mutex_unlock( &pMsgQ->mutex);
-      wstOffloadMsgExecute( type, param_pv, param_ll, param_int );
+      wstOffloadMsgExecute( type, param_pv, param_ll, param_int, param_pv2 );
       return;
    }
    pCur= &pMsgQ->msg[pMsgQ->writeIdx];
@@ -5796,13 +5863,14 @@ static void wstOffloadMsgPush(uint32_t type, void *param_pv, long long param_ll,
    pCur->param_pvoid= param_pv;
    pCur->param_long_long= param_ll;
    pCur->param_int= param_int;
+   pCur->param_pvoid2= param_pv2;
    pMsgQ->writeIdx++;
    if (pMsgQ->writeIdx >= OFFLOAD_QUEUE_CAPACITY)
    {
       pMsgQ->writeIdx= 0;
    }
    pthread_mutex_unlock( &pMsgQ->mutex);
-   TRACE3("OLM: add: type %d, par_pv %p par_ll %lld, par_int %d", type, param_pv, param_ll, param_int);
+   TRACE3("OLM: add: type %d, par_pv %p par_ll %lld, par_int %d par_pv2 %p", type, param_pv, param_ll, param_int, param_pv2);
 }
 
 static void wstStartOffloadMsgThread( WstGLCtx *ctx )

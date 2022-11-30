@@ -157,8 +157,8 @@ void *sync_free_frame( struct vframe *vf )
             avProgLog( fCheck->frameTime*1000LL, vfm->conn->videoResourceId, "WtoD", "drop");
             fCheck->vf= 0;
             vfm->dropFrameCount += 1;
-            wstOffloadFreeVideoFrameResources( fCheck );
-            wstOffloadSendBufferRelease( vfm->conn, fCheck->bufferId );
+            fCheck->dropped= true;
+            wstOffloadSendBufferRelease( vfm->conn, fCheck );
             if ( i+1 < vfm->queueSize )
             {
                memmove( &vfm->queue[i], &vfm->queue[i+1], (vfm->queueSize-i-1)*sizeof(VideoFrame) );
