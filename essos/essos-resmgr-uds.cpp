@@ -93,6 +93,7 @@ typedef struct _EssRMgrResourceControl
    EssRMgrResourceNotify pending[ESSRMGR_MAX_PENDING];
    int maxPoolItems;
    int pendingPoolIdx;
+   pthread_mutex_t mutex;
 } EssRMgrResourceControl;
 
 typedef struct _EssRMgrState
@@ -629,6 +630,60 @@ static void essRMReleaseConnectionResources( EssRMgrResourceConnection *conn )
    }
 }
 
+static void essRMLockType( EssRMgrResourceServerCtx *server, int type )
+{
+   pthread_mutex_t *mutex= 0;
+   switch( type )
+   {
+      case EssRMgrResType_videoDecoder:
+         mutex= &server->state->vidCtrl.mutex;
+         break;
+      case EssRMgrResType_audioDecoder:
+         mutex= &server->state->audCtrl.mutex;
+         break;
+      case EssRMgrResType_frontEnd:
+         mutex= &server->state->feCtrl.mutex;
+         break;
+      case EssRMgrResType_svpAllocator:
+         mutex= &server->state->svpaCtrl.mutex;
+         break;
+      default:
+         ERROR("lock type: unsupported resource type: %d", type);
+         break;
+   }
+   if ( mutex )
+   {
+      pthread_mutex_lock( mutex );
+   }
+}
+
+static void essRMUnLockType( EssRMgrResourceServerCtx *server, int type )
+{
+   pthread_mutex_t *mutex= 0;
+   switch( type )
+   {
+      case EssRMgrResType_videoDecoder:
+         mutex= &server->state->vidCtrl.mutex;
+         break;
+      case EssRMgrResType_audioDecoder:
+         mutex= &server->state->audCtrl.mutex;
+         break;
+      case EssRMgrResType_frontEnd:
+         mutex= &server->state->feCtrl.mutex;
+         break;
+      case EssRMgrResType_svpAllocator:
+         mutex= &server->state->svpaCtrl.mutex;
+         break;
+      default:
+         ERROR("unlock type: unsupported resource type: %d", type);
+         break;
+   }
+   if ( mutex )
+   {
+      pthread_mutex_unlock( mutex );
+   }
+}
+
 static void *essRMResourceConnectionThread( void *arg )
 {
    EssRMgrResourceConnection *conn= (EssRMgrResourceConnection*)arg;
@@ -738,6 +793,7 @@ static void *essRMResourceConnectionThread( void *arg )
                         appId[appIdLen]= '\0';
                         infolen= getU32( &m[offset] );
                         DEBUG("got res req res type %d", req.type);
+                        essRMLockType( server, req.type );
                         pthread_mutex_lock( &server->state->mutex );
                         if ( essRMgrAppIdAuthorized( conn, appId ) )
                         {
@@ -768,6 +824,7 @@ static void *essRMResourceConnectionThread( void *arg )
                         }
                         essRMSendResRequestResponse(conn, &req, reqresult);
                         pthread_mutex_unlock( &server->state->mutex );
+                        essRMUnLockType( server, req.type );
                      }
                      break;
                   case 'L':
@@ -799,9 +856,11 @@ static void *essRMResourceConnectionThread( void *arg )
                         int requestId= getU32( &m[5] );
                         int priority= getU32( &m[9] );
                         DEBUG("got set priority type %d requestId %d priority %d", type, requestId, priority);
+                        essRMLockType( server, type );
                         pthread_mutex_lock( &server->state->mutex );
                         essRMSetPriorityResource( conn, requestId, type, priority );
                         pthread_mutex_unlock( &server->state->mutex );
+                        essRMUnLockType( server, type );
                      }
                      break;
                   case 'S':
@@ -864,6 +923,7 @@ static void *essRMResourceConnectionThread( void *arg )
                         int infolen= getU32( &m[13] );
                         usage.usage= value;
                         DEBUG("got set usage type %d requestId %d usage %d", type, requestId, usage);
+                        essRMLockType( server, type );
                         pthread_mutex_lock( &server->state->mutex );
                         switch( type )
                         {
@@ -885,6 +945,7 @@ static void *essRMResourceConnectionThread( void *arg )
                               break;
                         }
                         pthread_mutex_unlock( &server->state->mutex );
+                        essRMUnLockType( server, type );
                      }
                      break;
                   case 'C':
@@ -1487,6 +1548,10 @@ static void essRMTermResourceServer( EssRMgrResourceServerCtx *server )
       server->server= 0;
       if ( server->state )
       {
+         pthread_mutex_destroy( &server->state->vidCtrl.mutex );
+         pthread_mutex_destroy( &server->state->audCtrl.mutex );
+         pthread_mutex_destroy( &server->state->feCtrl.mutex );
+         pthread_mutex_destroy( &server->state->svpaCtrl.mutex );
          pthread_mutex_destroy( &server->state->mutex );
          free( server->state );
          server->state= 0;
@@ -1563,6 +1628,7 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    }
    server->state->vidCtrl.pendingPoolIdx= 0;
    server->state->vidCtrl.maxPoolItems= maxPending;
+   pthread_mutex_init( &server->state->vidCtrl.mutex, 0 );
 
    for( int i= 0; i < server->state->base.numAudioDecoders; ++i )
    {
@@ -1585,6 +1651,7 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
    }
    server->state->audCtrl.pendingPoolIdx= 0;
    server->state->audCtrl.maxPoolItems= maxPending;
+   pthread_mutex_init( &server->state->audCtrl.mutex, 0 );
 
    for( int i= 0; i < server->state->base.numFrontEnds; ++i )
    {
@@ -1605,6 +1672,9 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
       pending->prev= ((i > 0) ? i-1 : -1);
       DEBUG("fe pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
    }
+   server->state->feCtrl.pendingPoolIdx= 0;
+   server->state->feCtrl.maxPoolItems= maxPending;
+   pthread_mutex_init( &server->state->feCtrl.mutex, 0 );
 
    for( int i= 0; i < server->state->base.numSVPAllocators; ++i )
    {
@@ -1625,8 +1695,9 @@ static void essRMInitDefaultState( EssRMgrResourceServerCtx *server )
       pending->prev= ((i > 0) ? i-1 : -1);
       DEBUG("svpa pendingPool: item %d next %d prev %d", i, pending->next, pending->prev);
    }
-   server->state->feCtrl.pendingPoolIdx= 0;
-   server->state->feCtrl.maxPoolItems= maxPending;
+   server->state->svpaCtrl.pendingPoolIdx= 0;
+   server->state->svpaCtrl.maxPoolItems= maxPending;
+   pthread_mutex_init( &server->state->svpaCtrl.mutex, 0 );
 }
 
 static EssRMgrRequestInfo *essRMFindRequestByRequestIdUnlocked( EssRMgr *rm, int requestId, bool remove )
