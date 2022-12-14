@@ -1,0 +1,33 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.40 Release Notes
+------------------------------
+
+Date: Dec 14, 2022
+Tag: Westeros-1.01.40
+Changes:
+
+* sink: don't clear eosEventSeen on eos post
+
+* drm: don't set avsync rate on unpause
+
+-unless we've previously set it to non-unity
+
+* drm: add support for video fence
+
+-enable at build time with -DDRM_USE_VIDEO_FENCE
+
+* erm: serialize transactions by resource type
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
