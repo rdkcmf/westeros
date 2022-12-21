@@ -835,6 +835,8 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    }
    #endif
 
+   g_print("westeros-sink: brcm sdk %d.%d\n", NEXUS_PLATFORM_VERSION_MAJOR, NEXUS_PLATFORM_VERSION_MINOR);
+
    gst_base_sink_set_async_enabled(GST_BASE_SINK(sink), TRUE);
 
    sink->processPadEvent= processEventSinkSoc;
