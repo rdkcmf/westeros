@@ -3342,7 +3342,7 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
 
    NEXUS_SimpleVideoDecoder_GetTrickState(sink->soc.videoDecoder, &trickState);
 
-   if ( ((clientPlaySpeed != 1.0) && (clientPlaySpeed != 0.0)) ||
+   if ( ((clientPlaySpeed != 1.0) && (clientPlaySpeed != 0.0)||(trickState.tsmEnabled == NEXUS_TsmMode_eDisabled)) ||
         ((trickState.rate != NEXUS_NORMAL_DECODE_RATE) && (trickState.rate != 0)) )
    {
       trickState.rate= NEXUS_NORMAL_DECODE_RATE * clientPlaySpeed;
