@@ -6396,6 +6396,14 @@ capture_start:
             sink->soc.keepLastFrameChanged= FALSE;
             wstSendKeepFrameVideoClientConnection( sink->soc.conn );
          }
+         if ( sink->soc.showChanged )
+         {
+            sink->soc.showChanged= FALSE;
+            if ( !sink->soc.captureEnabled )
+            {
+               wstSendHideVideoClientConnection( sink->soc.conn, !sink->show );
+            }
+         }
 
          if ( sink->soc.pauseException )
          {

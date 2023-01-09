@@ -2006,6 +2006,11 @@ static void *wstVideoServerConnectionThread( void *arg )
                            DEBUG("got hide (%d) video plane %d", hide, conn->videoPlane->plane->plane_id);
                            pthread_mutex_lock( &gMutex );
                            gCtx->dirty= true;
+                           if ( conn->videoPlane->vfm->paused )
+                           {
+                              gCtx->forceDirty= true;
+                              conn->videoPlane->readyToFlip= true;
+                           }
                            conn->videoPlane->dirty= true;
                            conn->videoPlane->hide= hide;
                            pthread_mutex_unlock( &gMutex );
