@@ -7886,6 +7886,7 @@ void* WstGLCreateNativeWindow( WstGLCtx *ctx, int x, int y, int width, int heigh
       }
    }
 
+   if ( !ctx->modeSet )
    {
       const char *mode= getenv("WESTEROS_GL_MODE");
       if ( mode )
