@@ -2346,6 +2346,26 @@ static void wstDestroyVideoServerConnection( VideoServerConnection *conn )
    {
       wstOffloadFlushConn( conn );
 
+      if ( gCtx )
+      {
+         int count, retryCount= 50;;
+
+         /* Wait until the offload thread is idle
+            before destroying the connection */
+         while ( retryCount-- > 0 )
+         {
+            if ( sem_getvalue( &gCtx->offloadMsgQ.sem, &count ) != 0 )
+            {
+               break;
+            }
+            if ( count <= 0 )
+            {
+               break;
+            }
+            usleep( 1000 );
+         }
+      }
+
       if ( conn->socketFd >= 0 )
       {
          shutdown( conn->socketFd, SHUT_RDWR );
@@ -5698,6 +5718,7 @@ static void *wstOffloadThread( void *arg )
          {
             break;
          }
+         pthread_mutex_lock( &pMsgQ->mutex);
          fullness= pMsgQ->writeIdx - pMsgQ->readIdx;
          if (fullness < 0)
          {
@@ -5706,25 +5727,26 @@ static void *wstOffloadThread( void *arg )
          if (fullness == 0)
          {
             TRACE1("Empty queue now index %d", pMsgQ->writeIdx);
+            pthread_mutex_unlock( &pMsgQ->mutex);
             break;
          }
-         pthread_mutex_lock( &pMsgQ->mutex);
          pCur= &pMsgQ->msg[pMsgQ->readIdx];
          msgType= pCur->msgType;
          param_pvoid= pCur->param_pvoid;
          param_long_long= pCur->param_long_long;
          param_int= pCur->param_int;
          param_pvoid2= pCur->param_pvoid2;
-         pthread_mutex_unlock( &pMsgQ->mutex);
 
-         wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int, param_pvoid2 );
-
-         TRACE1("OLM: process msg %d, lpar %lld, par %d", msgType, param_long_long, param_int);
          pMsgQ->readIdx++;
          if (pMsgQ->readIdx >= OFFLOAD_QUEUE_CAPACITY)
          {
             pMsgQ->readIdx= 0;
          }
+         pthread_mutex_unlock( &pMsgQ->mutex);
+
+         wstOffloadMsgExecute( msgType, param_pvoid, param_long_long, param_int, param_pvoid2 );
+
+         TRACE1("OLM: process msg %d, lpar %lld, par %d", msgType, param_long_long, param_int);
       }
       #ifdef USE_UEVENT_HOTPLUG
       wstProcessUEvent( ctx );
