@@ -1,0 +1,36 @@
+Westeros Release Notes
+======================
+
+Westeros 1.01.41 Release Notes
+------------------------------
+
+Date: Jan 13, 2023
+Tag: Westeros-1.01.41
+Changes:
+
+* brcm: log sdk version from sink
+
+* brcm: Do NEXUS_SimpleVideoDecoder_SetTrickState at pause/resume
+
+- Video only stream will not pause by NEXUS_SimpleStcChannel_Freeze
+since it is in vsync mode (tsm off)
+
+* drm,v4l2: allow video show/hide while paused
+
+* drm: only set mode from env on initial window creation
+
+* drm: fix locking for offload thread
+
+-fix thread safety issue between the offload thread and the disconnection of a video server client thread
+
+
+Depedencies
+------------
+wayland >= 1.6.0
+libxkbcommon >= 0.8.3
+xkeyboard-config >= 2.18
+gstreamer >= 1.10.4
+EGL >= 1.4
+GLES >= 2.0
+
+
