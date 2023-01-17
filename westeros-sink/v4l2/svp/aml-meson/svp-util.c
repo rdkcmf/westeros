@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/utsname.h>
 #include "resourcemanage.h"
 #include "../svp-util.h"
 
@@ -27,6 +28,7 @@
 #define AML_V4L2_GET_INPUT_BUFFER_NUM (V4L2_CID_USER_AMLOGIC_BASE + 1)
 #define AML_V4L2_SET_DURATION (V4L2_CID_USER_AMLOGIC_BASE + 2)
 #define AML_V4L2_GET_FILMGRAIN_INFO (V4L2_CID_USER_AMLOGIC_BASE + 3)
+#define AML_V4L2_DEC_PARMS_CONFIG (V4L2_CID_USER_AMLOGIC_BASE + 7)
 
 enum vdec_dw_mode
 {
@@ -218,6 +220,9 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
    memset( &streamparm, 0, sizeof(streamparm) );
    streamparm.type= V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
    decParm->parms_status= V4L2_CONFIG_PARM_DECODE_CFGINFO;
+   bool useExtConfig= false;
+   int major= 0, minor= 0, patch= 0;
+   struct utsname info;
 
    if ( sink->soc.useImmediateOutput )
    {
@@ -512,10 +517,39 @@ static void wstSVPDecoderConfig( GstWesterosSink *sink )
       }
    }
 
-   rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_PARM, &streamparm );
-   if ( rc != 0)
+   if ( uname(&info) || sscanf(info.release, "%d.%d.%d", &major, &minor, &patch) < 2)
    {
-      GST_ERROR("VIDIOC_S_PARAM failed for aml driver raw_data: %d", rc);
+      GST_DEBUG("get linux version failed");
+   }
+
+   GST_DEBUG("linux version %d.%d.%d", major, minor, patch);
+
+   useExtConfig= ((major > 5) || ((major == 5) && (minor >= 15))) ? true : false;
+
+   if (useExtConfig)
+   {
+      struct v4l2_ext_control control;
+      struct v4l2_ext_controls ctrls;
+      memset(&ctrls, 0, sizeof(ctrls));
+      memset(&control, 0, sizeof(control));
+      control.id= AML_V4L2_DEC_PARMS_CONFIG;
+      control.ptr= decParm;
+      control.size= sizeof(struct aml_dec_params);
+      ctrls.count= 1;
+      ctrls.controls= &control;
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_EXT_CTRLS, &ctrls );
+      if (rc != 0)
+      {
+         GST_ERROR("VIDIOC_S_EXT_CTRLS failed for aml driver raw_data: %d", rc);
+      }
+   }
+   else
+   {
+      rc= IOCTL( sink->soc.v4l2Fd, VIDIOC_S_PARM, &streamparm );
+      if ( rc != 0)
+      {
+         GST_ERROR("VIDIOC_S_PARAM failed for aml driver raw_data: %d", rc);
+      }
    }
 }
 

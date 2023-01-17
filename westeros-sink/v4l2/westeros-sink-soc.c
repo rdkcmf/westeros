@@ -7568,6 +7568,7 @@ static int ioctl_wrapper( int fd, int request, void* arg )
          case VIDIOC_SUBSCRIBE_EVENT: req= "VIDIOC_SUBSCRIBE_EVENT"; break;
          case VIDIOC_UNSUBSCRIBE_EVENT: req= "VIDIOC_UNSUBSCRIBE_EVENT"; break;
          case VIDIOC_DECODER_CMD: req= "VIDIOC_DECODER_CMD"; break;
+         case VIDIOC_S_EXT_CTRLS: req= "VIDIOC_S_EXT_CTRLS"; break;
          default: req= "NA"; break;
       }
       g_print("westerossink-ioctl: ioct( %d, %x ( %s ) )\n", fd, request, req );
