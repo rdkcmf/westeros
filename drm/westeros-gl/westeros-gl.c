@@ -499,6 +499,7 @@ static long long wstVideoFrameMangerGetTimeSyncCtrl( VideoFrameManager *vfm, boo
 static void wstVideoFrameManagerUpdateRect( VideoFrameManager *vfm, int rectX, int rectY, int rectW, int rectH );
 static void wstVideoFrameManagerPushFrame( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame* wstVideoFrameManagerPopFrame( VideoFrameManager *vfm );
+static void wstVideoFrameManagerEos( VideoFrameManager *vfm );
 static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause );
 static void wstVideoFrameManagerFrameAdvance( VideoFrameManager *vfm );
 static void wstDestroyVideoServerConnection( VideoServerConnection *conn );
@@ -2178,6 +2179,14 @@ static void *wstVideoServerConnectionThread( void *arg )
                            DEBUG("got keep frame (%d) video plane %d", keep, conn->videoPlane->plane->plane_id);
                            pthread_mutex_lock( &gMutex );
                            conn->videoPlane->keepLastFrame= keep;
+                           pthread_mutex_unlock( &gMutex );
+                        }
+                        break;
+                     case 'E':
+                        {
+                           DEBUG("got eos video plane %d", conn->videoPlane->plane->plane_id);
+                           pthread_mutex_lock( &gMutex );
+                           wstVideoFrameManagerEos( conn->videoPlane->vfm );
                            pthread_mutex_unlock( &gMutex );
                         }
                         break;
@@ -3905,6 +3914,17 @@ done:
       vfm->bufferIdCurrent= f->bufferId;
    }
    return f;
+}
+
+static void wstVideoFrameManagerEos( VideoFrameManager *vfm )
+{
+   FRAME("set eos");
+   #ifdef WESTEROS_GL_AVSYNC
+   if ( vfm->sync )
+   {
+      wstAVSyncEos( vfm );
+   }
+   #endif
 }
 
 static void wstVideoFrameManagerPause( VideoFrameManager *vfm, bool pause )

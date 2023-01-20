@@ -297,3 +297,13 @@ static void wstAVSyncPause( VideoFrameManager *vfm, bool pause )
    }
 }
 
+static void wstAVSyncEos( VideoFrameManager *vfm )
+{
+   if ( vfm->sync )
+   {
+      #ifdef AML_AV_SYNC_EOS_API
+      avs_sync_set_eos( vfm->sync );
+      #endif
+   }
+}
+

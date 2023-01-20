@@ -28,5 +28,6 @@ static void wstAVSyncSetSyncType( VideoFrameManager *vfm, int type );
 static void wstAVSyncPush( VideoFrameManager *vfm, VideoFrame *f );
 static VideoFrame *wstAVSyncPop( VideoFrameManager *vfm );
 static void wstAVSyncPause( VideoFrameManager *vfm, bool pause );
+static void wstAVSyncEos( VideoFrameManager *vfm );
 
 #endif

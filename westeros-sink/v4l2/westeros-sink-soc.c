@@ -173,6 +173,7 @@ static WstVideoClientConnection *wstCreateVideoClientConnection( GstWesterosSink
 static void wstDestroyVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendResourceVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn );
+static void wstSendEosVideoClientConnection( WstVideoClientConnection *conn );
 static bool wstSendFrameVideoClientConnection( WstVideoClientConnection *conn, int buffIndex );
 static void wstSendFrameAdvanceVideoClientConnection( WstVideoClientConnection *conn );
 static void wstSendRectVideoClientConnection( WstVideoClientConnection *conn );
@@ -4363,6 +4364,47 @@ static void wstSendFlushVideoClientConnection( WstVideoClientConnection *conn )
    }
 }
 
+static void wstSendEosVideoClientConnection( WstVideoClientConnection *conn )
+{
+   if ( conn )
+   {
+      struct msghdr msg;
+      struct iovec iov[1];
+      unsigned char mbody[4];
+      int len;
+      int sentLen;
+
+      msg.msg_name= NULL;
+      msg.msg_namelen= 0;
+      msg.msg_iov= iov;
+      msg.msg_iovlen= 1;
+      msg.msg_control= 0;
+      msg.msg_controllen= 0;
+      msg.msg_flags= 0;
+
+      len= 0;
+      mbody[len++]= 'V';
+      mbody[len++]= 'S';
+      mbody[len++]= 1;
+      mbody[len++]= 'E';
+
+      iov[0].iov_base= (char*)mbody;
+      iov[0].iov_len= len;
+
+      do
+      {
+         sentLen= sendmsg( conn->socketFd, &msg, MSG_NOSIGNAL );
+      }
+      while ( (sentLen < 0) && (errno == EINTR));
+
+      if ( sentLen == len )
+      {
+         GST_LOG("sent eos to video server");
+         FRAME("sent eos to video server");
+      }
+   }
+}
+
 static void wstSendPauseVideoClientConnection( WstVideoClientConnection *conn, bool pause )
 {
    if ( conn )
@@ -6788,7 +6830,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
 {
    GstWesterosSink *sink= (GstWesterosSink*)data;
    int outputFrameCount, count, eosCountDown;
-   int decoderEOS, displayCount;
+   int decoderEOS, decoderEOSPrev, displayCount;
    bool videoPlaying;
    bool eosEventSeen;
    double frameRate;
@@ -6796,6 +6838,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
    GST_DEBUG("wstVideoEOSThread: enter");
 
    eosCountDown= 2;
+   decoderEOS= 0;
    LOCK(sink)
    outputFrameCount= sink->soc.frameOutCount;
    frameRate= (sink->soc.frameRate > 0.0 ? sink->soc.frameRate : 30.0);
@@ -6809,6 +6852,7 @@ static gpointer wstEOSDetectionThread(gpointer data)
          LOCK(sink)
          count= sink->soc.frameOutCount;
          displayCount= sink->soc.frameDisplayCount + sink->soc.numDropped;
+         decoderEOSPrev= decoderEOS;
          decoderEOS= sink->soc.decoderEOS;
          videoPlaying= sink->soc.videoPlaying;
          eosEventSeen= sink->eosEventSeen;
@@ -6817,6 +6861,10 @@ static gpointer wstEOSDetectionThread(gpointer data)
          if ( eosEventSeen )
          {
             GST_DEBUG("waiting for eos: frameOutCount %d displayCount %d (%d+%d)", count, displayCount, sink->soc.frameDisplayCount, sink->soc.numDropped);
+         }
+         if ( videoPlaying && eosEventSeen && decoderEOS && !decoderEOSPrev )
+         {
+            wstSendEosVideoClientConnection( sink->soc.conn );
          }
          if ( videoPlaying && eosEventSeen && decoderEOS && (count <= displayCount) && (outputFrameCount == count) )
          {
