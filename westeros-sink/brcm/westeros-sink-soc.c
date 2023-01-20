@@ -804,6 +804,7 @@ gboolean gst_westeros_sink_soc_init( GstWesterosSink *sink )
    sink->soc.positionResourcesLost= 0;
    sink->soc.haveHardware= FALSE;
    sink->soc.logLatency= false;
+   sink->soc.saveAllm= ALLM_NOT_SAVED;
    #ifdef ENABLE_SW_DECODE
    sink->soc.dataProbeNeedStartCodes= FALSE;
    sink->soc.dataProbePad= 0;
@@ -1855,7 +1856,11 @@ void gst_westeros_sink_soc_eos_event( GstWesterosSink *sink )
 {
    gboolean sendEOS= FALSE;
    LOCK(sink);
-   if ( sink->videoStarted )
+   if ( sink->soc.useImmediateOutput )
+   {
+      sendEOS= TRUE;
+   }
+   else if ( sink->videoStarted )
    {
       NEXUS_VideoDecoderStatus videoStatus;
       if ( NEXUS_SUCCESS == NEXUS_SimpleVideoDecoder_GetStatus( sink->soc.videoDecoder, &videoStatus) )
@@ -3169,9 +3174,9 @@ static void underflowCallback( void *userData, int n )
       {
          if ( !sink->soc.useImmediateOutput )
          {
-            GST_INFO("underflow: EOS: %d qDepth %d presStarted %d ignoreDisc %d bytesDecoded %llu ImmediateOut %d PTS 0x%x",
+            GST_INFO("underflow: EOS: %d qDepth %d presStarted %d ignoreDisc %d bytesDecoded %llu PTS 0x%x",
                      sink->eosEventSeen, videoStatus.queueDepth, sink->soc.presentationStarted, sink->soc.ignoreDiscontinuity,
-                     videoStatus.numBytesDecoded, sink->soc.useImmediateOutput, videoStatus.pts);
+                     videoStatus.numBytesDecoded, videoStatus.pts);
          }
          LOCK(sink);
          if ( sink->eosEventSeen )
@@ -3191,7 +3196,7 @@ static void underflowCallback( void *userData, int n )
          }
          else
          {
-            if ( sink->soc.presentationStarted && !sink->soc.ignoreDiscontinuity && videoStatus.numBytesDecoded && !sink->soc.useImmediateOutput )
+            if ( sink->soc.presentationStarted && !sink->soc.ignoreDiscontinuity && videoStatus.numBytesDecoded )
             {
                sink->soc.emitUnderflow= TRUE;
             }
@@ -3321,6 +3326,10 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
       return;
    }
 
+   /* Only use 2x decode rate for immediate output if NEXUS_VideoDecoderLowLatencyMode_eGaming
+      low latency mode is not available.  The Broadcom refsw team has concerns that
+      using the 2x rate could cause the most recent frame to be dropped */
+   #ifndef NEXUS_LOWLATENCY_GAMING_API_BACKPORT
    if ( sink->soc.useImmediateOutput )
    {
        NEXUS_VideoDecoderTrickState trickState;
@@ -3331,6 +3340,7 @@ static void updateClientPlaySpeed( GstWesterosSink *sink, gfloat clientPlaySpeed
        NEXUS_SimpleVideoDecoder_SetTrickState(sink->soc.videoDecoder, &trickState);
        return;
    }
+   #endif
 
    if ( clientPlaySpeed < 0 )
    {
@@ -4561,7 +4571,7 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
       // to omit all out of order frames (ie. all B-Frames)
       settings.channelChangeMode= NEXUS_VideoDecoder_ChannelChangeMode_eMuteUntilFirstPicture;
       settings.ptsOffset= sink->soc.ptsOffset;
-      settings.fifoEmpty.callback= underflowCallback;
+      settings.fifoEmpty.callback= sink->soc.useImmediateOutput ? NULL : underflowCallback;
       settings.fifoEmpty.context= sink;
       settings.firstPts.callback= firstPtsCallback;
       settings.firstPts.context= sink;
@@ -4616,6 +4626,17 @@ static int sinkAcquireVideo( GstWesterosSink *sink )
          {
             GST_WARNING("sinkAcquireVideo: NEXUS_SimpleVideoDecoder_SetClientSettings failed rc %d", rc);
          }
+
+         NxClient_DisplaySettings displaySettings;
+         NxClient_GetDisplaySettings(&displaySettings);
+         sink->soc.saveAllm= displaySettings.hdmiPreferences.allm ? ALLM_TRUE : ALLM_FALSE;
+         displaySettings.hdmiPreferences.allm= true;
+         GST_LOG("sinkAcquireVideo: settings displaySettings.hdmiPreferences.allm %d", displaySettings.hdmiPreferences.allm);
+         rc = NxClient_SetDisplaySettings(&displaySettings);
+         if ( rc != NEXUS_SUCCESS )
+         {
+            GST_WARNING("sinkAcquireVideo: NxClient_SetDisplaySettings failed rc %d", rc);
+         }
       }
       #endif
 
@@ -4669,6 +4690,23 @@ static void sinkReleaseVideo( GstWesterosSink *sink )
 {
    GST_DEBUG("sinkReleaseVideo: enter");
    LOCK( sink );
+   #if NEXUS_COMMON_PLATFORM_VERSION >= NEXUS_PLATFORM_VERSION(20,1)
+   if ( sink->soc.saveAllm != ALLM_NOT_SAVED )
+   {
+      NEXUS_Error rc;
+      NxClient_DisplaySettings displaySettings;
+      NxClient_GetDisplaySettings(&displaySettings);
+      /* restore settting */
+      displaySettings.hdmiPreferences.allm= ( sink->soc.saveAllm == ALLM_TRUE ) ? true : false;
+      sink->soc.saveAllm= ALLM_NOT_SAVED;
+      GST_LOG("sinkReleaseVideo: restoring displaySettings.hdmiPreferences.allm %d", displaySettings.hdmiPreferences.allm );
+      rc= NxClient_SetDisplaySettings(&displaySettings);
+      if ( rc != NEXUS_SUCCESS )
+      {
+         GST_WARNING("sinkReleaseVideo: NxClient_SetDisplaySettings failed rc %d", rc);
+      }
+   }
+   #endif
    if ( sink->soc.videoDecoder )
    {
       NEXUS_SimpleVideoDecoderHandle videoDecoder= sink->soc.videoDecoder;
